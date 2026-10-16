@@ -320,7 +320,11 @@ def _still_matching(monkeypatch, keys):
 
     def fake(_session, _tenant_id, rule_id, _now):
         calls.append(rule_id)
-        return "other", set(keys)
+        other = _session.get(AutomationRule, rule_id)
+        action = executor.action_key(
+            RuleDefinition.model_validate(other.definition).action
+        )
+        return executor.RuleMatch("other", action, frozenset(keys))
 
     monkeypatch.setattr(executor, "_still_matching", fake)
     return calls
@@ -416,10 +420,10 @@ def test_inactive_other_rules_never_conflict(session, env):
     # 已关闭的规则不会再执行，不构成冲突；改为仅通知同理。
     other.enabled = False
     session.flush()
-    assert real(session, env.tenant_id, other.id, NOW) == ("", set())
+    assert real(session, env.tenant_id, other.id, NOW).action is None
     other.enabled, other.definition = True, {**other.definition, "mode": "NOTIFY"}
     session.flush()
-    assert real(session, env.tenant_id, other.id, NOW) == ("other", set())
+    assert real(session, env.tenant_id, other.id, NOW).action is None
 
 
 def test_no_change_targets_skip_ledger(session, env):
@@ -1078,3 +1082,175 @@ def test_rule_action_rejects_name_field(action_type):
         RuleDefinition.model_validate(
             base(action={"type": action_type, "level": "campaign"})
         )
+
+
+def _current_conflict_report(session, env, *, fresh=True, total="0.50"):
+    from uuid import uuid4
+
+    from app.modules.reporting.publish import AccountMeta, publish_ad_day
+    from app.modules.reporting.store_models import ReportSyncState
+    from tests.modules.reporting.sync_conftest import ad_row
+
+    publish_ad_day(
+        session,
+        tenant_id=env.tenant_id,
+        job_id=uuid4(),
+        accounts={"acc-x": AccountMeta("USD", "UTC")},
+        start=NOW.date(),
+        end=NOW.date(),
+        rows=[ad_row("a1", NOW.date(), adv="acc-x", spend="20", total=total)],
+    )
+    state = session.get(ReportSyncState, (env.tenant_id, "acc-x", "ad_day", NOW.date()))
+    state.last_success_at = NOW - (
+        timedelta(minutes=10) if fresh else timedelta(hours=5)
+    )
+    session.flush()
+
+
+def _execute_pause(session, env):
+    rule, run = _rule_run(
+        session, env, action=PAUSE, targets=[_target("acc-x", "bc-x")]
+    )
+    return execute_hits(
+        session,
+        run=run,
+        rule=rule,
+        selected_keys=None,
+        now=NOW,
+        actor_id=rule.updated_by,
+        require_manage=True,
+    )
+
+
+def test_real_recheck_keeps_old_opposite_action_without_hidden_age_limit(session, env):
+    _other_enabled(session, env, minutes_ago=32 * 24 * 60)
+    _current_conflict_report(session, env)
+    summary = _execute_pause(session, env)
+    assert summary["conflicts"] == 1 and summary["submitted"] == 0
+    assert session.exec(select(ManagementTask)).all() == []
+
+
+@pytest.mark.parametrize(
+    "action", [PAUSE, {**BUDGET_UP, "frequency": {"type": "EVERY_24H"}}]
+)
+def test_real_recheck_uses_other_rules_current_action(session, env, action):
+    other = _other_enabled(session, env)
+    other.definition = {**other.definition, "action": action}
+    session.flush()
+    _current_conflict_report(session, env)
+    summary = _execute_pause(session, env)
+    assert summary["conflicts"] == 0 and summary["submitted"] == 1
+
+
+def test_real_recheck_stale_report_cannot_release_opposite_action(session, env):
+    _other_enabled(session, env)
+    _current_conflict_report(session, env, fresh=False)
+    summary = _execute_pause(session, env)
+    assert summary["submitted"] == 0 and summary["failed"] == 1
+    assert session.exec(select(ManagementTask)).all() == []
+
+
+def test_real_recheck_missing_metric_cannot_release_opposite_action(session, env):
+    other = _other_enabled(session, env)
+    other.definition = {
+        **other.definition,
+        "conditions": [
+            {
+                "metric": "roas_total",
+                "range": "TODAY",
+                "operator": "GT",
+                "values": ["1"],
+            }
+        ],
+    }
+    session.flush()
+    _current_conflict_report(session, env, total=None)
+    summary = _execute_pause(session, env)
+    assert summary["submitted"] == 0 and summary["failed"] == 1
+    assert session.exec(select(ManagementTask)).all() == []
+
+
+@pytest.mark.parametrize("split", ["ads", "days"])
+def test_real_recheck_partial_missing_facts_are_unknown(session, env, split):
+    from uuid import uuid4
+
+    from app.modules.reporting.publish import AccountMeta, publish_ad_day
+    from app.modules.reporting.store_models import ReportSyncState
+    from tests.modules.reporting.sync_conftest import ad_row
+
+    other = _other_enabled(session, env)
+    other.definition = {
+        **other.definition,
+        "conditions": [
+            {
+                "metric": "roas_total",
+                "range": "PAST_3_DAYS",
+                "operator": "GT",
+                "values": ["1"],
+            }
+        ],
+    }
+    session.flush()
+    publish_ad_day(
+        session,
+        tenant_id=env.tenant_id,
+        job_id=uuid4(),
+        accounts={"acc-x": AccountMeta("USD", "UTC")},
+        start=NOW.date() - timedelta(days=2),
+        end=NOW.date(),
+        rows=[
+            ad_row("a1", NOW.date(), adv="acc-x", spend="20", total=None),
+            ad_row(
+                "a2" if split == "ads" else "a1",
+                NOW.date() if split == "ads" else NOW.date() - timedelta(days=1),
+                adv="acc-x",
+                spend="20",
+                total="10",
+            ),
+        ],
+    )
+    state = session.get(ReportSyncState, (env.tenant_id, "acc-x", "ad_day", NOW.date()))
+    state.last_success_at = NOW
+    session.flush()
+    summary = _execute_pause(session, env)
+    assert summary["submitted"] == 0 and summary["failed"] == 1
+    assert session.exec(select(ManagementTask)).all() == []
+
+
+def test_real_recheck_allows_reenable_after_roas_recovers(session, env):
+    other = _other_enabled(session, env)
+    other.definition = {
+        **other.definition,
+        "action": PAUSE,
+        "conditions": [
+            {
+                "metric": "roas_total",
+                "range": "TODAY",
+                "operator": "LT",
+                "values": ["1"],
+            }
+        ],
+    }
+    ledger = session.exec(
+        select(AutomationActionLedger).where(AutomationActionLedger.rule_id == other.id)
+    ).one()
+    ledger.action = "PAUSE"
+    obj = session.get(AdObject, (env.tenant_id, "acc-x", "adgroup", "g1"))
+    obj.operation_status = "DISABLE"
+    _current_conflict_report(session, env, total="30")
+    rule, run = _rule_run(
+        session,
+        env,
+        action={"type": "ENABLE", "level": "adgroup"},
+        targets=[_target("acc-x", "bc-x")],
+    )
+    summary = execute_hits(
+        session,
+        run=run,
+        rule=rule,
+        selected_keys=None,
+        now=NOW,
+        actor_id=rule.updated_by,
+        require_manage=True,
+    )
+    assert summary["conflicts"] == 0 and summary["submitted"] == 1

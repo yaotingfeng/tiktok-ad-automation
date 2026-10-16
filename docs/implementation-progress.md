@@ -2428,3 +2428,12 @@
 - 每日累计涨幅上限删除：提高/降低动作已强制填写上限/下限，预算与 ROAS 调整已强制设执行频率，原上限属重复保护。
 - 迁移 `0036_drop_rule_safety_settings` 删除 `automation_tenant_setting.reverse_cooldown_hours`、`daily_increase_limit_pct`；设置接口再提交这两个字段返回 422。运行设置页只剩运行时区与暂停全部规则。
 - 验证：专用库 `tkada_rule_safety_20261016_test` + Redis DB9 上 `tests/modules/automation_rules` 208 passed；迁移 downgrade/upgrade 往返通过；前端 `bun run build`、biome 通过，`tests/automation-rules.spec.ts` 30 passed。未部署、未调用真实 TikTok。
+
+
+## 2026-10-16：统一发布前自动规则边界修正
+
+- 把后续完成的 `dbe68bfe` 纳入统一发布。独立审查后修复：其他规则台账无年龄截断、每目标/字段取真正最新值；冲突复核使用规则当前动作方向；STALE/缺失关键事实不得当作不命中放行。
+- 冲突重算专用 `strict_facts` 从 SQL 跨天求和、同组广告累加到合计判断均保留部分 NULL 为 UNKNOWN；普通求和口径保持。历史每日涨幅标签和汇总继续可读。
+- 首轮组合 481 passed，新增部分 NULL 后自动规则完整 216 passed；新增真实事实链路覆盖历史动作、规则动作改变、过期与缺数、部分 NULL 及 ROAS 回升重新启用。前端 build/Biome 通过。旧候选检查已停止、不计完整通过，最终统一候选仍须完整门禁、备份/0036 隔离迁移及生产验收。
+
+- 自动规则边界最终全模块 219 passed/8.41s，判断/执行针对 51 passed；全局 ruff/ty、前端 build/Biome 通过，独立复核无剩余 Critical/Important。统一候选冻结，待完整发布门禁及生产备份/0036迁移/业务验收。

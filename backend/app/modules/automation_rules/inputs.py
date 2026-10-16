@@ -365,10 +365,14 @@ def _materials(
     return entities
 
 
-def _add(target: dict[str, Decimal | None], row: Any) -> None:
+def _add(
+    target: dict[str, Decimal | None], row: Any, *, strict_facts: bool = False
+) -> None:
     for key in STORED_KEYS:
         value = getattr(row, key)
-        if value is not None:
+        if strict_facts and (value is None or (key in target and target[key] is None)):
+            target[key] = None
+        elif value is not None:
             target[key] = (target.get(key) or Decimal(0)) + value
         else:
             target.setdefault(key, None)
@@ -382,9 +386,19 @@ def _facts(
     *,
     material: bool,
     now: datetime,
+    strict_facts: bool = False,
 ) -> dict[str, dict[str, Decimal | None]]:
     windows = [local_window(range_type, accounts[a].timezone, now) for a in accounts]
-    sums = ", ".join(f"sum(f.{key}) AS {key}" for key in STORED_KEYS)
+    # 反向冲突重算要求完整事实：跨天的部分 NULL 不能被 SUM 静默忽略。
+    # 普通规则继续沿用已有求和口径，此参数只决定重算证据是否足够。
+    sums = ", ".join(
+        (
+            f"CASE WHEN count(f.{key}) = count(*) THEN sum(f.{key}) END AS {key}"
+            if strict_facts
+            else f"sum(f.{key}) AS {key}"
+        )
+        for key in STORED_KEYS
+    )
     table, ids = (
         ("material_report_day", "f.main_material_id")
         if material
@@ -412,7 +426,11 @@ def _facts(
     for row in rows:
         adv = row.advertiser_id
         if material:
-            _add(result[f"material:{adv}:{row.main_material_id}"], row)
+            _add(
+                result[f"material:{adv}:{row.main_material_id}"],
+                row,
+                strict_facts=strict_facts,
+            )
             continue
         # 广告日报是唯一明细来源，向上累加到广告组、系列。
         for key in (
@@ -420,7 +438,7 @@ def _facts(
             f"adgroup:{adv}:{row.adgroup_id}",
             f"campaign:{adv}:{row.campaign_id}",
         ):
-            _add(result[key], row)
+            _add(result[key], row, strict_facts=strict_facts)
     return dict(result)
 
 
@@ -431,6 +449,7 @@ def load_inputs(
     definition: RuleDefinition,
     now: datetime,
     slot_at: datetime | None = None,
+    strict_facts: bool = False,
 ) -> Inputs:
     """slot_at 为定时运行的槽位：按账户时区运行时只判断当地正处于该槽位的账户；
     试运行等不带槽位的判断覆盖全部账户。"""
@@ -466,6 +485,7 @@ def load_inputs(
             accounts,
             range_type,
             material=level == "material",
+            strict_facts=strict_facts,
             now=now,
         )
         facts[range_type] = {k: v for k, v in loaded.items() if k in entities}

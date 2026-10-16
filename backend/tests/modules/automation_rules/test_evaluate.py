@@ -1,5 +1,7 @@
 from decimal import Decimal
 
+import pytest
+
 from app.modules.automation_rules.evaluate import evaluate
 from app.modules.automation_rules.inputs import AccountInfo, Entity, Inputs
 from app.modules.automation_rules.schemas import RuleDefinition
@@ -280,3 +282,45 @@ def test_click_through_rate_is_judged_in_percent():
     )
     assert [hit.subject_key for hit in result.hits] == ["adgroup:a:g1"]
     assert result.hits[0].metrics == {"ctr:TODAY": "0.5"}
+
+
+def test_conflict_recheck_keeps_partial_group_missing_separate_from_normal_sums():
+    facts = {
+        "adgroup:a:g1": {"spend": Decimal("20"), "revenue_total": None},
+        "adgroup:a:g2": {"spend": Decimal("20"), "revenue_total": Decimal("10")},
+    }
+    definition = rule(
+        aggregation="ALL",
+        conditions=[
+            {
+                "metric": "roas_total",
+                "range": "TODAY",
+                "operator": "LT",
+                "values": ["1"],
+            }
+        ],
+    )
+    normal = evaluate(definition, inputs(GROUPS, facts))
+    assert normal.hits[0].metrics["roas_total:TODAY"] == "0.25"
+    recheck = evaluate(definition, inputs(GROUPS, facts), strict_facts=True)
+    assert not recheck.hits
+    assert set(recheck.unknown_targets) == {"adgroup:a:g1", "adgroup:a:g2"}
+
+
+@pytest.mark.parametrize("spend,unknown", [("5", False), ("20", True)])
+def test_conflict_recheck_known_false_condition_resolves_unknown(spend, unknown):
+    facts = {"adgroup:a:g1": {"spend": Decimal(spend), "revenue_total": None}}
+    definition = rule(
+        conditions=[
+            {"metric": "spend", "range": "TODAY", "operator": "GT", "values": ["10"]},
+            {
+                "metric": "roas_total",
+                "range": "TODAY",
+                "operator": "LT",
+                "values": ["1"],
+            },
+        ]
+    )
+    result = evaluate(definition, inputs(GROUPS, facts), strict_facts=True)
+    assert not result.hits
+    assert ("adgroup:a:g1" in result.unknown_targets) is unknown

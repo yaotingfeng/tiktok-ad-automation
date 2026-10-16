@@ -5,13 +5,14 @@
 
 import logging
 from collections import defaultdict
-from datetime import datetime, timedelta
+from dataclasses import dataclass
+from datetime import datetime
 from typing import Any
 from uuid import NAMESPACE_URL, UUID, uuid5
 
 from fastapi import HTTPException
 from pydantic import ValidationError
-from sqlalchemy import or_, text
+from sqlalchemy import case, func, or_, text
 from sqlmodel import Session, col, select
 
 from app.core.context import TenantContext
@@ -49,6 +50,15 @@ logger = logging.getLogger(__name__)
 MANAGEMENT_SOURCE = "automation_rule"
 # 执行摘要中逐条列出的不支持对象上限。
 MAX_DETAILS = 20
+
+
+@dataclass(frozen=True)
+class RuleMatch:
+    name: str
+    action: str | None = None
+    keys: frozenset[str] = frozenset()
+    unknown_keys: frozenset[str] = frozenset()
+    unknown_accounts: frozenset[str] = frozenset()
 
 
 def _summary() -> dict[str, Any]:
@@ -182,9 +192,9 @@ def execute_hits(
             targets.setdefault(target["key"], target)
             owners[target["key"]].append(hit)
     outcome: dict[str, str] = {}
-    history = _ledger(session, rule.tenant_id, list(targets), now, rule_id=rule.id)
+    history = _ledger(session, rule.tenant_id, list(targets), rule_id=rule.id)
     # 每条对方规则只按当前数据重新判断一次，多个对象共用结果。
-    matching: dict[UUID, tuple[str, set[str]]] = {}
+    matching: dict[UUID, RuleMatch] = {}
     runnable: dict[str, dict[str, Any]] = {}
     for target_key, target in targets.items():
         rows = [row for row in history if row.target_key == target_key]
@@ -209,14 +219,36 @@ def execute_hits(
                 matching[last.rule_id] = _still_matching(
                     session, rule.tenant_id, last.rule_id, now
                 )
-            other_name, other_keys = matching[last.rule_id]
-            if target_key in other_keys:
+            current = matching[last.rule_id]
+            # 历史动作不代表规则现在的方向；改为同向/其他字段后不再互相冲突。
+            if (
+                current.action is not None
+                and opposite(key, current.action)
+                and (
+                    target_key in current.unknown_keys
+                    or target["advertiser_id"] in current.unknown_accounts
+                )
+            ):
+                outcome[target_key] = "FAILED"
+                summary["failed"] += 1
+                detail = {
+                    "bc_id": target["bc_id"],
+                    "reason": "关联规则数据未更新或指标缺失，无法判断反向冲突，本轮未执行",
+                }
+                if detail not in summary["failed_bcs"]:
+                    summary["failed_bcs"].append(detail)
+                continue
+            if (
+                current.action is not None
+                and opposite(key, current.action)
+                and target_key in current.keys
+            ):
                 outcome[target_key] = "CONFLICT"
                 summary["conflicts"] += 1
                 summary["conflict_details"].append(
                     {
                         "target_key": target_key,
-                        "rule_name": other_name,
+                        "rule_name": current.name,
                         "action": last.action,
                     }
                 )
@@ -313,15 +345,30 @@ def _ledger(
     session: Session,
     tenant_id: UUID,
     keys: list[str],
-    now: datetime,
     *,
     rule_id: UUID,
 ) -> list[AutomationActionLedger]:
     if not keys:
         return []
-    # 其他规则的动作只看最近 31 天，用于反向冲突判断；本规则自己的动作全部读取，
-    # 「仅一次」等频控不随时间失效。
-    since = now - timedelta(days=31)
+    # 每个对象/字段只取真正最新的动作，不按年龄截断；本规则保留完整频控历史。
+    field = case(
+        (col(AutomationActionLedger.action).in_(["PAUSE", "ENABLE"]), "STATUS"),
+        else_=func.split_part(col(AutomationActionLedger.action), "_", 1),
+    )
+    latest = (
+        select(AutomationActionLedger.id)
+        .where(
+            AutomationActionLedger.tenant_id == tenant_id,
+            col(AutomationActionLedger.target_key).in_(keys),
+        )
+        .distinct(col(AutomationActionLedger.target_key), field)
+        .order_by(
+            col(AutomationActionLedger.target_key),
+            field,
+            col(AutomationActionLedger.created_at).desc(),
+            col(AutomationActionLedger.id).desc(),
+        )
+    )
     return list(
         session.exec(
             select(AutomationActionLedger)
@@ -329,35 +376,49 @@ def _ledger(
                 AutomationActionLedger.tenant_id == tenant_id,
                 col(AutomationActionLedger.target_key).in_(keys),
                 or_(
-                    col(AutomationActionLedger.created_at) >= since,
                     col(AutomationActionLedger.rule_id) == rule_id,
+                    col(AutomationActionLedger.id).in_(latest),
                 ),
             )
-            .order_by(col(AutomationActionLedger.created_at))
+            .order_by(
+                col(AutomationActionLedger.created_at), col(AutomationActionLedger.id)
+            )
         ).all()
     )
 
 
 def _still_matching(
     session: Session, tenant_id: UUID, rule_id: UUID, now: datetime
-) -> tuple[str, set[str]]:
+) -> RuleMatch:
     """对方规则按当前数据命中的执行对象。
 
     已删除、已关闭、改为仅通知或定义失效的规则不会再执行，不构成冲突。忽略其作用
     状态：被它暂停的对象已不在「启用中」范围内，仍要判断它的条件是否成立。
     """
     other = session.get(AutomationRule, rule_id)
-    if other is None or not other.enabled:
-        return "", set()
+    if other is None or other.tenant_id != tenant_id or not other.enabled:
+        return RuleMatch("")
     try:
         definition = RuleDefinition.model_validate(other.definition)
     except ValidationError:
-        return other.name, set()
+        return RuleMatch(other.name)
     if definition.mode == "NOTIFY":
-        return other.name, set()
-    inputs = load_inputs(session, tenant_id=tenant_id, definition=definition, now=now)
-    result = evaluate(definition, inputs, ignore_status=True)
-    return other.name, {target.key for hit in result.hits for target in hit.targets}
+        return RuleMatch(other.name)
+    inputs = load_inputs(
+        session, tenant_id=tenant_id, definition=definition, now=now, strict_facts=True
+    )
+    result = evaluate(definition, inputs, ignore_status=True, strict_facts=True)
+    unknown_accounts = {row["advertiser_id"] for row in inputs.skipped_accounts}
+    if unknown_accounts and definition.aggregation != "EACH":
+        # 合计条件不能用缺少账户的部分事实断言不命中。
+        unknown_accounts.update(inputs.accounts)
+    return RuleMatch(
+        name=other.name,
+        action=action_key(definition.action),
+        keys=frozenset(target.key for hit in result.hits for target in hit.targets),
+        unknown_keys=frozenset(result.unknown_targets),
+        unknown_accounts=frozenset(unknown_accounts),
+    )
 
 
 def _execute_bc(

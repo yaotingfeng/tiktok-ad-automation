@@ -81,6 +81,7 @@ const EXECUTION_ERRORS: Record<string, string> = {
 
 type Summary = {
   submitted?: number
+  skipped_daily_limit?: number
   skipped_frequency?: number
   conflicts?: number
   no_change?: number
@@ -124,6 +125,9 @@ function ExecutionSummary({
         提交 {summary.submitted ?? 0} 个对象；频控跳过{" "}
         {summary.skipped_frequency ?? 0}、规则冲突 {summary.conflicts ?? 0}
         、无需变更 {summary.no_change ?? 0}
+        {summary.skipped_daily_limit
+          ? `、历史每日涨幅跳过 ${summary.skipped_daily_limit}`
+          : ""}
         {summary.unsupported ? `、不支持 ${summary.unsupported}` : ""}
         {summary.failed ? `、失败 ${summary.failed}` : ""}
       </p>

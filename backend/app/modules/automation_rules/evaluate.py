@@ -49,6 +49,7 @@ class Evaluation:
     checked: int
     hits: tuple[Hit, ...]
     skipped_count: int
+    unknown_targets: tuple[str, ...] = ()
 
 
 def _in_scope(entity: Entity, definition: RuleDefinition, ignore_status: bool) -> bool:
@@ -67,6 +68,8 @@ def _sum(
     members: list[Entity],
     facts: dict[str, dict[str, dict[str, Decimal | None]]],
     range_type: str,
+    *,
+    strict_facts: bool = False,
 ) -> dict[str, Decimal | None]:
     """没有事实行按 0 计（账户已通过新鲜度检查，说明确实没有投放）；
     有事实行但某指标全部为空时保持为空，与报表的 MISSING 口径一致，条件不满足。"""
@@ -85,18 +88,24 @@ def _sum(
                 seen[key] = True
                 totals[key] = (totals[key] or Decimal(0)) + value
     for key in STORED_KEYS:
-        if missing[key] and not seen[key]:
+        if missing[key] and (strict_facts or not seen[key]):
             totals[key] = None
     return totals
 
 
 def _metric(
-    condition: Condition, members: list[Entity], inputs: Inputs
+    condition: Condition,
+    members: list[Entity],
+    inputs: Inputs,
+    *,
+    strict_facts: bool = False,
 ) -> Decimal | str | None:
     meta = RULE_METRICS[condition.metric]
     if meta.kind == "attribute":
         return members[0].attributes.get(condition.metric)
-    totals = _sum(members, inputs.facts, str(condition.range))
+    totals = _sum(
+        members, inputs.facts, str(condition.range), strict_facts=strict_facts
+    )
     if condition.metric in _RATIOS:
         num, den, scale = _RATIOS[condition.metric]
         a, b = totals.get(num), totals.get(den)
@@ -214,7 +223,11 @@ def _targets(
 
 
 def evaluate(
-    definition: RuleDefinition, inputs: Inputs, *, ignore_status: bool = False
+    definition: RuleDefinition,
+    inputs: Inputs,
+    *,
+    ignore_status: bool = False,
+    strict_facts: bool = False,
 ) -> Evaluation:
     """ignore_status 只用于反向冲突判断：被规则暂停（或启用）后的对象已不在它的
     作用状态内，但仍要看它的条件按当前数据是否成立。"""
@@ -241,9 +254,28 @@ def evaluate(
     children = _children(inputs)
     materials_by_ad = _materials_by_ad(inputs)
     hits = []
+    unknown_targets: set[str] = set()
     for key, members in groups.items():
-        values = [(c, _metric(c, members, inputs)) for c in definition.conditions]
+        values = [
+            (c, _metric(c, members, inputs, strict_facts=strict_facts))
+            for c in definition.conditions
+        ]
         if not all(_matches(c, v) for c, v in values):
+            # 已知不成立足以排除；其余条件成立但关键值缺失时，不能断言不命中。
+            # 普通判断仍不生成命中，反向冲突重算用此证据保持本轮不执行。
+            if any(v is None for _, v in values) and all(
+                v is None or _matches(c, v) for c, v in values
+            ):
+                unknown_targets.update(
+                    t.key
+                    for t in _targets(
+                        members,
+                        definition.action.level,
+                        inputs,
+                        children,
+                        materials_by_ad,
+                    )
+                )
             continue
         first = members[0]
         targets = _targets(
@@ -270,4 +302,9 @@ def evaluate(
                 target_count=len(targets),
             )
         )
-    return Evaluation(checked=len(groups), hits=tuple(hits), skipped_count=skipped)
+    return Evaluation(
+        checked=len(groups),
+        hits=tuple(hits),
+        skipped_count=skipped,
+        unknown_targets=tuple(sorted(unknown_targets)),
+    )
