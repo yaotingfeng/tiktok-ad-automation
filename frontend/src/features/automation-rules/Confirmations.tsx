@@ -185,7 +185,7 @@ function ConfirmationSheet({
             </p>
           )}
           <p className="text-sm text-muted-foreground">
-            「现在」为按最新数据重新判断的结果；执行时仍会做频控、冷却期与每日涨幅检查。
+            「现在」为按最新数据重新判断的结果；执行时仍会做频控与规则冲突检查。
           </p>
           {data && (
             <Table>

@@ -45,8 +45,6 @@ def _public(session: Session, tenant_id: UUID) -> AutomationSettingsPublic:
     return AutomationSettingsPublic(
         schedule_timezone=setting.schedule_timezone,
         paused=setting.paused,
-        reverse_cooldown_hours=setting.reverse_cooldown_hours,
-        daily_increase_limit_pct=setting.daily_increase_limit_pct,
         feishu_configured=row is not None,
         feishu_enabled=bool(row and row.enabled),
         feishu_url_hint=row.url_hint if row else None,
@@ -102,8 +100,6 @@ def update_settings(
     )
     if zone_changed:
         _reschedule_tenant(session, context.tenant_id, body.schedule_timezone, now)
-    setting.reverse_cooldown_hours = body.reverse_cooldown_hours
-    setting.daily_increase_limit_pct = body.daily_increase_limit_pct
     row = session.get(TenantFeishuSetting, context.tenant_id)
     if body.clear_feishu:
         if row is not None:

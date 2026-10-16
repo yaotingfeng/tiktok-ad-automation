@@ -140,8 +140,6 @@ const EXECUTED_RUN = {
   execution_summary: {
     submitted: 2,
     skipped_frequency: 0,
-    skipped_cooldown: 0,
-    skipped_daily_limit: 1,
     conflicts: 1,
     no_change: 0,
     failed: 0,
@@ -449,8 +447,6 @@ export async function automationBoundary(
         feishu_enabled: true,
         feishu_url_hint: "https://open.feishu.cn/open-apis/bot/v2/hook/…ab12",
         feishu_has_secret: false,
-        reverse_cooldown_hours: 24,
-        daily_increase_limit_pct: 100,
       })
     }
     return json({ items: [], next_cursor: null, total: 0 })

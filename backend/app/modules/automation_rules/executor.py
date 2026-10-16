@@ -1,17 +1,16 @@
-"""执行规则命中：频控、冷却期冲突、每日涨幅上限，再经广告管理的冻结预览与任务提交执行。
+"""执行规则命中：频控、反向冲突判断，再经广告管理的冻结预览与任务提交执行。
 
 不直接调用 TikTok：写入、重试、写前观测核对与写后定向刷新全部由广告管理负责。
 """
 
 import logging
 from collections import defaultdict
-from datetime import UTC, datetime, time, timedelta
-from decimal import Decimal, InvalidOperation
+from datetime import datetime, timedelta
 from typing import Any
 from uuid import NAMESPACE_URL, UUID, uuid5
-from zoneinfo import ZoneInfo
 
 from fastapi import HTTPException
+from pydantic import ValidationError
 from sqlalchemy import or_, text
 from sqlmodel import Session, col, select
 
@@ -22,6 +21,7 @@ from app.modules.ad_management.previews import prepare_preview
 from app.modules.ad_management.submissions import submit_management_task
 from app.modules.ads.models import AdObject
 from app.modules.automation_rules.actions import (
+    action_field,
     action_key,
     frequency_allows,
     group_by_bc,
@@ -31,6 +31,8 @@ from app.modules.automation_rules.actions import (
     target_index,
     use_key,
 )
+from app.modules.automation_rules.evaluate import evaluate
+from app.modules.automation_rules.inputs import load_inputs
 from app.modules.automation_rules.models import (
     AutomationActionLedger,
     AutomationRule,
@@ -38,7 +40,6 @@ from app.modules.automation_rules.models import (
     AutomationRuleRun,
 )
 from app.modules.automation_rules.schemas import RuleDefinition
-from app.modules.automation_rules.settings_service import load_tenant_setting
 from app.modules.reporting.query_models import FrozenSelectionRecord
 from app.modules.reporting.selection import create_target_selection
 from app.modules.tenants.permissions import require_tenant
@@ -54,8 +55,6 @@ def _summary() -> dict[str, Any]:
     return {
         "submitted": 0,
         "skipped_frequency": 0,
-        "skipped_cooldown": 0,
-        "skipped_daily_limit": 0,
         "conflicts": 0,
         "no_change": 0,
         "unsupported": 0,
@@ -65,15 +64,6 @@ def _summary() -> dict[str, Any]:
         "conflict_details": [],
         "unsupported_details": [],
     }
-
-
-def _decimal(value: str | None) -> Decimal | None:
-    if value is None:
-        return None
-    try:
-        return Decimal(value)
-    except InvalidOperation, ValueError:
-        return None
 
 
 def lock_tenant(session: Session, tenant_id: UUID) -> None:
@@ -137,11 +127,6 @@ def _target_key(
     )
 
 
-def _day_start(now: datetime, timezone: str) -> datetime:
-    local = now.astimezone(ZoneInfo(timezone)).date()
-    return datetime.combine(local, time(0), ZoneInfo(timezone)).astimezone(UTC)
-
-
 def execute_hits(
     session: Session,
     *,
@@ -179,7 +164,6 @@ def execute_hits(
     definition = RuleDefinition.model_validate(run.definition)
     action = definition.action
     key = action_key(action)
-    setting = load_tenant_setting(session, rule.tenant_id)
     hits = list(
         session.exec(
             select(AutomationRuleHit)
@@ -198,44 +182,45 @@ def execute_hits(
             targets.setdefault(target["key"], target)
             owners[target["key"]].append(hit)
     outcome: dict[str, str] = {}
-    history = _ledger(
-        session,
-        rule.tenant_id,
-        list(targets),
-        now,
-        setting.reverse_cooldown_hours,
-        rule_id=rule.id,
-    )
-    rule_names = _rule_names(
-        session, {row.rule_id for row in history if row.rule_id is not None}
-    )
+    history = _ledger(session, rule.tenant_id, list(targets), now, rule_id=rule.id)
+    # 每条对方规则只按当前数据重新判断一次，多个对象共用结果。
+    matching: dict[UUID, tuple[str, set[str]]] = {}
     runnable: dict[str, dict[str, Any]] = {}
     for target_key, target in targets.items():
         rows = [row for row in history if row.target_key == target_key]
-        conflict = next(
+        # 反向冲突：同一字段最近一次是被另一条规则做了相反动作，且那条规则按当前
+        # 数据仍命中该对象——两条规则条件重叠，继续执行只会来回反复。对方规则
+        # 已不命中（如延迟归因后 ROAS 回升）说明数据变了，相反动作正常执行。
+        last = next(
             (
                 row
-                for row in rows
-                if row.rule_id != rule.id
-                and row.created_at
-                >= now - timedelta(hours=setting.reverse_cooldown_hours)
-                and opposite(key, row.action)
+                for row in reversed(rows)
+                if action_field(row.action) == action_field(key)
             ),
             None,
         )
-        if conflict is not None:
-            outcome[target_key] = "CONFLICT"
-            summary["conflicts"] += 1
-            summary["conflict_details"].append(
-                {
-                    "target_key": target_key,
-                    "rule_name": rule_names.get(conflict.rule_id, "已删除的规则")
-                    if conflict.rule_id is not None
-                    else "已删除的规则",
-                    "action": conflict.action,
-                }
-            )
-            continue
+        if (
+            last is not None
+            and last.rule_id is not None
+            and last.rule_id != rule.id
+            and opposite(key, last.action)
+        ):
+            if last.rule_id not in matching:
+                matching[last.rule_id] = _still_matching(
+                    session, rule.tenant_id, last.rule_id, now
+                )
+            other_name, other_keys = matching[last.rule_id]
+            if target_key in other_keys:
+                outcome[target_key] = "CONFLICT"
+                summary["conflicts"] += 1
+                summary["conflict_details"].append(
+                    {
+                        "target_key": target_key,
+                        "rule_name": other_name,
+                        "action": last.action,
+                    }
+                )
+                continue
         own = [
             row.created_at
             for row in rows
@@ -246,7 +231,6 @@ def execute_hits(
             summary["skipped_frequency"] += 1
             continue
         runnable[target_key] = target
-    day_start = _day_start(now, setting.schedule_timezone)
     for bc_id, bc_targets in group_by_bc(runnable.values()).items():
         # 保存点回滚时，本 BC 已计入的计数与结果一并撤销，整个 BC 记为失败。
         counts = {
@@ -263,9 +247,6 @@ def execute_hits(
                     bc_id=bc_id,
                     targets=bc_targets,
                     action_name=key,
-                    history=history,
-                    day_start=day_start,
-                    limit_pct=setting.daily_increase_limit_pct,
                     now=now,
                     outcome=outcome,
                     summary=summary,
@@ -300,9 +281,9 @@ def execute_hits(
             if _priority(value) > _priority(hit.outcome):
                 hit.outcome = value
     if summary["submitted"] == 0:
-        # 没有提交任何变更：有失败记为失败，否则全部被频控、冷却期等跳过。
+        # 没有提交任何变更：有失败记为失败，否则全部被频控、反向冲突等跳过。
         run.execution_status = "FAILED" if summary["failed"] else "SKIPPED"
-    elif summary["failed"] or summary["conflicts"] or summary["skipped_daily_limit"]:
+    elif summary["failed"] or summary["conflicts"]:
         run.execution_status = "PARTIAL"
     else:
         run.execution_status = "SUBMITTED"
@@ -318,7 +299,6 @@ _PRIORITY = [
     "NO_CHANGE",
     "UNSUPPORTED",
     "SKIPPED_FREQUENCY",
-    "SKIPPED_DAILY_LIMIT",
     "SUBMITTED",
     "CONFLICT",
     "FAILED",
@@ -334,15 +314,14 @@ def _ledger(
     tenant_id: UUID,
     keys: list[str],
     now: datetime,
-    cooldown_hours: int,
     *,
     rule_id: UUID,
 ) -> list[AutomationActionLedger]:
     if not keys:
         return []
-    # 冷却期与当日涨幅只看最近的台账（冷却期最长 168 小时）；本规则自己的动作
-    # 全部读取，「仅一次」等频控不随时间失效。
-    since = now - timedelta(days=31, hours=cooldown_hours)
+    # 其他规则的动作只看最近 31 天，用于反向冲突判断；本规则自己的动作全部读取，
+    # 「仅一次」等频控不随时间失效。
+    since = now - timedelta(days=31)
     return list(
         session.exec(
             select(AutomationActionLedger)
@@ -359,15 +338,26 @@ def _ledger(
     )
 
 
-def _rule_names(session: Session, ids: set[UUID]) -> dict[UUID, str]:
-    if not ids:
-        return {}
-    rows = session.exec(
-        select(AutomationRule.id, AutomationRule.name).where(
-            col(AutomationRule.id).in_(list(ids))
-        )
-    ).all()
-    return dict(rows)
+def _still_matching(
+    session: Session, tenant_id: UUID, rule_id: UUID, now: datetime
+) -> tuple[str, set[str]]:
+    """对方规则按当前数据命中的执行对象。
+
+    已删除、已关闭、改为仅通知或定义失效的规则不会再执行，不构成冲突。忽略其作用
+    状态：被它暂停的对象已不在「启用中」范围内，仍要判断它的条件是否成立。
+    """
+    other = session.get(AutomationRule, rule_id)
+    if other is None or not other.enabled:
+        return "", set()
+    try:
+        definition = RuleDefinition.model_validate(other.definition)
+    except ValidationError:
+        return other.name, set()
+    if definition.mode == "NOTIFY":
+        return other.name, set()
+    inputs = load_inputs(session, tenant_id=tenant_id, definition=definition, now=now)
+    result = evaluate(definition, inputs, ignore_status=True)
+    return other.name, {target.key for hit in result.hits for target in hit.targets}
 
 
 def _execute_bc(
@@ -379,9 +369,6 @@ def _execute_bc(
     bc_id: str,
     targets: list[dict[str, Any]],
     action_name: str,
-    history: list[AutomationActionLedger],
-    day_start: datetime,
-    limit_pct: int,
     now: datetime,
     outcome: dict[str, str],
     summary: dict[str, Any],
@@ -394,38 +381,6 @@ def _execute_bc(
     index = target_index(targets)
     owners = _OwnerMap(session, rule.tenant_id, targets, index)
     preview = prepare_preview(session, context, bc_id, selection.id, mutation)
-    field_prefix = action_name.partition("_")[0] + "_"
-    if action_name.startswith(("BUDGET_", "ROAS_")):
-        # 当日累计涨幅：任何把值调高的执行（提高或调整至）都受限，
-        # 基准是当日该字段第一次被规则调整前的值。
-        excluded = []
-        for item in preview.items:
-            original = item.original_value
-            # 预算/ROAS 预览的原值必为数值；非数值（如名称）不参与涨幅限制。
-            if item.execution_result != "PENDING" or not isinstance(original, Decimal):
-                continue
-            final = item.final_value
-            if not isinstance(final, Decimal) or final <= original:
-                continue
-            keys = owners.keys(item.ref, item.material_use)
-            today = [
-                row
-                for row in history
-                if row.target_key in keys
-                and row.action.startswith(field_prefix)
-                and row.created_at >= day_start
-            ]
-            first = _decimal(today[0].original_value) if today else None
-            baseline = first if first is not None else original
-            if final > baseline * (Decimal(1) + Decimal(limit_pct) / 100):
-                excluded.append(item.ref)
-                for key in keys:
-                    if key not in outcome:
-                        outcome[key] = "SKIPPED_DAILY_LIMIT"
-                        summary["skipped_daily_limit"] += 1
-        if excluded:
-            mutation = mutation.model_copy(update={"excluded_refs": tuple(excluded)})
-            preview = prepare_preview(session, context, bc_id, selection.id, mutation)
     # 一个规则目标可能对应多个预览项（素材在多条广告中的使用、预算持有者），
     # 先按目标汇总再定结果：任一项可执行即视为提交，避免已提交却未记台账。
     results: dict[str, list[Any]] = defaultdict(list)

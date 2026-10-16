@@ -462,14 +462,6 @@ export type AutomationSettingsPublic = {
      */
     paused: boolean;
     /**
-     * Reverse Cooldown Hours
-     */
-    reverse_cooldown_hours: number;
-    /**
-     * Daily Increase Limit Pct
-     */
-    daily_increase_limit_pct: number;
-    /**
      * Feishu Configured
      */
     feishu_configured: boolean;
@@ -503,14 +495,6 @@ export type AutomationSettingsUpdate = {
      * Feishu Enabled
      */
     feishu_enabled: boolean;
-    /**
-     * Reverse Cooldown Hours
-     */
-    reverse_cooldown_hours?: number;
-    /**
-     * Daily Increase Limit Pct
-     */
-    daily_increase_limit_pct?: number;
     /**
      * Webhook Url
      */

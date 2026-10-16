@@ -36,7 +36,6 @@ _COUNTS = (
     "submitted",
     "skipped_frequency",
     "conflicts",
-    "skipped_daily_limit",
     "no_change",
     "unsupported",
     "failed",

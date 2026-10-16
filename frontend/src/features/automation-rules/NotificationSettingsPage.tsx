@@ -47,8 +47,6 @@ export function NotificationSettingsPage() {
   const [enabled, setEnabled] = useState(true)
   const [timezone, setTimezone] = useState("Asia/Shanghai")
   const [paused, setPaused] = useState(false)
-  const [cooldown, setCooldown] = useState("24")
-  const [increaseLimit, setIncreaseLimit] = useState("100")
   const [notice, setNotice] = useState<{ ok: boolean; text: string } | null>(
     null,
   )
@@ -59,8 +57,6 @@ export function NotificationSettingsPage() {
     )
     setTimezone(settings.data.schedule_timezone)
     setPaused(settings.data.paused)
-    setCooldown(String(settings.data.reverse_cooldown_hours))
-    setIncreaseLimit(String(settings.data.daily_increase_limit_pct))
   }, [settings.data])
   const feedback = (ok: boolean, text: string) => setNotice({ ok, text })
   const test = useMutation({
@@ -81,8 +77,6 @@ export function NotificationSettingsPage() {
         body: {
           schedule_timezone: timezone,
           paused,
-          reverse_cooldown_hours: Number(cooldown),
-          daily_increase_limit_pct: Number(increaseLimit),
           feishu_enabled: enabled,
           // 留空表示保持已保存的 Webhook 与密钥不变。
           webhook_url: webhook.trim() || null,
@@ -213,38 +207,6 @@ export function NotificationSettingsPage() {
             />
             <Label htmlFor="rules-paused">暂停全部规则</Label>
           </div>
-          <div className="flex flex-wrap gap-6">
-            <Field className="w-56">
-              <FieldLabel htmlFor="reverse-cooldown">
-                反向操作冷却期（小时）
-              </FieldLabel>
-              <Input
-                id="reverse-cooldown"
-                type="number"
-                min={1}
-                max={168}
-                value={cooldown}
-                onChange={(e) => setCooldown(e.target.value)}
-              />
-            </Field>
-            <Field className="w-56">
-              <FieldLabel htmlFor="daily-increase-limit">
-                每日累计涨幅上限（%）
-              </FieldLabel>
-              <Input
-                id="daily-increase-limit"
-                type="number"
-                min={1}
-                max={1000}
-                value={increaseLimit}
-                onChange={(e) => setIncreaseLimit(e.target.value)}
-              />
-            </Field>
-          </div>
-          <p className="text-sm text-muted-foreground">
-            冷却期内，其他规则对同一对象做相反操作（如刚启用又暂停、刚提高又降低）会记为冲突并跳过；
-            预算与出价当日累计提高不超过当日首次调整前的值乘以上限比例。
-          </p>
         </CardContent>
         <CardFooter>
           <Button disabled={save.isPending} onClick={() => save.mutate(false)}>

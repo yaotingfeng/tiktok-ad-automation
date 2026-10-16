@@ -82,7 +82,6 @@ const EXECUTION_ERRORS: Record<string, string> = {
 type Summary = {
   submitted?: number
   skipped_frequency?: number
-  skipped_daily_limit?: number
   conflicts?: number
   no_change?: number
   unsupported?: number
@@ -123,9 +122,8 @@ function ExecutionSummary({
     <div className="flex flex-col gap-1 rounded-md border p-3 text-sm">
       <p>
         提交 {summary.submitted ?? 0} 个对象；频控跳过{" "}
-        {summary.skipped_frequency ?? 0}、冷却期冲突 {summary.conflicts ?? 0}
-        、超出每日涨幅 {summary.skipped_daily_limit ?? 0}、无需变更{" "}
-        {summary.no_change ?? 0}
+        {summary.skipped_frequency ?? 0}、规则冲突 {summary.conflicts ?? 0}
+        、无需变更 {summary.no_change ?? 0}
         {summary.unsupported ? `、不支持 ${summary.unsupported}` : ""}
         {summary.failed ? `、失败 ${summary.failed}` : ""}
       </p>
@@ -149,7 +147,8 @@ function ExecutionSummary({
       ))}
       {(summary.conflict_details ?? []).map((item) => (
         <p key={item.target_key} className="break-all text-muted-foreground">
-          冲突：{item.target_key} 与规则「{item.rule_name}」相反
+          冲突：{item.target_key} 规则「{item.rule_name}
+          」仍命中，两条规则条件重叠
         </p>
       ))}
       {(summary.tasks ?? []).map((task) => (

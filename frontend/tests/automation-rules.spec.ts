@@ -141,22 +141,18 @@ test("通知设置:掩码显示、测试与保存", async ({ page }) => {
   })
 })
 
-test("通知设置:保存冷却期与每日涨幅上限", async ({ page }) => {
-  const saved: unknown[] = []
+test("通知设置:运行设置只保存时区与暂停", async ({ page }) => {
+  const saved: Record<string, unknown>[] = []
   await automationBoundary(page, { saved })
   await page.goto(`/tenants/${TENANT}/notifications`)
-  await page
-    .getByRole("spinbutton", { name: "反向操作冷却期（小时）" })
-    .fill("12")
-  await page
-    .getByRole("spinbutton", { name: "每日累计涨幅上限（%）" })
-    .fill("50")
+  await expect(page.getByText("反向操作冷却期")).toHaveCount(0)
+  await expect(page.getByText("每日累计涨幅上限")).toHaveCount(0)
+  await page.getByLabel("暂停全部规则").check()
   await page.getByRole("button", { name: "保存" }).click()
   await expect.poll(() => saved.length).toBe(1)
-  expect(saved[0]).toMatchObject({
-    reverse_cooldown_hours: 12,
-    daily_increase_limit_pct: 50,
-  })
+  expect(saved[0]).toMatchObject({ paused: true })
+  expect(saved[0]).not.toHaveProperty("reverse_cooldown_hours")
+  expect(saved[0]).not.toHaveProperty("daily_increase_limit_pct")
 })
 
 test("非管理员没有通知设置入口", async ({ page }) => {

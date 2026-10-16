@@ -103,10 +103,6 @@ class AutomationTenantSetting(SQLModel, table=True):
     # 自定义运行时段按租户时区解释;各账户指标仍按各自账户时区取日期。
     schedule_timezone: str = Field(default="Asia/Shanghai", max_length=64)
     paused: bool = False
-    # 同一对象被一条规则改过后，冷却期内其他规则不得做相反动作。
-    reverse_cooldown_hours: int = 24
-    # 提高预算 / ROAS 时，同一对象当日累计涨幅上限（百分比）。
-    daily_increase_limit_pct: int = 100
     updated_at: datetime = Field(default_factory=_now, sa_type=AwareDateTime)
 
 
@@ -123,10 +119,10 @@ class TenantFeishuSetting(SQLModel, table=True):
 
 
 class AutomationActionLedger(SQLModel, table=True):
-    """每次提交给广告管理的规则动作；频控、冷却期与每日涨幅上限都以它为准。
+    """每次提交给广告管理的规则动作；频控与反向冲突判断都以它为准。
 
-    台账独立于运行与规则保留：运行清理或规则删除后，频控（如「仅一次」）与
-    其他规则的冷却期冲突判断仍要看到这些动作。
+    台账独立于运行与规则保留：运行清理或规则删除后，频控（如「仅一次」）仍要
+    看到这些动作。
     """
 
     __tablename__ = "automation_action_ledger"

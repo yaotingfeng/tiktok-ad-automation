@@ -253,8 +253,6 @@ def test_execution_result_card(session, sync_seed):
     run.execution_summary = {
         "submitted": 2,
         "skipped_frequency": 1,
-        "skipped_cooldown": 0,
-        "skipped_daily_limit": 3,
         "conflicts": 1,
         "no_change": 4,
         "failed": 1,
@@ -269,9 +267,9 @@ def test_execution_result_card(session, sync_seed):
     assert card["card"]["header"]["template"] == "red"
     text = _card_text(card)
     assert "提交 2 个对象" in text
-    assert "频控跳过 1、冷却期冲突 1、超出每日涨幅 3、无需变更 4" in text
+    assert "频控跳过 1、规则冲突 1、无需变更 4" in text
     assert "bc-y：route_unavailable" in text
-    assert "冲突：adgroup:acc-1:g1 与规则「拉量」相反" in text
+    assert "冲突：adgroup:acc-1:g1 规则「拉量」仍命中，两条规则条件重叠" in text
     run.execution_status, run.execution_summary["failed_bcs"] = "SUBMITTED", []
     run.execution_summary["failed"] = 0
     card = build_run_card(rule, run, [], confirmation_id=None)

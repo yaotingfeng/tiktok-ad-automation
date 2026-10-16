@@ -157,6 +157,18 @@ def test_status_filters_and_missing_facts_are_zero():
     assert [h.subject_key for h in result.hits] == ["adgroup:a:g2"]
 
 
+def test_ignore_status_keeps_condition_check_for_paused_objects():
+    # 反向冲突判断：暂停规则已把 g1 关掉，仍要看它的条件按当前数据是否成立。
+    items = [
+        ent("adgroup", "a", "g1", status="DISABLE"),
+        ent("adgroup", "a", "g2", status="DISABLE"),
+    ]
+    facts = {"adgroup:a:g1": {"spend": Decimal("20")}}
+    result = evaluate(rule(), inputs(items, facts), ignore_status=True)
+    assert [h.subject_key for h in result.hits] == ["adgroup:a:g1"]
+    assert evaluate(rule(), inputs(items, facts)).hits == ()
+
+
 def test_name_and_attribute_conditions():
     items = [
         ent("adgroup", "a", "g1", name="嘉书-测试", budget=Decimal("30")),

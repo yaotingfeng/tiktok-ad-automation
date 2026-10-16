@@ -2420,3 +2420,11 @@
 - 队列收尾：新增目录 Worker 独占 `ads-publish`（与读取公平轮询、仍单并发），避免万条读取积压阻塞末页发布；scanner 按暂存末页选路由、旧同键消息保留、缺末页发布拒绝。生产备份隔离恢复并迁移演练，真实 4582 对象/4404 素材发布 49 SQL、5.45 秒，无外部 API/生产写入。
 
 - 全量门禁发现核心运行配置测试仍断言旧队列清单，补齐 `ads-publish` 后该文件 12 passed；75dcc8d9 检查轮次已停止、不计完整通过（当轮前端 591 passed）。新候选须重新完成门禁。
+
+## 2026-10-16：自动规则移除冷却期与每日涨幅上限，反向冲突改看对方规则是否仍命中
+
+- 用户反馈：固定 24 小时冷却会拦下「ROAS 低被关停 → 延迟归因回升 → 启用」以及「启用后再次变差 → 再关停」这类正常操作；两项设置普通用户看不懂。
+- 反向冲突改为：同一对象同一字段最近一次是另一条规则做的相反动作，且那条规则按当前数据（忽略其作用状态）仍命中该对象，才记为冲突并在飞书提示「两条规则条件重叠」；对方规则已不命中、已关闭、已删除或改为仅通知时正常执行。
+- 每日累计涨幅上限删除：提高/降低动作已强制填写上限/下限，预算与 ROAS 调整已强制设执行频率，原上限属重复保护。
+- 迁移 `0036_drop_rule_safety_settings` 删除 `automation_tenant_setting.reverse_cooldown_hours`、`daily_increase_limit_pct`；设置接口再提交这两个字段返回 422。运行设置页只剩运行时区与暂停全部规则。
+- 验证：专用库 `tkada_rule_safety_20261016_test` + Redis DB9 上 `tests/modules/automation_rules` 208 passed；迁移 downgrade/upgrade 往返通过；前端 `bun run build`、biome 通过，`tests/automation-rules.spec.ts` 30 passed。未部署、未调用真实 TikTok。

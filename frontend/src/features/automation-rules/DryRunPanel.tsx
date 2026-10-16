@@ -32,9 +32,8 @@ export const OUTCOME_LABELS: Record<string, string> = {
   NO_CHANGE: "无需变更",
   UNSUPPORTED: "不支持",
   SKIPPED_FREQUENCY: "频控跳过",
-  SKIPPED_DAILY_LIMIT: "超出每日涨幅",
   SUBMITTED: "已提交",
-  CONFLICT: "冷却期冲突",
+  CONFLICT: "规则冲突",
   FAILED: "失败",
 }
 

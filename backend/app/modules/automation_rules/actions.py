@@ -26,6 +26,11 @@ def action_key(action: Action) -> str:
     return f"{action.type}_{_SUFFIX[action.adjustment.mode]}"
 
 
+def action_field(action: str) -> str:
+    """动作作用的字段：启停改状态，其余按前缀（BUDGET / ROAS）。"""
+    return "STATUS" if action in ("PAUSE", "ENABLE") else action.partition("_")[0]
+
+
 def opposite(a: str, b: str) -> bool:
     """暂停与启用相反；同一字段的提高与降低相反；「调整至」与同字段任何调整都视为相反。"""
     if {a, b} == {"PAUSE", "ENABLE"}:

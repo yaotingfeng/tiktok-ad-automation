@@ -26,7 +26,6 @@ from app.modules.automation_rules.models import (
     AutomationRule,
     AutomationRuleHit,
     AutomationRuleRun,
-    AutomationTenantSetting,
 )
 from app.modules.automation_rules.schemas import RuleDefinition
 from app.modules.tenants.models import TenantMembership
@@ -291,7 +290,8 @@ def test_frequency_once_skips_second_run(session, env):
     assert _hits(session, second) == {"adgroup:acc-x:g1": "SKIPPED_FREQUENCY"}
 
 
-def test_reverse_action_within_cooldown_is_conflict(session, env):
+def _other_enabled(session, env, *, minutes_ago=60):
+    """另一条规则最近启用过目标广告组。"""
     other, other_run = _rule_run(
         session,
         env,
@@ -306,9 +306,31 @@ def test_reverse_action_within_cooldown_is_conflict(session, env):
             run_id=other_run.id,
             target_key="adgroup:acc-x:g1",
             action="ENABLE",
-            created_at=NOW - timedelta(hours=1),
+            created_at=NOW - timedelta(minutes=minutes_ago),
         )
     )
+    session.flush()
+    return other
+
+
+def _still_matching(monkeypatch, keys):
+    from app.modules.automation_rules import executor
+
+    calls = []
+
+    def fake(_session, _tenant_id, rule_id, _now):
+        calls.append(rule_id)
+        return "other", set(keys)
+
+    monkeypatch.setattr(executor, "_still_matching", fake)
+    return calls
+
+
+def test_reverse_action_conflicts_while_other_rule_still_matches(
+    session, env, monkeypatch
+):
+    other = _other_enabled(session, env)
+    calls = _still_matching(monkeypatch, {"adgroup:acc-x:g1"})
     rule, run = _rule_run(
         session, env, action=PAUSE, targets=[_target("acc-x", "bc-x")]
     )
@@ -321,6 +343,8 @@ def test_reverse_action_within_cooldown_is_conflict(session, env):
         actor_id=rule.updated_by,
         require_manage=True,
     )
+    # 对方规则按当前数据仍命中：两条规则条件重叠，跳过并提示。
+    assert calls == [other.id]
     assert summary["conflicts"] == 1 and summary["submitted"] == 0
     assert summary["conflict_details"] == [
         {"target_key": "adgroup:acc-x:g1", "rule_name": "other", "action": "ENABLE"}
@@ -328,32 +352,15 @@ def test_reverse_action_within_cooldown_is_conflict(session, env):
     assert session.exec(select(ManagementTask)).all() == []
 
 
-def test_daily_increase_limit_excludes_target(session, env):
-    session.add(
-        AutomationTenantSetting(tenant_id=env.tenant_id, daily_increase_limit_pct=100)
-    )
-    up30 = {**BUDGET_UP, "adjustment": {**BUDGET_UP["adjustment"], "value": "30"}}
+def test_reverse_action_runs_when_other_rule_no_longer_matches(
+    session, env, monkeypatch
+):
+    # 例如延迟归因后 ROAS 回升，暂停规则已不命中：刚被暂停也能马上被启用，反之亦然。
+    _other_enabled(session, env, minutes_ago=5)
+    _still_matching(monkeypatch, set())
     rule, run = _rule_run(
-        session,
-        env,
-        action=up30,
-        targets=[_target("acc-x", "bc-x")],
-        frequency={"type": "CUSTOM", "window": 1, "unit": "MINUTE", "count": 9},
+        session, env, action=PAUSE, targets=[_target("acc-x", "bc-x")]
     )
-    # 当日早些时候已从 30 提到 50；本次 50→65 超过基准 30 的 2 倍（日涨幅 100%）即 60。
-    session.add(
-        AutomationActionLedger(
-            tenant_id=env.tenant_id,
-            rule_id=rule.id,
-            run_id=run.id,
-            target_key="adgroup:acc-x:g1",
-            action="BUDGET_UP",
-            original_value="30",
-            final_value="50",
-            created_at=NOW - timedelta(hours=2),
-        )
-    )
-    session.flush()
     summary = execute_hits(
         session,
         run=run,
@@ -363,8 +370,56 @@ def test_daily_increase_limit_excludes_target(session, env):
         actor_id=rule.updated_by,
         require_manage=True,
     )
-    assert summary["skipped_daily_limit"] == 1 and summary["submitted"] == 0
-    assert _hits(session, run) == {"adgroup:acc-x:g1": "SKIPPED_DAILY_LIMIT"}
+    assert summary["conflicts"] == 0 and summary["submitted"] == 1
+
+
+def test_latest_same_field_action_decides_conflict(session, env, monkeypatch):
+    _other_enabled(session, env, minutes_ago=120)
+    # 之后本规则自己又改过状态：最近一次状态变更不是对方做的，无需再判断对方规则。
+    rule, run = _rule_run(
+        session, env, action=PAUSE, targets=[_target("acc-x", "bc-x")]
+    )
+    session.add(
+        AutomationActionLedger(
+            tenant_id=env.tenant_id,
+            rule_id=rule.id,
+            run_id=run.id,
+            target_key="adgroup:acc-x:g1",
+            action="PAUSE",
+            created_at=NOW - timedelta(minutes=60),
+        )
+    )
+    session.flush()
+    calls = _still_matching(monkeypatch, {"adgroup:acc-x:g1"})
+    summary = execute_hits(
+        session,
+        run=run,
+        rule=rule,
+        selected_keys=None,
+        now=NOW,
+        actor_id=rule.updated_by,
+        require_manage=True,
+    )
+    assert calls == [] and summary["conflicts"] == 0
+
+
+def test_inactive_other_rules_never_conflict(session, env):
+    from app.modules.automation_rules.executor import _still_matching as real
+
+    other, _ = _rule_run(
+        session,
+        env,
+        action={"type": "ENABLE", "level": "adgroup"},
+        targets=[],
+        name="other",
+    )
+    # 已关闭的规则不会再执行，不构成冲突；改为仅通知同理。
+    other.enabled = False
+    session.flush()
+    assert real(session, env.tenant_id, other.id, NOW) == ("", set())
+    other.enabled, other.definition = True, {**other.definition, "mode": "NOTIFY"}
+    session.flush()
+    assert real(session, env.tenant_id, other.id, NOW) == ("other", set())
 
 
 def test_no_change_targets_skip_ledger(session, env):
@@ -454,8 +509,9 @@ def test_selected_keys_limit_execution(session, env):
     }
 
 
-def test_concurrent_reverse_actions_conflict():
+def test_concurrent_reverse_actions_conflict(monkeypatch):
     """两条相反规则在两个独立事务中执行：租户级锁保证后者看到前者的台账。"""
+    _still_matching(monkeypatch, {"adgroup:acc-race:g1"})
     with Session(engine, expire_on_commit=False) as setup:
         context = create_context(setup, role="tenant_admin")
         connection = _bc(setup, context, "bc-race", "acc-race")
@@ -490,7 +546,7 @@ def test_concurrent_reverse_actions_conflict():
                 )
                 results.append(summary)
         assert results[0]["submitted"] == 1
-        # 第二条：目标已是 DISABLE 时，ENABLE 是相反动作且在冷却期内。
+        # 第二条：前者刚暂停且按当前数据仍命中，ENABLE 记为冲突。
         assert results[1]["conflicts"] == 1 and results[1]["submitted"] == 0
     finally:
         from tests.modules.automation_rules.cleanup import purge_tenant
@@ -623,63 +679,6 @@ def test_smart_plus_material_pause_keys_ledger_by_rule_target(session, env):
     ]
 
 
-def test_budget_set_increase_is_capped_by_daily_limit(session, env):
-    session.add(
-        AutomationTenantSetting(tenant_id=env.tenant_id, daily_increase_limit_pct=100)
-    )
-    set_high = {
-        "type": "BUDGET",
-        "level": "adgroup",
-        "adjustment": {"mode": "SET", "value_type": "AMOUNT", "value": "10000"},
-    }
-    rule, run = _rule_run(
-        session, env, action=set_high, targets=[_target("acc-x", "bc-x")]
-    )
-    summary = execute_hits(
-        session,
-        run=run,
-        rule=rule,
-        selected_keys=None,
-        now=NOW,
-        actor_id=rule.updated_by,
-        require_manage=True,
-    )
-    # 50 → 10000 远超当日 100% 涨幅上限（基准 50，最多到 100）。
-    assert summary["skipped_daily_limit"] == 1 and summary["submitted"] == 0
-
-
-def test_daily_limit_baseline_counts_earlier_set_raise(session, env):
-    session.add(
-        AutomationTenantSetting(tenant_id=env.tenant_id, daily_increase_limit_pct=100)
-    )
-    up30 = {**BUDGET_UP, "adjustment": {**BUDGET_UP["adjustment"], "value": "30"}}
-    rule, run = _rule_run(session, env, action=up30, targets=[_target("acc-x", "bc-x")])
-    # 同一规则当日（改为提高前）已把预算从 25 调整至 50；本次 50→65 超过基准 25 的 2 倍。
-    session.add(
-        AutomationActionLedger(
-            tenant_id=env.tenant_id,
-            rule_id=rule.id,
-            run_id=run.id,
-            target_key="adgroup:acc-x:g1",
-            action="BUDGET_SET",
-            original_value="25",
-            final_value="50",
-            created_at=NOW - timedelta(hours=2),
-        )
-    )
-    session.flush()
-    summary = execute_hits(
-        session,
-        run=run,
-        rule=rule,
-        selected_keys=None,
-        now=NOW,
-        actor_id=rule.updated_by,
-        require_manage=True,
-    )
-    assert summary["skipped_daily_limit"] == 1 and summary["submitted"] == 0
-
-
 def test_all_skipped_run_is_marked_skipped(session, env):
     rule, run = _rule_run(
         session,
@@ -714,22 +713,14 @@ def test_all_skipped_run_is_marked_skipped(session, env):
 def test_unexpected_error_fails_bc_and_restores_counts(session, env, monkeypatch):
     from app.modules.automation_rules import executor
 
-    session.add(
-        AutomationTenantSetting(tenant_id=env.tenant_id, daily_increase_limit_pct=10)
-    )
     rule, run = _rule_run(
         session, env, action=BUDGET_UP, targets=[_target("acc-x", "bc-x")]
     )
-    real = executor.prepare_preview
-    calls = []
 
-    def flaky(*args, **kwargs):
-        calls.append(1)
-        if len(calls) == 2:
-            raise RuntimeError("boom")
-        return real(*args, **kwargs)
+    def boom(*_args, **_kwargs):
+        raise RuntimeError("boom")
 
-    monkeypatch.setattr(executor, "prepare_preview", flaky)
+    monkeypatch.setattr(executor, "prepare_preview", boom)
     summary = execute_hits(
         session,
         run=run,
@@ -739,8 +730,8 @@ def test_unexpected_error_fails_bc_and_restores_counts(session, env, monkeypatch
         actor_id=rule.updated_by,
         require_manage=True,
     )
-    # 第一次预览计入的涨幅跳过随保存点回滚，整个 BC 记为失败，不重复计数。
-    assert summary["skipped_daily_limit"] == 0 and summary["failed"] == 1
+    # 未预期的异常随保存点回滚，整个 BC 记为失败。
+    assert summary["submitted"] == 0 and summary["failed"] == 1
     assert summary["failed_bcs"] == [{"bc_id": "bc-x", "reason": "unexpected_error"}]
     assert run.execution_status == "FAILED"
 
@@ -889,27 +880,9 @@ def test_confirm_execution_uses_decider(session, env, monkeypatch):
     assert session.exec(select(ManagementTask)).one().actor_id == decider.id
 
 
-def test_ledger_outlives_deleted_rule_and_old_runs(session, env):
-
-    other, other_run = _rule_run(
-        session,
-        env,
-        action={"type": "ENABLE", "level": "adgroup"},
-        targets=[],
-        name="other",
-    )
-    session.add(
-        AutomationActionLedger(
-            tenant_id=env.tenant_id,
-            rule_id=other.id,
-            run_id=other_run.id,
-            target_key="adgroup:acc-x:g1",
-            action="ENABLE",
-            created_at=NOW - timedelta(hours=1),
-        )
-    )
-    session.flush()
-    # 删除规则后它最近的动作仍在台账中，冷却期冲突照常识别。
+def test_deleted_rule_action_no_longer_conflicts(session, env):
+    other = _other_enabled(session, env)
+    # 规则删除后不会再执行，它留在台账里的动作不阻止相反操作。
     session.delete(other)
     session.flush()
     rule, run = _rule_run(
@@ -924,8 +897,7 @@ def test_ledger_outlives_deleted_rule_and_old_runs(session, env):
         actor_id=rule.updated_by,
         require_manage=True,
     )
-    assert summary["conflicts"] == 1
-    assert summary["conflict_details"][0]["rule_name"] == "已删除的规则"
+    assert summary["conflicts"] == 0 and summary["submitted"] == 1
 
 
 def test_once_frequency_survives_run_cleanup(session, env):

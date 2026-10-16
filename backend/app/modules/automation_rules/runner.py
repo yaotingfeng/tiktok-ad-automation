@@ -273,8 +273,7 @@ def _execution_lines(summary: dict[str, Any]) -> list[str]:
     lines = [
         f"提交 {summary.get('submitted', 0)} 个对象；"
         f"频控跳过 {summary.get('skipped_frequency', 0)}、"
-        f"冷却期冲突 {summary.get('conflicts', 0)}、"
-        f"超出每日涨幅 {summary.get('skipped_daily_limit', 0)}、"
+        f"规则冲突 {summary.get('conflicts', 0)}、"
         f"无需变更 {summary.get('no_change', 0)}"
     ]
     if summary.get("unsupported"):
@@ -291,7 +290,8 @@ def _execution_lines(summary: dict[str, Any]) -> list[str]:
     details = summary.get("conflict_details") or []
     for detail in details[:MAX_CONFLICT_LINES]:
         lines.append(
-            f"冲突：{detail['target_key']} 与规则「{detail['rule_name']}」相反"
+            f"冲突：{detail['target_key']} 规则「{detail['rule_name']}」仍命中，"
+            "两条规则条件重叠"
         )
     if len(details) > MAX_CONFLICT_LINES:
         lines.append(f"其余 {len(details) - MAX_CONFLICT_LINES} 个冲突请在 TK-ADA 查看")
@@ -326,7 +326,7 @@ def build_run_card(
             )
             button = "去确认"
     elif status == "SKIPPED":
-        # 命中对象全部被频控、冷却期或涨幅上限等跳过，没有提交任何变更。
+        # 命中对象全部被频控或反向冲突等跳过，没有提交任何变更。
         title, template = f"【未执行】{rule.name}", "grey"
         summary.extend(_execution_lines(run.execution_summary))
     elif status in ("SUBMITTED", "PARTIAL", "FAILED"):

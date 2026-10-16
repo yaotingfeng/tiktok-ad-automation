@@ -51,14 +51,14 @@ class Evaluation:
     skipped_count: int
 
 
-def _in_scope(entity: Entity, definition: RuleDefinition) -> bool:
+def _in_scope(entity: Entity, definition: RuleDefinition, ignore_status: bool) -> bool:
     apply = definition.apply_to
     if entity.kind != apply.level:
         return False
     if apply.status == "SELECTED":
         if f"{entity.advertiser_id}:{entity.remote_id}" not in apply.object_ids:
             return False
-    elif entity.status != _STATUS[apply.status]:
+    elif not ignore_status and entity.status != _STATUS[apply.status]:
         return False
     return True
 
@@ -213,9 +213,17 @@ def _targets(
     )
 
 
-def evaluate(definition: RuleDefinition, inputs: Inputs) -> Evaluation:
+def evaluate(
+    definition: RuleDefinition, inputs: Inputs, *, ignore_status: bool = False
+) -> Evaluation:
+    """ignore_status 只用于反向冲突判断：被规则暂停（或启用）后的对象已不在它的
+    作用状态内，但仍要看它的条件按当前数据是否成立。"""
     scoped = sorted(
-        (e for e in inputs.entities.values() if _in_scope(e, definition)),
+        (
+            e
+            for e in inputs.entities.values()
+            if _in_scope(e, definition, ignore_status)
+        ),
         key=lambda e: e.key,
     )
     skipped = 0
