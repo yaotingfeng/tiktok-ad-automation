@@ -180,6 +180,16 @@ REPORT_KINDS = (
 )
 
 
+class ReportDispatchCursor(SQLModel, table=True):
+    """报表专属跨轮派发游标，不能与其他队列的 outbox 发布游标混用。"""
+
+    __tablename__ = "report_dispatch_cursor"
+    tenant_id: UUID = Field(
+        primary_key=True, foreign_key="tenant.id", ondelete="CASCADE"
+    )
+    last_dispatched_at: datetime = Field(sa_type=AwareDateTime)
+
+
 class ReportSyncState(SQLModel, table=True):
     """每个账户、每种报表、每一天的发布状态；页面据此显示更新时间与缺口。"""
 

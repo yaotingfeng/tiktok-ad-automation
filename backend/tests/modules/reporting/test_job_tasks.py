@@ -532,3 +532,265 @@ def test_lost_directory_message_is_redispatched_with_new_generation(
                 == f"ads.sync_step:{run_id}:{generation + 1}:page:{run.next_page}",
             )
         ).one()
+
+
+def test_report_dispatch_keeps_small_window_and_rechecks_hot_priority(
+    monkeypatch, committed_sync_seed
+):
+    from datetime import timedelta
+
+    from sqlmodel import select
+
+    from app.core.db import engine
+    from app.modules.reporting.jobs import enqueue_job
+    from app.modules.reporting.store_models import ReportSyncJob
+    from tests.modules.reporting.test_jobs import D, _route
+
+    seed, factory = committed_sync_seed
+    monkeypatch.setattr(job_tasks.settings, "ADS_SYNC_ENABLED", True)
+    now = datetime.now(UTC)
+
+    def enqueue(session, index, tier):
+        day = D - timedelta(days=index)
+        return enqueue_job(
+            session,
+            tenant_id=seed.tenant_id,
+            bc_id="bc-a",
+            kind="ad_day",
+            tier=tier,
+            advertiser_ids=["acc-1"],
+            start=day,
+            end=day,
+            frozen_route=_route(seed),
+            actor_id=seed.actor_id,
+            due_at=now,
+        )
+
+    with factory() as session, session.begin():
+        for index in range(6):
+            enqueue(session, index, "history")
+    assert job_tasks._dispatch_pending(engine, now) == 2
+    assert job_tasks._dispatch_pending(engine, now) == 0
+    with factory() as session, session.begin():
+        running = session.exec(
+            select(ReportSyncJob).where(
+                ReportSyncJob.tenant_id == seed.tenant_id,
+                ReportSyncJob.status == "RUNNING",
+            )
+        ).all()
+        assert len(running) == 2
+        running[0].status = "COMPLETE"
+        running[0].claim_token = running[0].claimed_until = None
+        hot_id = enqueue(session, 20, "hot")
+    assert job_tasks._dispatch_pending(engine, now) == 1
+    with factory() as session:
+        assert session.get(ReportSyncJob, hot_id).status == "RUNNING"
+
+
+def test_report_worker_renews_lease_and_durably_wakes_dispatch(
+    monkeypatch, committed_sync_seed, redis_client
+):
+    from datetime import timedelta
+
+    from sqlmodel import select
+
+    from app.core.db import engine
+    from app.jobs.models import PendingDispatch
+    from app.modules.reporting.jobs import enqueue_job
+    from app.modules.reporting.store_models import ReportSyncJob
+    from tests.modules.reporting.test_jobs import (
+        D,
+        FakeReader,
+        _enqueue_and_claim,
+        _route,
+    )
+
+    seed, factory = committed_sync_seed
+    job = _enqueue_and_claim(factory, seed)
+    claim = job.claim_token
+    now = datetime.now(UTC)
+    with factory() as session, session.begin():
+        row = session.get(ReportSyncJob, job.id)
+        row.claimed_until = now + timedelta(seconds=1)
+        next_id = enqueue_job(
+            session,
+            tenant_id=seed.tenant_id,
+            bc_id="bc-a",
+            kind="ad_day",
+            tier="hot",
+            advertiser_ids=["acc-1"],
+            start=D - timedelta(days=1),
+            end=D - timedelta(days=1),
+            frozen_route=_route(seed),
+            actor_id=seed.actor_id,
+        )
+
+    @contextmanager
+    def reader(**_kwargs):
+        with factory() as session:
+            assert session.get(ReportSyncJob, job.id).claimed_until >= now + timedelta(
+                seconds=230
+            )
+        yield FakeReader()
+
+    monkeypatch.setattr(job_tasks.settings, "ADS_SYNC_ENABLED", True)
+    monkeypatch.setattr(job_tasks, "_reader_for", reader)
+    assert (
+        job_tasks.run_job_step(
+            database_engine=engine,
+            redis_client=redis_client,
+            job_id=job.id,
+            claim_token=claim,
+        )
+        == "COMPLETE"
+    )
+    with factory() as session:
+        signal = session.exec(
+            select(PendingDispatch).where(
+                PendingDispatch.tenant_id == seed.tenant_id,
+                PendingDispatch.task_key == f"report-refill:{job.id}:{claim}",
+            )
+        ).one()
+        assert signal.task_name == "reporting.plan_due" and signal.payload == {
+            "dispatch_only": True
+        }
+
+    def unexpected_reader(**_kwargs):
+        raise AssertionError("补位仅领取本地任务，不能重新筛选或读取平台")
+
+    monkeypatch.setattr(job_tasks, "_reader_for", unexpected_reader)
+    assert (
+        job_tasks.plan_due.run(
+            tenant_id=str(seed.tenant_id),
+            actor_id=str(seed.actor_id),
+            payload=signal.payload,
+        )
+        == 1
+    )
+    with factory() as session:
+        assert session.get(ReportSyncJob, next_id).status == "RUNNING"
+
+
+def test_concurrent_report_dispatchers_cannot_overfill_window(
+    monkeypatch, committed_sync_seed
+):
+    from concurrent.futures import ThreadPoolExecutor
+    from datetime import timedelta
+
+    from sqlalchemy import func
+    from sqlmodel import select
+
+    from app.core.db import engine
+    from app.modules.reporting.jobs import enqueue_job
+    from app.modules.reporting.store_models import ReportSyncJob
+    from tests.modules.reporting.test_jobs import D, _route
+
+    seed, factory = committed_sync_seed
+    monkeypatch.setattr(job_tasks.settings, "ADS_SYNC_ENABLED", True)
+    now = datetime.now(UTC)
+    with factory() as session, session.begin():
+        for index in range(6):
+            day = D - timedelta(days=index)
+            enqueue_job(
+                session,
+                tenant_id=seed.tenant_id,
+                bc_id="bc-a",
+                kind="ad_day",
+                tier="hot",
+                advertiser_ids=["acc-1"],
+                start=day,
+                end=day,
+                frozen_route=_route(seed),
+                actor_id=seed.actor_id,
+                due_at=now,
+            )
+    with ThreadPoolExecutor(2) as executor:
+        results = list(
+            executor.map(lambda _n: job_tasks._dispatch_pending(engine, now), range(2))
+        )
+    assert sum(results) == 2
+    with factory() as session:
+        assert (
+            session.exec(
+                select(func.count())
+                .select_from(ReportSyncJob)
+                .where(
+                    ReportSyncJob.tenant_id == seed.tenant_id,
+                    ReportSyncJob.status == "RUNNING",
+                )
+            ).one()
+            == 2
+        )
+
+
+def test_single_slot_refill_round_robins_three_tenants_across_rounds(monkeypatch):
+    from contextlib import ExitStack
+    from datetime import timedelta
+
+    from sqlmodel import col, select
+
+    from app.core.db import engine
+    from app.modules.reporting.jobs import enqueue_job
+    from app.modules.reporting.store_models import ReportSyncJob
+    from tests.modules.reporting.sync_conftest import (
+        committed_sync_seed as seed_fixture,
+    )
+    from tests.modules.reporting.test_jobs import D, _route
+
+    monkeypatch.setattr(job_tasks.settings, "ADS_SYNC_ENABLED", True)
+    with ExitStack() as stack:
+        seeds = [
+            stack.enter_context(contextmanager(seed_fixture.__wrapped__)())
+            for _ in range(3)
+        ]
+        factory = seeds[0][1]
+        now = datetime.now(UTC)
+        with factory() as session, session.begin():
+            for rank, (seed, _) in enumerate(seeds):
+                for index in range(6):
+                    day = D - timedelta(days=index)
+                    enqueue_job(
+                        session,
+                        tenant_id=seed.tenant_id,
+                        bc_id="bc-a",
+                        kind="ad_day",
+                        tier="hot",
+                        advertiser_ids=["acc-1"],
+                        start=day,
+                        end=day,
+                        frozen_route=_route(seed),
+                        actor_id=seed.actor_id,
+                        due_at=now - timedelta(minutes=3 - rank),
+                    )
+        assert job_tasks._dispatch_pending(engine, now) == 2
+        with factory() as session:
+            running = session.exec(
+                select(ReportSyncJob)
+                .where(ReportSyncJob.status == "RUNNING")
+                .order_by(ReportSyncJob.due_at, ReportSyncJob.id)
+            ).all()
+            active = [r.id for r in running]
+            seen = [r.tenant_id for r in running]
+        for round_no in range(6):
+            finished = active.pop(0)
+            with factory() as session, session.begin():
+                row = session.get(ReportSyncJob, finished)
+                row.status = "COMPLETE"
+                row.claim_token = row.claimed_until = None
+            assert (
+                job_tasks._dispatch_pending(
+                    engine, now + timedelta(seconds=round_no + 1)
+                )
+                == 1
+            )
+            with factory() as session:
+                fresh = session.exec(
+                    select(ReportSyncJob).where(
+                        ReportSyncJob.status == "RUNNING",
+                        col(ReportSyncJob.id).not_in(active),
+                    )
+                ).one()
+                active.append(fresh.id)
+                seen.append(fresh.tenant_id)
+        a, b, c = [s.tenant_id for s, _ in seeds]
+        assert seen == [a, b, c, a, b, c, a, b]

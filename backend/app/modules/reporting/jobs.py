@@ -114,19 +114,21 @@ def enqueue_job(
 
 
 def claim_jobs(session: Session, *, now: datetime, limit: int) -> list[ReportSyncJob]:
-    """按租户轮转领取：每个租户内按 (优先级, 到期) 排名，先取各租户第 1 名，再取第 2 名……"""
+    """按持久游标轮转租户，租户内部按优先级/到期排序；单槽补位也不能饿死其他租户。"""
     ids = (
         session.connection()
         .execute(
             text("""
         WITH ranked AS (
-            SELECT id, priority, due_at,
-                   ROW_NUMBER() OVER (PARTITION BY tenant_id ORDER BY priority, due_at, id) AS rn
-            FROM report_sync_job
-            WHERE (status IN ('QUEUED','WAITING') AND due_at <= :now
-              AND (claimed_until IS NULL OR claimed_until <= :now))
-               OR (status = 'RUNNING' AND claimed_until <= :now))
-        SELECT id FROM ranked ORDER BY rn, priority, due_at, id LIMIT :limit"""),
+            SELECT j.id, j.priority, j.due_at, c.last_dispatched_at,
+                   ROW_NUMBER() OVER (PARTITION BY j.tenant_id ORDER BY j.priority, j.due_at, j.id) AS rn
+            FROM report_sync_job j
+            LEFT JOIN report_dispatch_cursor c ON c.tenant_id = j.tenant_id
+            WHERE (j.status IN ('QUEUED','WAITING') AND j.due_at <= :now
+              AND (j.claimed_until IS NULL OR j.claimed_until <= :now))
+               OR (j.status = 'RUNNING' AND j.claimed_until <= :now))
+        SELECT id FROM ranked
+        ORDER BY rn, last_dispatched_at NULLS FIRST, priority, due_at, id LIMIT :limit"""),
             parameters={"now": now, "limit": limit},
         )
         .scalars()

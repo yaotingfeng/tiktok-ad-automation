@@ -9,7 +9,8 @@ from uuid import UUID
 
 from billiard.exceptions import SoftTimeLimitExceeded
 from redis import Redis
-from sqlalchemy import delete, func
+from sqlalchemy import delete, func, text
+from sqlalchemy.dialects.postgresql import insert
 from sqlmodel import Session, col, select
 
 from app.core.config import settings
@@ -33,6 +34,7 @@ from app.modules.ads.directory_requests import (
 from app.modules.ads.sync_models import AdDirectoryRun
 from app.modules.reporting import planner, publish
 from app.modules.reporting.jobs import (
+    LEASE,
     _CountingReader,
     _read_all,
     claim_jobs,
@@ -45,6 +47,7 @@ from app.modules.reporting.store_models import (
     AdSyncBc,
     CampaignReportHour,
     ReportBalanceRun,
+    ReportDispatchCursor,
     ReportSyncJob,
 )
 
@@ -52,6 +55,8 @@ logger = logging.getLogger(__name__)
 
 # 每次派发最多入队的目录运行数；其余留给后续轮次，保证规划耗时有界。
 DIRECTORY_DISPATCH_BATCH = 1000
+# 与 ACK 两个报表执行槽配套；历史积压留在数据库，不提前变成上千个有效租约。
+REPORT_DISPATCH_WINDOW = 2
 # 目录消息发布后超过此时长仍未被领取，视为丢失并重新入队。
 DIRECTORY_MESSAGE_LOST_AFTER = timedelta(hours=6)
 
@@ -390,18 +395,80 @@ def _plan_one(database_engine, redis_client, key, now, deadline, hot, material):
                 planner.record_calls(redis_client, now, counted.count)
 
 
+def _dispatch_report_jobs(session: Session, now: datetime) -> int:
+    # 多个调度唤醒也必须原子核对全局窗口，不能各自看到两个空槽后重复领取。
+    locked = (
+        session.connection()
+        .execute(
+            text(
+                "SELECT pg_try_advisory_xact_lock(hashtextextended('tkada:report-dispatch-window', 0))"
+            )
+        )
+        .scalar_one()
+    )
+    if not locked:
+        return 0
+    inflight = session.exec(
+        select(func.count())
+        .select_from(ReportSyncJob)
+        .where(
+            ReportSyncJob.status == "RUNNING",
+            col(ReportSyncJob.claimed_until) > now,
+        )
+    ).one()
+    available = max(0, REPORT_DISPATCH_WINDOW - inflight)
+    jobs = claim_jobs(session, now=now, limit=available) if available else []
+    for job in jobs:
+        enqueue_after_commit(
+            session,
+            context=_context(job),
+            task_name="reporting.job_step",
+            task_key=f"report-job:{job.id}:{job.claim_token}",
+            payload={"job_id": str(job.id), "claim_id": str(job.claim_token)},
+        )
+    for tenant_id in sorted({job.tenant_id for job in jobs}):
+        # 游标与领取/outbox 同事务提交，失败不跳过租户，也不干扰其他业务队列。
+        statement = insert(ReportDispatchCursor).values(
+            tenant_id=tenant_id, last_dispatched_at=now
+        )
+        session.exec(
+            statement.on_conflict_do_update(
+                index_elements=["tenant_id"],
+                set_={
+                    "last_dispatched_at": func.greatest(
+                        col(ReportDispatchCursor.last_dispatched_at),
+                        statement.excluded.last_dispatched_at,
+                    )
+                },
+            )
+        )
+    return len(jobs)
+
+
+@contextmanager
+def _report_refill_after(database_engine, job, claim_token):
+    try:
+        yield
+    finally:
+        if settings.ADS_SYNC_ENABLED:
+            try:
+                with Session(database_engine) as session, session.begin():
+                    # 只唤醒本地派发，不重新筛选账户或读取平台；Beat 仍负责中断兜底。
+                    enqueue_after_commit(
+                        session,
+                        context=_context(job),
+                        task_name="reporting.plan_due",
+                        task_key=f"report-refill:{job.id}:{claim_token}",
+                        payload={"dispatch_only": True},
+                    )
+            except Exception:
+                # 已提交的报表不能因补位消息失败改成失败；30 秒 Beat 会再次补位。
+                logger.exception("report refill wake failed: job=%s", job.id)
+
+
 def _dispatch_pending(database_engine, now):
     with Session(database_engine) as session, session.begin():
-        jobs = claim_jobs(session, now=now, limit=100)
-        for job in jobs:
-            enqueue_after_commit(
-                session,
-                context=_context(job),
-                task_name="reporting.job_step",
-                task_key=f"report-job:{job.id}:{job.claim_token}",
-                payload={"job_id": str(job.id), "claim_id": str(job.claim_token)},
-            )
-        return len(jobs) + _dispatch_directories(session, now)
+        return _dispatch_report_jobs(session, now) + _dispatch_directories(session, now)
 
 
 def _failed(session, job, code):
@@ -446,50 +513,53 @@ def run_job_step(*, database_engine, redis_client, job_id, claim_token):
             session.commit()
             return "FAILED"
         before = job.request_count
+        # 排队等待不侵占实际读取期限，避免刚开始执行就被扫描器换代。
+        job.claimed_until = now + LEASE
         session.commit()
 
     def factory():
         return Session(database_engine)
 
-    try:
-        with _reader_for(
-            database_engine=database_engine,
-            redis_client=redis_client,
-            plan=job,
-            deadline=now + timedelta(seconds=170),
-        ) as reader:
-            if reader is None:
-                raise DomainError("api_binding_required", "报表需要 API 绑定")
-            result = execute_job(
-                factory, job_id=job_id, claim_token=claim_token, reader=reader
-            )
-    except AccountAdmissionDeferred as error:
-        with factory() as session:
-            current = session.get(ReportSyncJob, job_id, with_for_update=True)
-            if current is not None and current.claim_token == claim_token:
-                current.status = "WAITING"
-                current.error_code = "admission_deferred"
-                current.due_at = now + timedelta(
-                    milliseconds=max(1000, error.retry_after_ms)
+    with _report_refill_after(database_engine, job, claim_token):
+        try:
+            with _reader_for(
+                database_engine=database_engine,
+                redis_client=redis_client,
+                plan=job,
+                deadline=now + timedelta(seconds=170),
+            ) as reader:
+                if reader is None:
+                    raise DomainError("api_binding_required", "报表需要 API 绑定")
+                result = execute_job(
+                    factory, job_id=job_id, claim_token=claim_token, reader=reader
                 )
-                current.claim_token = current.claimed_until = None
-                session.commit()
-        return "WAITING"
-    except DomainError as error:
+        except AccountAdmissionDeferred as error:
+            with factory() as session:
+                current = session.get(ReportSyncJob, job_id, with_for_update=True)
+                if current is not None and current.claim_token == claim_token:
+                    current.status = "WAITING"
+                    current.error_code = "admission_deferred"
+                    current.due_at = now + timedelta(
+                        milliseconds=max(1000, error.retry_after_ms)
+                    )
+                    current.claim_token = current.claimed_until = None
+                    session.commit()
+            return "WAITING"
+        except DomainError as error:
+            with factory() as session:
+                current = session.get(ReportSyncJob, job_id, with_for_update=True)
+                if current is not None and current.claim_token == claim_token:
+                    _failed(session, current, error.code)
+                    session.commit()
+            return "FAILED"
         with factory() as session:
-            current = session.get(ReportSyncJob, job_id, with_for_update=True)
-            if current is not None and current.claim_token == claim_token:
-                _failed(session, current, error.code)
-                session.commit()
-        return "FAILED"
-    with factory() as session:
-        current = session.get(ReportSyncJob, job_id)
-        if current is not None:
-            # 计增量，不能在每次重试重复计入历史请求数。
-            planner.record_calls(
-                redis_client, now, max(0, current.request_count - before)
-            )
-    return result
+            current = session.get(ReportSyncJob, job_id)
+            if current is not None:
+                # 计增量，不能在每次重试重复计入历史请求数。
+                planner.record_calls(
+                    redis_client, now, max(0, current.request_count - before)
+                )
+        return result
 
 
 def cleanup_store(session, *, now):
@@ -521,7 +591,12 @@ def cleanup_store(session, *, now):
 
 @celery_app.task(name="reporting.plan_due", time_limit=200, soft_time_limit=180)
 def plan_due(*, tenant_id=None, actor_id=None, payload=None):
-    del tenant_id, actor_id, payload
+    del tenant_id, actor_id
+    if payload == {"dispatch_only": True}:
+        if not settings.ADS_SYNC_ENABLED:
+            return 0
+        with Session(engine) as session, session.begin():
+            return _dispatch_report_jobs(session, datetime.now(UTC))
     with Redis.from_url(settings.REDIS_URL) as redis:
         return plan_due_runs(database_engine=engine, redis_client=redis)
 

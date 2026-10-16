@@ -336,7 +336,12 @@ def test_large_publish_has_bounded_database_round_trips(
         finally:
             event.remove(connection, "before_cursor_execute", record)
         counts.append(len(statements))
-        objects = session.exec(select(AdObject).where(AdObject.kind == kind)).all()
+        objects = session.exec(
+            select(AdObject).where(
+                AdObject.kind == kind,
+                AdObject.tenant_id == directory_seed.context.tenant_id,
+            )
+        ).all()
         assert len(objects) == (1201 if kind == "ad" else 1200)
         assert all(
             obj.published_version == version
@@ -344,11 +349,19 @@ def test_large_publish_has_bounded_database_round_trips(
             if obj.remote_id.startswith("bulk-")
         )
         if kind == "ad":
-            usages = session.exec(select(AdMaterialReference)).all()
+            usages = session.exec(
+                select(AdMaterialReference).where(
+                    AdMaterialReference.tenant_id == directory_seed.context.tenant_id
+                )
+            ).all()
             assert len(usages) == 1200
             assert all(u.complete and u.published_version == version for u in usages)
         else:
-            projections = session.exec(select(CampaignNameProjection)).all()
+            projections = session.exec(
+                select(CampaignNameProjection).where(
+                    CampaignNameProjection.tenant_id == directory_seed.context.tenant_id
+                )
+            ).all()
             assert len(projections) == 1200
             assert all(p.name_revision == 1 for p in projections)
     record_property("sql_counts", counts)
@@ -392,7 +405,11 @@ def test_publish_preserves_newer_objects_and_complete_materials(
     )
     publish_directory(session, run_id=second.id, claim_generation=1)
     session.refresh(current)
-    material = session.exec(select(AdMaterialReference)).one()
+    material = session.exec(
+        select(AdMaterialReference).where(
+            AdMaterialReference.tenant_id == directory_seed.context.tenant_id
+        )
+    ).one()
     assert current.name == old_name and current.published_version == 1
     assert material.complete and material.name == "完整素材"
     assert material.published_version == first.published_version
