@@ -42,6 +42,10 @@ class ReleaseTests(unittest.TestCase):
             "phase": "frozen",
             "token": "fixture",
             "lock_uid": "lock",
+            "old_sha": "a" * 40,
+            "helper": "helper-pod",
+            "backup_dir": "/backup/.pending-fixture",
+            "database_bytes": 6 * 2**30,
         }
 
     def test_kubectl_manifest_stream_and_list_are_equivalent(self):
@@ -55,28 +59,19 @@ class ReleaseTests(unittest.TestCase):
             manifest_items(json.dumps({"kind": "List", "items": items}).encode()), items
         )
 
-    def test_prepare_pulls_production_images_as_amd64_on_any_host(self):
-        from common import POSTGRES_IMAGE, PUBLIC
-
-        self.release.state["old_sha"] = "a" * 40
+    def test_prepare_never_pulls_images_on_the_release_host(self):
+        # 恢复验证已移到集群内；Jenkins 节点不再下载数 GB 的应用镜像。
         with (
             patch("release.run", return_value=b"") as command,
             patch.object(
-                self.release,
-                "image_digest",
-                side_effect=RuntimeError("stop after pulls"),
+                self.release, "image_digest", side_effect=RuntimeError("stop")
             ),
-            self.assertRaisesRegex(RuntimeError, "stop after pulls"),
+            self.assertRaisesRegex(RuntimeError, "stop"),
         ):
             self.release.prepare_tools("b" * 40)
-        pulls = [call.args[0] for call in command.call_args_list]
-        self.assertIn(
-            ["docker", "pull", "--platform=linux/amd64", PUBLIC + "a" * 40], pulls
+        self.assertFalse(
+            any(c.args[0][:2] == ["docker", "pull"] for c in command.call_args_list)
         )
-        self.assertIn(
-            ["docker", "pull", "--platform=linux/amd64", PUBLIC + "b" * 40], pulls
-        )
-        self.assertIn(["docker", "pull", POSTGRES_IMAGE], pulls)
 
     def test_image_digest_uses_registry_index_reported_by_ack(self):
         index = "sha256:" + "1" * 64
@@ -87,31 +82,130 @@ class ReleaseTests(unittest.TestCase):
                 {"digest": child, "platform": {"architecture": "amd64", "os": "linux"}}
             ],
         }
-        from common import PUBLIC
-
-        pulled = [PUBLIC.rsplit(":", 1)[0] + "@" + index]
-        with patch(
-            "release.run",
-            side_effect=[json.dumps(descriptor).encode(), json.dumps(pulled).encode()],
-        ):
+        with patch("release.run", return_value=json.dumps(descriptor).encode()):
             self.assertEqual(self.release.image_digest("a" * 40), index)
 
-    def test_changed_registry_tag_cannot_validate_a_different_local_image(self):
-        descriptor = {"digest": "sha256:" + "1" * 64}
-        from common import PUBLIC
+    def helper_spec(self, candidate):
+        self.release.state["candidate_sha"] = candidate
+        self.release.state["deployments"][PROJECT + "-beat"]["spec"]["template"][
+            "spec"
+        ] = {
+            "containers": [{"name": "beat", "image": VPC + "a" * 40, "args": ["x"]}],
+            "volumes": [{"name": "beat-data"}],
+        }
+        created = {}
 
-        pulled = [PUBLIC.rsplit(":", 1)[0] + "@sha256:" + "2" * 64]
+        def create(obj):
+            created.update(obj)
+            return {"metadata": {"uid": "helper"}}
+
         with (
-            patch(
-                "release.run",
-                side_effect=[
-                    json.dumps(descriptor).encode(),
-                    json.dumps(pulled).encode(),
-                ],
-            ),
-            self.assertRaisesRegex(RuntimeError, "Pulled image"),
+            patch.object(self.release.cluster, "create", side_effect=create),
+            patch.object(self.release.cluster, "k"),
+            patch("release.check_space", return_value={}) as space,
         ):
-            self.release.image_digest("a" * 40)
+            self.release.helper()
+        space.assert_called_once()
+        return created["spec"]
+
+    def test_helper_mounts_backup_disk_and_sized_verify_disk(self):
+        spec = self.helper_spec("b" * 40)
+        containers = {c["name"]: c for c in spec["containers"]}
+        self.assertEqual(
+            set(containers),
+            {"app", "postgres", "verify-pg", "verify-redis", "candidate"},
+        )
+        self.assertEqual(containers["candidate"]["image"], VPC + "b" * 40)
+        volumes = {v["name"]: v for v in spec["volumes"]}
+        self.assertEqual(
+            volumes["backup"]["persistentVolumeClaim"]["claimName"],
+            PROJECT + "-backup",
+        )
+        # 6 GiB 数据库按 2.5 倍再加 5 GiB：20 GiB 下限之上。
+        self.assertEqual(
+            volumes["verify"]["ephemeral"]["volumeClaimTemplate"]["spec"]["resources"][
+                "requests"
+            ]["storage"],
+            "20Gi",
+        )
+        self.assertIn("beat-data", volumes)
+        self.assertIn("listen_addresses=127.0.0.1", containers["verify-pg"]["args"])
+        self.assertIn("127.0.0.1", containers["verify-redis"]["args"])
+        mounts = {m["name"]: m for m in containers["verify-pg"]["volumeMounts"]}
+        self.assertTrue(mounts["backup"]["readOnly"])
+        self.assertEqual(self.release.state["phase"], "helper-ready")
+
+    def test_same_version_backup_has_no_candidate_container(self):
+        self.release.state["database_bytes"] = 40 * 2**30
+        spec = self.helper_spec(None)
+        self.assertNotIn("candidate", {c["name"] for c in spec["containers"]})
+        verify = next(v for v in spec["volumes"] if v["name"] == "verify")
+        self.assertEqual(
+            verify["ephemeral"]["volumeClaimTemplate"]["spec"]["resources"]["requests"][
+                "storage"
+            ],
+            "105Gi",
+        )
+
+    def test_backup_disk_created_only_when_missing(self):
+        claim = {
+            "kind": "PersistentVolumeClaim",
+            "metadata": {"name": PROJECT + "-backup"},
+        }
+        for existing, applies in (([], True), ([claim], False)):
+            write(
+                self.release.folder / "cluster-before.json",
+                {"persistentvolumeclaims": {"items": existing}},
+            )
+            with patch.object(self.release.cluster, "k") as command:
+                self.release.ensure_backup_disk([{"kind": "ConfigMap"}, claim])
+            self.assertEqual(command.called, applies)
+
+    def test_insufficient_backup_space_stops_before_freeze(self):
+        from backup import check_space
+
+        def pod(*_args, **_kwargs):
+            return b"%d\n%d\n" % (3 * 2**30, 2 * 2**30)
+
+        with self.assertRaisesRegex(RuntimeError, "expand"):
+            check_space(pod, 6 * 2**30)
+        self.assertEqual(
+            check_space(lambda *_a, **_k: b"%d\n0\n" % (3 * 2**30), 6 * 2**30)[
+                "required"
+            ],
+            2 * 2**30,
+        )
+
+    def test_resume_starts_beat_after_all_consumers_ready(self):
+        calls = []
+        current = copy.deepcopy(self.deployments)
+        for item in current.values():
+            item["spec"]["template"]["spec"]["containers"][0]["image"] = VPC + "b" * 40
+        with (
+            patch.object(self.release, "assert_lock"),
+            patch.object(self.release, "validate_deployments", return_value=current),
+            patch.object(self.release, "config_unchanged"),
+            patch.object(self.release, "remove_helper"),
+            patch.object(self.release, "accept"),
+            patch.object(self.release, "unlock"),
+            patch("release.cleanup_completed"),
+            patch.object(
+                self.release.cluster,
+                "scale",
+                side_effect=lambda name, _n: calls.append(("scale", name)),
+            ),
+            patch.object(
+                self.release.cluster,
+                "k",
+                side_effect=lambda *a, **_k: calls.append(("wait", a[1])),
+            ),
+        ):
+            self.release.resume("b" * 40)
+        beat = calls.index(("scale", PROJECT + "-beat"))
+        self.assertEqual([c for c in calls[:beat] if c[0] == "scale"].__len__(), 8)
+        self.assertEqual([c for c in calls[:beat] if c[0] == "wait"].__len__(), 8)
+        # 前八个先全部扩容，再统一等待就绪。
+        self.assertTrue(all(c[0] == "scale" for c in calls[:8]))
 
     def test_missing_worker_never_counts_as_drained(self):
         self.assertFalse(
@@ -271,7 +365,7 @@ class ReleaseTests(unittest.TestCase):
             patch.object(self.release, "pause"),
             patch("release.snapshot"),
             patch("release.restore_verify", side_effect=RuntimeError("bad backup")),
-            patch("release.publish_local") as upload,
+            patch("release.publish") as upload,
             patch("release.run") as command,
             patch.object(self.release, "resume") as resume,
         ):
@@ -315,7 +409,7 @@ class ReleaseTests(unittest.TestCase):
             patch.object(self.release, "pause"),
             patch("release.snapshot"),
             patch("release.restore_verify"),
-            patch("release.publish_local"),
+            patch("release.publish"),
             patch.object(self.release, "assert_lock"),
             patch.object(self.release, "config_unchanged"),
             patch.object(self.release.cluster, "app_pods", return_value=[]),
@@ -366,6 +460,47 @@ class ReleaseTests(unittest.TestCase):
                 self.assertFalse(
                     any(c.args[0] == "rollout" for c in command.call_args_list)
                 )
+
+
+class SupersededTests(unittest.TestCase):
+    """Jenkins 排队期间 main 前进：本批在检查前退出，本机推送前的落后远端不受影响。"""
+
+    def test_only_an_ancestor_of_company_main_is_superseded(self):
+        import subprocess
+
+        spec = importlib.util.spec_from_file_location("local", ROOT / "deploy/local.py")
+        local = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(local)
+        with tempfile.TemporaryDirectory() as tmp:
+            company, work = Path(tmp) / "company.git", Path(tmp) / "work"
+
+            def git(*args, cwd=work):
+                return subprocess.run(
+                    ["git", *args], cwd=cwd, check=True, capture_output=True, text=True
+                ).stdout.strip()
+
+            subprocess.run(["git", "init", "-q", "--bare", str(company)], check=True)
+            subprocess.run(["git", "init", "-q", "-b", "main", str(work)], check=True)
+            git("remote", "add", "company", str(company))
+            shas = []
+            for n in range(2):
+                git(
+                    "-c",
+                    "user.name=t",
+                    "-c",
+                    "user.email=t@t",
+                    "commit",
+                    "-q",
+                    "--allow-empty",
+                    "-m",
+                    str(n),
+                )
+                shas.append(git("rev-parse", "HEAD"))
+            git("push", "-q", "company", "main")
+            older, newer = shas
+            self.assertTrue(local.superseded(older, newer, work))
+            self.assertFalse(local.superseded(newer, newer, work))
+            self.assertFalse(local.superseded(newer, older, work))
 
 
 if __name__ == "__main__":

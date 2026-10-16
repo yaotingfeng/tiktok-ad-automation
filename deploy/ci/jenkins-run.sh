@@ -36,7 +36,7 @@ host_path() {
   printf '%s%s' "$best_source" "${path#"$best"}"
 }
 
-# 私有目录保存发布状态、检查记录和最近一份备份（含密钥），权限 0700，不进构建产物。
+# 私有目录保存发布状态、检查记录和备份清单（发布中含密钥副本），权限 0700，不进构建产物。
 umask 077
 mkdir -p "$TKADA_PRIVATE_DIR"
 chmod 700 "$TKADA_PRIVATE_DIR"
@@ -64,7 +64,7 @@ printf '%s' "$REG_PASS" | DOCKER_CONFIG="$secrets_dir/docker" docker login \
   --username "$REG_USER" --password-stdin sg-acr-prod-registry.ap-southeast-1.cr.aliyuncs.com >/dev/null
 printf '#!/bin/sh\ncase "$1" in Username*) printf %%s "$GIT_USER";; *) printf %%s "$GIT_TOKEN";; esac\n' >"$secrets_dir/askpass"
 chmod 700 "$secrets_dir/askpass"
-# local.py 以配置文件所在目录为状态根目录；固定放在私有目录，跨构建保留检查记录与备份。
+# local.py 以配置文件所在目录为状态根目录；固定放在私有目录，跨构建保留检查记录与发布批次。
 # 配置只含本次凭据文件的路径，每次运行重写。
 printf '{"kubeconfig": "%s", "retired_source_inventory": "%s"}\n' \
   "$secrets_host/kubeconfig" "$secrets_host/retired-source.json" >"$TKADA_PRIVATE_DIR/config.json"

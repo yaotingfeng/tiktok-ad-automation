@@ -18,6 +18,12 @@ sys.path.insert(0, str(ROOT / "deploy/release"))
 from common import CONTEXT, VPC, require, write
 
 COMPANY = "https://git.gzjunbo.net/yaotf/tiktok-ad-automation.git"
+# 公司 main 已有更新提交、本批不再发布时的退出码；Jenkins 据此标记为未构建而非失败。
+SUPERSEDED = 3
+
+
+class Superseded(Exception):
+    pass
 
 
 def git(*args, cwd=ROOT):
@@ -28,27 +34,71 @@ def git(*args, cwd=ROOT):
     return result.stdout.strip()
 
 
-def stage(args, cwd, env, log):
+def stage(args, cwd, env, log, abort_if=None):
+    """运行一个阶段；abort_if 每分钟检查一次，返回真时终止该阶段并抛出 Superseded。"""
     # 完整输出只落入私有日志；控制台不展开运行配置或外部命令错误正文。
     print("执行：" + Path(args[0]).name + " " + Path(args[1]).name, flush=True)
     env = dict(env, RELEASE_DIAGNOSTIC_LOG=str(log.with_name("command-error.json")))
     with log.open("ab") as stream:
-        result = subprocess.run(
-            args, cwd=cwd, env=env, stdout=stream, stderr=stream, check=False
+        process = subprocess.Popen(
+            args,
+            cwd=cwd,
+            env=env,
+            stdout=stream,
+            stderr=stream,
         )
-    require(
-        result.returncode == 0, f"Step failed ({result.returncode}); private log: {log}"
+        while True:
+            try:
+                returncode = process.wait(timeout=60)
+                break
+            except subprocess.TimeoutExpired:
+                if abort_if and abort_if():
+                    # check.sh 收到 TERM 后自行回收测试容器与源码副本；保持同一进程组，
+                    # 本机 Ctrl-C 仍能直接送达检查进程。
+                    process.terminate()
+                    try:
+                        process.wait(timeout=180)
+                    except subprocess.TimeoutExpired:
+                        process.kill()
+                        process.wait()
+                    raise Superseded("公司 main 在检查期间有了更新提交")
+    require(returncode == 0, f"Step failed ({returncode}); private log: {log}")
+
+
+def lane_summary(log):
+    """检查线的启动/结束与耗时行不含配置，原样转到控制台，便于在 Jenkins 上看各线耗时。"""
+    for line in log.read_text(errors="replace").splitlines():
+        if line.startswith("检查线"):
+            print(line, flush=True)
+
+
+def remote_main(cwd):
+    return git("ls-remote", "company", "refs/heads/main", cwd=cwd).split()[0]
+
+
+def superseded(sha, remote, cwd):
+    """sha 是公司 main 的严格祖先：已有更新提交在 main 上，本批发布已无意义。
+
+    本机发布时公司 main 落后于 sha（随后快进推送），不算被取代。
+    """
+    if remote == sha:
+        return False
+    git("fetch", "-q", "company", "refs/heads/main", cwd=cwd)
+    return (
+        subprocess.run(
+            ["git", "merge-base", "--is-ancestor", sha, remote], cwd=cwd, check=False
+        ).returncode
+        == 0
     )
 
 
-def environment(config, base):
+def environment(config):
     env = dict(os.environ)
     env.update(
         KUBECONFIG=config["kubeconfig"],
         K8S_CONTEXT=CONTEXT,
         K8S_NAMESPACE="test",
         RETIRED_SOURCE_INVENTORY=config["retired_source_inventory"],
-        LOCAL_BACKUP_DIR=str(base / "backups"),
         PATH=os.pathsep.join(config.get("tool_paths", []) + [env.get("PATH", "")]),
     )
     for key in ("BUN_BIN", "PG_BIN_DIR"):
@@ -86,15 +136,30 @@ def deployed_sha(env):
     """读取线上九个服务共用的镜像版本；无法确认时返回 None，检查随之全量。"""
     try:
         output = subprocess.run(
-            ["kubectl", "--context", CONTEXT, "-n", "test", "get", "deployments",
-             "-l", "app=tiktok-ad-automation", "-o", "json", "--request-timeout=30s"],
-            env=env, capture_output=True, text=True, check=True,
+            [
+                "kubectl",
+                "--context",
+                CONTEXT,
+                "-n",
+                "test",
+                "get",
+                "deployments",
+                "-l",
+                "app=tiktok-ad-automation",
+                "-o",
+                "json",
+                "--request-timeout=30s",
+            ],
+            env=env,
+            capture_output=True,
+            text=True,
+            check=True,
         ).stdout
         images = {
             item["spec"]["template"]["spec"]["containers"][0]["image"]
             for item in json.loads(output)["items"]
         }
-    except (subprocess.CalledProcessError, OSError, ValueError, KeyError, IndexError):
+    except subprocess.CalledProcessError, OSError, ValueError, KeyError, IndexError:
         return None
     if len(images) != 1:
         return None
@@ -114,9 +179,14 @@ def check_basis(base, sha, deployed, repo=ROOT):
         if not (record.get("full") or (deployed and record.get("base") == deployed)):
             continue
         candidate = record["sha"]
-        if candidate != sha and subprocess.run(
-            ["git", "merge-base", "--is-ancestor", candidate, sha], cwd=repo, check=False
-        ).returncode:
+        if (
+            candidate != sha
+            and subprocess.run(
+                ["git", "merge-base", "--is-ancestor", candidate, sha],
+                cwd=repo,
+                check=False,
+            ).returncode
+        ):
             continue
         distance = int(git("rev-list", "--count", candidate + ".." + sha, cwd=repo))
         if best is None or distance < best[0]:
@@ -126,8 +196,16 @@ def check_basis(base, sha, deployed, repo=ROOT):
 
 def plan_checks(args, base, folder, checkout, sha, env):
     """生成本次检查计划；返回 (计划, 通过后写入的覆盖记录)。"""
-    command = [sys.executable, "deploy/ci/select_tests.py", "--repo", str(checkout),
-               "--head", sha, "--output", str(folder / "check-plan.json")]
+    command = [
+        sys.executable,
+        "deploy/ci/select_tests.py",
+        "--repo",
+        str(checkout),
+        "--head",
+        sha,
+        "--output",
+        str(folder / "check-plan.json"),
+    ]
     deployed = deployed_sha(env)
     basis = None if args.full else check_basis(base, sha, deployed)
     if args.fast:
@@ -188,7 +266,7 @@ def main():
     args = parser.parse_args()
     config = json.loads(args.config.read_text())
     base = args.config.resolve().parent
-    env = environment(config, base)
+    env = environment(config)
     with (base / ".lock").open("a") as lock:
         try:
             if args.action != "status":
@@ -239,7 +317,9 @@ def main():
             not args.full or args.action in ("check", "deploy"),
             "--full is only valid for check/deploy",
         )
-        require(not args.fast or args.action == "check", "--fast is only valid for check")
+        require(
+            not args.fast or args.action == "check", "--fast is only valid for check"
+        )
         require(
             not args.full_scale or args.action in ("check", "deploy"),
             "--full-scale is only valid for check/deploy",
@@ -266,23 +346,41 @@ def main():
             print("阶段：" + phase, flush=True)
 
         print("详细日志：" + str(log), flush=True)
+        abort_if = None
+        if args.action == "deploy":
+            # 推送排队期间 main 可能已前进：先于检查发现就直接结束，不再白跑全量检查。
+            started_remote = remote_main(checkout)
+            if superseded(sha, started_remote, checkout):
+                raise Superseded("公司 main 已有包含本提交的更新版本")
+
+            def abort_if():
+                # 偶发的远端查询失败不算被取代，下一分钟再查。
+                try:
+                    return remote_main(checkout) != started_remote
+                except RuntimeError:
+                    return False
+
         if args.action in ("check", "deploy"):
             plan, coverage = plan_checks(args, base, folder, checkout, sha, env)
             if plan["mode"] == "none":
                 mark("checks-skipped")
             else:
                 mark("checking")
-                stage(
-                    ["bash", "deploy/ci/check.sh"],
-                    checkout,
-                    dict(
-                        env,
-                        CHECK_PLAN=str(folder / "check-plan.json"),
-                        CHECK_CACHE_DIR=str(base / "ci-cache"),
-                        **({"ACCEPTANCE_SCALE": "full"} if args.full_scale else {}),
-                    ),
-                    log,
-                )
+                try:
+                    stage(
+                        ["bash", "deploy/ci/check.sh"],
+                        checkout,
+                        dict(
+                            env,
+                            CHECK_PLAN=str(folder / "check-plan.json"),
+                            CHECK_CACHE_DIR=str(base / "ci-cache"),
+                            **({"ACCEPTANCE_SCALE": "full"} if args.full_scale else {}),
+                        ),
+                        log,
+                        abort_if,
+                    )
+                finally:
+                    lane_summary(log)
                 mark("checks-passed")
             # 记录本提交的覆盖范围，后续发布可在此基础上增量检查或直接复用。
             # 快速检查跳过了慢用例与验收，不能作为发布的增量起点，因此不记录。
@@ -290,13 +388,21 @@ def main():
                 (base / "checks").mkdir(mode=0o700, exist_ok=True)
                 write(
                     base / "checks" / (sha + ".json"),
-                    {"sha": sha, **coverage, "mode": plan["mode"], "at": int(time.time())},
+                    {
+                        "sha": sha,
+                        **coverage,
+                        "mode": plan["mode"],
+                        "at": int(time.time()),
+                    },
                 )
         if args.action == "deploy":
             # 仅快进推送指定 SHA 到公司 main；origin 不参与发布。Jenkins 由推送触发，
             # 远端已是该 SHA，此时不再推送（Jenkins 只持有只读凭据）。
             mark("pushing")
-            if git("ls-remote", "company", "refs/heads/main", cwd=checkout).split()[0] != sha:
+            if (
+                git("ls-remote", "company", "refs/heads/main", cwd=checkout).split()[0]
+                != sha
+            ):
                 git("push", "company", sha + ":refs/heads/main", cwd=checkout)
             require(
                 git("ls-remote", "company", "refs/heads/main", cwd=checkout).split()[0]
@@ -321,12 +427,18 @@ def main():
         cleanup_checkout(folder)
         print("完成：" + args.action + "；批次：" + run_name, flush=True)
         if args.action != "check":
-            print("本地最新备份：" + str(base / "backups/latest.tar"))
+            print("最新备份：集群备份盘 tiktok-ad-automation-backup 的 /backup/latest")
 
 
 if __name__ == "__main__":
     try:
         main()
+    except Superseded as exc:
+        print(
+            "[local-release] 跳过：" + str(exc) + "；由最新提交的构建负责发布。",
+            file=sys.stderr,
+        )
+        sys.exit(SUPERSEDED)
     except (RuntimeError, OSError, ValueError, KeyError) as exc:
         print("[local-release] " + str(exc), file=sys.stderr)
         print(

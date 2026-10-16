@@ -1,19 +1,42 @@
-"""完整备份、隔离恢复及本地原子归档。正式数据库永不作为恢复目标。"""
+"""集群内完整备份与隔离恢复验证；正式数据库/Redis 永不作为恢复目标。
 
-import fcntl
-import hashlib
+备份直接写入集群备份盘（PVC BACKUP_PVC，挂载于发布辅助 Pod 的 /backup），恢复验证也在
+同一 Pod 内的临时 PostgreSQL/Redis 中完成：备份文件不离开新加坡集群，避免跨境回传
+（数据库数 GB、跨境约 0.5 MiB/s）拉长停写时间。发布端只保存清单、校验和与恢复证明。
+
+备份盘只保留最近一份完整备份 /backup/latest；新备份写入 .pending-* 目录，验证通过后
+才替换旧备份。没有异地副本（用户 2026-10-16 决定），集群/可用区级故障依赖云数据库自身备份。
+"""
+
 import json
 import os
-import secrets
 import shlex
 import tarfile
 import time
 from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
-from common import POSTGRES_IMAGE, PUBLIC, REDIS_IMAGE, digest, require, run, write
+from common import PROJECT, digest, require, write
 
 PROBE = Path(__file__).with_name("probe.py")
+ARCHIVE_CHECK = Path(__file__).with_name("archive_check.py")
+BACKUP_PVC = PROJECT + "-backup"
+BACKUP_ROOT = "/backup"
+# 恢复验证实例只监听辅助 Pod 内回环地址，端口与生产默认端口错开。
+VERIFY_PG_PORT = 5433
+VERIFY_REDIS_PORT = 6380
+VERIFY_ENV = {
+    "DATABASE_URL": f"postgresql+psycopg://postgres@127.0.0.1:{VERIFY_PG_PORT}/tkada_verify",
+    "REDIS_URL": f"redis://127.0.0.1:{VERIFY_REDIS_PORT}/0",
+}
+# 辅助 Pod 的应用容器带着正式运行配置；恢复验证前覆盖连接并断言实际生效值，
+# 覆盖失败时立即中止，绝不对正式数据库执行恢复、指纹或候选迁移。
+VERIFY_GUARD = f"""import os
+os.environ.update({VERIFY_ENV!r})
+from app.core.config import settings
+assert [(h["host"], h["port"]) for h in settings.DATABASE_URL.hosts()] == [("127.0.0.1", {VERIFY_PG_PORT})], "verify DATABASE_URL guard"
+assert settings.REDIS_URL == {VERIFY_ENV["REDIS_URL"]!r}, "verify REDIS_URL guard"
+"""
 
 
 REDIS_RESTORE_CODE = (
@@ -41,6 +64,44 @@ print(json.dumps({'verified_keys':verified,'reencoded_keys':reencoded}))
 )
 
 
+class PodExec:
+    """在发布辅助 Pod 的指定容器内执行命令。
+
+    容器约定：app（旧版应用镜像）、postgres（pg_dump 客户端）、verify-pg / verify-redis
+    （恢复验证实例）、candidate（候选版本镜像，仅候选版本与旧版不同时存在）。各容器共享
+    Pod 网络与 /backup 挂载；集成测试用同网络命名空间、同卷的 Docker 容器替代本类。
+    """
+
+    def __init__(self, cluster, pod):
+        self.cluster, self.pod = cluster, pod
+
+    def __call__(self, container, *args, data=None):
+        stdin = ["-i"] if data is not None else []
+        return self.cluster.k(
+            "exec", *stdin, self.pod, "-c", container, "--", *args, data=data
+        )
+
+
+def sh(pod, container, script, *args, data=None):
+    # 路径经位置参数传入，不拼进脚本文本，避免被 shell 解释。
+    return pod(container, "sh", "-c", script, "sh", *args, data=data)
+
+
+def remote_digest(pod, path):
+    return pod("app", "sha256sum", path).decode().split()[0]
+
+
+def upload(pod, local, remote):
+    sh(pod, "app", 'umask 077 && cat > "$1"', remote, data=Path(local).read_bytes())
+    require(
+        remote_digest(pod, remote) == digest(local), "Backup upload checksum mismatch"
+    )
+
+
+def guarded(pod, container, body, *args, data=None):
+    return pod(container, "python", "-c", VERIFY_GUARD + body, *args, data=data)
+
+
 def pg_environment(values):
     url = urlsplit(values["DATABASE_URL"])
     require(url.path == "/tkada", "Source PostgreSQL database must be tkada")
@@ -53,73 +114,73 @@ def pg_environment(values):
     }
 
 
-def remote_file(cluster, pod, container, remote, local):
-    expected = (
-        cluster.k("exec", pod, "-c", container, "--", "sha256sum", remote)
-        .decode()
-        .split()[0]
+def check_space(pod, database_bytes):
+    """停写前确认备份盘余量，并清理上次失败遗留的未完成目录（发布锁保证无并发写入）。"""
+    output = sh(
+        pod,
+        "app",
+        'cd "$1" && rm -rf .pending-* .previous && df -B1 --output=avail . | tail -1'
+        " && { stat -c %s latest/postgres.dump 2>/dev/null || echo 0; }",
+        BACKUP_ROOT,
+    ).split()
+    available, last = int(output[0]), int(output[1])
+    # 新备份验证完成、旧备份删除前两份并存，再留一份余量；首次没有上一份时
+    # 按数据库大小估算（自定义格式压缩实测约 7:1，按 1/4 留足）。
+    required = max(3 * last, database_bytes // 4, 2 * 2**30)
+    require(
+        available >= required,
+        f"Backup disk {BACKUP_PVC} has {available >> 20} MiB free, needs"
+        f" {required >> 20} MiB; expand it in deploy/k8s/tk-ada.yaml before releasing",
     )
-    env = dict(os.environ, KUBECTL_REMOTE_COMMAND_WEBSOCKETS="false")
-    run(
-        cluster.base
-        + ["cp", "--retries=8", "-c", container, pod + ":" + remote, str(local)],
-        env=env,
-    )
-    require(digest(local) == expected, "Backup transfer checksum mismatch")
-    local.chmod(0o600)
+    return {"available": available, "last_dump": last, "required": required}
 
 
 def snapshot(release):
-    folder, cluster, pod = release.folder, release.cluster, release.state["helper"]
-    # pg_dump 凭据经 stdin 传给容器，不进入本机进程参数或控制台。
+    """在同一停写窗口内把全部备份写入备份盘的未完成目录，并生成清单。"""
+    folder, pod = release.folder, release.pod
+    target = release.state["backup_dir"]
+    sh(pod, "app", 'umask 077 && mkdir "$1"', target)
+    # pg_dump 凭据经 stdin 传给容器，不进入进程参数或控制台。
     exports = "\n".join(
         "export " + key + "=" + shlex.quote(value)
         for key, value in pg_environment(release.values).items()
     )
-    cluster.k(
-        "exec",
-        "-i",
-        pod,
-        "-c",
+    pod(
         "postgres",
-        "--",
         "sh",
         "-s",
         data=(
             exports
-            + "\npg_dump -Fc --no-owner --no-acl --schema=public -f /tmp/postgres.dump\n"
+            + "\npg_dump -Fc --no-owner --no-acl --schema=public -f "
+            + shlex.quote(target + "/postgres.dump")
+            + "\n"
         ).encode(),
-    )
-    remote_file(
-        cluster, pod, "postgres", "/tmp/postgres.dump", folder / "postgres.dump"
     )
     for filename, directory, excludes in [
         ("runtime-app.tar.gz", "/app", ["--exclude=.venv", "--exclude=__pycache__"]),
         ("beat-data.tar.gz", "/var/run/celery", []),
     ]:
-        cluster.k(
-            "exec",
-            pod,
-            "-c",
+        pod(
             "app",
-            "--",
             "tar",
             "-czf",
-            "/tmp/" + filename,
+            target + "/" + filename,
             *excludes,
             "-C",
             directory,
             ".",
         )
-        remote_file(cluster, pod, "app", "/tmp/" + filename, folder / filename)
     write(folder / "source-fingerprint.json", release.probe("fingerprint"))
-    # probe 的附加参数按 JSON 透传，这里是容器内导出文件路径。
-    exported = release.probe("redis", "/tmp/redis.json")
-    remote_file(cluster, pod, "app", "/tmp/redis.json", folder / "redis.json")
-    require(
-        len(json.loads((folder / "redis.json").read_text())) == exported["records"],
-        "Redis export record count mismatch",
+    # probe 的附加参数按 JSON 透传，这里是备份盘上的导出文件路径。
+    exported = release.probe("redis", target + "/redis.json")
+    counted = pod(
+        "app",
+        "python",
+        "-c",
+        "import json,sys; print(len(json.load(open(sys.argv[1]))))",
+        target + "/redis.json",
     )
+    require(int(counted) == exported["records"], "Redis export record count mismatch")
     release.archive_project(folder / "project.tar.gz")
     # 清单包含运行配置、注册材料、原副本与旧部署、共享入口证书引用。
     with tarfile.open(folder / "config.tar.gz", "w:gz") as archive:
@@ -133,6 +194,8 @@ def snapshot(release):
         retired = os.environ.get("RETIRED_SOURCE_INVENTORY")
         if retired:
             archive.add(retired, arcname="retired-source.json")
+    for name in ("source-fingerprint.json", "project.tar.gz", "config.tar.gz"):
+        upload(pod, folder / name, target + "/" + name)
     files = (
         "postgres.dump",
         "runtime-app.tar.gz",
@@ -147,267 +210,121 @@ def snapshot(release):
         {
             "old_sha": release.state["old_sha"],
             "captured_at": int(time.time()),
-            "files": {name: digest(folder / name) for name in files},
+            "files": {name: remote_digest(pod, target + "/" + name) for name in files},
         },
     )
+    upload(pod, folder / "manifest.json", target + "/manifest.json")
 
 
-def verify_archives(folder):
-    manifest = json.loads((folder / "manifest.json").read_text())
-    for name, checksum in manifest["files"].items():
-        require(
-            Path(name).name == name and digest(folder / name) == checksum,
-            "Backup checksum mismatch",
-        )
-    for name in ("runtime-app", "project", "beat-data", "config"):
-        with tarfile.open(folder / (name + ".tar.gz")) as archive:
-            members = archive.getmembers()
-            require(bool(members), "Empty archive: " + name)
-            require(
-                all(
-                    not m.name.startswith("/") and ".." not in Path(m.name).parts
-                    for m in members
-                ),
-                "Unsafe archive member",
-            )
-            if name == "runtime-app":
-                require(
-                    any(
-                        m.name.endswith("backend/app/frontend/index.html")
-                        for m in members
-                    ),
-                    "Frontend artifact missing",
-                )
-            # 解包普通文件验证压缩内容可读，避免仅检查目录。
-            for member in members:
-                if member.isfile():
-                    with archive.extractfile(member) as stream:
-                        while stream.read(1024 * 1024):
-                            pass
-
-
-def restore_verify(folder, values, old_sha, candidate_sha=None):
-    verify_archives(folder)
-    name = "tkada-restore-" + secrets.token_hex(6)
-    net, pg, redis_name = name + "-net", name + "-pg", name + "-redis"
-    password = secrets.token_urlsafe(32)
-    write(
-        folder / "verify-pg.env",
-        f"POSTGRES_PASSWORD={password}\nPOSTGRES_DB=tkada_verify\n".encode(),
+def verify_archives(pod, folder, directory):
+    """备份盘上的清单须与发布端记录一致，再在集群内逐个核对校验和与归档结构。"""
+    require(
+        remote_digest(pod, directory + "/manifest.json")
+        == digest(folder / "manifest.json"),
+        "Backup manifest checksum mismatch",
     )
-    env = dict(
-        values,
-        DATABASE_URL=f"postgresql+psycopg://postgres:{password}@{pg}:5432/tkada_verify",
-        REDIS_URL=f"redis://{redis_name}:6379/0",
+    result = json.loads(
+        pod("app", "python", "-", directory, data=ARCHIVE_CHECK.read_bytes())
     )
-    write(
-        folder / "verify-app.env",
-        "".join(f"{k}={v}\n" for k, v in env.items()).encode(),
-    )
-    ids = []
-    network_id = None
-    try:
-        network_id = (
-            run(["docker", "network", "create", "--internal", net]).decode().strip()
-        )
-        ids.append(
-            run(
-                [
-                    "docker",
-                    "run",
-                    "-d",
-                    "--name",
-                    pg,
-                    "--network",
-                    net,
-                    "--env-file",
-                    str(folder / "verify-pg.env"),
-                    POSTGRES_IMAGE,
-                ]
-            )
-            .decode()
-            .strip()
-        )
-        ids.append(
-            run(
-                [
-                    "docker",
-                    "run",
-                    "-d",
-                    "--name",
-                    redis_name,
-                    "--network",
-                    net,
-                    REDIS_IMAGE,
-                    "redis-server",
-                    "--save",
-                    "",
-                    "--appendonly",
-                    "no",
-                ]
-            )
-            .decode()
-            .strip()
-        )
-        for _ in range(60):
-            try:
-                run(
-                    [
-                        "docker",
-                        "exec",
-                        pg,
-                        "pg_isready",
-                        "-h",
-                        "127.0.0.1",
-                        "-U",
-                        "postgres",
-                    ]
-                )
-                break
-            except RuntimeError:
-                time.sleep(1)
-        else:
-            raise RuntimeError("Isolated PostgreSQL failed to become ready")
-        run(
-            [
-                "docker",
-                "exec",
-                pg,
-                "psql",
+    require(result["ok"], "Backup verification failed: " + str(result["error"]))
+
+
+RESTORE_SCRIPT = f"""set -e
+pg_restore --list "$1" | grep -v ' SCHEMA - public ' > /tmp/restore.toc
+pg_restore --use-list=/tmp/restore.toc --exit-on-error --single-transaction \\
+  --no-owner --no-acl -h 127.0.0.1 -p {VERIFY_PG_PORT} -U postgres -d tkada_verify "$1"
+"""
+
+
+def restore_verify(pod, folder, directory, candidate_sha=None, candidate="candidate"):
+    """在辅助 Pod 内的临时实例上完整恢复并验证；candidate 为执行候选迁移的容器名。"""
+    verify_archives(pod, folder, directory)
+    for _ in range(120):
+        try:
+            pod(
+                "verify-pg",
+                "pg_isready",
+                "-h",
+                "127.0.0.1",
+                "-p",
+                str(VERIFY_PG_PORT),
                 "-U",
                 "postgres",
-                "-d",
-                "tkada_verify",
-                "-v",
-                "ON_ERROR_STOP=1",
-                "-c",
-                'CREATE EXTENSION pg_trgm; CREATE EXTENSION "uuid-ossp";',
-            ]
-        )
-        run(["docker", "cp", str(folder / "postgres.dump"), pg + ":/tmp/backup.dump"])
-        toc = run(
-            ["docker", "exec", pg, "pg_restore", "--list", "/tmp/backup.dump"]
-        ).decode()
-        write(
-            folder / "restore.toc",
-            (
-                "\n".join(
-                    line for line in toc.splitlines() if " SCHEMA - public " not in line
-                )
-                + "\n"
-            ).encode(),
-        )
-        run(["docker", "cp", str(folder / "restore.toc"), pg + ":/tmp/restore.toc"])
-        run(
-            [
-                "docker",
-                "exec",
-                pg,
-                "pg_restore",
-                "--use-list=/tmp/restore.toc",
-                "--exit-on-error",
-                "--single-transaction",
-                "--no-owner",
-                "--no-acl",
-                "-U",
-                "postgres",
-                "-d",
-                "tkada_verify",
-                "/tmp/backup.dump",
-            ]
-        )
-        app = [
-            "docker",
-            "run",
-            "--rm",
-            "-i",
-            "--network",
-            net,
-            "--env-file",
-            str(folder / "verify-app.env"),
-        ]
-        fingerprint = json.loads(
-            run(
-                app + [PUBLIC + old_sha, "python", "-", "fingerprint"],
-                data=PROBE.read_bytes(),
             )
+            break
+        except RuntimeError:
+            time.sleep(1)
+    else:
+        raise RuntimeError("Isolated PostgreSQL failed to become ready")
+    pod(
+        "verify-pg",
+        "psql",
+        "-h",
+        "127.0.0.1",
+        "-p",
+        str(VERIFY_PG_PORT),
+        "-U",
+        "postgres",
+        "-d",
+        "tkada_verify",
+        "-v",
+        "ON_ERROR_STOP=1",
+        "-c",
+        'CREATE EXTENSION pg_trgm; CREATE EXTENSION "uuid-ossp";',
+    )
+    sh(pod, "verify-pg", RESTORE_SCRIPT, directory + "/postgres.dump")
+    fingerprint = json.loads(guarded(pod, "app", PROBE.read_text(), "fingerprint"))
+    require(
+        fingerprint == json.loads((folder / "source-fingerprint.json").read_text()),
+        "Restored PostgreSQL facts/credentials differ",
+    )
+    # Redis DUMP/RESTORE 保留键内容及绝对过期时间，允许跨版本重新编码；验证每个有效键，不只比键数。
+    redis_result = json.loads(
+        sh(
+            pod,
+            "app",
+            'exec python -c "$1" < "$2"',
+            VERIFY_GUARD + REDIS_RESTORE_CODE,
+            directory + "/redis.json",
         )
+    )
+    if candidate_sha:
+        guarded(
+            pod,
+            candidate,
+            "from alembic.config import main\nmain(argv=['upgrade', 'head'])",
+        )
+        after = json.loads(guarded(pod, candidate, PROBE.read_text(), "fingerprint"))
         require(
-            fingerprint == json.loads((folder / "source-fingerprint.json").read_text()),
-            "Restored PostgreSQL facts/credentials differ",
+            after["credentials_decrypted"] == fingerprint["credentials_decrypted"],
+            "Migration lost readable credentials",
         )
-        # Redis DUMP/RESTORE 保留键内容及绝对过期时间，允许跨版本重新编码；验证每个有效键，不只比键数。
-        redis_result = json.loads(
-            run(
-                app + [PUBLIC + old_sha, "python", "-c", REDIS_RESTORE_CODE],
-                data=(folder / "redis.json").read_bytes(),
-            )
-        )
-        if candidate_sha:
-            run(app + [PUBLIC + candidate_sha, "alembic", "upgrade", "head"])
-            after = json.loads(
-                run(
-                    app + [PUBLIC + candidate_sha, "python", "-", "fingerprint"],
-                    data=PROBE.read_bytes(),
-                )
-            )
-            require(
-                after["credentials_decrypted"] == fingerprint["credentials_decrypted"],
-                "Migration lost readable credentials",
-            )
-        write(
-            folder / "restore-verified.json",
-            {
-                "manifest_sha256": digest(folder / "manifest.json"),
-                "postgres_matches": True,
-                "credentials_decrypted": fingerprint["credentials_decrypted"],
-                "redis": redis_result,
-                "candidate_sha": candidate_sha,
-                "verified_at": int(time.time()),
-            },
-        )
-    finally:
-        for cid in reversed(ids):
-            run(["docker", "rm", "-f", "-v", cid])
-        if network_id:
-            run(["docker", "network", "rm", network_id])
-        (folder / "verify-pg.env").unlink(missing_ok=True)
-        (folder / "verify-app.env").unlink(missing_ok=True)
+    write(
+        folder / "restore-verified.json",
+        {
+            "manifest_sha256": digest(folder / "manifest.json"),
+            "postgres_matches": True,
+            "credentials_decrypted": fingerprint["credentials_decrypted"],
+            "redis": redis_result,
+            "candidate_sha": candidate_sha,
+            "verified_at": int(time.time()),
+        },
+    )
+    upload(pod, folder / "restore-verified.json", directory + "/restore-verified.json")
 
 
-def local_destination():
-    value = os.environ.get("LOCAL_BACKUP_DIR", "")
-    require(bool(value), "LOCAL_BACKUP_DIR must be configured")
-    folder = Path(value).expanduser().absolute()
-    require(not folder.is_symlink(), "Backup directory cannot be a symlink")
-    folder.mkdir(parents=True, exist_ok=True, mode=0o700)
-    folder.chmod(0o700)
-    require(os.access(folder, os.W_OK), "Local backup directory is not writable")
-    return folder
+ROTATE_SCRIPT = """set -e
+cd "$1"
+rm -rf .previous
+if [ -e latest ]; then mv latest .previous; fi
+mv "$2" latest
+sync
+rm -rf .previous
+"""
 
 
-def verify_bundle(bundle, checksums):
-    # 从已经关闭的归档重新读取实际内容，不能只相信打包前的源文件。
-    with tarfile.open(bundle, "r:") as archive:
-        members = archive.getmembers()
-        require(
-            len(members) == len(checksums)
-            and {m.name for m in members} == set(checksums)
-            and all(m.isfile() for m in members),
-            "Local backup member mismatch",
-        )
-        for member in members:
-            with archive.extractfile(member) as stream:
-                require(
-                    hashlib.file_digest(stream, "sha256").hexdigest()
-                    == checksums[member.name],
-                    "Local backup readback checksum mismatch",
-                )
-
-
-def publish_local(folder):
-    folder = Path(folder)
-    verify_archives(folder)
+def publish(pod, folder, directory):
+    """恢复验证通过后，以同盘目录改名替换为唯一保留的 /backup/latest。"""
     proof = json.loads((folder / "restore-verified.json").read_text())
     require(
         proof.get("postgres_matches") is True
@@ -415,74 +332,45 @@ def publish_local(folder):
         and proof.get("manifest_sha256") == digest(folder / "manifest.json"),
         "Successful restore verification required",
     )
-    destination = local_destination()
     require(
-        destination.resolve() != folder.resolve(),
-        "Backup and state directories must differ",
+        remote_digest(pod, directory + "/restore-verified.json")
+        == digest(folder / "restore-verified.json"),
+        "Restore proof on backup disk differs",
     )
-    target = destination / "latest.tar"
-    require(not target.is_symlink(), "Backup archive cannot be a symlink")
+    sh(pod, "app", ROTATE_SCRIPT, BACKUP_ROOT, directory)
+    latest = BACKUP_ROOT + "/latest"
+    # 同一文件系统内改名不重写内容；核对清单确认替换的是本次已验证的备份。
+    require(
+        remote_digest(pod, latest + "/manifest.json")
+        == digest(folder / "manifest.json"),
+        "Published cluster backup differs",
+    )
     manifest = json.loads((folder / "manifest.json").read_text())
-    checksums = {
-        name: digest(folder / name)
-        for name in [*manifest["files"], "manifest.json", "restore-verified.json"]
-    }
-    temporary = destination / (".pending-" + secrets.token_hex(8) + ".tar")
-    # 本机文件锁串行化发布；固定文件名原子替换，只保留最近一份完整备份。
-    with (destination / ".lock").open("a") as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX)
-        try:
-            with temporary.open("xb") as stream:
-                temporary.chmod(0o600)
-                with tarfile.open(fileobj=stream, mode="w") as archive:
-                    for name in checksums:
-                        require(
-                            not (folder / name).is_symlink(),
-                            "Backup source cannot be a symlink",
-                        )
-                        archive.add(folder / name, arcname=name, recursive=False)
-                stream.flush()
-                os.fsync(stream.fileno())
-            verify_bundle(temporary, checksums)
-            checksum = digest(temporary)
-            temporary.replace(target)
-            fd = os.open(destination, os.O_RDONLY)
-            try:
-                os.fsync(fd)
-            finally:
-                os.close(fd)
-            write(
-                folder / "local-backup.json",
-                {
-                    "path": str(target),
-                    "sha256": checksum,
-                    "old_sha": manifest.get("old_sha"),
-                    "retained": 1,
-                    "encrypted": False,
-                    "verified_at": int(time.time()),
-                },
-            )
-        finally:
-            temporary.unlink(missing_ok=True)
-    return target
+    write(
+        folder / "cluster-backup.json",
+        {
+            "pvc": BACKUP_PVC,
+            "path": latest,
+            "manifest_sha256": digest(folder / "manifest.json"),
+            "old_sha": manifest.get("old_sha"),
+            "retained": 1,
+            "encrypted": False,
+            "verified_at": int(time.time()),
+        },
+    )
+    return latest
 
 
 def cleanup_completed(folder):
-    """成功验收后删除本批重复备份与私密配置；失败现场必须保留。"""
+    """成功验收后删除本批发布端的私密配置副本；失败现场必须保留。"""
     folder = Path(folder)
-    if not (folder / "local-backup.json").exists():
+    if not (folder / "cluster-backup.json").exists():
         return
-    record = json.loads((folder / "local-backup.json").read_text())
-    require(
-        digest(record["path"]) == record["sha256"], "Published local backup changed"
-    )
-    manifest = json.loads((folder / "manifest.json").read_text())
-    for name in [
-        *manifest["files"],
+    for name in (
         "cluster-before.json",
         "runtime.env",
         "mcp-client.json",
-        "restore.toc",
-    ]:
-        require(Path(name).name == name, "Unsafe cleanup path")
+        "config.tar.gz",
+        "project.tar.gz",
+    ):
         (folder / name).unlink(missing_ok=True)

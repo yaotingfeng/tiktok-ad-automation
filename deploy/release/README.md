@@ -38,7 +38,9 @@ python3 deploy/local.py deploy
 
 推送到公司 Gitea `main` 后，公司 Jenkins 任务 `tiktok-ad-automation`（`http://123.207.4.46:8080`）自动执行与 `python3 deploy/local.py deploy` 完全相同的流程（`Jenkinsfile` → `deploy/ci/jenkins-run.sh` → 工具镜像内的 `deploy/local.py`）。本机命令保留为应急入口；两边同时发布由集群锁阻止。
 
-- 状态、检查通过记录与最新备份在 Jenkins 私有目录 `/var/jenkins_home/tk-ada-private`（宿主 `/data/jenkins/tk-ada-private`），与本机 `.runtime/local-release/` 结构相同、互不共享。备份为 `backups/latest.tar`，只留最新一份，不作为构建产物下载。
+- 状态与检查通过记录在 Jenkins 私有目录 `/var/jenkins_home/tk-ada-private`（宿主 `/data/jenkins/tk-ada-private`），与本机 `.runtime/local-release/` 结构相同、互不共享。备份本身在集群备份盘上（见下文），两边共用同一份。
+- 公司 main 在排队或检查期间前进时，本批在停服前退出（退出码 3），Jenkins 标记为 `NOT_BUILT`，由最新提交的构建发布；不会再白跑完整检查后才在推送阶段失败。
+- 控制台会输出各检查线的耗时行（`检查线通过：backend（N 分钟）`），其余检查输出仍只在私有日志。
 - 中断处理：在 Jenkins 手动运行该任务，`ACTION` 选 `status` 查看阶段，再按下文选 `recover` 或 `finish`。详细日志在私有目录的批次 `execution.log`，控制台只显示阶段。
 - 工具镜像 `deploy/ci/tools.Dockerfile` 与 Docker Hub 依赖镜像副本（`test/tiktok-ad-automation-base:*`）在能访问外网的机器上构建推送；改动工具版本时同步更新 `Jenkinsfile` 的 `TOOLS_IMAGE`。
 
@@ -56,13 +58,18 @@ python3 deploy/local.py deploy
 }
 ```
 
-依赖 Python3.14、uv、Bun1.4.2、Node、Docker/buildx、ffmpeg/ffprobe、PostgreSQL18客户端、kubectl。需具备公司 Git 推送凭据、ACR push/pull 登录及已授权 ACK 访问。不需要 age、AWS CLI 或任何备份桶凭据。工具不输出真实连接配置。
+依赖 Python3.14、uv、Bun1.4.2、Node、Docker/buildx、ffmpeg/ffprobe、PostgreSQL18客户端、kubectl。需具备公司 Git 推送凭据、ACR push/pull 登录及已授权 ACK 访问。不需要 age、AWS CLI 或任何备份桶凭据；发布端不再拉取应用镜像。工具不输出真实连接配置。
 
 配置中的 ACK context 固定为 `kubernetes-admin-c19dbd82590a34b9f87cebb8c1a858796`，不接受隐式切换目标。旧 prod 资源停用清单用于核对残留资源，不能省略。首次部署参考 `deploy/k8s/README.md`；此入口只用于现有九角色、各一副本的部署。
 
 ## 备份位置与保留
 
-最新完整备份固定为 **`.runtime/local-release/backups/latest.tar`**（在运行发布命令的这台电脑上）。保留最近一份成功且隔离恢复通过的归档：新归档回读成功后才原子替换旧文件。归档是本机私有明文文件，不上传云存储，权限 0600；目录 0700。每次成功验收后清除本批次重复 dump/配置，只保留状态与验证记录；失败现场保留，供恢复处理。
+最新完整备份固定在新加坡 ACK `test` 命名空间的备份盘 **PVC `tiktok-ad-automation-backup`（50Gi ESSD）的 `/backup/latest/`**，在 `deploy/k8s/tk-ada.yaml` 声明，首次发布在停服前自动创建。备份与恢复验证都在集群内完成，备份文件不回传 Jenkins 或本机（此前跨境回传约 0.5 MiB/s，是停写时间的主要来源）。按用户 2026-10-16 决定不保留异地副本；可用区级故障依赖云数据库自身的每日备份。
+
+- 只保留一份：新备份写入同盘 `/backup/.pending-<token>/`，集群内恢复验证通过后才以目录改名替换 `latest`；失败时旧 `latest` 不变，残留的未完成目录在下次发布开始时清理。
+- 余量：辅助 Pod 就绪后、取消 Worker 消费前检查剩余空间 ≥ max(3×上一份 dump, 数据库大小/4, 2 GiB)，不足即停止（此时可直接 `recover`），提示在清单里扩容（存储类支持在线扩容，改 `storage` 后由下次发布的 `apply.sh` 生效）。2026-10-16 数据库 5.66 GB、压缩 dump 约 0.8 GB。
+- 发布端批次目录只保存清单、校验和、恢复证明和 `cluster-backup.json`；成功验收后删除其中的私密配置副本，失败现场保留。
+- 备份盘只由发布辅助 Pod 挂载，读取备份需在 `test` 命名空间临时起一个挂载该 PVC 的 Pod（与 Beat 盘同一可用区）。
 
 备份包括 PostgreSQL public 业务 schema、Redis DB15 每个键的值与绝对过期时间、Beat 调度文件、旧 SHA 独立源码、运行程序及前端构建、实际私有配置/密钥/MCP注册、部署资源和共享入口证书引用。共享证书私钥、R2素材正文、其他项目数据库/Redis及云平台系统 schema 不在项目归档中。
 
@@ -72,11 +79,11 @@ python3 deploy/local.py deploy
 
 1. 在独立源码副本中按检查计划并行运行发布门禁、后端检查/测试、前端构建/浏览器测试，以及按需的镜像构建与真实 PostgreSQL/Redis 恢复测试（见上文“检查范围”）。
 2. 将指定 SHA 快进推送公司 main，核对远端一致，再构建上传 ACR。
-3. 获取集群独占锁，保存九 Deployment UID、原配置和版本。验证旧/新镜像、本机备份目录、现有资源、三个开关及只读预检。
-4. 停止 API/Beat；取消七 Worker 的消费，等待在途任务自然完成并连续两次空闲。停止 Worker，保留待处理队列，不清队列或重放 UNKNOWN。
-5. 在同一停写窗口备份，通过集群传输校验 SHA256。本机 Docker 内部隔离网络恢复 PostgreSQL/Redis，验证表行数、迁移 head、授权可解密、Redis内容/TTL，试跑候选迁移。
-6. 生成并完整回读本地归档，原子替换 `latest.tar`。成功后才迁移正式数据库，九服务保持停止直到迁移完成。
-7. 删除本次临时工具 Pod，依次恢复 API、七 Worker 和唯一 Beat。核对九 Pod Ready、镜像摘要、实际配置/开关、HTTPS健康，再解锁和清理重复备份。
+3. 获取集群独占锁，保存九 Deployment UID、原配置和版本。从镜像仓库取旧/新镜像摘要，确保备份盘存在，经运行中的 API 只读查询数据库大小，核对现有资源、开关及只读预检。
+4. 停止 API/Beat；创建发布辅助 Pod（挂 Beat 盘、备份盘与按数据库大小新建的临时恢复盘）并检查备份盘余量。取消七 Worker 的消费，等待在途任务自然完成并连续两次空闲。停止 Worker，保留待处理队列，不清队列或重放 UNKNOWN。
+5. 在同一停写窗口把备份直接写入备份盘并生成 SHA256 清单。在辅助 Pod 内只监听回环地址的临时 PostgreSQL/Redis 上恢复，验证表行数、迁移 head、授权可解密、Redis内容/TTL，并用候选镜像容器试跑迁移；执行前强制覆盖连接并断言只连回环临时实例。
+6. 核对恢复证明后以目录改名替换 `/backup/latest`。成功后才迁移正式数据库，九服务保持停止直到迁移完成。
+7. 删除本次辅助 Pod（临时恢复盘随之删除），同时启动 API 与七 Worker、全部就绪后启动唯一 Beat。并行核对九 Pod Ready、镜像摘要、实际配置/开关，再查 HTTPS健康，解锁并清理私密配置副本。
 
 普通发版保留线上四个开关的实际值（2026-10-16 核实均为 true），不被本地模板覆盖。OAuth重新授权和真实广告业务写入不属于自动验收，不能把健康检查称为真实业务联调成功。
 
@@ -93,7 +100,7 @@ python3 deploy/local.py deploy
 
 ## 恢复验证
 
-每个归档含 `manifest.json` 与 `restore-verified.json`，恢复证据绑定清单 SHA256。解包到新的私有目录，核对清单后从 `config.tar.gz` 取出原加密密钥；将数据库和Redis连接改为全新隔离实例。使用 `backup.py:restore_verify` 的算法恢复并验证，禁止直接覆盖在线库或带旧 AOF 的共享 Redis。发布时已完成一次真实隔离恢复。
+每份备份目录含 `manifest.json` 与 `restore-verified.json`，恢复证据绑定清单 SHA256；`deploy/release/archive_check.py` 可在挂载备份盘的 Pod 内单独核对校验和与归档结构。手动恢复时在新的私有环境中核对清单，从 `config.tar.gz` 取出原加密密钥，将数据库和 Redis 连接改为全新隔离实例，按 `backup.py:restore_verify` 的步骤恢复并验证；禁止直接覆盖在线库或带旧 AOF 的共享 Redis。每次发布已在集群内完成一次真实隔离恢复。
 
 ```bash
 node scripts/test-deployment-assets.mjs

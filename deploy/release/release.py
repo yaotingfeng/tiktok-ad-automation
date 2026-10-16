@@ -11,24 +11,28 @@ import re
 import secrets
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from urllib.request import urlopen
 
 from backup import (
+    BACKUP_PVC,
+    BACKUP_ROOT,
     PROBE,
+    VERIFY_PG_PORT,
+    VERIFY_REDIS_PORT,
+    PodExec,
+    check_space,
     cleanup_completed,
-    local_destination,
-    publish_local,
+    publish,
     restore_verify,
     snapshot,
 )
 from common import (
     CONTEXT,
     FLAGS,
-    POSTGRES_IMAGE,
     PROJECT,
     PUBLIC,
-    REDIS_IMAGE,
     ROOT,
     VPC,
     Cluster,
@@ -47,6 +51,8 @@ WORKERS = {
     "worker-ads-reporting": "ads-reporting",
     "worker-ad-management": "ad-management",
 }
+# 与 Beat 磁盘相同的存储类：按首个消费者所在可用区建盘，辅助 Pod 才能同时挂载。
+STORAGE_CLASS = "alicloud-disk-topology-alltype"
 
 
 def manifest_items(payload):
@@ -290,31 +296,11 @@ class Release:
             re.fullmatch(r"sha256:[0-9a-f]{64}", expected),
             "Registry image digest unavailable",
         )
-        repo_digests = json.loads(
-            run(
-                [
-                    "docker",
-                    "image",
-                    "inspect",
-                    "--format",
-                    "{{json .RepoDigests}}",
-                    PUBLIC + sha,
-                ]
-            )
-        )
-        require(
-            PUBLIC.rsplit(":", 1)[0] + "@" + expected in repo_digests,
-            "Pulled image differs from the current registry digest; pull and recheck before release",
-        )
         return expected
 
     def prepare_tools(self, sha=None):
-        for image in {PUBLIC + self.state["old_sha"], POSTGRES_IMAGE, REDIS_IMAGE} | (
-            {PUBLIC + sha} if sha else set()
-        ):
-            # Apple Silicon 本机也必须验证线上 AMD64 镜像；恢复依赖可用本机架构。
-            platform = ["--platform=linux/amd64"] if image.startswith(PUBLIC) else []
-            run(["docker", "pull", *platform, image])
+        # 恢复验证在集群内运行，发布端不再拉取镜像；摘要直接取自镜像仓库，
+        # 验收时与运行中容器实际报告的摘要逐个比对。
         self.state["image_digests"] = {
             version: self.image_digest(version)
             for version in {self.state["old_sha"], sha or self.state["old_sha"]}
@@ -354,14 +340,47 @@ class Release:
             old_defaults == new_defaults,
             "ConfigMap defaults changed; review configuration before automatic release",
         )
-        # 停服前确认本机目标可写，无需云桶或额外备份云盘。
-        local_destination()
+        self.ensure_backup_disk(rendered)
+        self.state["database_bytes"] = self.database_bytes(old_pods)
         if sha:
             self.check_remote(sha)
         run(
             ["bash", str(ROOT / "deploy/k8s/apply.sh")],
             env=dict(self.env(sha or self.state["old_sha"]), PREFLIGHT_ONLY="1"),
         )
+
+    def ensure_backup_disk(self, rendered):
+        """备份盘按部署清单声明；首次发布在停服前创建，之后由 apply.sh 维护（含扩容）。"""
+        claim = next(
+            v
+            for v in rendered
+            if v["kind"] == "PersistentVolumeClaim"
+            and v["metadata"]["name"] == BACKUP_PVC
+        )
+        before = json.loads((self.folder / "cluster-before.json").read_text())
+        if not any(
+            v["metadata"]["name"] == BACKUP_PVC
+            for v in before["persistentvolumeclaims"]["items"]
+        ):
+            self.cluster.k("apply", "-f", "-", data=json.dumps(claim).encode())
+
+    def database_bytes(self, pods):
+        """停服前经运行中的 API 只读查询数据库大小，用于临时恢复盘容量与备份盘余量。"""
+        api = next(p for p in pods if p["metadata"]["labels"]["role"] == "api")
+        code = (
+            "from sqlalchemy import text\nfrom app.core.db import engine\n"
+            "with engine.connect() as c:\n"
+            " print(c.execute(text('SELECT pg_database_size(current_database())')).scalar_one())"
+        )
+        value = int(
+            self.cluster.k("exec", api["metadata"]["name"], "--", "python", "-c", code)
+        )
+        require(value > 0, "Database size unavailable")
+        return value
+
+    @property
+    def pod(self):
+        return PodExec(self.cluster, self.state["helper"])
 
     def wait_pods(self, roles):
         deadline = time.monotonic() + self.timeout
@@ -385,22 +404,107 @@ class Release:
         for key in ("readinessProbe", "livenessProbe", "startupProbe"):
             app.pop(key, None)
         app["resources"] = {
-            "requests": {"cpu": "25m", "memory": "128Mi"},
-            "limits": {"cpu": "1", "memory": "1Gi"},
+            "requests": {"cpu": "100m", "memory": "256Mi"},
+            "limits": {"cpu": "2", "memory": "2Gi"},
         }
-        template["containers"] = [
+        backup = {"name": "backup", "mountPath": BACKUP_ROOT}
+        app.setdefault("volumeMounts", []).append(backup)
+        containers = [
             app,
             {
                 "name": "postgres",
                 # 集群节点可直接拉取官方镜像；ACR 副本只服务于 Jenkins 本机。
                 "image": "postgres:18",
                 "command": ["sleep", "86400"],
+                "volumeMounts": [backup],
+                "resources": {
+                    "requests": {"cpu": "100m", "memory": "64Mi"},
+                    "limits": {"cpu": "1", "memory": "1Gi"},
+                },
+            },
+            {
+                # 恢复验证实例：只监听 Pod 回环地址，数据在本次临时盘上，随 Pod 删除。
+                # 仅一次性验证用，关闭落盘保证以加快恢复；免密仅限同 Pod 内连接。
+                "name": "verify-pg",
+                "image": "postgres:18",
+                "args": [
+                    "-c",
+                    "listen_addresses=127.0.0.1",
+                    "-p",
+                    str(VERIFY_PG_PORT),
+                    "-c",
+                    "fsync=off",
+                    "-c",
+                    "synchronous_commit=off",
+                    "-c",
+                    "full_page_writes=off",
+                ],
+                "env": [
+                    {"name": "POSTGRES_HOST_AUTH_METHOD", "value": "trust"},
+                    {"name": "POSTGRES_DB", "value": "tkada_verify"},
+                    # 云盘根目录有 lost+found，数据目录须放在子目录。
+                    {"name": "PGDATA", "value": "/verify/pgdata"},
+                ],
+                "volumeMounts": [
+                    {"name": "verify", "mountPath": "/verify"},
+                    dict(backup, readOnly=True),
+                ],
+                "resources": {
+                    "requests": {"cpu": "250m", "memory": "512Mi"},
+                    "limits": {"cpu": "2", "memory": "2Gi"},
+                },
+            },
+            {
+                "name": "verify-redis",
+                "image": "redis:8",
+                "args": [
+                    "redis-server",
+                    "--bind",
+                    "127.0.0.1",
+                    "--port",
+                    str(VERIFY_REDIS_PORT),
+                    "--save",
+                    "",
+                    "--appendonly",
+                    "no",
+                ],
                 "resources": {
                     "requests": {"cpu": "25m", "memory": "64Mi"},
                     "limits": {"cpu": "1", "memory": "1Gi"},
                 },
             },
         ]
+        candidate = self.state.get("candidate_sha")
+        if candidate and candidate != self.state["old_sha"]:
+            # 候选迁移只在临时恢复库上试跑；与 app 同配置，运行前同样强制覆盖连接。
+            containers.append(
+                dict(copy.deepcopy(app), name="candidate", image=VPC + candidate)
+            )
+        template["containers"] = containers
+        # 恢复后数据（含索引）约为数据库大小，另留 WAL 与增长余量；阿里云 ESSD 最小 20 GiB。
+        verify_gib = max(20, -(-self.state["database_bytes"] * 5 // 2 // 2**30) + 5)
+        template.setdefault("volumes", []).extend(
+            [
+                {"name": "backup", "persistentVolumeClaim": {"claimName": BACKUP_PVC}},
+                {
+                    "name": "verify",
+                    "ephemeral": {
+                        "volumeClaimTemplate": {
+                            "metadata": {
+                                "labels": {"app": PROJECT, "role": "release-verify"}
+                            },
+                            "spec": {
+                                "accessModes": ["ReadWriteOnce"],
+                                "storageClassName": STORAGE_CLASS,
+                                "resources": {
+                                    "requests": {"storage": f"{verify_gib}Gi"}
+                                },
+                            },
+                        }
+                    },
+                },
+            ]
+        )
         template["restartPolicy"] = "Never"
         template["automountServiceAccountToken"] = False
         template["terminationGracePeriodSeconds"] = 15
@@ -421,7 +525,12 @@ class Release:
         )
         self.state["helper_uid"] = obj["metadata"]["uid"]
         self.save("helper-created")
-        self.cluster.k("wait", "--for=condition=Ready", "pod/" + name, "--timeout=300s")
+        # 需挂载 Beat 盘、备份盘并新建临时恢复盘，云盘挂载可能较慢。
+        self.cluster.k("wait", "--for=condition=Ready", "pod/" + name, "--timeout=600s")
+        self.state["backup_dir"] = BACKUP_ROOT + "/.pending-" + self.state["token"][:12]
+        # 余量不足时在取消 Worker 消费前停止，仍可直接 recover 恢复原版。
+        self.state["backup_space"] = check_space(self.pod, self.state["database_bytes"])
+        self.save("helper-ready")
 
     def probe(self, action, expected=None):
         args = [
@@ -526,10 +635,15 @@ class Release:
         self.config_unchanged()
         self.remove_helper()  # Beat RWO 磁盘先卸载，避免重启时多节点挂载冲突。
         self.save("resuming")
-        for role in ("api", *WORKERS, "beat"):
-            name = PROJECT + "-" + role
-            self.cluster.scale(name, 1)
-            self.cluster.k("rollout", "status", "deployment/" + name, "--timeout=10m")
+        # API 与七个 Worker 同时启动并一起等待就绪；Beat 仍最后启动，
+        # 保证周期任务投递时所有消费者已在线。
+        for group in (("api", *WORKERS), ("beat",)):
+            for role in group:
+                self.cluster.scale(PROJECT + "-" + role, 1)
+            for role in group:
+                self.cluster.k(
+                    "rollout", "status", f"deployment/{PROJECT}-{role}", "--timeout=10m"
+                )
         self.accept(sha)
         self.save("complete")
         self.unlock()
@@ -589,7 +703,8 @@ class Release:
             + repr(sorted(expected_env))
             + "},sort_keys=True).encode()).hexdigest(),hashlib.sha256(Path('/run/tk-ada/mcp-client.json').read_bytes()).hexdigest()]))"
         )
-        for pod in pods:
+
+        def verify(pod):
             statuses = pod.get("status", {}).get("containerStatuses", [])
             require(
                 len(statuses) == 1
@@ -619,6 +734,10 @@ class Release:
                 == {k: str(v).lower() for k, v in json.loads(expected_values).items()},
                 "Effective feature flags differ",
             )
+
+        # 九个 Pod 的实际配置互不依赖，并行核对；任一失败即抛出。
+        with ThreadPoolExecutor(max_workers=len(pods)) as pool:
+            list(pool.map(verify, pods))
         with urlopen(
             "https://tkada.shortclipflix.com/api/utils/health-check/", timeout=30
         ) as response:
@@ -686,8 +805,12 @@ class Release:
         self.pause()
         snapshot(self)
         self.save("backed-up")
-        restore_verify(self.folder, self.values, self.state["old_sha"], sha)
-        publish_local(self.folder)
+        directory = self.state["backup_dir"]
+        if sha and sha != self.state["old_sha"]:
+            restore_verify(self.pod, self.folder, directory, sha)
+        else:
+            restore_verify(self.pod, self.folder, directory, sha, candidate="app")
+        publish(self.pod, self.folder, directory)
         self.save("backup-verified")
         if sha:
             self.assert_lock()

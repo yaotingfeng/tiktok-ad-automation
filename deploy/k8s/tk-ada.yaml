@@ -42,3 +42,20 @@ spec:
   resources:
     requests:
       storage: 20Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: tiktok-ad-automation-backup
+  labels:
+    app: tiktok-ad-automation
+spec:
+  # 发布备份盘：只保留最近一份已恢复验证的完整备份（/backup/latest），只由发布辅助 Pod 挂载。
+  # 与 Beat 盘同存储类；首次挂载时与 Beat 盘同在辅助 Pod 上，因此建在同一可用区。
+  # 2026-10-16 数据库 5.66 GB、压缩备份约 0.8 GB；发布前检查余量不足会提示在此扩容（支持在线扩容）。
+  storageClassName: alicloud-disk-topology-alltype
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 50Gi

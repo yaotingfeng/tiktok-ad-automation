@@ -1,4 +1,8 @@
-"""使用纯合成数据验证真实 PG18/Redis7到8 恢复与 Celery 暂停；不连接生产。"""
+"""使用纯合成数据验证真实 PG18/Redis7到8 恢复与 Celery 暂停；不连接生产。
+
+发布辅助 Pod 用同一网络命名空间、同一备份卷的 Docker 容器模拟：app 与 verify-pg/
+verify-redis 共享回环地址，备份写在卷上的 /backup，执行路径与集群内完全相同。
+"""
 
 import base64
 import json
@@ -9,12 +13,120 @@ import tarfile
 import tempfile
 import time
 from pathlib import Path
-from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "deploy/release"))
-from backup import PROBE, REDIS_RESTORE_CODE, publish_local, restore_verify
+from backup import (
+    BACKUP_ROOT,
+    PROBE,
+    REDIS_RESTORE_CODE,
+    VERIFY_PG_PORT,
+    VERIFY_REDIS_PORT,
+    check_space,
+    publish,
+    remote_digest,
+    restore_verify,
+    sh,
+    upload,
+)
 from common import PUBLIC, digest, mirrored, require, run, write
+
+
+class DockerPod:
+    """与 backup.PodExec 相同的调用约定：按容器名执行命令。"""
+
+    def __init__(self, containers):
+        self.containers = containers
+
+    def __call__(self, container, *args, data=None):
+        stdin = ["-i"] if data is not None else []
+        return run(
+            ["docker", "exec", *stdin, self.containers[container], *args], data=data
+        )
+
+
+def start_pod(name, network, image, env_file, containers):
+    """app 容器挂备份卷并接入源库网络；验证实例共用其网络命名空间，只监听回环地址。"""
+    volume = name + "-backup"
+    run(["docker", "volume", "create", volume])
+    app = (
+        run(
+            [
+                "docker",
+                "run",
+                "-d",
+                "--name",
+                name + "-app",
+                "--network",
+                network,
+                "--env-file",
+                str(env_file),
+                "-v",
+                volume + ":" + BACKUP_ROOT,
+                image,
+                "sleep",
+                "600",
+            ]
+        )
+        .decode()
+        .strip()
+    )
+    containers.append(app)
+    shared = ["--network", "container:" + app]
+    verify_pg = (
+        run(
+            [
+                "docker",
+                "run",
+                "-d",
+                "--name",
+                name + "-verify-pg",
+                *shared,
+                "-e",
+                "POSTGRES_HOST_AUTH_METHOD=trust",
+                "-e",
+                "POSTGRES_DB=tkada_verify",
+                "-v",
+                volume + ":" + BACKUP_ROOT + ":ro",
+                mirrored("postgres:18"),
+                "-c",
+                "listen_addresses=127.0.0.1",
+                "-p",
+                str(VERIFY_PG_PORT),
+            ]
+        )
+        .decode()
+        .strip()
+    )
+    containers.append(verify_pg)
+    verify_redis = (
+        run(
+            [
+                "docker",
+                "run",
+                "-d",
+                "--name",
+                name + "-verify-redis",
+                *shared,
+                mirrored("redis:8"),
+                "redis-server",
+                "--bind",
+                "127.0.0.1",
+                "--port",
+                str(VERIFY_REDIS_PORT),
+                "--save",
+                "",
+                "--appendonly",
+                "no",
+            ]
+        )
+        .decode()
+        .strip()
+    )
+    containers.append(verify_redis)
+    return DockerPod(
+        {"app": app, "verify-pg": verify_pg, "verify-redis": verify_redis}
+    ), volume
 
 
 def main():
@@ -225,6 +337,13 @@ r.set('string',b'\\x00secret');r.rpush('queue',b'one',b'two');r.hset('hash',mapp
             else:
                 raise RuntimeError("Wrong Redis logical content accepted")
             write(folder / "redis.json", records)
+            pod, volume = start_pod(
+                name, name, image, folder / "source.env", containers
+            )
+            space = check_space(pod, 1)
+            require(space["last_dump"] == 0, "Fresh backup disk has no previous dump")
+            directory = BACKUP_ROOT + "/.pending-fixture"
+            sh(pod, "app", 'umask 077 && mkdir "$1"', directory)
             for archive_name, entry in [
                 ("project", "README.md"),
                 ("runtime-app", "backend/app/frontend/index.html"),
@@ -246,13 +365,38 @@ r.set('string',b'\\x00secret');r.rpush('queue',b'one',b'two');r.hset('hash',mapp
                 "beat-data.tar.gz",
                 "config.tar.gz",
             ]
+            for f in files:
+                upload(pod, folder / f, directory + "/" + f)
             write(
                 folder / "manifest.json",
                 {"files": {f: digest(folder / f) for f in files}},
             )
-            restore_verify(folder, values, sha, sha)
-            with patch.dict(os.environ, LOCAL_BACKUP_DIR=str(folder / "local-backups")):
-                publish_local(folder)
+            upload(pod, folder / "manifest.json", directory + "/manifest.json")
+            # 备份卷之外的源库仍可从 app 容器访问：恢复只能落在回环临时实例上。
+            restore_verify(pod, folder, directory, sha, candidate="app")
+            latest = publish(pod, folder, directory)
+            require(
+                remote_digest(pod, latest + "/postgres.dump")
+                == digest(folder / "postgres.dump"),
+                "Published backup content differs",
+            )
+            source_rows = run(
+                [
+                    "docker",
+                    "exec",
+                    pg,
+                    "psql",
+                    "-U",
+                    "postgres",
+                    "-d",
+                    "tkada",
+                    "-Atc",
+                    "SELECT count(*) FROM fixture",
+                ]
+            )
+            require(
+                source_rows.strip() == b"2", "Source database changed during verify"
+            )
             result = json.loads((folder / "restore-verified.json").read_text())
             require(
                 result["credentials_decrypted"] == 1,
@@ -270,20 +414,26 @@ r.set('string',b'\\x00secret');r.rpush('queue',b'one',b'two');r.hset('hash',mapp
                 "PASS: isolated PostgreSQL restore, encrypted credential, candidate migration, six Redis key types/TTL",
                 flush=True,
             )
-            # 损坏备份必须在启动恢复容器前被拒绝。
-            with (folder / "postgres.dump").open("ab") as stream:
-                stream.write(b"corrupt")
+            # 下次发布需要为新旧两份并存留足余量。
+            space = check_space(pod, 1)
+            require(
+                space["last_dump"] == (folder / "postgres.dump").stat().st_size,
+                "Space check must size against the retained dump",
+            )
+            # 备份盘上的损坏备份必须在恢复前被拒绝。
+            sh(pod, "app", 'printf corrupt >> "$1"', latest + "/postgres.dump")
             try:
-                restore_verify(folder, values, sha, sha)
+                restore_verify(pod, folder, latest, sha, candidate="app")
             except RuntimeError as exc:
                 require("checksum" in str(exc), "Unexpected corruption error")
             else:
                 raise RuntimeError("Corrupt backup accepted")
-            print("PASS: corrupt backup rejected", flush=True)
+            print("PASS: published to backup disk; corrupt backup rejected", flush=True)
             celery_test(app, folder, name, image, containers)
         finally:
             for cid in reversed(containers):
                 run(["docker", "rm", "-f", "-v", cid])
+            run(["docker", "volume", "rm", "-f", name + "-backup"])
             run(["docker", "network", "rm", net])
             run(["docker", "image", "rm", image])
 

@@ -2453,3 +2453,16 @@
 - 详见[最终生产记录](validation/2026-10-16-directory-publish-finalization.md)。审计文档在应用上线后单独提交，不为文档补记再次启动生产发布。
 
 - 最终 16:42 业务回读：星屿/新骏伯广告日报均已刷新到 16:42，素材日报也有上线后更新；23 条报表、583 条目录真实完成。数据库 16 连接、0 锁等待、0 超一分钟空闲事务，报表 broker=0、有效租约=2；目录约 2 万条历史读取继续后台处理，不宣称所有历史回补已结束。
+
+## 2026-10-16：发布提速——备份与恢复验证移入集群
+
+- 背景（Jenkins API 实测 #1–#6）：全量检查 31–37 分钟，构建镜像 0.3–1 分钟；备份阶段把数据库 dump 跨境回传 Jenkins 后在本机 Docker 恢复，dump 已约 0.8 GB（数据库 5.66 GB）、跨境约 0.5 MiB/s，发布阶段 15 分钟以上且大部分处于停写。#4/#5 在检查期间 main 已前进，跑完约 70 分钟检查才在推送阶段失败。
+- 用户决定：备份放集群磁盘、50Gi 先评估后确认、不要异地副本。
+- 实现：
+  - `deploy/k8s/tk-ada.yaml` 新增 PVC `tiktok-ad-automation-backup`（50Gi，`alicloud-disk-topology-alltype`），首次发布在停服前由 `release.py` 创建，之后由 `apply.sh` 维护。
+  - 发布辅助 Pod 增加 `verify-pg`（只监听 127.0.0.1:5433，数据在按数据库大小 ×2.5+5 GiB、至少 20 GiB 的临时盘，随 Pod 删除）、`verify-redis`（127.0.0.1:6380）和候选镜像容器 `candidate`；备份直接写入 `/backup/.pending-*`，集群内恢复/指纹/Redis 内容/候选迁移，验证后目录改名为 `/backup/latest`。验证代码先覆盖连接再断言实际生效值只指向回环临时实例，否则中止。
+  - 新增 `deploy/release/archive_check.py`（标准库，Pod 内核对清单与归档）；余量检查在取消 Worker 消费前执行。发布端不再 `docker pull` 应用镜像，摘要直接取自镜像仓库。
+  - 恢复：API 与七 Worker 同时扩容并一起等待就绪，Beat 最后；验收逐 Pod 配置核对改为并行。
+  - `deploy/local.py`：deploy 时若本提交已是公司 main 的祖先则在检查前退出，检查期间 main 变化则终止检查，退出码 3；`Jenkinsfile` 将其标为 `NOT_BUILT`。检查线耗时行转到控制台。
+- 验证：`node --test scripts/test-deployment-assets.mjs`（含新 `test-cluster-backup.py` 8 项、`test-release-tools.py` 26 项）通过；`scripts/test-release-integration.py` 用同网络命名空间/同卷的 Docker 容器模拟辅助 Pod，真实 PG18、Redis 7→8 恢复、凭据解密、候选迁移、发布轮换、损坏拒绝、源库未改动及 Celery 排空全部通过；`validate-k8s-manifests.py` 14 个对象通过；对生产 ACK 做辅助 Pod 与备份 PVC 的服务器端 dry-run 均被接受，未创建资源。
+- 待验：集群内新流程（云盘创建/挂载、Pod 内恢复耗时）首次实跑在下一次 main 发布；检查阶段（约 32 分钟）尚未优化，待新增的检查线耗时数据确定瓶颈。
