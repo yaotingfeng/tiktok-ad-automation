@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import UUID, uuid4
@@ -28,6 +30,27 @@ register_dispatch_task(TASK_NAME, "ads-directory")
 
 _LEASE_SECONDS = 90
 _LOCK_TIMEOUT = "20s"
+
+
+@contextmanager
+def _directory_session(database_engine: Any) -> Iterator[Session]:
+    """领取和发布均使用有界事务，异常时丢弃物理连接以释放服务器行锁。"""
+    with Session(database_engine) as session:
+        try:
+            session.connection().execute(
+                text(f"SET LOCAL lock_timeout = '{_LOCK_TIMEOUT}'")
+            )
+            session.connection().execute(text("SET LOCAL statement_timeout = '30s'"))
+            # 发布没有外部请求；即使进程被软超时中断且回滚失败，也由服务器兜底。
+            session.connection().execute(
+                text("SET LOCAL idle_in_transaction_session_timeout = '10s'")
+            )
+            yield session
+        except BaseException:
+            # psycopg 被 Celery 信号打断后可能仍有未完成命令，普通 close/rollback
+            # 会报 another command is already in progress，必须直接关闭物理连接。
+            session.invalidate()
+            raise
 
 
 def _context(tenant_id: str, actor_id: str) -> TenantContext:
@@ -64,12 +87,7 @@ def run_directory_step(
     # 实例总开关同时拦截已经排队的目录任务；重新开启后由扫描器恢复。
     if not settings.ADS_SYNC_ENABLED:
         return "WAIT"
-    with Session(database_engine) as session:
-        # 等锁必须远短于任务软超时：软超时信号若在驱动等待中触发，回滚会失败，
-        # 连接带着未结束的事务和行锁泄漏，最终耗尽连接池。超时则正常报错回滚。
-        session.connection().execute(
-            text(f"SET LOCAL lock_timeout = '{_LOCK_TIMEOUT}'")
-        )
+    with _directory_session(database_engine) as session:
         run = session.exec(
             select(AdDirectoryRun)
             .where(
@@ -123,7 +141,7 @@ def run_directory_step(
         task_deadline=deadline,
     ) as gateway:
         page = gateway.ads.read_page(query)
-    with Session(database_engine) as session:
+    with _directory_session(database_engine) as session:
         stage_directory_page(
             session,
             run_id=run_id,
