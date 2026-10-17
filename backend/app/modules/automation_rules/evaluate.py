@@ -6,13 +6,12 @@ from decimal import Decimal
 from typing import Any
 
 from app.modules.automation_rules.catalog import RULE_METRICS
-from app.modules.automation_rules.inputs import Entity, Inputs
+from app.modules.automation_rules.inputs import Entity, Inputs, in_rule_scope
 from app.modules.automation_rules.schemas import Condition, RuleDefinition
 from app.modules.reporting.metric_catalog import DERIVED_RATIOS, STORED_KEYS
 
 _DEPTH = {"campaign": 0, "adgroup": 1, "ad": 2, "material": 3}
 _RATIOS = {name: (num, den, scale) for name, num, den, scale in DERIVED_RATIOS}
-_STATUS = {"ACTIVE": "ENABLE", "PAUSED": "DISABLE"}
 
 
 # 单条命中保存的执行对象上限，保护运行记录体积；正常规模下执行全部命中对象。
@@ -50,26 +49,6 @@ class Evaluation:
     hits: tuple[Hit, ...]
     skipped_count: int
     unknown_targets: tuple[str, ...] = ()
-
-
-def _in_scope(entity: Entity, definition: RuleDefinition, ignore_status: bool) -> bool:
-    apply = definition.apply_to
-    if entity.kind != apply.level:
-        return False
-    if apply.status == "SELECTED":
-        if f"{entity.advertiser_id}:{entity.remote_id}" not in apply.object_ids:
-            return False
-    elif (
-        not ignore_status
-        and entity.status != _STATUS[apply.status]
-        and not (
-            entity.kind == "material"
-            and entity.judgement_issue
-            and entity.status is None
-        )
-    ):
-        return False
-    return True
 
 
 def _sum(
@@ -256,7 +235,7 @@ def evaluate(
         (
             e
             for e in inputs.entities.values()
-            if _in_scope(e, definition, ignore_status)
+            if in_rule_scope(e, definition, ignore_status=ignore_status)
         ),
         key=lambda e: e.key,
     )

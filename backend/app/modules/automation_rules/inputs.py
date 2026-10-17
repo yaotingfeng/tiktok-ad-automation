@@ -57,6 +57,8 @@ class Entity:
     # 日报帖子可因重建出现多个；判断按广告内视频合计，操作只用当前身份。
     report_ids: tuple[str, ...] = ()
     judgement_issue: str | None = None
+    # 素材自身启用不等于可投放：其广告、广告组、系列也须启用。
+    parents_enabled: bool | None = True
 
 
 @dataclass
@@ -65,6 +67,30 @@ class Inputs:
     entities: dict[str, Entity]
     facts: dict[str, dict[str, dict[str, Decimal | None]]]
     skipped_accounts: list[dict[str, str]] = field(default_factory=list)
+
+
+def in_rule_scope(
+    entity: Entity, definition: RuleDefinition, *, ignore_status: bool = False
+) -> bool:
+    """判断与缺数说明共用作用范围；反向冲突复核仍可忽略开关状态。"""
+    scope = definition.apply_to
+    if entity.kind != scope.level:
+        return False
+    if scope.status == "SELECTED":
+        return f"{entity.advertiser_id}:{entity.remote_id}" in scope.object_ids
+    if ignore_status:
+        return True
+    if (
+        entity.kind == "material"
+        and scope.status == "ACTIVE"
+        and entity.parents_enabled is False
+    ):
+        return False
+    return entity.status == {"ACTIVE": "ENABLE", "PAUSED": "DISABLE"}[scope.status] or (
+        entity.kind == "material"
+        and bool(entity.judgement_issue)
+        and entity.status is None
+    )
 
 
 def local_today(timezone: str, now: datetime) -> date:

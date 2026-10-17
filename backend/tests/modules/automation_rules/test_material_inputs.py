@@ -4,6 +4,9 @@ from datetime import timedelta
 from decimal import Decimal
 from uuid import uuid4
 
+import pytest
+from sqlmodel import select
+
 from app.modules.ads.models import AdMaterialReference, AdObject
 from app.modules.automation_rules.evaluate import evaluate
 from app.modules.automation_rules.inputs import load_inputs
@@ -18,6 +21,17 @@ from tests.modules.automation_rules.test_inputs import NOW, TODAY, _seed, defini
 
 def setup(session, seed):
     _seed(session, seed)
+    # 通用广告夹具把 a1 设为暂停；素材规则的正常基线需要整条上级链启用。
+    ad = session.exec(
+        select(AdObject).where(
+            AdObject.tenant_id == seed.tenant_id,
+            AdObject.advertiser_id == "acc-1",
+            AdObject.kind == "ad",
+            AdObject.remote_id == "a1",
+        )
+    ).one()
+    ad.operation_status = "ENABLE"
+    session.add(ad)
     session.add(
         AdObject(
             tenant_id=seed.tenant_id,
@@ -184,6 +198,81 @@ def test_missing_link_is_reported_and_not_treated_as_zero_spend(session, sync_se
     loaded, found = result(session, sync_seed)
     assert found.hits == () and found.skipped_count == 1
     assert any(i["reason"] == "MATERIAL_LINK_MISSING" for i in loaded.skipped_accounts)
+
+
+@pytest.mark.parametrize(
+    "kind,remote", [("campaign", "c1"), ("adgroup", "g1"), ("ad", "a1")]
+)
+@pytest.mark.parametrize("has_report", [False, True])
+def test_active_material_excludes_disabled_ancestors_from_hits_and_issues(
+    session, sync_seed, kind, remote, has_report
+):
+    setup(session, sync_seed)
+    use(session, sync_seed, "a1")
+    if has_report:
+        post(session, sync_seed, "a1", "p1")
+    ancestor = session.exec(
+        select(AdObject).where(
+            AdObject.tenant_id == sync_seed.tenant_id,
+            AdObject.advertiser_id == "acc-1",
+            AdObject.kind == kind,
+            AdObject.remote_id == remote,
+        )
+    ).one()
+    ancestor.operation_status = "DISABLE"
+    session.add(ancestor)
+    session.flush()
+    loaded, found = result(session, sync_seed)
+    assert found.checked == 0 and found.hits == () and found.skipped_count == 0
+    assert loaded.skipped_accounts == []
+    # 反向冲突检查须忽略作用状态，仍能复核旧止损原因，不能被本次范围修正绕过。
+    if has_report:
+        assert evaluate(rule(), loaded, ignore_status=True).hits
+
+
+def test_paused_material_does_not_include_enabled_material_below_disabled_ad(
+    session, sync_seed
+):
+    setup(session, sync_seed)
+    use(session, sync_seed, "a1")
+    post(session, sync_seed, "a1", "p1")
+    ad = session.exec(
+        select(AdObject).where(
+            AdObject.tenant_id == sync_seed.tenant_id,
+            AdObject.kind == "ad",
+            AdObject.remote_id == "a1",
+        )
+    ).one()
+    ad.operation_status = "DISABLE"
+    session.add(ad)
+    session.flush()
+    d = rule()
+    d = d.model_copy(
+        update={"apply_to": d.apply_to.model_copy(update={"status": "PAUSED"})}
+    )
+    _, found = result(session, sync_seed, d)
+    assert found.checked == 0 and not found.hits
+
+
+def test_missing_ancestor_is_reported_instead_of_hidden_as_disabled(session, sync_seed):
+    setup(session, sync_seed)
+    use(session, sync_seed, "a1")
+    post(session, sync_seed, "a1", "p1")
+    ad = session.exec(
+        select(AdObject).where(
+            AdObject.tenant_id == sync_seed.tenant_id,
+            AdObject.kind == "ad",
+            AdObject.remote_id == "a1",
+        )
+    ).one()
+    ad.parent_remote_id = "not-synced"
+    session.add(ad)
+    session.flush()
+    loaded, found = result(session, sync_seed)
+    assert found.checked == 0 and not found.hits and found.skipped_count == 1
+    assert loaded.skipped_accounts == [
+        {"advertiser_id": "acc-1", "reason": "MATERIAL_PARENT_UNKNOWN", "count": "1"}
+    ]
 
 
 def test_ambiguous_current_identity_is_skipped(session, sync_seed):

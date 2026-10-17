@@ -155,4 +155,4 @@ def test_issue_summary_bounds_reason_lines_and_keeps_stale_accounts_distinct():
     lines = input_issue_lines(issues)
     assert len(lines) == 4
     assert lines[0] == "1 个账户数据未更新，已跳过"
-    assert lines[-1] == "另有 4 类缺数问题，详见运行记录"
+    assert lines[-1] == "另有 5 类缺数问题，详见运行记录"

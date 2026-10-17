@@ -13,7 +13,12 @@ from sqlmodel import Session, col, select
 
 from app.modules.ads.directory import latest_ad_materials
 from app.modules.ads.models import AdMaterialReference
-from app.modules.automation_rules.inputs import AccountInfo, Entity, local_window
+from app.modules.automation_rules.inputs import (
+    AccountInfo,
+    Entity,
+    in_rule_scope,
+    local_window,
+)
 from app.modules.automation_rules.schemas import RuleDefinition
 from app.modules.reporting.metric_catalog import DERIVED_RATIOS, STORED_KEYS
 from app.modules.reporting.store_models import MaterialPostLink
@@ -23,6 +28,22 @@ def material_use_id(ad_id: str, video_id: str, material_type: str) -> str:
     """广告内视频的稳定身份；广告内素材 ID 重建不改变规则频控/选择身份。"""
     raw = json.dumps([ad_id, video_id, material_type], ensure_ascii=False)
     return hashlib.sha256(raw.encode()).hexdigest()
+
+
+def _parents_enabled(ad: Entity, objects: dict[str, Entity]) -> bool | None:
+    current = ad
+    for kind in ("ad", "adgroup", "campaign"):
+        if current.kind != kind or current.status is None:
+            return None
+        if current.status != "ENABLE":
+            return False
+        if kind != "campaign":
+            parent = objects.get(current.parent_key or "")
+            if parent is None:
+                # 上级缺失须单列缺数，不能当成已关闭后从告警中悄悄排除。
+                return None
+            current = parent
+    return True
 
 
 def load_material_entities(
@@ -74,11 +95,14 @@ def load_material_entities(
         if ad is None:
             continue
         info = accounts[adv]
+        parents_enabled = _parents_enabled(ad, ads)
         for use in latest_ad_materials(candidates):
             refs = by_video[adv, ad_id, use.platform_material_id]
             issue = None
             if not use.ad_material_id or use.operation_status is None:
                 issue = "MATERIAL_IDENTITY_AMBIGUOUS"
+            elif parents_enabled is None:
+                issue = "MATERIAL_PARENT_UNKNOWN"
             elif adv in unlinked_accounts:
                 issue = "MATERIAL_REPORT_UNLINKED"
             elif (adv, ad_id) in unresolved_ads:
@@ -117,6 +141,7 @@ def load_material_entities(
                 video=use.platform_material_id,
                 report_ids=tuple(sorted({link.main_material_id for link in refs})),
                 judgement_issue=issue,
+                parents_enabled=parents_enabled,
             )
     return entities
 
@@ -154,14 +179,7 @@ def material_issues(
     for entity in entities.values():
         if entity.kind != "material" or not entity.judgement_issue:
             continue
-        scope = definition.apply_to
-        if scope.status == "SELECTED":
-            if f"{entity.advertiser_id}:{entity.remote_id}" not in scope.object_ids:
-                continue
-        elif (
-            entity.status is not None
-            and entity.status != {"ACTIVE": "ENABLE", "PAUSED": "DISABLE"}[scope.status]
-        ):
+        if not in_rule_scope(entity, definition):
             continue
         counts[entity.advertiser_id, entity.judgement_issue] += 1
     return [
