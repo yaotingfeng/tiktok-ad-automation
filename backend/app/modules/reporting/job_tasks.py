@@ -586,8 +586,8 @@ def run_job_step(*, database_engine, redis_client, job_id, claim_token):
 
 
 # 目录分页暂存只服务于本次运行的整批发布；运行发布或作废后不再被读取。
-# 保留 1 天便于排查；FAILED 可重试，不清理。
-DIRECTORY_PAGE_RETENTION = timedelta(days=1)
+# 只保留 1 小时：每日新增约 1.8 万页，保留越久发布备份与恢复越慢。FAILED 可重试，不清理。
+DIRECTORY_PAGE_RETENTION = timedelta(hours=1)
 # 单批清理的运行数上限：暂存页含大 JSONB，分批各自提交，避免长事务。
 DIRECTORY_PAGE_CLEANUP_RUNS = 2000
 # 每轮任务内继续分批清理的时间预算（任务软超时 55 秒）；积压时下一轮继续。

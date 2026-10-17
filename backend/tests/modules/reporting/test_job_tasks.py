@@ -278,7 +278,7 @@ def test_cleanup_removes_only_finished_directory_staging_pages(
 
     monkeypatch.setattr(job_tasks, "DIRECTORY_PAGE_CLEANUP_RUNS", 2)
     now = datetime.now(UTC)
-    old, recent = now - timedelta(days=2), now - timedelta(hours=2)
+    old, recent = now - timedelta(hours=2), now - timedelta(minutes=20)
     cases = {
         "published-old": ("COMPLETE", 1, old, True),
         "cancelled-old": ("CANCELLED", None, old, True),
