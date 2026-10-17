@@ -276,7 +276,12 @@ def execution_brief(summary: dict[str, Any], action: str) -> str:
         parts.append(f"冲突 {summary['conflicts']}")
     skipped = sum(
         int(summary.get(k, 0) or 0)
-        for k in ("skipped_frequency", "unsupported", "no_change")
+        for k in (
+            "skipped_frequency",
+            "skipped_parent_status",
+            "unsupported",
+            "no_change",
+        )
     )
     if skipped:
         parts.append(f"跳过 {skipped}")

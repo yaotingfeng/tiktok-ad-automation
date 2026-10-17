@@ -683,6 +683,54 @@ def test_smart_plus_material_pause_keys_ledger_by_rule_target(session, env):
     ]
 
 
+@pytest.mark.parametrize("parent_status", ["ENABLE", "DISABLE", None])
+def test_recovery_rechecks_parent_state_after_hit_was_frozen(
+    session, env, parent_status
+):
+    from app.modules.ads.models import AdMaterialReference
+    from app.modules.automation_rules.runner import execution_brief
+
+    connection = session.exec(
+        select(TikTokConnection).where(TikTokConnection.tenant_id == env.tenant_id)
+    ).first()
+    target = _smart_material(session, env, connection)
+    rule, run = _rule_run(
+        session, env, action={"type": "ENABLE", "level": "material"}, targets=[target]
+    )
+    campaign = session.exec(
+        select(AdObject).where(
+            AdObject.tenant_id == env.tenant_id, AdObject.kind == "campaign"
+        )
+    ).one()
+    campaign.operation_status = parent_status
+    session.add(campaign)
+    material = session.exec(
+        select(AdMaterialReference).where(
+            AdMaterialReference.tenant_id == env.tenant_id
+        )
+    ).one()
+    material.operation_status = "DISABLE"
+    session.add(material)
+    session.flush()
+    summary = execute_hits(
+        session,
+        run=run,
+        rule=rule,
+        selected_keys=None,
+        now=NOW,
+        actor_id=rule.updated_by,
+        require_manage=True,
+    )
+    if parent_status == "ENABLE":
+        assert summary["submitted"] == 1
+        assert _hits(session, run) == {"material:acc-x:m1": "SUBMITTED"}
+    else:
+        assert summary["submitted"] == 0
+        assert _hits(session, run) == {"material:acc-x:m1": "SKIPPED_PARENT_STATUS"}
+        assert session.exec(select(ManagementTask)).all() == []
+        assert execution_brief(summary, "启用") == "跳过 1"
+
+
 def test_all_skipped_run_is_marked_skipped(session, env):
     rule, run = _rule_run(
         session,

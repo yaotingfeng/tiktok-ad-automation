@@ -26,6 +26,21 @@ export type AutomationBoundaryOptions = {
 
 const CATALOG = {
   metrics: [
+    ...["campaign", "adgroup", "ad", "material"].map((level, index) => ({
+      key: `${level}_status`,
+      group: "attribute",
+      name_zh: ["系列状态", "广告组状态", "广告状态", "素材状态"][index],
+      unit: "status",
+      kind: "attribute",
+      levels: ["campaign", "adgroup", "ad", "material"].slice(index),
+      aggregations: ["EACH"],
+      operators: ["EQ"],
+      ranged: false,
+      options: [
+        { value: "ENABLE", label: "开启" },
+        { value: "DISABLE", label: "暂停" },
+      ],
+    })),
     {
       key: "spend",
       group: "delivery",

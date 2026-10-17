@@ -741,6 +741,24 @@ export type CatalogMetric = {
      * Ranged
      */
     ranged: boolean;
+    /**
+     * Options
+     */
+    options?: Array<CatalogOption>;
+};
+
+/**
+ * CatalogOption
+ */
+export type CatalogOption = {
+    /**
+     * Value
+     */
+    value: string;
+    /**
+     * Label
+     */
+    label: string;
 };
 
 /**

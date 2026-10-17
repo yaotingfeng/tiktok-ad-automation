@@ -12,6 +12,7 @@ import {
 import {
   LEVEL_LABELS,
   type Level,
+  metricValue,
   RANGE_LABELS,
   type RangeType,
 } from "./ruleForm"
@@ -32,6 +33,7 @@ export const OUTCOME_LABELS: Record<string, string> = {
   NO_CHANGE: "无需变更",
   UNSUPPORTED: "不支持",
   SKIPPED_FREQUENCY: "频控跳过",
+  SKIPPED_PARENT_STATUS: "上级未开启，已跳过",
   SKIPPED_DAILY_LIMIT: "超出每日涨幅（历史）",
   SUBMITTED: "已提交",
   CONFLICT: "规则冲突",
@@ -83,7 +85,7 @@ export function HitTable({
                 {Object.entries(hit.metrics)
                   .map(
                     ([key, value]) =>
-                      `${metricTitle(key, catalog)} ${value || "—"}`,
+                      `${metricTitle(key, catalog)} ${metricValue(key, value, catalog)}`,
                   )
                   .join("；")}
               </TableCell>

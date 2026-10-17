@@ -30,6 +30,46 @@ def test_valid_definition_defaults():
 
 
 @pytest.mark.parametrize(
+    "metric", ["campaign_status", "adgroup_status", "ad_status", "material_status"]
+)
+def test_status_condition_accepts_enum_without_reporting_range(metric):
+    value = base(
+        apply_to={"level": "material", "status": "PAUSED"},
+        action={"type": "ENABLE", "level": "material"},
+        schedule={"frequency": "1H", "window": "CONTINUOUS"},
+        conditions=[{"metric": metric, "operator": "EQ", "values": ["ENABLE"]}],
+    )
+    assert RuleDefinition.model_validate(value).conditions[0].values == ("ENABLE",)
+    for patch in ({"values": ["0"]}, {"operator": "CONTAINS"}, {"range": "TODAY"}):
+        value["conditions"][0].update(patch)
+        with pytest.raises(ValidationError):
+            RuleDefinition.model_validate(value)
+        value["conditions"] = [
+            {"metric": metric, "operator": "EQ", "values": ["ENABLE"]}
+        ]
+
+
+def test_status_catalog_labels_and_descendant_availability():
+    from app.modules.automation_rules.service import catalog
+
+    metrics = {m.key: m for m in catalog().metrics}
+    assert metrics["ad_status"].name_zh == "广告状态"
+    assert metrics["ad_status"].levels == ["ad", "material"]
+    assert [o.model_dump() for o in metrics["ad_status"].options] == [
+        {"value": "ENABLE", "label": "开启"},
+        {"value": "DISABLE", "label": "暂停"},
+    ]
+    with pytest.raises(ValidationError):
+        RuleDefinition.model_validate(
+            base(
+                conditions=[
+                    {"metric": "ad_status", "operator": "EQ", "values": ["ENABLE"]}
+                ]
+            )
+        )
+
+
+@pytest.mark.parametrize(
     "patch",
     [
         {"max_targets": 200},

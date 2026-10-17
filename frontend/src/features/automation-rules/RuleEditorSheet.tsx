@@ -510,6 +510,11 @@ export function RuleEditorSheet({
           </p>
         )}
       </Section>
+      {def.action.type === "ENABLE" && def.action.level === "material" && (
+        <p className="text-xs text-muted-foreground">
+          仅恢复系列、广告组及广告均为开启状态的素材；上级状态不明时跳过。
+        </p>
+      )}
       <Section title="条件">
         <ConditionRows
           catalog={catalog}

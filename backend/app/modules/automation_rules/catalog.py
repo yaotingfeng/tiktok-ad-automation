@@ -28,6 +28,7 @@ class RuleMetric:
     aggregations: frozenset[str]
     operators: tuple[str, ...]
     ranged: bool
+    options: tuple[tuple[str, str], ...] = ()
 
 
 _DELIVERY = {"spend", "impressions", "clicks", "ctr", "cpm", "cpc"}
@@ -72,7 +73,7 @@ def _attributes() -> dict[str, RuleMetric]:
             False,
         )
 
-    return {
+    attributes = {
         "name": attr("name", "text", LEVELS, TEXT_OPERATORS),
         "days_since_creation": attr(
             "days_since_creation",
@@ -85,6 +86,20 @@ def _attributes() -> dict[str, RuleMetric]:
             "roas_bid", "multiple", ("campaign", "adgroup"), NUMERIC_OPERATORS
         ),
     }
+    # 状态是对象自身的操作状态；上级状态独立提供，避免把暂停继承混为一谈。
+    for index, level in enumerate(LEVELS):
+        attributes[f"{level}_status"] = RuleMetric(
+            f"{level}_status",
+            "attribute",
+            "status",
+            "attribute",
+            frozenset(LEVELS[index:]),
+            frozenset({"EACH"}),
+            ("EQ",),
+            False,
+            (("ENABLE", "开启"), ("DISABLE", "暂停")),
+        )
+    return attributes
 
 
 RULE_METRICS: dict[str, RuleMetric] = {**_fact_metrics(), **_attributes()}

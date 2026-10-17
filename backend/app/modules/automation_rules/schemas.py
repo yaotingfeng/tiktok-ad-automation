@@ -201,7 +201,10 @@ def _check_condition(condition: Condition, *, level: str, aggregation: str) -> N
         raise ValueError("range required for facts and forbidden for attributes")
     if (condition.operator == "BETWEEN") != (len(condition.values) == 2):
         raise ValueError("BETWEEN takes exactly two values")
-    if metric.key != "name":
+    if metric.options:
+        if condition.values[0] not in {value for value, _ in metric.options}:
+            raise ValueError("invalid status value")
+    elif metric.key != "name":
         try:
             numbers = [Decimal(v) for v in condition.values]
         except ArithmeticError as exc:
@@ -361,6 +364,11 @@ class DryRunPublic(BaseModel):
     hits: list[HitPublic]
 
 
+class CatalogOption(BaseModel):
+    value: str
+    label: str
+
+
 class CatalogMetric(BaseModel):
     key: str
     group: str
@@ -371,6 +379,7 @@ class CatalogMetric(BaseModel):
     aggregations: list[str]
     operators: list[str]
     ranged: bool
+    options: list[CatalogOption] = Field(default_factory=list)
 
 
 class CatalogPublic(BaseModel):

@@ -44,7 +44,7 @@ import {
   confirmationsQuery,
   ruleKeys,
 } from "./queries"
-import { ACTION_LABELS, LEVEL_LABELS } from "./ruleForm"
+import { ACTION_LABELS, LEVEL_LABELS, metricValue } from "./ruleForm"
 import { SkippedInputs } from "./SkippedInputs"
 
 export const CONFIRMATION_STATUS: Record<string, string> = {
@@ -81,7 +81,10 @@ function metricsText(
   const entries = Object.entries(metrics)
   if (!entries.length) return "—"
   return entries
-    .map(([key, value]) => `${metricTitle(key, catalog)} ${value || "—"}`)
+    .map(
+      ([key, value]) =>
+        `${metricTitle(key, catalog)} ${metricValue(key, value, catalog)}`,
+    )
     .join("；")
 }
 

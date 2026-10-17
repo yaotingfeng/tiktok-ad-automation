@@ -49,6 +49,10 @@ ATTRIBUTE_NAMES = {
     "days_since_creation": "创建天数",
     "budget": "当前预算",
     "roas_bid": "当前 ROAS 出价",
+    "campaign_status": "系列状态",
+    "adgroup_status": "广告组状态",
+    "ad_status": "广告状态",
+    "material_status": "素材状态",
 }
 DRY_RUN_HIT_LIMIT = 500
 DRY_RUN_TARGET_LIMIT = 50
@@ -338,6 +342,9 @@ def catalog() -> CatalogPublic:
                 ],
                 operators=list(metric.operators),
                 ranged=metric.ranged,
+                options=[
+                    {"value": value, "label": label} for value, label in metric.options
+                ],
             )
             for metric in RULE_METRICS.values()
         ],

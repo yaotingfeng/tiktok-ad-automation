@@ -676,3 +676,40 @@ test("广告内素材分别判断、解释缺数并原值保存 0.85", async ({ 
     },
   })
 })
+
+test("素材规则使用状态下拉并提交广告开启条件", async ({ page }) => {
+  const created: unknown[] = []
+  await automationBoundary(page, { created })
+  await page.goto(`/tenants/${TENANT}/automation-rules`)
+  await page.getByRole("button", { name: "新建规则" }).click()
+  await page.getByRole("textbox", { name: "规则名称" }).fill("回收恢复状态条件")
+  await page.getByRole("combobox", { name: "对象层级" }).click()
+  await page.getByRole("option", { name: "素材", exact: true }).click()
+  await page.getByRole("combobox", { name: "条件 1 指标" }).click()
+  await page.getByRole("option", { name: "广告状态", exact: true }).click()
+  await page.getByRole("combobox", { name: "运行频率" }).click()
+  await page.getByRole("option", { name: "每 1 小时", exact: true }).click()
+  await expect(page.getByRole("combobox", { name: "条件 1 状态" })).toHaveText(
+    "开启",
+  )
+  await expect(
+    page.getByRole("spinbutton", { name: "条件 1 数值" }),
+  ).toHaveCount(0)
+  await expect(
+    page.getByRole("combobox", { name: "条件 1 时间周期" }),
+  ).toHaveCount(0)
+  await page.getByRole("button", { name: "保存" }).click()
+  await expect.poll(() => created.length).toBe(1)
+  expect(created[0]).toMatchObject({
+    definition: {
+      conditions: [
+        {
+          metric: "ad_status",
+          range: null,
+          operator: "EQ",
+          values: ["ENABLE"],
+        },
+      ],
+    },
+  })
+})

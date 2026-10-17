@@ -63,7 +63,7 @@ export function ConditionRows({
       metric: key,
       range: metric.ranged ? "TODAY" : null,
       operator: metric.operators[0] as Operator,
-      values: [""],
+      values: [metric.options?.[0]?.value ?? ""],
     })
   }
   return (
@@ -145,12 +145,35 @@ export function ConditionRows({
               <SelectContent>
                 {(metric?.operators ?? []).map((operator) => (
                   <SelectItem key={operator} value={operator}>
-                    {OPERATOR_LABELS[operator as Operator]}
+                    {metric?.options?.length && operator === "EQ"
+                      ? "是"
+                      : OPERATOR_LABELS[operator as Operator]}
                   </SelectItem>
                 ))}
               </SelectContent>
             </Select>
-            {condition.operator === "BETWEEN" ? (
+            {metric?.options?.length ? (
+              <Select
+                value={condition.values[0] ?? ""}
+                onValueChange={(value) =>
+                  replace(index, { ...condition, values: [value] })
+                }
+                disabled={disabled}
+              >
+                <SelectTrigger aria-label={`条件 ${n} 状态`} className="w-32">
+                  <SelectValue placeholder="选择状态" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectGroup>
+                    {metric.options.map((option) => (
+                      <SelectItem key={option.value} value={option.value}>
+                        {option.label}
+                      </SelectItem>
+                    ))}
+                  </SelectGroup>
+                </SelectContent>
+              </Select>
+            ) : condition.operator === "BETWEEN" ? (
               <>
                 <Input
                   type="number"

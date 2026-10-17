@@ -37,6 +37,7 @@ register_dispatch_task(SUMMARY_TASK, "control")
 _COUNTS = (
     "submitted",
     "skipped_frequency",
+    "skipped_parent_status",
     "conflicts",
     "no_change",
     "unsupported",

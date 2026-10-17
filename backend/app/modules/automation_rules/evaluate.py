@@ -306,6 +306,16 @@ def evaluate(
         targets = _targets(
             members, definition.action.level, inputs, children, materials_by_ad
         )
+        if not ignore_status and definition.action.type == "ENABLE":
+            # 上层对象命中再展开素材时也要保护，不能借执行层级绕过恢复范围。
+            targets = tuple(
+                t
+                for t in targets
+                if t.kind != "material"
+                or inputs.entities[t.key].parents_enabled is True
+            )
+            if not targets:
+                continue
         if definition.aggregation == "EACH":
             subject, label = first.key, first.name
         elif definition.aggregation == "DRAMA":

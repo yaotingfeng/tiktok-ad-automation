@@ -20,6 +20,7 @@ from app.modules.automation_rules.inputs import (
     local_window,
 )
 from app.modules.automation_rules.schemas import RuleDefinition
+from app.modules.automation_rules.statuses import known_status
 from app.modules.reporting.metric_catalog import DERIVED_RATIOS, STORED_KEYS
 from app.modules.reporting.store_models import MaterialPostLink
 
@@ -33,7 +34,7 @@ def material_use_id(ad_id: str, video_id: str, material_type: str) -> str:
 def _parents_enabled(ad: Entity, objects: dict[str, Entity]) -> bool | None:
     current = ad
     for kind in ("ad", "adgroup", "campaign"):
-        if current.kind != kind or current.status is None:
+        if current.kind != kind or known_status(current.status) is None:
             return None
         if current.status != "ENABLE":
             return False
@@ -128,7 +129,15 @@ def load_material_entities(
                 currency=info.currency,
                 timezone=info.timezone,
                 parent_key=ad.key,
-                attributes={"name": use.name or use.platform_material_id},
+                attributes={
+                    **{
+                        key: value
+                        for key, value in ad.attributes.items()
+                        if key.endswith("_status")
+                    },
+                    "material_status": known_status(use.operation_status),
+                    "name": use.name or use.platform_material_id,
+                },
                 material_uses=(
                     {
                         "advertiser_id": adv,

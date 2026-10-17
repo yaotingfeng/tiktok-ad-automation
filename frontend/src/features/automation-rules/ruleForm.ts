@@ -17,7 +17,7 @@ type CatalogLike = Pick<CatalogPublic, "metrics"> & {
     CatalogMetric,
     "key" | "name_zh" | "levels" | "aggregations" | "ranged" | "kind"
   > &
-    Partial<Pick<CatalogMetric, "unit">>)[]
+    Partial<Pick<CatalogMetric, "unit" | "options">>)[]
 }
 
 export const LEVELS: Level[] = ["campaign", "adgroup", "ad", "material"]
@@ -162,11 +162,26 @@ function conditionText(condition: Condition, catalog: CatalogLike) {
   const prefix = condition.range ? RANGE_LABELS[condition.range] : ""
   const [first, second] = condition.values
   const symbol = SYMBOLS[condition.operator]
+  if (metric?.options?.length)
+    return `${name} 是 ${metricValue(condition.metric, first, catalog)}`
   if (condition.operator === "BETWEEN")
     return `${prefix}${name} 介于 ${first} ~ ${second}`
   if (symbol && metric?.kind !== "attribute")
     return `${prefix}${name} ${symbol} ${first}`
   return `${prefix}${name} ${symbol ?? OPERATOR_LABELS[condition.operator]} ${first}`
+}
+
+/** 状态枚举在摘要、试运行和确认页统一显示为中文。 */
+export function metricValue(
+  key: string,
+  value: string,
+  catalog: CatalogLike | undefined,
+) {
+  const metric = catalog?.metrics.find((item) => item.key === key.split(":")[0])
+  return (
+    metric?.options?.find((option) => option.value === value)?.label ??
+    (value || "—")
+  )
 }
 
 export function summarizeConditions(def: Definition, catalog: CatalogLike) {
@@ -266,6 +281,16 @@ export function validateDefinition(
     const metric = catalog.metrics.find((item) => item.key === condition.metric)
     if (metric?.kind === "attribute" && def.aggregation !== "EACH")
       errors.push(`合计口径不能使用属性条件（${metric.name_zh}）`)
+    if (metric?.options?.length) {
+      if (
+        condition.operator !== "EQ" ||
+        condition.range ||
+        condition.values.length !== 1 ||
+        !metric.options.some((option) => option.value === condition.values[0])
+      )
+        errors.push(`${label} 请选择状态`)
+      return
+    }
     const textual =
       metric?.unit === "text" || TEXT_OPERATORS.includes(condition.operator)
     const [first, second] = condition.values

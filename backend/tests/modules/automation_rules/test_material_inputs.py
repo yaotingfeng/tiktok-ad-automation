@@ -140,6 +140,83 @@ def result(session, seed, d=None):
     return loaded, evaluate(d, loaded)
 
 
+def recovery_rule(*, selected=None, conditions=None):
+    return definition(
+        accounts={"mode": "ACCOUNTS", "advertiser_ids": ["acc-1"]},
+        apply_to={
+            "level": "material",
+            "status": "SELECTED" if selected else "PAUSED",
+            "object_ids": [selected] if selected else [],
+        },
+        action={"type": "ENABLE", "level": "material"},
+        schedule={"frequency": "1H", "window": "CONTINUOUS"},
+        conditions=conditions
+        or [
+            {
+                "metric": "roas_total",
+                "range": "LIFETIME",
+                "operator": "GT",
+                "values": ["0.9"],
+            }
+        ],
+    )
+
+
+@pytest.mark.parametrize(
+    "kind,remote", [("campaign", "c1"), ("adgroup", "g1"), ("ad", "a1")]
+)
+@pytest.mark.parametrize("selected", [False, True])
+def test_recovery_never_enables_material_under_paused_parent(
+    session, sync_seed, kind, remote, selected
+):
+    setup(session, sync_seed)
+    use(session, sync_seed, "a1", status="DISABLE")
+    post(session, sync_seed, "a1", "p1", revenue="36")
+    ancestor = session.exec(
+        select(AdObject).where(
+            AdObject.tenant_id == sync_seed.tenant_id,
+            AdObject.advertiser_id == "acc-1",
+            AdObject.kind == kind,
+            AdObject.remote_id == remote,
+        )
+    ).one()
+    ancestor.operation_status = "DISABLE"
+    session.add(ancestor)
+    session.flush()
+    from app.modules.automation_rules.material_inputs import material_use_id
+
+    d = recovery_rule(
+        selected=f"acc-1:{material_use_id('a1', 'v1', 'VIDEO')}" if selected else None
+    )
+    loaded, found = result(session, sync_seed, d)
+    assert not found.hits
+    assert evaluate(d, loaded, ignore_status=True).hits
+
+
+def test_material_status_conditions_use_own_and_ancestor_states(session, sync_seed):
+    setup(session, sync_seed)
+    use(session, sync_seed, "a1", status="DISABLE")
+    post(session, sync_seed, "a1", "p1", revenue="36")
+    d = recovery_rule(
+        conditions=[
+            {"metric": "ad_status", "operator": "EQ", "values": ["ENABLE"]},
+            {"metric": "material_status", "operator": "EQ", "values": ["DISABLE"]},
+        ]
+    )
+    loaded, found = result(session, sync_seed, d)
+    assert len(found.hits) == 1
+    material = next(e for e in loaded.entities.values() if e.kind == "material")
+    assert {
+        k: material.attributes[k]
+        for k in ("campaign_status", "adgroup_status", "ad_status", "material_status")
+    } == {
+        "campaign_status": "ENABLE",
+        "adgroup_status": "ENABLE",
+        "ad_status": "ENABLE",
+        "material_status": "DISABLE",
+    }
+
+
 def test_empty_directory_main_id_uses_links_and_only_hits_bad_ad(session, sync_seed):
     setup(session, sync_seed)
     use(session, sync_seed, "a1")
@@ -509,3 +586,53 @@ def test_unlinked_historical_post_prevents_false_low_roas_hit(session, sync_seed
     assert any(
         i["reason"] == "MATERIAL_REPORT_UNLINKED" for i in loaded.skipped_accounts
     )
+
+
+def test_ad_judgement_cannot_bypass_material_recovery_parent_guard(session, sync_seed):
+    setup(session, sync_seed)
+    use(session, sync_seed, "a1", status="DISABLE")
+    post(session, sync_seed, "a1", "p1", revenue="36")
+    campaign = session.exec(
+        select(AdObject).where(
+            AdObject.tenant_id == sync_seed.tenant_id,
+            AdObject.advertiser_id == "acc-1",
+            AdObject.kind == "campaign",
+            AdObject.remote_id == "c1",
+        )
+    ).one()
+    campaign.operation_status = "DISABLE"
+    session.add(campaign)
+    session.flush()
+    d = definition(
+        accounts={"mode": "ACCOUNTS", "advertiser_ids": ["acc-1"]},
+        apply_to={"level": "ad", "status": "ACTIVE"},
+        action={"type": "ENABLE", "level": "material"},
+        schedule={"frequency": "1H", "window": "CONTINUOUS"},
+        conditions=[{"metric": "ad_status", "operator": "EQ", "values": ["ENABLE"]}],
+    )
+    loaded, found = result(session, sync_seed, d)
+    assert loaded.entities["ad:acc-1:a1"].attributes["ad_status"] == "ENABLE"
+    assert loaded.entities["ad:acc-1:a1"].attributes["campaign_status"] == "DISABLE"
+    assert not found.hits
+
+
+def test_status_parent_lookup_stays_inside_material_account(session, sync_seed):
+    setup(session, sync_seed)
+    use(session, sync_seed, "a1", status="DISABLE")
+    post(session, sync_seed, "a1", "p1", revenue="36")
+    session.add(
+        AdObject(
+            tenant_id=sync_seed.tenant_id,
+            advertiser_id="acc-2",
+            kind="campaign",
+            remote_id="c1",
+            ad_type="SMART_PLUS",
+            operation_status="DISABLE",
+            observed_at=NOW,
+            published_version=1,
+        )
+    )
+    session.flush()
+    _, found = result(session, sync_seed, recovery_rule())
+    assert len(found.hits) == 1
+    assert found.hits[0].targets[0].advertiser_id == "acc-1"

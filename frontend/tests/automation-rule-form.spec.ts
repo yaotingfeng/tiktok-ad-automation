@@ -314,3 +314,43 @@ test("素材数据问题说明具体原因", async () => {
     }),
   ).toContain("尚未关联")
 })
+
+test("状态条件保存枚举并显示中文摘要", () => {
+  const statusCatalog = {
+    metrics: [
+      ...catalog.metrics,
+      {
+        key: "ad_status",
+        name_zh: "广告状态",
+        unit: "status",
+        kind: "attribute",
+        levels: ["ad", "material"],
+        aggregations: ["EACH"],
+        ranged: false,
+        options: [
+          { value: "ENABLE", label: "开启" },
+          { value: "DISABLE", label: "暂停" },
+        ],
+      },
+    ],
+  }
+  const def = {
+    ...emptyDefinition(),
+    apply_to: { level: "material" as const, status: "PAUSED" as const },
+    action: { type: "ENABLE" as const, level: "material" as const },
+    schedule: { frequency: "1H" as const, window: "CONTINUOUS" as const },
+    conditions: [
+      { metric: "ad_status", operator: "EQ" as const, values: ["ENABLE"] },
+    ],
+  }
+  expect(validateDefinition(def, statusCatalog)).toEqual([])
+  expect(summarizeConditions(def, statusCatalog)).toBe(
+    "每条广告内的素材 · 广告状态 是 开启",
+  )
+  expect(
+    validateDefinition(
+      { ...def, conditions: [{ ...def.conditions[0], values: ["0"] }] },
+      statusCatalog,
+    ),
+  ).toEqual(["条件 1 请选择状态"])
+})

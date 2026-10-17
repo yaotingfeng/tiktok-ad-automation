@@ -16,6 +16,7 @@ from app.modules.accounts.models import AdvertiserAccount, BCAccountAccess
 from app.modules.automation_rules.catalog import RULE_METRICS
 from app.modules.automation_rules.schedule import due_at, next_run_at
 from app.modules.automation_rules.schemas import AccountScope, RuleDefinition
+from app.modules.automation_rules.statuses import hierarchy_statuses
 from app.modules.reporting.metric_catalog import STORED_KEYS
 
 # 报表热数据 30 分钟、素材 60 分钟同步一次；超过阈值说明同步停滞，宁可跳过也不按旧数据判断。
@@ -72,9 +73,16 @@ class Inputs:
 def in_rule_scope(
     entity: Entity, definition: RuleDefinition, *, ignore_status: bool = False
 ) -> bool:
-    """判断与缺数说明共用作用范围；反向冲突复核仍可忽略开关状态。"""
+    """判断与缺数说明共用作用范围；反向冲突复核仍可忽略操作状态。"""
     scope = definition.apply_to
     if entity.kind != scope.level:
+        return False
+    if (
+        not ignore_status
+        and entity.kind == "material"
+        and definition.action.type == "ENABLE"
+        and entity.parents_enabled is False
+    ):
         return False
     if scope.status == "SELECTED":
         return f"{entity.advertiser_id}:{entity.remote_id}" in scope.object_ids
@@ -324,6 +332,7 @@ def _objects(
             if parent_kind and row.parent_remote_id
             else None,
             attributes={
+                **hierarchy_statuses(row, by_key),
                 "name": row.name or row.remote_id,
                 "budget": _first_number(config, _BUDGET_KEYS),
                 "roas_bid": _first_number(config, _ROAS_KEYS),

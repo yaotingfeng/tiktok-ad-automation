@@ -41,6 +41,7 @@ from app.modules.automation_rules.models import (
     AutomationRuleRun,
 )
 from app.modules.automation_rules.schemas import RuleDefinition
+from app.modules.automation_rules.statuses import blocked_material_recoveries
 from app.modules.reporting.query_models import FrozenSelectionRecord
 from app.modules.reporting.selection import create_target_selection
 from app.modules.tenants.permissions import require_tenant
@@ -65,6 +66,7 @@ def _summary() -> dict[str, Any]:
     return {
         "submitted": 0,
         "skipped_frequency": 0,
+        "skipped_parent_status": 0,
         "conflicts": 0,
         "no_change": 0,
         "unsupported": 0,
@@ -210,7 +212,16 @@ def execute_hits(
     # 每条对方规则只按当前数据重新判断一次，多个对象共用结果。
     matching: dict[UUID, RuleMatch] = {}
     runnable: dict[str, dict[str, Any]] = {}
+    blocked = (
+        blocked_material_recoveries(session, rule.tenant_id, targets)
+        if action.type == "ENABLE"
+        else set()
+    )
     for target_key, target in targets.items():
+        if target_key in blocked:
+            outcome[target_key] = "SKIPPED_PARENT_STATUS"
+            summary["skipped_parent_status"] += 1
+            continue
         rows = [row for row in history if row.target_key == target_key]
         # 反向冲突：同一字段最近一次是被另一条规则做了相反动作，且那条规则按当前
         # 数据仍命中该对象——两条规则条件重叠，继续执行只会来回反复。对方规则
@@ -345,6 +356,7 @@ _PRIORITY = [
     "NO_CHANGE",
     "UNSUPPORTED",
     "SKIPPED_FREQUENCY",
+    "SKIPPED_PARENT_STATUS",
     "SUBMITTED",
     "CONFLICT",
     "FAILED",
