@@ -14,15 +14,31 @@ from pathlib import Path
 ARCHIVES = ("runtime-app", "project", "beat-data", "config")
 
 
+def file_digest(path):
+    with path.open("rb") as stream:
+        return hashlib.file_digest(stream, "sha256").hexdigest()
+
+
+def entry_digest(path):
+    """文件取 sha256；目录按文件名字节序拼接 "<sha256>  <名称>\\n" 后再取 sha256（与 sha256sum 输出一致）。"""
+    if not path.is_dir():
+        return file_digest(path)
+    lines = "".join(
+        f"{file_digest(item)}  {item.name}\n"
+        for item in sorted(path.iterdir(), key=lambda p: p.name.encode())
+        if item.is_file()
+    )
+    return hashlib.sha256(lines.encode()).hexdigest()
+
+
 def check(folder):
     folder = Path(folder)
     manifest = json.loads((folder / "manifest.json").read_text())
     for name, checksum in manifest["files"].items():
         if Path(name).name != name:
             return "Unsafe manifest path"
-        with (folder / name).open("rb") as stream:
-            if hashlib.file_digest(stream, "sha256").hexdigest() != checksum:
-                return "Backup checksum mismatch: " + name
+        if entry_digest(folder / name) != checksum:
+            return "Backup checksum mismatch: " + name
     for name in ARCHIVES:
         with tarfile.open(folder / (name + ".tar.gz")) as archive:
             members = archive.getmembers()

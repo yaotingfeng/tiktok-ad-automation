@@ -8,6 +8,7 @@
 才替换旧备份。没有异地副本（用户 2026-10-16 决定），集群/可用区级故障依赖云数据库自身备份。
 """
 
+import hashlib
 import json
 import os
 import shlex
@@ -87,7 +88,29 @@ def sh(pod, container, script, *args, data=None):
     return pod(container, "sh", "-c", script, "sh", *args, data=data)
 
 
-def remote_digest(pod, path):
+# PostgreSQL 用目录格式并行导出，备份里唯一的目录项；其余都是普通文件。
+PG_DUMP = "postgres.dir"
+PG_DUMP_JOBS = 4
+# 目录的校验和：按文件名字节序逐个 sha256sum，再对整段输出取 sha256（与 archive_check.py 一致）。
+TREE_DIGEST = 'cd "$1" && LC_ALL=C sha256sum -- * | sha256sum'
+
+
+def tree_digest(path):
+    """本机计算与 TREE_DIGEST 相同的目录校验和；文件则直接取 sha256。"""
+    path = Path(path)
+    if not path.is_dir():
+        return digest(path)
+    lines = "".join(
+        f"{digest(item)}  {item.name}\n"
+        for item in sorted(path.iterdir(), key=lambda p: p.name.encode())
+        if item.is_file()
+    )
+    return hashlib.sha256(lines.encode()).hexdigest()
+
+
+def remote_digest(pod, path, directory=False):
+    if directory:
+        return sh(pod, "app", TREE_DIGEST, path).decode().split()[0]
     return pod("app", "sha256sum", path).decode().split()[0]
 
 
@@ -120,12 +143,12 @@ def check_space(pod, database_bytes):
         pod,
         "app",
         'cd "$1" && rm -rf .pending-* .previous && df -B1 --output=avail . | tail -1'
-        " && { stat -c %s latest/postgres.dump 2>/dev/null || echo 0; }",
+        " && { if [ -e latest ]; then du -sb latest | cut -f1; else echo 0; fi; }",
         BACKUP_ROOT,
     ).split()
     available, last = int(output[0]), int(output[1])
-    # 新备份验证完成、旧备份删除前两份并存，再留一份余量；首次没有上一份时
-    # 按数据库大小估算（自定义格式压缩实测约 7:1，按 1/4 留足）。
+    # 新备份验证完成、旧备份删除前两份并存，再留一份余量（按上一份完整备份的总大小）；
+    # 首次没有上一份时按数据库大小估算（lz4 压缩实测约 3.5:1，按 1/4 留足）。
     required = max(3 * last, database_bytes // 4, 2 * 2**30)
     require(
         available >= required,
@@ -151,10 +174,11 @@ def snapshot(release):
         "-s",
         data=(
             exports
-            # lz4 压缩远快于默认 gzip（2026-10-17 实测 1.4 GB 导出约 3 分钟，瓶颈在压缩 CPU）；
-            # 体积略大，备份盘余量充足。
-            + "\npg_dump -Fc --compress=lz4 --no-owner --no-acl --schema=public -f "
-            + shlex.quote(target + "/postgres.dump")
+            # 目录格式按表并行导出（ad_object 等数个 GB 级大表），lz4 压缩；
+            # 同一快照下多连接一致导出，只读。
+            + f"\npg_dump -Fd --jobs={PG_DUMP_JOBS} --compress=lz4"
+            + " --no-owner --no-acl --schema=public -f "
+            + shlex.quote(target + "/" + PG_DUMP)
             + "\n"
         ).encode(),
     )
@@ -201,7 +225,7 @@ def snapshot(release):
     for name in ("source-fingerprint.json", "project.tar.gz", "config.tar.gz"):
         upload(pod, folder / name, target + "/" + name)
     files = (
-        "postgres.dump",
+        PG_DUMP,
         "runtime-app.tar.gz",
         "beat-data.tar.gz",
         "project.tar.gz",
@@ -214,7 +238,10 @@ def snapshot(release):
         {
             "old_sha": release.state["old_sha"],
             "captured_at": int(time.time()),
-            "files": {name: remote_digest(pod, target + "/" + name) for name in files},
+            "files": {
+                name: remote_digest(pod, target + "/" + name, directory=name == PG_DUMP)
+                for name in files
+            },
         },
     )
     upload(pod, folder / "manifest.json", target + "/manifest.json")
@@ -277,7 +304,7 @@ def restore_verify(pod, folder, directory, candidate_sha=None, candidate="candid
         "-c",
         'CREATE EXTENSION pg_trgm; CREATE EXTENSION "uuid-ossp";',
     )
-    sh(pod, "verify-pg", RESTORE_SCRIPT, directory + "/postgres.dump")
+    sh(pod, "verify-pg", RESTORE_SCRIPT, directory + "/" + PG_DUMP)
     fingerprint = json.loads(guarded(pod, "app", PROBE.read_text(), "fingerprint"))
     require(
         fingerprint == json.loads((folder / "source-fingerprint.json").read_text()),

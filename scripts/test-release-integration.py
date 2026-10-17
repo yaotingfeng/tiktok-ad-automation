@@ -18,6 +18,8 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "deploy/release"))
 from backup import (
     BACKUP_ROOT,
+    PG_DUMP,
+    PG_DUMP_JOBS,
     PROBE,
     REDIS_RESTORE_CODE,
     VERIFY_PG_PORT,
@@ -27,9 +29,10 @@ from backup import (
     remote_digest,
     restore_verify,
     sh,
+    tree_digest,
     upload,
 )
-from common import PUBLIC, digest, mirrored, require, run, write
+from common import PUBLIC, mirrored, require, run, write
 
 
 class DockerPod:
@@ -268,22 +271,18 @@ with create_engine(str(settings.DATABASE_URL)).begin() as c:
                     "postgres",
                     "-d",
                     "tkada",
-                    "-Fc",
+                    # 与发布端相同：目录格式、并行、lz4。
+                    "-Fd",
+                    f"--jobs={PG_DUMP_JOBS}",
+                    "--compress=lz4",
                     "--schema=public",
                     "--no-owner",
                     "--no-acl",
                     "-f",
-                    "/tmp/fixture.dump",
+                    "/tmp/fixture.dir",
                 ]
             )
-            run(
-                [
-                    "docker",
-                    "cp",
-                    pg + ":/tmp/fixture.dump",
-                    str(folder / "postgres.dump"),
-                ]
-            )
+            run(["docker", "cp", pg + ":/tmp/fixture.dir", str(folder / PG_DUMP)])
             write(
                 folder / "source-fingerprint.json",
                 json.loads(
@@ -357,7 +356,7 @@ r.set('string',b'\\x00secret');r.rpush('queue',b'one',b'two');r.hset('hash',mapp
                 ) as archive:
                     archive.add(target, arcname=entry)
             files = [
-                "postgres.dump",
+                PG_DUMP,
                 "redis.json",
                 "source-fingerprint.json",
                 "project.tar.gz",
@@ -366,18 +365,23 @@ r.set('string',b'\\x00secret');r.rpush('queue',b'one',b'two');r.hset('hash',mapp
                 "config.tar.gz",
             ]
             for f in files:
-                upload(pod, folder / f, directory + "/" + f)
+                if (folder / f).is_dir():
+                    sh(pod, "app", 'umask 077 && mkdir "$1"', directory + "/" + f)
+                    for item in (folder / f).iterdir():
+                        upload(pod, item, directory + "/" + f + "/" + item.name)
+                else:
+                    upload(pod, folder / f, directory + "/" + f)
             write(
                 folder / "manifest.json",
-                {"files": {f: digest(folder / f) for f in files}},
+                {"files": {f: tree_digest(folder / f) for f in files}},
             )
             upload(pod, folder / "manifest.json", directory + "/manifest.json")
             # 备份卷之外的源库仍可从 app 容器访问：恢复只能落在回环临时实例上。
             restore_verify(pod, folder, directory, sha, candidate="app")
             latest = publish(pod, folder, directory)
             require(
-                remote_digest(pod, latest + "/postgres.dump")
-                == digest(folder / "postgres.dump"),
+                remote_digest(pod, latest + "/" + PG_DUMP, directory=True)
+                == tree_digest(folder / PG_DUMP),
                 "Published backup content differs",
             )
             source_rows = run(
@@ -417,11 +421,16 @@ r.set('string',b'\\x00secret');r.rpush('queue',b'one',b'two');r.hset('hash',mapp
             # 下次发布需要为新旧两份并存留足余量。
             space = check_space(pod, 1)
             require(
-                space["last_dump"] == (folder / "postgres.dump").stat().st_size,
+                space["last_dump"] > 0,
                 "Space check must size against the retained dump",
             )
             # 备份盘上的损坏备份必须在恢复前被拒绝。
-            sh(pod, "app", 'printf corrupt >> "$1"', latest + "/postgres.dump")
+            sh(
+                pod,
+                "app",
+                'printf corrupt >> "$1"',
+                latest + "/" + PG_DUMP + "/toc.dat",
+            )
             try:
                 restore_verify(pod, folder, latest, sha, candidate="app")
             except RuntimeError as exc:

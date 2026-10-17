@@ -12,7 +12,16 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "deploy/release"))
 import backup
-from backup import BACKUP_ROOT, cleanup_completed, publish, upload, verify_archives
+from backup import (
+    BACKUP_ROOT,
+    PG_DUMP,
+    cleanup_completed,
+    publish,
+    remote_digest,
+    tree_digest,
+    upload,
+    verify_archives,
+)
 from common import digest, write
 
 
@@ -59,12 +68,17 @@ class ClusterBackupTests(unittest.TestCase):
                 info.size = len(payload)
                 archive.addfile(info, io.BytesIO(payload))
             files.append(path.name)
-        for file_name in ("postgres.dump", "redis.json", "source-fingerprint.json"):
+        # 与 pg_dump -Fd 相同：一个 toc.dat 加按表分开的数据文件。
+        (remote / PG_DUMP).mkdir()
+        (remote / PG_DUMP / "toc.dat").write_bytes(b"toc-" + payload)
+        (remote / PG_DUMP / "3001.dat.lz4").write_bytes(payload)
+        files.append(PG_DUMP)
+        for file_name in ("redis.json", "source-fingerprint.json"):
             (remote / file_name).write_bytes(payload)
             files.append(file_name)
         write(
             self.state / "manifest.json",
-            {"old_sha": "a" * 40, "files": {n: digest(remote / n) for n in files}},
+            {"old_sha": "a" * 40, "files": {n: tree_digest(remote / n) for n in files}},
         )
         upload(
             self.pod,
@@ -89,7 +103,9 @@ class ClusterBackupTests(unittest.TestCase):
     def test_valid_backup_passes_and_corruption_is_rejected(self):
         directory = self.fixture(b"first")
         verify_archives(self.pod, self.state, directory)
-        with (self.disk / ".pending-one/postgres.dump").open("ab") as stream:
+        with (self.disk / ".pending-one" / PG_DUMP / "3001.dat.lz4").open(
+            "ab"
+        ) as stream:
             stream.write(b"x")
         with self.assertRaisesRegex(RuntimeError, "checksum"):
             verify_archives(self.pod, self.state, directory)
@@ -115,9 +131,9 @@ class ClusterBackupTests(unittest.TestCase):
 
     def test_publish_keeps_exactly_one_latest(self):
         publish(self.pod, self.state, self.fixture(b"first"))
-        first = digest(self.disk / "latest/postgres.dump")
+        first = tree_digest(self.disk / "latest" / PG_DUMP)
         publish(self.pod, self.state, self.fixture(b"second", ".pending-two"))
-        self.assertNotEqual(digest(self.disk / "latest/postgres.dump"), first)
+        self.assertNotEqual(tree_digest(self.disk / "latest" / PG_DUMP), first)
         self.assertEqual(sorted(p.name for p in self.disk.iterdir()), ["latest"])
         record = json.loads((self.state / "cluster-backup.json").read_text())
         self.assertEqual(record["path"], BACKUP_ROOT + "/latest")
@@ -131,7 +147,9 @@ class ClusterBackupTests(unittest.TestCase):
         write(self.state / "restore-verified.json", proof)
         with self.assertRaises(RuntimeError):
             publish(self.pod, self.state, directory)
-        self.assertEqual((self.disk / "latest/postgres.dump").read_bytes(), b"first")
+        self.assertEqual(
+            (self.disk / "latest" / PG_DUMP / "3001.dat.lz4").read_bytes(), b"first"
+        )
 
     def test_proof_on_disk_must_match_release_record(self):
         directory = self.fixture(b"first")
@@ -166,6 +184,16 @@ class ClusterBackupTests(unittest.TestCase):
         self.assertIn("--jobs=4", backup.RESTORE_SCRIPT)
         self.assertIn("--exit-on-error", backup.RESTORE_SCRIPT)
         self.assertNotIn("--single-transaction", backup.RESTORE_SCRIPT)
+
+    def test_remote_tree_digest_matches_local_and_detects_missing_file(self):
+        directory = self.fixture(b"first")
+        local = self.disk / ".pending-one" / PG_DUMP
+        self.assertEqual(
+            remote_digest(self.pod, directory + "/" + PG_DUMP, True), tree_digest(local)
+        )
+        (local / "toc.dat").unlink()
+        with self.assertRaisesRegex(RuntimeError, "checksum"):
+            verify_archives(self.pod, self.state, directory)
 
     def test_verify_guard_pins_loopback_instances(self):
         self.assertIn("127.0.0.1", backup.VERIFY_ENV["DATABASE_URL"])
