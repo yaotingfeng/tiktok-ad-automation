@@ -39,10 +39,9 @@ export function aggregationOptions(level: Level): Aggregation[] {
   return level === "material" ? ["EACH", "VIDEO"] : ["EACH", "DRAMA", "ALL"]
 }
 
-/** 素材的「每个对象」是单个账户里的这条素材，与跨账户的视频合计区分。 */
+/** 素材的「每个对象」是单条广告内的视频使用位置，与跨账户的视频合计区分。 */
 export function aggregationLabel(aggregation: Aggregation, level: Level) {
-  if (level === "material" && aggregation === "EACH")
-    return "每个素材（单账户内）"
+  if (level === "material" && aggregation === "EACH") return "每条广告内的素材"
   return AGGREGATION_LABELS[aggregation]
 }
 export const ACTION_LABELS: Record<ActionType, string> = {

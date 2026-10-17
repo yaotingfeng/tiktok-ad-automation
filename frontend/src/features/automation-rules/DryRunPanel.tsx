@@ -1,6 +1,5 @@
 import { Fragment, useState } from "react"
 import type { CatalogPublic, DryRunPublic, HitPublic } from "@/client"
-import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
 import {
   Table,
@@ -16,6 +15,7 @@ import {
   RANGE_LABELS,
   type RangeType,
 } from "./ruleForm"
+import { SkippedInputs } from "./SkippedInputs"
 
 /** 指标键 "spend:TODAY" 显示为「今天消耗」；属性键直接取中文名。 */
 export function metricTitle(key: string, catalog: CatalogPublic | undefined) {
@@ -147,21 +147,10 @@ export function DryRunPanel({
       <p className="text-sm font-medium">
         判断 {result.checked_count} 个对象，命中 {result.hit_count} 个
       </p>
-      {result.skipped_accounts.length > 0 && (
-        <Alert>
-          <AlertTitle>
-            数据未更新，已跳过 {result.skipped_accounts.length} 个账户
-          </AlertTitle>
-          <AlertDescription className="break-all">
-            {result.skipped_accounts
-              .map((item) => item.advertiser_id)
-              .join("、")}
-          </AlertDescription>
-        </Alert>
-      )}
+      <SkippedInputs items={result.skipped_accounts} />
       {result.skipped_count > 0 && (
         <p className="text-sm text-muted-foreground">
-          {result.skipped_count} 个对象命名不规范，未参与剧合计
+          {result.skipped_count} 个对象因命名或素材数据不完整，未参与判断
         </p>
       )}
       {result.hits.length > 0 && (

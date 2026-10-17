@@ -615,3 +615,64 @@ test("模板请求失败后在弹窗内重试，长列表可滚动且窄屏不�
     path: test.info().outputPath("template-picker-desktop.png"),
   })
 })
+
+test("广告内素材分别判断、解释缺数并原值保存 0.85", async ({ page }) => {
+  const created: unknown[] = []
+  await automationBoundary(page, { created })
+  await page.route("**/automation-rules/dry-run", (route) =>
+    route.fulfill({
+      json: {
+        checked_count: 3,
+        hit_count: 0,
+        skipped_count: 2,
+        skipped_accounts: [
+          {
+            advertiser_id: "acc-1",
+            reason: "MATERIAL_SHARED_REPORT",
+            count: "2",
+          },
+        ],
+        hits: [],
+      },
+    }),
+  )
+  await page.goto(`/tenants/${TENANT}/automation-rules`)
+  await page.getByRole("button", { name: "新建规则" }).click()
+  await page.getByRole("combobox", { name: "对象层级" }).click()
+  await page.getByRole("option", { name: "素材", exact: true }).click()
+  await expect(
+    page.getByRole("radio", { name: "每条广告内的素材" }),
+  ).toBeChecked()
+  await expect(
+    page.getByText(/同一视频在其他广告里的使用不受影响/),
+  ).toBeVisible()
+  await chooseAction(page, "暂停")
+  await page.getByRole("combobox", { name: "运行频率" }).click()
+  await page.getByRole("option", { name: "每 1 小时", exact: true }).click()
+  await page.getByRole("spinbutton", { name: "条件 1 数值" }).fill("20")
+  await page.getByRole("button", { name: "添加条件" }).click()
+  await page.getByRole("combobox", { name: "条件 2 指标" }).click()
+  await page.getByRole("option", { name: "广告收益 ROAS", exact: true }).click()
+  await page.getByRole("combobox", { name: "条件 2 运算符" }).click()
+  await page.getByRole("option", { name: "小于", exact: true }).click()
+  await page.getByRole("spinbutton", { name: "条件 2 数值" }).fill("0.85")
+  await page.getByRole("button", { name: "试运行" }).click()
+  await expect(
+    page.getByText(/2 个广告内素材无法判断，多条广告共用报表无法拆分/),
+  ).toBeVisible()
+  await expect(page.getByText("数据未更新，已跳过 1 个账户")).toHaveCount(0)
+  await page.getByRole("button", { name: "保存", exact: true }).click()
+  await expect.poll(() => created.length).toBe(1)
+  expect(created[0]).toMatchObject({
+    definition: {
+      aggregation: "EACH",
+      apply_to: { level: "material" },
+      action: { type: "PAUSE", level: "material" },
+      conditions: [
+        { values: ["20"] },
+        { metric: "roas_total", operator: "LT", values: ["0.85"] },
+      ],
+      mode: "CONFIRM",
+    },
+  })
+})

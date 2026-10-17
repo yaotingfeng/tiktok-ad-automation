@@ -422,7 +422,11 @@ def _still_matching(
         session, tenant_id=tenant_id, definition=definition, now=now, strict_facts=True
     )
     result = evaluate(definition, inputs, ignore_status=True, strict_facts=True)
-    unknown_accounts = {row["advertiser_id"] for row in inputs.skipped_accounts}
+    unknown_accounts = {
+        row["advertiser_id"]
+        for row in inputs.skipped_accounts
+        if row.get("reason") == "STALE_REPORT"
+    }
     if unknown_accounts and definition.aggregation != "EACH":
         # 合计条件不能用缺少账户的部分事实断言不命中。
         unknown_accounts.update(inputs.accounts)

@@ -16,6 +16,10 @@ from app.core.errors import DomainError
 from app.jobs.outbox import enqueue_after_commit
 from app.jobs.tasks import register_dispatch_task
 from app.modules.automation_rules import feishu
+from app.modules.automation_rules.data_issues import (
+    input_issue_lines,
+    merge_input_issues,
+)
 from app.modules.automation_rules.models import (
     AutomationRule,
     AutomationRuleHit,
@@ -146,9 +150,10 @@ def build_summary_card(
                 {**totals, "conflict_details": conflicts, "failed_bcs": failed_bcs}
             )
         )
-    skipped = {item["advertiser_id"] for run in runs for item in run.skipped_accounts}
-    if skipped:
-        lines.append(f"{len(skipped)} 个账户数据未更新，已跳过")
+    issues = merge_input_issues([item for run in runs for item in run.skipped_accounts])
+    if any(item.get("reason", "").startswith("MATERIAL_") for item in issues):
+        lines.append("以下素材缺数数量为本时段各账户单次运行的最大值")
+    lines.extend(input_issue_lines(issues))
     # 同一对象在多次运行中命中，只列最近一次。
     latest: dict[str, AutomationRuleHit] = {}
     for hit in hits:

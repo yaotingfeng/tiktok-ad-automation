@@ -3,11 +3,11 @@
 from dataclasses import dataclass
 from typing import Literal
 
-from sqlalchemy import func, or_
+from sqlalchemy import or_
 from sqlmodel import Session, col, select
 
 from app.core.context import TenantContext
-from app.modules.ads.models import AdMaterialReference, AdObject
+from app.modules.ads.models import AdObject
 from app.modules.automation_rules.inputs import expand_accounts
 from app.modules.automation_rules.schemas import AccountScope
 from app.modules.automation_rules.service import require
@@ -26,7 +26,7 @@ class AccountOption:
 
 @dataclass(frozen=True)
 class ObjectOption:
-    # 与规则定义中的指定对象格式一致：「账户ID:远端ID」，素材为「账户ID:主素材ID」。
+    # 与规则定义中的指定对象格式一致：「账户ID:远端ID」，素材为「账户ID:广告内素材稳定ID」。
     value: str
     label: str
     advertiser_id: str
@@ -77,38 +77,33 @@ def search_objects(
         return []
     pattern = f"%{query.strip()}%"
     if level == "material":
-        rows = session.exec(
-            select(
-                AdMaterialReference.advertiser_id,
-                AdMaterialReference.main_material_id,
-                func.max(AdMaterialReference.name),
-                # 素材在任一广告中开启即视为开启，与判断引擎一致。
-                func.max(AdMaterialReference.operation_status),
+        from datetime import UTC, datetime
+
+        from app.modules.automation_rules.inputs import _materials, _objects
+
+        accounts = expand_accounts(
+            session,
+            tenant_id=context.tenant_id,
+            scope=AccountScope(mode="ACCOUNTS", advertiser_ids=tuple(sorted(allowed))),
+        )
+        ads = _objects(session, context.tenant_id, accounts, datetime.now(UTC))
+        entities = _materials(session, context.tenant_id, accounts, ads)
+        needle = query.strip().lower()
+        choices = [
+            ObjectOption(
+                f"{entity.advertiser_id}:{entity.remote_id}",
+                entity.name,
+                entity.advertiser_id,
+                "material",
+                entity.status,
             )
-            .where(
-                AdMaterialReference.tenant_id == context.tenant_id,
-                col(AdMaterialReference.advertiser_id).in_(allowed),
-                col(AdMaterialReference.main_material_id).is_not(None),
-                or_(
-                    col(AdMaterialReference.name).ilike(pattern),
-                    col(AdMaterialReference.main_material_id).ilike(pattern),
-                ),
-            )
-            .group_by(
-                col(AdMaterialReference.advertiser_id),
-                col(AdMaterialReference.main_material_id),
-            )
-            .order_by(
-                col(AdMaterialReference.advertiser_id),
-                col(AdMaterialReference.main_material_id),
-            )
-            .offset(offset)
-            .limit(limit)
-        ).all()
-        return [
-            ObjectOption(f"{adv}:{main}", name or str(main), adv, "material", status)
-            for adv, main, name, status in rows
+            for entity in sorted(entities.values(), key=lambda e: e.key)
+            if not needle
+            or needle in entity.name.lower()
+            or needle in (entity.video or "").lower()
+            or needle in (entity.parent_key or "").lower()
         ]
+        return choices[offset : offset + limit]
     objects = session.exec(
         select(AdObject)
         .where(

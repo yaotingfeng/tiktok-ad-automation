@@ -60,10 +60,10 @@ test("执行层级与后端一致", () => {
   expect(actionLevels("EACH", "ad", "BUDGET")).toEqual([])
 })
 
-test("素材按单账户或同一视频跨账户判断", () => {
+test("素材按广告内位置或同一视频跨账户判断", () => {
   expect(aggregationOptions("material")).toEqual(["EACH", "VIDEO"])
   expect(aggregationOptions("ad")).toEqual(["EACH", "DRAMA", "ALL"])
-  expect(aggregationLabel("EACH", "material")).toBe("每个素材（单账户内）")
+  expect(aggregationLabel("EACH", "material")).toBe("每条广告内的素材")
   expect(aggregationLabel("EACH", "ad")).toBe("每个对象")
   // 视频口径只能对素材本身执行。
   expect(actionLevels("VIDEO", "material", "PAUSE")).toEqual(["material"])
@@ -285,4 +285,32 @@ test("时区换算覆盖夏令时", () => {
   expect(toZonedInput("2026-10-14T01:30:00Z", "Asia/Shanghai")).toBe(
     "2026-10-14T09:30",
   )
+})
+
+// 关联问题与数据陈旧必须分别说明，不能把部分素材跳过说成全账户无命中。
+test("素材数据问题说明具体原因", async () => {
+  const { inputIssueText } = await import(
+    "../src/features/automation-rules/dataIssues"
+  )
+  expect(
+    inputIssueText({
+      advertiser_id: "acc-1",
+      reason: "MATERIAL_SHARED_REPORT",
+      count: "2",
+    }),
+  ).toContain("2 个广告内素材")
+  expect(
+    inputIssueText({
+      advertiser_id: "acc-1",
+      reason: "MATERIAL_SHARED_REPORT",
+      count: "2",
+    }),
+  ).toContain("共用报表无法拆分")
+  expect(
+    inputIssueText({
+      advertiser_id: "acc-1",
+      reason: "MATERIAL_LINK_MISSING",
+      count: "1",
+    }),
+  ).toContain("尚未关联")
 })

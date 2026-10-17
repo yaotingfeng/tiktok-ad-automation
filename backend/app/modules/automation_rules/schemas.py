@@ -39,7 +39,7 @@ class AccountScope(_Strict):
 class ApplyTo(_Strict):
     level: Level
     status: Literal["ACTIVE", "PAUSED", "SELECTED"]
-    # 指定对象:"账户ID:远端ID";素材为"账户ID:主素材ID"。
+    # 指定对象:"账户ID:远端ID";素材为"账户ID:广告内素材稳定ID"。
     object_ids: tuple[str, ...] = ()
 
     @model_validator(mode="after")

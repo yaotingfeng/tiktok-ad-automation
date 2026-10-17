@@ -16,7 +16,6 @@ from app.modules.accounts.models import AdvertiserAccount, BCAccountAccess
 from app.modules.automation_rules.catalog import RULE_METRICS
 from app.modules.automation_rules.schedule import due_at, next_run_at
 from app.modules.automation_rules.schemas import AccountScope, RuleDefinition
-from app.modules.reporting.material_links import post_video_map
 from app.modules.reporting.metric_catalog import STORED_KEYS
 
 # 报表热数据 30 分钟、素材 60 分钟同步一次；超过阈值说明同步停滞，宁可跳过也不按旧数据判断。
@@ -55,6 +54,9 @@ class Entity:
     material_uses: tuple[dict[str, Any], ...] = ()
     # 素材所属视频，与素材报表按视频跨账户合并的口径一致；对不上视频时为空。
     video: str | None = None
+    # 日报帖子可因重建出现多个；判断按广告内视频合计，操作只用当前身份。
+    report_ids: tuple[str, ...] = ()
+    judgement_issue: str | None = None
 
 
 @dataclass
@@ -310,64 +312,16 @@ def _materials(
     tenant_id: UUID,
     accounts: dict[str, AccountInfo],
     ads: dict[str, Entity],
+    *,
+    definition: RuleDefinition | None = None,
+    now: datetime | None = None,
 ) -> dict[str, Entity]:
-    """素材按「账户 + 主素材」合并；同一素材被多条广告使用时列出全部使用。"""
-    rows = (
-        session.connection()
-        .execute(
-            text(
-                "SELECT advertiser_id, ad_remote_id, platform_material_id, ad_material_id, "
-                "material_type, name, main_material_id, operation_status "
-                "FROM ad_material_reference WHERE tenant_id = :t AND advertiser_id = ANY(:advs) "
-                "AND main_material_id IS NOT NULL ORDER BY advertiser_id, main_material_id, ad_remote_id"
-            ),
-            {"t": tenant_id, "advs": list(accounts)},
-        )
-        .all()
+    # 延迟导入避免 Entity 数据合同与素材加载器循环导入。
+    from app.modules.automation_rules.material_inputs import load_material_entities
+
+    return load_material_entities(
+        session, tenant_id, accounts, ads, definition=definition, now=now
     )
-    grouped: dict[tuple[str, str], list[Any]] = defaultdict(list)
-    for row in rows:
-        grouped[(row.advertiser_id, row.main_material_id)].append(row)
-    videos = post_video_map(session, tenant_id=tenant_id, advertisers=list(accounts))
-    entities = {}
-    for (adv, main_id), uses in grouped.items():
-        info = accounts[adv]
-        dramas = {
-            ads[key].drama
-            for key in (f"ad:{adv}:{u.ad_remote_id}" for u in uses)
-            if key in ads
-        }
-        name = next((u.name for u in uses if u.name), main_id)
-        key = f"material:{adv}:{main_id}"
-        entities[key] = Entity(
-            key=key,
-            kind="material",
-            advertiser_id=adv,
-            bc_id=info.bc_id,
-            remote_id=main_id,
-            name=name,
-            drama=next(iter(dramas)) if len(dramas) == 1 else None,
-            naming_valid=len(dramas) == 1 and None not in dramas,
-            status="ENABLE"
-            if any(u.operation_status == "ENABLE" for u in uses)
-            else "DISABLE",
-            currency=info.currency,
-            timezone=info.timezone,
-            parent_key=None,
-            attributes={"name": name},
-            material_uses=tuple(
-                {
-                    "advertiser_id": adv,
-                    "ad_remote_id": u.ad_remote_id,
-                    "platform_material_id": u.platform_material_id,
-                    "ad_material_id": u.ad_material_id,
-                    "material_type": u.material_type,
-                }
-                for u in uses
-            ),
-            video=videos.get((adv, main_id)),
-        )
-    return entities
 
 
 def _add(
@@ -474,7 +428,16 @@ def load_inputs(
         return Inputs(accounts={}, entities={}, facts={}, skipped_accounts=skipped)
     entities = _objects(session, tenant_id, accounts, now)
     if "material" in (level, definition.action.level):
-        entities.update(_materials(session, tenant_id, accounts, entities))
+        entities.update(
+            _materials(
+                session,
+                tenant_id,
+                accounts,
+                entities,
+                definition=definition if level == "material" else None,
+                now=now,
+            )
+        )
     ranges: list[str] = sorted(
         {
             str(c.range)
@@ -490,10 +453,23 @@ def load_inputs(
             accounts,
             range_type,
             material=level == "material",
-            strict_facts=strict_facts,
+            strict_facts=strict_facts or level == "material",
             now=now,
         )
-        facts[range_type] = {k: v for k, v in loaded.items() if k in entities}
+        if level == "material":
+            from app.modules.automation_rules.material_inputs import material_facts
+
+            facts[range_type] = material_facts(entities, loaded)
+        else:
+            facts[range_type] = {k: v for k, v in loaded.items() if k in entities}
+    if level == "material":
+        from app.modules.automation_rules.material_inputs import (
+            mark_missing_metrics,
+            material_issues,
+        )
+
+        mark_missing_metrics(entities, facts, definition)
+        skipped.extend(material_issues(entities, definition))
     return Inputs(
         accounts=accounts, entities=entities, facts=facts, skipped_accounts=skipped
     )

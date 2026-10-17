@@ -45,6 +45,7 @@ import {
   ruleKeys,
 } from "./queries"
 import { ACTION_LABELS, LEVEL_LABELS } from "./ruleForm"
+import { SkippedInputs } from "./SkippedInputs"
 
 export const CONFIRMATION_STATUS: Record<string, string> = {
   PENDING: "待确认",
@@ -176,14 +177,7 @@ function ConfirmationSheet({
               </AlertDescription>
             </Alert>
           )}
-          {data && data.skipped_accounts.length > 0 && (
-            <p className="text-sm text-muted-foreground break-all">
-              现在数据未更新的账户：
-              {data.skipped_accounts
-                .map((item) => item.advertiser_id)
-                .join("、")}
-            </p>
-          )}
+          {data && <SkippedInputs items={data.skipped_accounts} />}
           <p className="text-sm text-muted-foreground">
             「现在」为按最新数据重新判断的结果；执行时仍会做频控与规则冲突检查。
           </p>

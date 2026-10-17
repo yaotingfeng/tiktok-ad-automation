@@ -22,6 +22,7 @@ from app.modules.automation_rules.confirmations import (
     expire_open,
     open_batch,
 )
+from app.modules.automation_rules.data_issues import input_issue_lines
 from app.modules.automation_rules.evaluate import Evaluation, evaluate
 from app.modules.automation_rules.inputs import load_inputs
 from app.modules.automation_rules.models import (
@@ -230,8 +231,15 @@ def _same_stale_as_last_sent(
     ).first()
     if last is None or last.hit_count:
         return False
-    accounts = {item["advertiser_id"] for item in skipped}
-    return accounts == {item["advertiser_id"] for item in last.skipped_accounts}
+
+    # 同账户的缺数原因或影响数量变化仍需通知，不能只比较账户集合。
+    def signature(items: list[dict[str, str]]) -> set[tuple[str, str, str]]:
+        return {
+            (item["advertiser_id"], item.get("reason", ""), item.get("count", ""))
+            for item in items
+        }
+
+    return signature(skipped) == signature(last.skipped_accounts)
 
 
 def queue_notification(
@@ -307,10 +315,9 @@ def build_run_card(
 ) -> dict[str, Any]:
     """卡片按运行状态分三类:待确认、执行结果、预警/运行报告。"""
     summary = [f"判断对象 {run.checked_count} 个，命中 {run.hit_count} 个"]
-    if run.skipped_accounts:
-        summary.append(f"{len(run.skipped_accounts)} 个账户数据未更新，已跳过")
+    summary.extend(input_issue_lines(run.skipped_accounts))
     if run.skipped_count:
-        summary.append(f"{run.skipped_count} 个对象命名不规范，未参与剧合计")
+        summary.append(f"{run.skipped_count} 个对象因命名或素材数据不完整，未参与判断")
     base = f"{settings.FRONTEND_HOST.rstrip('/')}/tenants/{rule.tenant_id}"
     link = f"{base}/automation-rules?tab=runs&run={run.id}"
     button = "查看明细"

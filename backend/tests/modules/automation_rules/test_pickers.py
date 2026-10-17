@@ -37,9 +37,10 @@ def test_object_search_levels_and_materials(session, sync_seed):
             AdMaterialReference(
                 tenant_id=sync_seed.tenant_id,
                 advertiser_id="acc-1",
-                ad_remote_id=remote,
+                ad_remote_id="a1",
                 platform_material_id=f"v-{remote}",
-                ad_material_id=None,
+                ad_material_id=f"am-{remote}",
+                complete=True,
                 material_type="VIDEO",
                 name="素材甲",
                 main_material_id="m1",
@@ -56,8 +57,9 @@ def test_object_search_levels_and_materials(session, sync_seed):
         advertiser_ids=["acc-1"],
         limit=50,
     )
-    # 同一主素材在多条广告中使用，只出现一次。
-    assert [(item.value, item.label) for item in materials] == [("acc-1:m1", "素材甲")]
+    # 指定对象与判断引擎一致：每个广告内视频独立选择，不依赖目录主素材字段。
+    assert len(materials) == 2 and materials[0].value != materials[1].value
+    assert all(item.label == "素材甲 · 广告一" for item in materials)
     assert (
         search_objects(
             session,

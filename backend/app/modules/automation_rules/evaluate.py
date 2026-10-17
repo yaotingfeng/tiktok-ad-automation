@@ -59,7 +59,15 @@ def _in_scope(entity: Entity, definition: RuleDefinition, ignore_status: bool) -
     if apply.status == "SELECTED":
         if f"{entity.advertiser_id}:{entity.remote_id}" not in apply.object_ids:
             return False
-    elif not ignore_status and entity.status != _STATUS[apply.status]:
+    elif (
+        not ignore_status
+        and entity.status != _STATUS[apply.status]
+        and not (
+            entity.kind == "material"
+            and entity.judgement_issue
+            and entity.status is None
+        )
+    ):
         return False
     return True
 
@@ -274,7 +282,26 @@ def evaluate(
     materials_by_ad = _materials_by_ad(inputs)
     hits = []
     unknown_targets: set[str] = set()
+    checked = 0
+    missing_video_account = definition.aggregation == "VIDEO" and any(
+        item.get("reason") == "STALE_REPORT" for item in inputs.skipped_accounts
+    )
     for key, members in groups.items():
+        if missing_video_account or any(member.judgement_issue for member in members):
+            # VIDEO 合计缺少任何成员的数据时，不能只用其余成员判断整个视频。
+            skipped += (
+                len(members)
+                if missing_video_account
+                else sum(bool(member.judgement_issue) for member in members)
+            )
+            unknown_targets.update(
+                t.key
+                for t in _targets(
+                    members, definition.action.level, inputs, children, materials_by_ad
+                )
+            )
+            continue
+        checked += 1
         values = [
             (c, _metric(c, members, inputs, strict_facts=strict_facts))
             for c in definition.conditions
@@ -324,7 +351,7 @@ def evaluate(
             )
         )
     return Evaluation(
-        checked=len(groups),
+        checked=checked,
         hits=tuple(hits),
         skipped_count=skipped,
         unknown_targets=tuple(sorted(unknown_targets)),

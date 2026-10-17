@@ -1,6 +1,7 @@
 """只展开已界定的账户集合；每次读取重新校验当前成员与 BC 授权。"""
 
 from collections import defaultdict
+from collections.abc import Sequence
 
 from sqlalchemy import tuple_
 from sqlmodel import Session, col, select
@@ -242,6 +243,13 @@ def current_ad_materials(session: Session, ref: EntityRef) -> list[AdMaterialRef
         )
         .execution_options(populate_existing=True)
     ).all()
+    return latest_ad_materials(rows)
+
+
+def latest_ad_materials(
+    rows: Sequence[AdMaterialReference],
+) -> list[AdMaterialReference]:
+    """在同一广告内选各视频的当前唯一身份；规则批量加载与广告详情共用。"""
     grouped: dict[tuple[str, str], list[AdMaterialReference]] = defaultdict(list)
     for row in rows:
         grouped[row.platform_material_id, row.material_type].append(row)

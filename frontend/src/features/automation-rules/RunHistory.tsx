@@ -32,6 +32,7 @@ import {
   runsQuery,
 } from "./queries"
 import { MODE_LABELS } from "./ruleForm"
+import { SkippedInputs } from "./SkippedInputs"
 
 const NOTIFY_LABELS: Record<string, string> = {
   NOT_REQUIRED: "无需发送",
@@ -194,14 +195,7 @@ function RunDetailSheet({
           </SheetDescription>
         </SheetHeader>
         <div className="flex flex-1 flex-col gap-3 overflow-y-auto px-4 py-2">
-          {run && run.skipped_accounts.length > 0 && (
-            <p className="text-sm text-muted-foreground break-all">
-              数据未更新已跳过的账户：
-              {run.skipped_accounts
-                .map((item) => item.advertiser_id)
-                .join("、")}
-            </p>
-          )}
+          {run && <SkippedInputs items={run.skipped_accounts} />}
           {run?.notify_status === "FAILED" && (
             <p className="text-sm text-destructive">
               飞书发送失败：{run.notify_error}
@@ -277,8 +271,7 @@ export function RunHistory({
           ) : (
             <span>
               命中 {run.hit_count}
-              {run.skipped_accounts.length > 0 &&
-                ` · 跳过 ${run.skipped_accounts.length} 个账户`}
+              {run.skipped_accounts.length > 0 && " · 部分数据未参与判断"}
             </span>
           ),
       },

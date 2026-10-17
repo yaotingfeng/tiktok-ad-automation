@@ -10,6 +10,7 @@ from app.modules.ads.models import (
 from app.modules.automation_rules.inputs import (
     AccountInfo,
     _materials,
+    _objects,
     expand_accounts,
     load_inputs,
     local_window,
@@ -239,8 +240,9 @@ def test_account_timezone_rules_judge_each_account_at_its_local_time(
 
 def test_materials_carry_video_from_report_links(session, sync_seed):
     # 视频归属与素材报表同源（主素材 → 视频对照）；对不上视频的主素材为空，不参与视频合计。
+    _seed(session, sync_seed)
     tenant = sync_seed.tenant_id
-    for main, ad in (("p1", "a1"), ("p2", "a2")):
+    for main, ad in (("p1", "a1"), ("p2", "a1")):
         session.add(
             AdMaterialReference(
                 tenant_id=tenant,
@@ -264,12 +266,16 @@ def test_materials_carry_video_from_report_links(session, sync_seed):
             main_material_id="p1",
             ad_remote_id="a1",
             main_material_type="VIDEO",
-            platform_material_id="v1",
+            platform_material_id="v-p1",
             observed_at=NOW,
         )
     )
     session.flush()
     accounts = {"acc-1": AccountInfo("acc-1", "bc", "UTC", "USD", "A")}
-    found = _materials(session, tenant, accounts, {})
-    assert found["material:acc-1:p1"].video == "v1"
-    assert found["material:acc-1:p2"].video is None
+    found = _materials(
+        session, tenant, accounts, _objects(session, tenant, accounts, NOW)
+    )
+    by_video = {entity.video: entity for entity in found.values()}
+    assert by_video["v-p1"].report_ids == ("p1",)
+    assert by_video["v-p1"].judgement_issue is None
+    assert by_video["v-p2"].judgement_issue == "MATERIAL_LINK_MISSING"
