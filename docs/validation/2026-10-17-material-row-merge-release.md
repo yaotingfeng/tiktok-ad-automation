@@ -11,10 +11,17 @@
 - 红灯：3 个新增用例分别复现重复两行、旧 ID 仍可冻结、并列身份被错误当成可操作素材。
 - 回归覆盖：新旧帖子消耗/总收入/当日收入合计一次及 ROAS 重算、其他广告不混入、按目录版本选择当前 ID、无 ID 重复行、身份歧义及预览后 ID 替换。
 - 发布前使用事故广告生产数据库只读事务对比：原接口 32 行，候选逻辑 30 行/30 视频，每个视频的所有指标桶和帖子集合完全一致，当前两个替换素材 ID 验证通过；未写库、未调用 TikTok。私有脚本 `.runtime/material-row-merge-20261017/verify-runtime.py`。
-- `pytest backend/tests/modules/reporting backend/tests/modules/ad_management backend/tests/modules/ads backend/tests/modules/automation_rules -q`：602 passed / 39.00s（独立本地 PostgreSQL 18 / Redis 8）。相关 Ruff/格式/ty/差异检查通过；发布门禁结果待本轮流水线完成后补齐。
+- `pytest backend/tests/modules/reporting backend/tests/modules/ad_management backend/tests/modules/ads backend/tests/modules/automation_rules -q`：602 passed / 39.00s（独立本地 PostgreSQL 18 / Redis 8）。相关 Ruff/格式/ty/差异检查通过；公司 Jenkins affected 发布门禁通过（20 个后端测试文件，27 秒）。
 
 ## 生产发布
 
 用户已授权修复并发布；目标 ACK `test`（生产用途）/ `https://tkada.shortclipflix.com`。旧版 `63975325c5e0f8292b4a9f5c23abfe783a987520`，本轮沿用四个业务开关线上实际值。
 
-状态：待聚焦提交及公司 Jenkins 检查、完整备份/隔离恢复、九角色启动及原生接口验证。
+状态：修复提交 `ffc17f8aa346a6ee4bdf8c1d8f2b89237b04eb46` 已发布。公司 Jenkins [#16](http://123.207.4.46:8080/job/tiktok-ad-automation/16/) 于北京时间 2026-10-17 15:58:43 SUCCESS，批次 `20261017T073738-01c5b5`。
+
+- 同一停写窗口的数据库、Redis、Beat、独立源码/运行程序/前端构建、私有配置与证书引用归档完整；真实隔离恢复通过。清单 SHA256 `884f8b3bc01283aa66071fc97ac91b1ce7018ec46d8f52019688366650c210a5`；PostgreSQL 一致、6 份凭据可解密、Redis 14 键验证/重新编码通过，恢复证明绑定本轮 SHA。
+- acceptance.json：九 Pod Ready、7 Worker 就绪、唯一 Beat、实际镜像 digest `sha256:69567ce539864b4abb1b8ca08d02958574b3b3cdea1637126a932143c15aa848`；逐 Pod 实际配置验证通过，四开关与发布前一致均为 true，HTTPS 健康通过。
+- 本机集群连接间歇 EOF/超时期间，通过 Jenkins 当前批次的只读阶段记录、恢复证明与 acceptance.json 核对发布，没有跳过备份/恢复门禁。完成后一度页面返回 503，随后首页和健康接口均恢复 200；页面可以正常加载报表。
+- 用户两次要求继续后补齐真实浏览器验收：打开事故广告详情的素材页，DOM 行计数为 30、唯一文件名 30，war-01 / war-03 各一行，war-03 为已暂停；未勾选或执行任何真实启停。保持该详情页供用户查看。
+- 发布后工作区另有后续提交 `fb851952`（目录暂存清理）；本轮未改动或重新发布该提交，不把它计作本轮修复范围。
+- 本轮生产验收是实际页面展示与发布基础验收，不代表额外执行了 TikTok 启停写入。
