@@ -42,8 +42,9 @@ from app.modules.ad_management.models import (
     ManagementTaskItem,
 )
 from app.modules.ad_management.schemas import ManagementItemPublic
+from app.modules.ads.directory import locate_material_use
 from app.modules.ads.directory_requests import request_directory
-from app.modules.ads.models import AdMaterialReference, AdObject
+from app.modules.ads.models import AdObject
 from app.modules.reporting.planner import plan_hot
 from app.modules.reporting.store_models import AdSyncBc
 
@@ -251,17 +252,11 @@ def _same_frozen_value(
     ):
         use = _material(item.material_use)
         assert use is not None
-        row = session.get(
-            AdMaterialReference,
-            (
-                ref.tenant_id,
-                ref.advertiser_id,
-                use.ad_ref.remote_id,
-                use.platform_material_id,
-                use.ad_material_id,
-                use.material_type,
-            ),
-        )
+        if use.ad_ref != ref:
+            raise DomainError(
+                "management_observation_conflict", "冻结素材与管理广告不一致"
+            )
+        row = locate_material_use(session, use)
         if row is None:
             raise DomainError(
                 "management_observation_conflict", "冻结素材当前观测不存在"
@@ -364,12 +359,17 @@ def _update_task(session: Session, task_id: UUID, tenant_id: UUID) -> None:
     statuses = {row.execution_result for row in rows}
     if "UNKNOWN" in statuses:
         task.status = "NEEDS_REVIEW"
-    elif "PENDING" in statuses or "NOT_SENT" in statuses:
+    elif "PENDING" in statuses or any(
+        row.execution_result == "NOT_SENT"
+        and (attempts := _attempts(session, row))
+        and attempts[-1].retryable
+        for row in rows
+    ):
         task.status = "RUNNING"
     elif statuses and statuses <= {"ACCEPTED", "NO_CHANGE"}:
         task.status = "SUCCEEDED"
     elif statuses:
-        task.status = "PARTIAL"
+        task.status = "PARTIAL" if statuses & {"ACCEPTED", "NO_CHANGE"} else "FAILED"
     task.updated_at = _now()
     session.add(task)
 
@@ -784,29 +784,37 @@ def execute_item(database_engine: Engine, item_id: UUID) -> None:
             # Attempt row identity is separate from Redis claim generation.
 
         assert lease is not None
-        lease.fence(redis_client)
-        with Session(database_engine) as check:
-            current = check.exec(
-                select(ManagementTaskItem).where(ManagementTaskItem.id == item_id)
-            ).one()
-            task = check.get(ManagementTask, current.task_id)
-            assert task is not None
-            route = _route(task)
-            context = TenantContext(
-                tenant_id=task.tenant_id, actor_id=task.actor_id, role="operator"
-            )
-            ref = _ref(current.ref)
-            verify_route(
-                check,
-                context=context,
-                route=route,
-                advertiser_id=ref.advertiser_id,
-                capability="ads_manage",
-                operation=(current.capability or {}).get("operation"),
-                entity_kind=(current.capability or {}).get("entity_kind"),
-            )
-            _same_frozen_value(check, current, ref)
-            command = _command(current)
+        try:
+            lease.fence(redis_client)
+            with Session(database_engine) as check:
+                current = check.exec(
+                    select(ManagementTaskItem).where(ManagementTaskItem.id == item_id)
+                ).one()
+                task = check.get(ManagementTask, current.task_id)
+                assert task is not None
+                route = _route(task)
+                context = TenantContext(
+                    tenant_id=task.tenant_id, actor_id=task.actor_id, role="operator"
+                )
+                ref = _ref(current.ref)
+                verify_route(
+                    check,
+                    context=context,
+                    route=route,
+                    advertiser_id=ref.advertiser_id,
+                    capability="ads_manage",
+                    operation=(current.capability or {}).get("operation"),
+                    entity_kind=(current.capability or {}).get("entity_kind"),
+                )
+                _same_frozen_value(check, current, ref)
+                command = _command(current)
+        except DomainError:
+            raise
+        except Exception as error:
+            # 此处尚未打开平台网关，确定没有发送，不能遗留执行中或误记 UNKNOWN。
+            raise DomainError(
+                "management_preflight_failed", "发送前素材或对象校验失败"
+            ) from error
 
         def before_provider_request() -> None:
             """Re-fence and re-read the frozen object at each adapter send gate."""
@@ -943,6 +951,22 @@ def execute_item(database_engine: Engine, item_id: UUID) -> None:
                     if error.code == "management_original_changed"
                     else "NOT_SENT"
                 )
+                # 已提交的预请求也要关闭，重复投递不能把本地失败误判为发送结果未知。
+                attempts = _attempts(session, item)
+                if item.claim_token == owner and attempts:
+                    attempt = attempts[-1]
+                    if attempt.outcome == "NOT_SENT":
+                        attempt.retryable = False
+                        attempt.response = {"reason": error.code}
+                        session.add(attempt)
+                        session.add(
+                            ReceiptRow(
+                                tenant_id=item.tenant_id,
+                                attempt_id=attempt.id,
+                                outcome="NOT_SENT",
+                                response={"reason": error.code},
+                            )
+                        )
                 item.claim_token = None
                 item.claimed_until = None
                 item.delivery_status = error.code

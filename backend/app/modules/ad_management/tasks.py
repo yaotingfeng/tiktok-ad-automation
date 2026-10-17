@@ -12,7 +12,7 @@ from app.core.errors import DomainError
 from app.jobs.celery_app import celery_app
 from app.jobs.outbox import validate_dispatch_payload
 from app.jobs.tasks import register_dispatch_task
-from app.modules.ad_management.execution import execute_item
+from app.modules.ad_management.execution import _update_task, execute_item
 from app.modules.ad_management.models import ManagementTask, ManagementTaskItem
 
 MANAGEMENT_DISPATCH_TASK = "ad_management.execute"
@@ -34,7 +34,9 @@ def _payload(payload: dict[str, Any]) -> tuple[UUID, int]:
 
 
 @celery_app.task(name=MANAGEMENT_DISPATCH_TASK)
-def execute_management_task(*, tenant_id: str, actor_id: str, payload: dict[str, Any]) -> str:
+def execute_management_task(
+    *, tenant_id: str, actor_id: str, payload: dict[str, Any]
+) -> str:
     try:
         tenant = UUID(tenant_id)
         actor = UUID(actor_id)
@@ -59,7 +61,11 @@ def execute_management_task(*, tenant_id: str, actor_id: str, payload: dict[str,
                 ManagementTaskItem.observation_state == "REFRESH_PENDING",
             )
         ).first()
-        if task.status in {"SUCCEEDED", "PARTIAL", "FAILED", "CANCELLED", "NEEDS_REVIEW"} and refresh_pending is None:
+        if (
+            task.status
+            in {"SUCCEEDED", "PARTIAL", "FAILED", "CANCELLED", "NEEDS_REVIEW"}
+            and refresh_pending is None
+        ):
             return task.status
         task.status = "RUNNING"
         session.add(task)
@@ -85,17 +91,8 @@ def execute_management_task(*, tenant_id: str, actor_id: str, payload: dict[str,
         task = session.get(ManagementTask, task_id)
         if task is None:
             return "FAILED"
-        rows = session.exec(select(ManagementTaskItem).where(ManagementTaskItem.task_id == task_id, ManagementTaskItem.tenant_id == tenant)).all()
-        statuses = {row.execution_result for row in rows}
-        if "UNKNOWN" in statuses:
-            task.status = "NEEDS_REVIEW"
-        elif "PENDING" in statuses or "NOT_SENT" in statuses:
-            task.status = "RUNNING"
-        elif statuses and statuses <= {"ACCEPTED", "NO_CHANGE"}:
-            task.status = "SUCCEEDED"
-        else:
-            task.status = "PARTIAL"
-        session.add(task)
+        # 与单项回写共用汇总规则：不可重试的未发送项必须结束任务。
+        _update_task(session, task_id, tenant)
         session.commit()
         return task.status
 

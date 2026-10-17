@@ -40,7 +40,8 @@ from app.modules.ad_management.models import (
 from app.modules.ad_management.models import (
     ManagementReceipt as ReceiptRow,
 )
-from app.modules.ads.models import AdObject
+from app.modules.ad_management.tasks import execute_management_task
+from app.modules.ads.models import AdMaterialReference, AdObject
 from app.modules.reporting.query_models import FrozenSelectionRecord
 from app.modules.reporting.store_models import AdSyncBc
 from tests.modules.conftest import create_context
@@ -165,7 +166,12 @@ def _committed_item(
     context, bc, account, route, selection = management_env
     # 改名冻结的是推广系列名称；数值动作冻结在广告组配置里。
     rename = operation == "rename"
-    kind, remote_id = ("campaign", "campaign-c5") if rename else ("adgroup", "group-c5")
+    material = operation == "set_material_status"
+    kind, remote_id = (
+        ("ad", "ad-c5")
+        if material
+        else (("campaign", "campaign-c5") if rename else ("adgroup", "group-c5"))
+    )
     configuration = {} if rename else {"budget": original}
     with Session(engine, expire_on_commit=False) as setup:
         preview = ManagementPreview(
@@ -189,7 +195,7 @@ def _committed_item(
                 kind=kind,
                 remote_id=remote_id,
                 name=original if rename else "",
-                ad_type="REGULAR",
+                ad_type="SMART_PLUS" if material else "REGULAR",
                 configuration=configuration,
                 operation_status="ENABLE",
                 delivery_status="DELIVERING",
@@ -250,9 +256,201 @@ def _committed_item(
             execution_result="PENDING",
             capability=dict(preview_item.capability),
         )
+        if material:
+            use = {
+                "ad_ref": dict(item.ref),
+                "platform_material_id": "video-c5",
+                "ad_material_id": "material-current-c5",
+                "material_type": "VIDEO",
+            }
+            item.material_use = use
+            preview_item.material_use = use
+            item.capability = dict(
+                item.capability,
+                ad_type="SMART_PLUS",
+                ad_material_id="material-current-c5",
+                platform_material_id="video-c5",
+            )
+            setup.add_all(
+                [
+                    AdMaterialReference(
+                        tenant_id=context.tenant_id,
+                        advertiser_id=account.advertiser_id,
+                        ad_remote_id=remote_id,
+                        platform_material_id="video-c5",
+                        ad_material_id=mid,
+                        material_type="VIDEO",
+                        operation_status=status,
+                        complete=True,
+                        published_version=1,
+                    )
+                    for mid, status in [
+                        ("material-current-c5", original),
+                        ("material-old-c5", final),
+                    ]
+                ]
+            )
         setup.add(item)
         setup.commit()
         return context, task.id, item.id
+
+
+@pytest.mark.parametrize(
+    "original,final", [("ENABLE", "DISABLE"), ("DISABLE", "ENABLE")]
+)
+def test_material_toggle_executes_exact_usage_and_persists_receipt(
+    c5_env, redis_client, monkeypatch, original, final
+):
+    context, task_id, item_id = _committed_item(
+        c5_env, original=original, final=final, operation="set_material_status"
+    )
+
+    def gateway(**kwargs):
+        def apply(_self, command):
+            # 模拟真实适配器发送门：重复核验本素材，不能误取同视频的历史记录。
+            kwargs["before_request"]()
+            assert command.ad_material_id == "material-current-c5"
+            assert command.desired == {"operation_status": final}
+            return ManagementReceipt("ACCEPTED", "material-toggle-request", False)
+
+        return _Gateway(apply)
+
+    monkeypatch.setattr(
+        "app.modules.ad_management.execution._redis", lambda: redis_client
+    )
+    monkeypatch.setattr(
+        "app.modules.ad_management.execution.open_tiktok_gateway", gateway
+    )
+    execute_item(engine, item_id)
+    with Session(engine) as session:
+        item = session.get(ManagementTaskItem, item_id)
+        assert item.execution_result == "ACCEPTED"
+        assert session.get(ManagementTask, task_id).status == "SUCCEEDED"
+        receipt = session.exec(
+            select(ReceiptRow).where(ReceiptRow.tenant_id == context.tenant_id)
+        ).one()
+        assert receipt.outcome == "ACCEPTED"
+
+
+def test_unexpected_preflight_error_finishes_without_provider_send(
+    c5_env, redis_client, monkeypatch
+):
+    context, task_id, item_id = _committed_item(c5_env)
+
+    def broken_observation(*_args):
+        raise ValueError("synthetic observation failure")
+
+    def forbidden_gateway(**_kwargs):
+        pytest.fail("发送前校验失败不得打开平台写入网关")
+
+    monkeypatch.setattr(
+        "app.modules.ad_management.execution._redis", lambda: redis_client
+    )
+    monkeypatch.setattr(
+        "app.modules.ad_management.execution._same_frozen_value", broken_observation
+    )
+    monkeypatch.setattr(
+        "app.modules.ad_management.execution.open_tiktok_gateway", forbidden_gateway
+    )
+    assert (
+        execute_management_task(
+            tenant_id=str(context.tenant_id),
+            actor_id=str(context.actor_id),
+            payload={"task_id": str(task_id), "generation": 1},
+        )
+        == "FAILED"
+    )
+    with Session(engine) as session:
+        item = session.get(ManagementTaskItem, item_id)
+        assert item.execution_result == "NOT_SENT"
+        assert item.reason == "management_preflight_failed"
+        assert item.claim_token is None
+        assert session.get(ManagementTask, task_id).status == "FAILED"
+        attempt = session.exec(
+            select(ManagementRequestAttempt).where(
+                ManagementRequestAttempt.task_item_id == item_id
+            )
+        ).one()
+        assert attempt.outcome == "NOT_SENT" and not attempt.retryable
+        assert attempt.response == {"reason": "management_preflight_failed"}
+        receipt = session.exec(
+            select(ReceiptRow).where(ReceiptRow.tenant_id == context.tenant_id)
+        ).one()
+        assert receipt.outcome == "NOT_SENT"
+    # 再次投递只读终态，不能把确定未发送的本地失败误改成 UNKNOWN。
+    execute_item(engine, item_id)
+    with Session(engine) as session:
+        assert session.get(ManagementTaskItem, item_id).execution_result == "NOT_SENT"
+
+
+@pytest.mark.parametrize("change", ["missing", "status", "scope"])
+def test_material_toggle_blocks_changed_or_mismatched_usage(
+    c5_env, redis_client, monkeypatch, change
+):
+    context, task_id, item_id = _committed_item(
+        c5_env, original="ENABLE", final="DISABLE", operation="set_material_status"
+    )
+    with Session(engine) as session:
+        material = session.exec(
+            select(AdMaterialReference).where(
+                AdMaterialReference.tenant_id == context.tenant_id,
+                AdMaterialReference.ad_material_id == "material-current-c5",
+            )
+        ).one()
+        if change == "missing":
+            session.delete(material)
+        elif change == "status":
+            material.operation_status = "DISABLE"
+            session.add(material)
+        else:
+            item = session.get(ManagementTaskItem, item_id)
+            use = dict(item.material_use)
+            use["ad_ref"] = dict(use["ad_ref"], tenant_id=str(uuid4()))
+            item.material_use = use
+            session.add(item)
+        session.commit()
+
+    def forbidden_gateway(**_kwargs):
+        pytest.fail("素材不存在、原值变化或越界时不得写入平台")
+
+    monkeypatch.setattr(
+        "app.modules.ad_management.execution._redis", lambda: redis_client
+    )
+    monkeypatch.setattr(
+        "app.modules.ad_management.execution.open_tiktok_gateway", forbidden_gateway
+    )
+    execute_item(engine, item_id)
+    with Session(engine) as session:
+        item = session.get(ManagementTaskItem, item_id)
+        assert item.execution_result == (
+            "CONFLICT" if change == "status" else "NOT_SENT"
+        )
+        assert session.get(ManagementTask, task_id).status == "FAILED"
+
+
+@pytest.mark.parametrize("retryable,expected", [(False, "FAILED"), (True, "RUNNING")])
+def test_not_sent_task_status_respects_retryability(
+    c5_env, redis_client, monkeypatch, retryable, expected
+):
+    context, task_id, item_id = _committed_item(c5_env)
+    monkeypatch.setattr(
+        "app.modules.ad_management.execution._redis", lambda: redis_client
+    )
+    monkeypatch.setattr(
+        "app.modules.ad_management.execution.open_tiktok_gateway",
+        lambda **_kwargs: _Gateway(
+            lambda *_args: ManagementReceipt("NOT_SENT", None, retryable)
+        ),
+    )
+    result = execute_management_task(
+        tenant_id=str(context.tenant_id),
+        actor_id=str(context.actor_id),
+        payload={"task_id": str(task_id), "generation": 1},
+    )
+    assert result == expected
+    with Session(engine) as session:
+        assert session.get(ManagementTaskItem, item_id).execution_result == "NOT_SENT"
+        assert session.get(ManagementTask, task_id).status == expected
 
 
 def _cleanup(task_id):

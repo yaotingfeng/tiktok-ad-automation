@@ -32,8 +32,8 @@ from app.modules.accounts.management_rules import (
 )
 from app.modules.accounts.models import BCAccountAccess
 from app.modules.ad_management.schemas import MutationSpec
-from app.modules.ads.directory import locate
-from app.modules.ads.models import AdMaterialReference, AdObject
+from app.modules.ads.directory import locate, locate_material_use
+from app.modules.ads.models import AdObject
 from app.modules.reporting.query_models import FrozenSelectionRecord
 from app.modules.reporting.selection import get_frozen_selection
 
@@ -211,23 +211,6 @@ def _management_allowed(
     )
 
 
-def _material_row(session: Session, use: MaterialUseRef) -> AdMaterialReference | None:
-    statement = select(AdMaterialReference).where(
-        AdMaterialReference.tenant_id == use.ad_ref.tenant_id,
-        AdMaterialReference.advertiser_id == use.ad_ref.advertiser_id,
-        AdMaterialReference.ad_remote_id == use.ad_ref.remote_id,
-        AdMaterialReference.platform_material_id == use.platform_material_id,
-        AdMaterialReference.material_type == use.material_type,
-    )
-    if use.ad_material_id is None:
-        statement = statement.where(col(AdMaterialReference.ad_material_id).is_(None))
-    else:
-        statement = statement.where(
-            AdMaterialReference.ad_material_id == use.ad_material_id
-        )
-    return session.exec(statement.execution_options(populate_existing=True)).first()
-
-
 def _child_adgroups(
     session: Session,
     *,
@@ -332,7 +315,7 @@ def _current_value(
     field: str,
 ) -> Decimal | str | None:
     if use is not None and field in {"status", "material_status"}:
-        material = _material_row(session, use)
+        material = locate_material_use(session, use)
         return (
             material.operation_status if material is not None else row.operation_status
         )
@@ -881,7 +864,7 @@ def _expand(
         force_field: str | None = None,
     ) -> None:
         field = force_field or effective_field
-        material = _material_row(session, use) if use is not None else None
+        material = locate_material_use(session, use) if use is not None else None
         if use is not None and use.ad_material_id is not None and material is None:
             grouping_revision = grouping_revision_for(row)
             items.append(

@@ -5,10 +5,14 @@ from sqlmodel import Session, col, select
 
 from app.core.context import TenantContext
 from app.core.errors import DomainError
-from app.integrations.tiktok.contracts.ads import ENTITY_KINDS, EntityRef
+from app.integrations.tiktok.contracts.ads import (
+    ENTITY_KINDS,
+    EntityRef,
+    MaterialUseRef,
+)
 from app.modules.accounts.access import usable_grants
 from app.modules.accounts.models import BCAccountAccess
-from app.modules.ads.models import AdObject, CampaignNameProjection
+from app.modules.ads.models import AdMaterialReference, AdObject, CampaignNameProjection
 from app.modules.ads.naming import parse_campaign_name
 from app.modules.tenants.permissions import require_tenant
 
@@ -202,3 +206,23 @@ def append_campaign_name_projections(
     return tuple(
         by_key[ref.tenant_id, ref.advertiser_id, ref.remote_id] for ref, _ in campaigns
     )
+
+
+def locate_material_use(
+    session: Session, use: MaterialUseRef
+) -> AdMaterialReference | None:
+    """按完整业务身份读取素材，供预览和执行复用；表主键是独立 UUID。"""
+    statement = select(AdMaterialReference).where(
+        AdMaterialReference.tenant_id == use.ad_ref.tenant_id,
+        AdMaterialReference.advertiser_id == use.ad_ref.advertiser_id,
+        AdMaterialReference.ad_remote_id == use.ad_ref.remote_id,
+        AdMaterialReference.platform_material_id == use.platform_material_id,
+        AdMaterialReference.material_type == use.material_type,
+    )
+    if use.ad_material_id is None:
+        statement = statement.where(col(AdMaterialReference.ad_material_id).is_(None))
+    else:
+        statement = statement.where(
+            AdMaterialReference.ad_material_id == use.ad_material_id
+        )
+    return session.exec(statement.execution_options(populate_existing=True)).first()
