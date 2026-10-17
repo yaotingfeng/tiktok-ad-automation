@@ -2600,3 +2600,8 @@
 - 本地自动规则回归 255 passed，Ruff/ty 通过。计划见 `docs/superpowers/plans/2026-10-18-minimal-rule-notifications.md`，私有生产记录与候选卡片在 `.runtime/notification-minimal-20261018/`。发布验收待后补，不把候选重建视作已上线。
 
 - 生产上线完成：代码 `88d07d93` / Jenkins #26 / `20261017T161429-db4fc6`，北京时间 00:27:15 SUCCESS。完整备份及隔离 PG/Redis 恢复通过，清单 SHA256 `ef721385fb8c1a082b382cd84c4ea59709d329966fa2452c33d70698f7d03e24` 与证明相符。九角色同版 Ready、四开关实际加载均 true、HTTPS 200、发布锁释放。生产安装版本使用真实记录纯格式重建为暂停 16 字符、恢复待确认 25 字符，普通空报告均无发送资格；未向真实群发测试消息。详见 `docs/validation/2026-10-18-minimal-rule-notifications.md`，验收补录仅本地提交。
+
+## 2026-10-18：昨晚规则通知与关停执行只读核查
+
+- 核实 22:00—00:01 九条已发送运行由两条关停提交、四条普通空报告、三条待确认组成，非同一自动操作先后发两次。AUTO 当前只在管理任务提交后通知，不另发平台终态；CONFIRM 人工确认后可再通知。
+- 两个任务 SUCCEEDED、10 个广告内素材唯一、每个写入一次且 ACCEPTED；00:42 通过生产应用原 OFFICIAL_API 路由实时读取全部 DISABLE，无失败/未知/未发送或刷新待重试。23:00 九条是上级系列已关闭历史使用，属于已修复的父级范围问题；00:01 一条父级全启用并已关停。无任务重放或广告写操作。私有证据 `.runtime/notification-execution-audit-20261018/`；说明见 `docs/validation/2026-10-18-rule-execution-audit.md`。本轮仅补录本地文档，不触发发布。
