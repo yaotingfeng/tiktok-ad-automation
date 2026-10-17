@@ -42,7 +42,7 @@ from app.modules.ad_management.models import (
     ManagementTaskItem,
 )
 from app.modules.ad_management.schemas import ManagementItemPublic
-from app.modules.ads.directory import locate_material_use
+from app.modules.ads.directory import current_ad_materials, locate_material_use
 from app.modules.ads.directory_requests import request_directory
 from app.modules.ads.models import AdObject
 from app.modules.reporting.planner import plan_hot
@@ -260,6 +260,13 @@ def _same_frozen_value(
         if row is None:
             raise DomainError(
                 "management_observation_conflict", "冻结素材当前观测不存在"
+            )
+        if not any(
+            current.use_ref == use for current in current_ad_materials(session, ref)
+        ):
+            # 预览后平台可能换发新 ID；旧选择不得继续操作历史记录，需刷新后重新选择。
+            raise DomainError(
+                "management_material_replaced", "素材投放记录已更新，请刷新后重新选择"
             )
         current = row.operation_status
         if current is None:

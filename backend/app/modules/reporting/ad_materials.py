@@ -16,14 +16,13 @@ from uuid import uuid4
 from fastapi import HTTPException
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy import text
-from sqlmodel import Session, col, select
+from sqlmodel import Session, select
 
 from app.core.context import TenantContext
 from app.core.errors import DomainError
 from app.integrations.tiktok.contracts.ads import EntityRef, MaterialUseRef
 from app.modules.accounts.models import AdvertiserAccount
 from app.modules.ads import directory
-from app.modules.ads.models import AdMaterialReference
 from app.modules.reporting.dimension_query import (
     COMPLETE_COVERAGE_STATUSES,
     _aggregate,
@@ -84,29 +83,6 @@ def _locate_ad(
     return ref
 
 
-def _ad_uses(session: Session, ref: EntityRef) -> list[AdMaterialReference]:
-    """本广告的素材，每个视频一条：目录可能另有不带广告内素材 ID 的重复记录，
-    有带 ID 的记录时只保留它（只有它能单独启停）。"""
-    rows = session.exec(
-        select(AdMaterialReference)
-        .where(
-            AdMaterialReference.tenant_id == ref.tenant_id,
-            AdMaterialReference.advertiser_id == ref.advertiser_id,
-            AdMaterialReference.ad_remote_id == ref.remote_id,
-            col(AdMaterialReference.complete).is_(True),
-        )
-        .order_by(
-            col(AdMaterialReference.name), col(AdMaterialReference.ad_material_id)
-        )
-    ).all()
-    with_id = {row.platform_material_id for row in rows if row.ad_material_id}
-    return [
-        row
-        for row in rows
-        if row.ad_material_id or row.platform_material_id not in with_id
-    ]
-
-
 def list_ad_materials(
     session: Session,
     *,
@@ -122,7 +98,7 @@ def list_ad_materials(
     ref = _locate_ad(
         session, context=context, bc_id=bc_id, advertiser_id=advertiser_id, ad_id=ad_id
     )
-    uses = _ad_uses(session, ref)
+    uses = directory.current_ad_materials(session, ref)
     links = session.connection().execute(
         text("""
         SELECT l.platform_material_id AS vid, l.main_material_id,
@@ -175,7 +151,7 @@ def list_ad_materials(
     )
     items = []
     for use in uses:
-        mids = sorted(posts.get(use.platform_material_id, []))
+        mids = sorted(set(posts.get(use.platform_material_id, [])))
         vectors = tuple(
             fact_vector(item, unsupported=MATERIAL_UNSUPPORTED)
             for mid in mids
@@ -219,7 +195,9 @@ def freeze_ad_material_selection(
     ref = _locate_ad(
         session, context=context, bc_id=bc_id, advertiser_id=advertiser_id, ad_id=ad_id
     )
-    by_id = {use.ad_material_id: use for use in _ad_uses(session, ref)}
+    by_id = {
+        use.ad_material_id: use for use in directory.current_ad_materials(session, ref)
+    }
     if not set(ad_material_ids) <= set(by_id):
         raise HTTPException(404, detail="ad_material_not_found")
     uses = [by_id[item].use_ref for item in ad_material_ids]

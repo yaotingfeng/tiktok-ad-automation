@@ -1,5 +1,7 @@
 """只展开已界定的账户集合；每次读取重新校验当前成员与 BC 授权。"""
 
+from collections import defaultdict
+
 from sqlalchemy import tuple_
 from sqlmodel import Session, col, select
 
@@ -226,3 +228,37 @@ def locate_material_use(
             AdMaterialReference.ad_material_id == use.ad_material_id
         )
     return session.exec(statement.execution_options(populate_existing=True)).first()
+
+
+def current_ad_materials(session: Session, ref: EntityRef) -> list[AdMaterialReference]:
+    """每个视频一条：历史身份留库核算消耗，展示和操作使用最近完整观察的广告内身份。"""
+    rows = session.exec(
+        select(AdMaterialReference)
+        .where(
+            AdMaterialReference.tenant_id == ref.tenant_id,
+            AdMaterialReference.advertiser_id == ref.advertiser_id,
+            AdMaterialReference.ad_remote_id == ref.remote_id,
+            col(AdMaterialReference.complete).is_(True),
+        )
+        .execution_options(populate_existing=True)
+    ).all()
+    grouped: dict[tuple[str, str], list[AdMaterialReference]] = defaultdict(list)
+    for row in rows:
+        grouped[row.platform_material_id, row.material_type].append(row)
+    result = []
+    for uses in grouped.values():
+        # 同步通道还会返回无广告内 ID 的视频行，不能覆盖可单独启停的精确身份。
+        candidates = [use for use in uses if use.ad_material_id] or uses
+        version = max(use.published_version for use in candidates)
+        latest = [use for use in candidates if use.published_version == version]
+        current = latest[0]
+        if len(latest) > 1:
+            # 同次观察仍有多个身份时无法确定唯一操作对象，不能按 ID 大小猜测。
+            # 只改返回副本，不污染数据库中的历史状态；前端对无 ID 的行禁用选择。
+            current = current.model_copy(
+                update={"ad_material_id": None, "operation_status": None}
+            )
+        result.append(current)
+    return sorted(
+        result, key=lambda row: (row.name, row.platform_material_id, row.material_type)
+    )

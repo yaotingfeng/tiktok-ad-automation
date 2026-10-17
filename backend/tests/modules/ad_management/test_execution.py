@@ -282,7 +282,7 @@ def _committed_item(
                         material_type="VIDEO",
                         operation_status=status,
                         complete=True,
-                        published_version=1,
+                        published_version=2 if mid == "material-current-c5" else 1,
                     )
                     for mid, status in [
                         ("material-current-c5", original),
@@ -383,7 +383,7 @@ def test_unexpected_preflight_error_finishes_without_provider_send(
         assert session.get(ManagementTaskItem, item_id).execution_result == "NOT_SENT"
 
 
-@pytest.mark.parametrize("change", ["missing", "status", "scope"])
+@pytest.mark.parametrize("change", ["missing", "status", "scope", "replaced"])
 def test_material_toggle_blocks_changed_or_mismatched_usage(
     c5_env, redis_client, monkeypatch, change
 ):
@@ -402,6 +402,15 @@ def test_material_toggle_blocks_changed_or_mismatched_usage(
         elif change == "status":
             material.operation_status = "DISABLE"
             session.add(material)
+        elif change == "replaced":
+            newer = session.exec(
+                select(AdMaterialReference).where(
+                    AdMaterialReference.tenant_id == context.tenant_id,
+                    AdMaterialReference.ad_material_id == "material-old-c5",
+                )
+            ).one()
+            newer.published_version = 3
+            session.add(newer)
         else:
             item = session.get(ManagementTaskItem, item_id)
             use = dict(item.material_use)
