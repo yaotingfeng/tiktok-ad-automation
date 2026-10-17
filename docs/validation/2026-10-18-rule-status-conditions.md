@@ -22,4 +22,10 @@
 
 ## 生产验收
 
-待本轮公司 Jenkins 完整门禁、完整备份与隔离恢复、九角色版本/实际开关/HTTPS 验收后补录。规则变更须通过生产页面保存，并独立回读第四条只增加 ad_status=ENABLE，enabled=false 保持；前三条不变。
+- 生产代码 `efe1a97bcb42c54b28ad72c0d33e251fab817ed0`，公司 Jenkins #27，批次 `20261017T182409-c01c14`，北京时间 02:44:18 SUCCESS。后端门禁 25 秒，前端构建/工作台门禁 4 分 47 秒。
+- 完整备份与隔离 PostgreSQL/Redis 恢复、候选迁移及凭据可解密验证通过。清单 SHA256 `d92f45a84319c941a67c6a66b1d47d190a3decab0616ce795fe6428dde0d526b` 与恢复证明一致，覆盖 postgres.dir、项目、运行程序/前端、Beat、Redis、私有配置及源库指纹。当前完整备份位于 PVC `/backup/latest/`；私有证明在 `.runtime/rule-status-20261018/release27-backup-proof.json`。
+- 独立验收九 Deployment 各一副本 Ready、镜像完整 SHA 一致；API、Beat、七 Worker 实际加载四个开关均为 true，与发版前一致；HTTPS 200。证据为同私有目录 before-release.json / after-release.json。
+- 生产安装代码的 catalog 确认为四个中文状态项及开启/暂停值，无广告账户状态。对原 240 项冻结目标只读调用新父级保护：按当前目录阻止 238 项、父级全启用剩 2 项，未提交广告写入。来源保护不在本次实现范围，不能据剩余 2 项推断都应恢复。
+- 生产网页为第四条追加“广告状态 是 开启”，只读试运行判断 18 个暂停素材、命中 1 个；指标显示“广告状态 开启”。随后保存成功，列表摘要显示原累计 ROAS >0.9 且新状态条件，恢复复选框未选中。列表“最近运行命中240”为 01:01:53 的历史运行，本次试运行未执行且不会更新历史运行列。
+- 独立数据库只读回读并精确比较：第四条 version 3→4，definition 唯一变化为追加 `ad_status / EQ / ENABLE / range=null`；enabled=false、next_run_at=null、AUTO、账户/BC、原 ROAS 0.9、小时排期及通知均保持。前三条 definition、版本、enabled 和名称全部不变。证据为 `.runtime/rule-status-20261018/rule-change-verified.json` 及 rules-before/after.json；未重启恢复规则、未即时执行素材、未发飞书测试消息，也未回退旧 240 项。
+- 发布锁已释放。生产页面截图已在操作记录展示，截图文件导出被浏览器 URL 安全策略阻止，未绕过。交付页保留在 junbo / 麦斯国际运营522 自动规则列表。
