@@ -2629,3 +2629,7 @@
 
 - 本轮生产验收完成：`efe1a97b` / Jenkins #27 / `20261017T182409-c01c14`，02:44:18 SUCCESS。完整备份及隔离 PG/Redis 恢复通过（清单 `d92f45a84319c941a67c6a66b1d47d190a3decab0616ce795fe6428dde0d526b`）；九角色同版 Ready、实际四开关 true、HTTPS 200、发布锁释放。生产代码回放旧 240 项，当前父级筛掉 238 / 剩 2，仅只读验证。
 - 生产 UI 保存第四条广告状态 EQ ENABLE，version 3→4；试运行 18/1，不执行。独立回读精确确认只有新增条件，enabled=false / next_run_at=null / AUTO / ROAS 0.9 / 小时排期不变，前三条定义、版本、状态均不变；未回退旧素材或发群测试。说明见 `docs/validation/2026-10-18-rule-status-conditions.md`。本验收补录只做本地文档提交，不再触发部署。
+
+## 2026-10-18：按用户追加要求启用第四条恢复规则
+
+- 用户明确“要启用”，已在生产 junbo / 麦斯国际运营522 页面启用“04 素材回收恢复”。独立回读 enabled=true、AUTO、version=4、下次北京时间 03:00；定义仍是累计 ROAS>0.9 且广告状态 EQ ENABLE，素材恢复内置父级保护继续生效。前三条及第四条条件/排期/通知均不变，未手动发起即时执行。证据 `.runtime/rule-status-20261018/enable-verified.json`；此次仅业务配置，无代码部署。
