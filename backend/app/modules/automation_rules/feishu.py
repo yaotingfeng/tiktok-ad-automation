@@ -16,7 +16,7 @@ from app.core.errors import DomainError
 _HOOK = re.compile(
     r"^https://open\.(feishu\.cn|larksuite\.com)/open-apis/bot/v2/hook/[A-Za-z0-9-]+$"
 )
-MAX_CARD_HITS = 10
+MAX_CARD_HITS = 3
 MAX_CARD_BYTES = 20 * 1024
 
 
@@ -46,10 +46,25 @@ class CardHit:
     target_count: int
 
 
+def compact_text(value: str, limit: int) -> str:
+    """通知只展示可扫读的名称；完整名称及执行身份保留在工具明细中。"""
+    value = " ".join(value.split())
+    return value if len(value) <= limit else value[: limit - 1] + "…"
+
+
 def _hit_line(hit: CardHit) -> str:
-    metrics = ",".join(f"{name} {value}" for name, value in hit.metrics)
-    drama = f"【{hit.drama}】" if hit.drama else ""
-    return f"- {drama}{hit.label}:{metrics}(涉及 {hit.target_count} 个对象)"
+    metrics = " · ".join(
+        f"{compact_text(name, 24)} {compact_text(value, 20)}"
+        for name, value in hit.metrics
+    )
+    drama = (
+        f"【{compact_text(hit.drama, 20)}】"
+        if hit.drama and hit.drama not in hit.label
+        else ""
+    )
+    targets = f"（涉及 {hit.target_count} 个对象）" if hit.target_count != 1 else ""
+    line = f"- {drama}{compact_text(hit.label, 60)}{targets}"
+    return f"{line}\n  {metrics}" if metrics else line
 
 
 def build_card(
@@ -77,7 +92,8 @@ def build_card(
             "tag": "div",
             "text": {
                 "tag": "lark_md",
-                "content": f"**规则**:{rule_name}\n" + "\n".join(summary_lines),
+                # 标题已有规则名称，不在正文重复长条件名称。
+                "content": "\n".join(summary_lines) or compact_text(rule_name, 80),
             },
         },
     ]
@@ -104,7 +120,7 @@ def build_card(
             "config": {"wide_screen_mode": True},
             "header": {
                 "template": template,
-                "title": {"tag": "plain_text", "content": title},
+                "title": {"tag": "plain_text", "content": compact_text(title, 80)},
             },
             "elements": elements,
         },

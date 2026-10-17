@@ -15,12 +15,24 @@ def input_issue_lines(items: list[dict[str, str]]) -> list[str]:
         item["advertiser_id"] for item in items if item.get("reason") == "STALE_REPORT"
     }
     lines = [f"{len(stale)} 个账户数据未更新，已跳过"] if stale else []
-    for item in items:
-        reason = MATERIAL_REASONS.get(item.get("reason", ""))
-        if reason:
-            lines.append(
-                f"账户 {item['advertiser_id']}：{item.get('count', '部分')} 个广告内素材无法判断，{reason}"
-            )
+    # 同类问题按账户去重聚合，避免几十条账户 ID 淹没止损结果。
+    grouped: dict[str, list[dict[str, str]]] = {}
+    for item in merge_input_issues(items):
+        if item.get("reason") in MATERIAL_REASONS:
+            grouped.setdefault(item["reason"], []).append(item)
+    ordered = sorted(grouped, key=lambda reason: (-len(grouped[reason]), reason))
+    for reason in ordered[:2]:
+        group = grouped[reason]
+        count = (
+            str(sum(int(item["count"]) for item in group))
+            if all(item.get("count", "").isdigit() for item in group)
+            else "部分"
+        )
+        lines.append(
+            f"{count} 个广告内素材未参与判断（{len(group)} 个账户）：{MATERIAL_REASONS[reason]}"
+        )
+    if len(ordered) > 2:
+        lines.append(f"另有 {len(ordered) - 2} 类缺数问题，详见运行记录")
     return lines
 
 

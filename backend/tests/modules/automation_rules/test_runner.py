@@ -263,18 +263,24 @@ def test_execution_result_card(session, sync_seed):
         ],
     }
     card = build_run_card(rule, run, [], confirmation_id=None)
-    assert card["card"]["header"]["title"]["content"] == "【已执行】r"
+    assert card["card"]["header"]["title"]["content"] == "【部分提交】r"
     assert card["card"]["header"]["template"] == "red"
     text = _card_text(card)
     assert "提交 2 个对象" in text
     assert "频控跳过 1、规则冲突 1、无需变更 4" in text
-    assert "bc-y：route_unavailable" in text
-    assert "冲突：adgroup:acc-1:g1 规则「拉量」仍命中，两条规则条件重叠" in text
+    assert "失败的 BC：1 个；原因：route_unavailable" in text
+    assert "规则「拉量」仍命中，已阻止反向操作" in text
+    assert "adgroup:acc-1:g1" not in text
     run.execution_status, run.execution_summary["failed_bcs"] = "SUBMITTED", []
     run.execution_summary["failed"] = 0
     card = build_run_card(rule, run, [], confirmation_id=None)
+    assert card["card"]["header"]["title"]["content"] == "【已提交】r"
     assert card["card"]["header"]["template"] == "green"
     assert _button(card)["url"].endswith(f"tab=runs&run={run.id}")
+    run.execution_status = "FAILED"
+    card = build_run_card(rule, run, [], confirmation_id=None)
+    assert card["card"]["header"]["title"]["content"] == "【执行失败】r"
+    assert card["card"]["header"]["template"] == "red"
 
 
 def test_execution_result_notification_respects_rule_setting(session, sync_seed):

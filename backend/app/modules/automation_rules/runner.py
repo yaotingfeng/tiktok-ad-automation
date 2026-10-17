@@ -46,7 +46,6 @@ RANGE_LABELS = {
     "PAST_7_DAYS": "近 7 天",
     "LIFETIME": "投放以来",
 }
-MAX_CONFLICT_LINES = 5
 EXECUTION_ERRORS = {
     "rule_owner_forbidden": "执行人已无执行权限，未执行",
     "automation_disabled": "自动规则部署开关已关闭，未执行",
@@ -274,16 +273,24 @@ def notify_execution(
 
 def _metric_name(key: str) -> str:
     metric, _, range_type = key.partition(":")
-    return f"{RANGE_LABELS.get(range_type, '')}{metric_label(metric)}"
+    period = "累计" if range_type == "LIFETIME" else RANGE_LABELS.get(range_type, "")
+    name = "ROAS" if metric == "roas_total" else metric_label(metric)
+    return f"{period}{name}"
 
 
 def _execution_lines(summary: dict[str, Any]) -> list[str]:
-    lines = [
-        f"提交 {summary.get('submitted', 0)} 个对象；"
-        f"频控跳过 {summary.get('skipped_frequency', 0)}、"
-        f"规则冲突 {summary.get('conflicts', 0)}、"
-        f"无需变更 {summary.get('no_change', 0)}"
+    lines = [f"提交 {summary.get('submitted', 0)} 个对象（处理结果以任务明细为准）"]
+    skipped = [
+        f"{label} {summary[key]}"
+        for key, label in (
+            ("skipped_frequency", "频控跳过"),
+            ("conflicts", "规则冲突"),
+            ("no_change", "无需变更"),
+        )
+        if summary.get(key)
     ]
+    if skipped:
+        lines.append("、".join(skipped))
     if summary.get("unsupported"):
         # 例如普通广告的素材没有广告内素材 ID，平台不支持单独启停。
         lines.append(f"不支持操作 {summary['unsupported']} 个对象（如普通广告的素材）")
@@ -293,16 +300,17 @@ def _execution_lines(summary: dict[str, Any]) -> list[str]:
         lines.append(EXECUTION_ERRORS.get(summary["error"], "执行失败"))
     failed_bcs = summary.get("failed_bcs") or []
     if failed_bcs:
-        reasons = "、".join(f"{bc['bc_id']}：{bc['reason']}" for bc in failed_bcs)
-        lines.append(f"失败的 BC：{reasons}")
-    details = summary.get("conflict_details") or []
-    for detail in details[:MAX_CONFLICT_LINES]:
+        reasons = sorted({str(bc["reason"]) for bc in failed_bcs})
         lines.append(
-            f"冲突：{detail['target_key']} 规则「{detail['rule_name']}」仍命中，"
-            "两条规则条件重叠"
+            f"失败的 BC：{len({bc['bc_id'] for bc in failed_bcs})} 个；"
+            f"原因：{feishu.compact_text('、'.join(reasons), 80)}"
         )
-    if len(details) > MAX_CONFLICT_LINES:
-        lines.append(f"其余 {len(details) - MAX_CONFLICT_LINES} 个冲突请在 TK-ADA 查看")
+    details = summary.get("conflict_details") or []
+    if details:
+        lines.append(
+            f"冲突：规则「{feishu.compact_text(details[0]['rule_name'], 30)}」仍命中，"
+            "已阻止反向操作；完整冲突见明细"
+        )
     return lines
 
 
@@ -315,9 +323,6 @@ def build_run_card(
 ) -> dict[str, Any]:
     """卡片按运行状态分三类:待确认、执行结果、预警/运行报告。"""
     summary = [f"判断对象 {run.checked_count} 个，命中 {run.hit_count} 个"]
-    summary.extend(input_issue_lines(run.skipped_accounts))
-    if run.skipped_count:
-        summary.append(f"{run.skipped_count} 个对象因命名或素材数据不完整，未参与判断")
     base = f"{settings.FRONTEND_HOST.rstrip('/')}/tenants/{rule.tenant_id}"
     link = f"{base}/automation-rules?tab=runs&run={run.id}"
     button = "查看明细"
@@ -338,12 +343,20 @@ def build_run_card(
         summary.extend(_execution_lines(run.execution_summary))
     elif status in ("SUBMITTED", "PARTIAL", "FAILED"):
         failed = status == "FAILED" or bool(run.execution_summary.get("failed_bcs"))
-        title, template = f"【已执行】{rule.name}", "red" if failed else "green"
+        kind = {"SUBMITTED": "已提交", "PARTIAL": "部分提交", "FAILED": "执行失败"}[
+            status
+        ]
+        title = f"【{kind}】{rule.name}"
+        template = "red" if failed else "orange" if status == "PARTIAL" else "green"
         summary.extend(_execution_lines(run.execution_summary))
     else:
         kind = "预警" if run.hit_count else "运行报告"
         title = f"【{kind}】{rule.name}"
         template = "orange" if run.hit_count else "blue"
+    # 先呈现命中和处理结果，再放缺数摘要；账户/素材明细留在运行记录。
+    summary.extend(input_issue_lines(run.skipped_accounts))
+    if run.skipped_count:
+        summary.append(f"未参与判断共 {run.skipped_count} 个对象，缺数明细见运行记录")
     card_hits = [
         feishu.CardHit(
             label=hit.subject_label,
