@@ -106,7 +106,8 @@ def test_deliver_marks_sent_and_failed(session, sync_seed):
         lambda r: sent.append(r) or httpx.Response(200, json={"code": 0})
     )
     assert deliver_notification(session, run_id=run.id, transport=ok) == "SENT"
-    assert "组一" in sent[0].content.decode()
+    assert "命中 1 项" in sent[0].content.decode()
+    assert "组一" not in sent[0].content.decode()
     run.notify_status = "PENDING"
     bad = httpx.MockTransport(
         lambda r: httpx.Response(200, json={"code": 9499, "msg": "bad"})
@@ -229,11 +230,8 @@ def test_confirmation_card_links_to_batch(session, sync_seed):
     rule = make_rule(session, sync_seed, mode="CONFIRM")
     run = execute_run(session, rule=rule, slot_at=NOW, now=NOW)
     batch = session.exec(select(AutomationConfirmation)).one()
-    hits = session.exec(
-        select(AutomationRuleHit).where(AutomationRuleHit.run_id == run.id)
-    ).all()
-    card = build_run_card(rule, run, list(hits), confirmation_id=batch.id)
-    assert card["card"]["header"]["title"]["content"] == "【待确认】r"
+    card = build_run_card(rule, run, confirmation_id=batch.id)
+    assert card["card"]["header"]["title"]["content"] == "r"
     assert card["card"]["header"]["template"] == "yellow"
     button = _button(card)
     assert button["text"]["content"] == "去确认"
@@ -262,25 +260,28 @@ def test_execution_result_card(session, sync_seed):
             {"target_key": "adgroup:acc-1:g1", "rule_name": "拉量", "action": "ENABLE"}
         ],
     }
-    card = build_run_card(rule, run, [], confirmation_id=None)
-    assert card["card"]["header"]["title"]["content"] == "【部分提交】r"
+    card = build_run_card(rule, run, confirmation_id=None)
+    assert card["card"]["header"]["title"]["content"] == "r"
     assert card["card"]["header"]["template"] == "red"
     text = _card_text(card)
-    assert "提交 2 个对象" in text
-    assert "频控跳过 1、规则冲突 1、无需变更 4" in text
-    assert "失败的 BC：1 个；原因：route_unavailable" in text
-    assert "规则「拉量」仍命中，已阻止反向操作" in text
+    assert "失败 1" in text and "暂停已提交 2" in text
+    assert "冲突 1" in text and "跳过 5" in text
+    assert len(text) <= 48
+    assert "route_unavailable" not in text
     assert "adgroup:acc-1:g1" not in text
     run.execution_status, run.execution_summary["failed_bcs"] = "SUBMITTED", []
     run.execution_summary["failed"] = 0
-    card = build_run_card(rule, run, [], confirmation_id=None)
-    assert card["card"]["header"]["title"]["content"] == "【已提交】r"
+    card = build_run_card(rule, run, confirmation_id=None)
+    assert card["card"]["header"]["title"]["content"] == "r"
     assert card["card"]["header"]["template"] == "green"
     assert _button(card)["url"].endswith(f"tab=runs&run={run.id}")
     run.execution_status = "FAILED"
-    card = build_run_card(rule, run, [], confirmation_id=None)
-    assert card["card"]["header"]["title"]["content"] == "【执行失败】r"
+    card = build_run_card(rule, run, confirmation_id=None)
+    assert card["card"]["header"]["title"]["content"] == "r"
     assert card["card"]["header"]["template"] == "red"
+    run.status, run.execution_status = "FAILED", "NOT_REQUIRED"
+    card = build_run_card(rule, run)
+    assert "检查失败" in _card_text(card) and "无命中" not in _card_text(card)
 
 
 def test_execution_result_notification_respects_rule_setting(session, sync_seed):
@@ -319,23 +320,28 @@ def test_skipped_execution_card(session, sync_seed):
             {"target_key": "material:a:v1", "reason": "material_status_unsupported"}
         ],
     }
-    card = build_run_card(rule, run, [], confirmation_id=None)
-    assert "不支持操作 2 个对象" in _card_text(card)
-    assert card["card"]["header"]["title"]["content"] == "【未执行】r"
+    card = build_run_card(rule, run, confirmation_id=None)
+    assert "跳过 3" in _card_text(card)
+    assert card["card"]["header"]["title"]["content"] == "r"
     assert card["card"]["header"]["template"] == "grey"
-    assert "频控跳过 1" in _card_text(card)
+    assert len(_card_text(card)) <= 48
 
 
-def test_execution_error_lines():
-    from app.modules.automation_rules.runner import _execution_lines
+def test_execution_errors_remain_visible_in_short_notifications():
+    from app.modules.automation_rules.runner import execution_brief
 
-    assert "部署开关已关闭" in "".join(
-        _execution_lines({"error": "automation_disabled"})
-    )
-    assert "执行异常" in "".join(_execution_lines({"error": "execution_error"}))
-    assert "已无执行权限" in "".join(
-        _execution_lines({"error": "rule_owner_forbidden"})
-    )
+    assert "规则已停用" in execution_brief({"error": "automation_disabled"}, "暂停")
+    assert "执行异常" in execution_brief({"error": "execution_error"}, "暂停")
+    assert "权限失效" in execution_brief({"error": "rule_owner_forbidden"}, "暂停")
+
+
+def test_expired_confirmation_does_not_send_an_outdated_prompt(session, sync_seed):
+    _seed(session, sync_seed)
+    rule = make_rule(session, sync_seed, mode="CONFIRM")
+    run = execute_run(session, rule=rule, slot_at=NOW, now=NOW)
+    assert run.notify_status == "PENDING"
+    run.execution_status = "EXPIRED"
+    assert deliver_notification(session, run_id=run.id) == "NOT_REQUIRED"
 
 
 def test_repeated_stale_accounts_without_hits_not_resent(session, sync_seed):

@@ -150,10 +150,11 @@ def test_deliver_summary_merges_runs(session, sync_seed):
         transport=httpx.MockTransport(handler),
     )
     assert status == "SENT" and len(sent) == 1
-    assert "【汇总】r" in sent[0] and "运行 2 次" in sent[0]
+    assert "汇总 · r" in sent[0] and "运行 2 次" in sent[0]
     assert first.notify_status == "SENT" and second.notify_status == "SENT"
-    # 同一对象在多次运行中命中只列一次。
-    assert sent[0].count("组一") == 1
+    # 素材/广告名称和指标不在通知里展开，汇总只保留结果计数。
+    assert "组一" not in sent[0]
+    assert "命中合计 2 次" in sent[0]
     assert (
         deliver_summary(session, rule_id=rule.id, slot=later + timedelta(hours=1))
         == "NOT_REQUIRED"
@@ -169,6 +170,32 @@ def test_summary_runs_after_slot_wait_for_next(session, sync_seed):
         == "NOT_REQUIRED"
     )
     assert session.get(AutomationRuleRun, run.id).notify_status == "SUMMARY"
+
+
+def test_old_queued_empty_summary_is_not_sent(session, sync_seed):
+    _seed(session, sync_seed)
+    rule = _summary_rule(
+        session,
+        sync_seed,
+        conditions=[
+            {"metric": "spend", "range": "TODAY", "operator": "GT", "values": ["999"]}
+        ],
+    )
+    run = execute_run(session, rule=rule, slot_at=NOW, now=NOW)
+    run.notify_status = "SUMMARY"  # 模拟升级前已经排队的普通空报告。
+    sent = []
+    assert (
+        deliver_summary(
+            session,
+            rule_id=rule.id,
+            slot=NOW,
+            transport=httpx.MockTransport(
+                lambda r: sent.append(r) or httpx.Response(200, json={"code": 0})
+            ),
+        )
+        == "NOT_REQUIRED"
+    )
+    assert sent == [] and run.notify_status == "NOT_REQUIRED"
 
 
 def test_scan_respects_flag_and_disabled_rules(session, sync_seed, monkeypatch):

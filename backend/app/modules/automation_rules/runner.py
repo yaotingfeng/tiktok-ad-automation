@@ -22,7 +22,7 @@ from app.modules.automation_rules.confirmations import (
     expire_open,
     open_batch,
 )
-from app.modules.automation_rules.data_issues import input_issue_lines
+from app.modules.automation_rules.data_issues import actionable_input_issues
 from app.modules.automation_rules.evaluate import Evaluation, evaluate
 from app.modules.automation_rules.inputs import load_inputs
 from app.modules.automation_rules.models import (
@@ -32,24 +32,15 @@ from app.modules.automation_rules.models import (
     AutomationRuleRun,
 )
 from app.modules.automation_rules.schemas import RuleDefinition
-from app.modules.automation_rules.service import metric_label
 from app.modules.automation_rules.settings_service import load_feishu
 from app.modules.tenants.permissions import require_tenant
 
 logger = logging.getLogger(__name__)
 
-RANGE_LABELS = {
-    "TODAY": "今天",
-    "YESTERDAY": "昨天",
-    "PAST_3_DAYS": "近 3 天",
-    "PAST_5_DAYS": "近 5 天",
-    "PAST_7_DAYS": "近 7 天",
-    "LIFETIME": "投放以来",
-}
 EXECUTION_ERRORS = {
-    "rule_owner_forbidden": "执行人已无执行权限，未执行",
-    "automation_disabled": "自动规则部署开关已关闭，未执行",
-    "execution_error": "执行异常，未完成，请在 TK-ADA 查看",
+    "rule_owner_forbidden": "权限失效",
+    "automation_disabled": "规则已停用",
+    "execution_error": "执行异常",
 }
 SEND_TASK = "automation.send_feishu"
 # 投递方在入队前就要能解析队列，注册放在投递所在模块。
@@ -185,21 +176,16 @@ def execute_run(
         # 确认后执行：先生成待确认批次，由人确认。
         open_batch(session, run=run, rule=rule, now=now)
     notify = definition.notification
-    stale_only = (
-        not result.hits
-        and not notify.notify_without_hits
-        and bool(inputs.skipped_accounts)
-    )
+    issues = actionable_input_issues(inputs.skipped_accounts)
+    stale_only = not result.hits and not notify.notify_without_hits and bool(issues)
     if (
         notify.enabled
         and stale_only
-        and _same_stale_as_last_sent(session, rule.id, run.id, inputs.skipped_accounts)
+        and _same_issues_as_last_sent(session, rule.id, run.id, issues)
     ):
-        # 只有过期账户、且与上次已发送的过期账户相同：不再重复发卡片。
+        # 真正的数据异常未变化时不重复提醒；普通待报表已在上方排除。
         pass
-    elif notify.enabled and (
-        result.hits or notify.notify_without_hits or inputs.skipped_accounts
-    ):
+    elif notify.enabled and (result.hits or notify.notify_without_hits or issues):
         # 汇总模式下预警等到固定时刻合并发送；待确认批次在下次运行即失效，仍立即发送。
         if (
             notify.timing == "SUMMARY"
@@ -212,7 +198,7 @@ def execute_run(
     return run
 
 
-def _same_stale_as_last_sent(
+def _same_issues_as_last_sent(
     session: Session,
     rule_id: UUID,
     run_id: UUID,
@@ -235,7 +221,7 @@ def _same_stale_as_last_sent(
     def signature(items: list[dict[str, str]]) -> set[tuple[str, str, str]]:
         return {
             (item["advertiser_id"], item.get("reason", ""), item.get("count", ""))
-            for item in items
+            for item in actionable_input_issues(items)
         }
 
     return signature(skipped) == signature(last.skipped_accounts)
@@ -271,110 +257,106 @@ def notify_execution(
     session.flush()
 
 
-def _metric_name(key: str) -> str:
-    metric, _, range_type = key.partition(":")
-    period = "累计" if range_type == "LIFETIME" else RANGE_LABELS.get(range_type, "")
-    name = "ROAS" if metric == "roas_total" else metric_label(metric)
-    return f"{period}{name}"
+def failed_summary(summary: dict[str, Any]) -> bool:
+    return any(summary.get(k) for k in ("failed", "failed_bcs", "error"))
 
 
-def _execution_lines(summary: dict[str, Any]) -> list[str]:
-    lines = [f"提交 {summary.get('submitted', 0)} 个对象（处理结果以任务明细为准）"]
-    skipped = [
-        f"{label} {summary[key]}"
-        for key, label in (
-            ("skipped_frequency", "频控跳过"),
-            ("conflicts", "规则冲突"),
-            ("no_change", "无需变更"),
-        )
-        if summary.get(key)
-    ]
-    if skipped:
-        lines.append("、".join(skipped))
-    if summary.get("unsupported"):
-        # 例如普通广告的素材没有广告内素材 ID，平台不支持单独启停。
-        lines.append(f"不支持操作 {summary['unsupported']} 个对象（如普通广告的素材）")
+def execution_brief(summary: dict[str, Any], action: str) -> str:
+    """失败优先，随后展示提交及跳过数量；原始原因始终留在执行记录。"""
+    parts = []
     if summary.get("failed"):
-        lines.append(f"失败 {summary['failed']} 个对象")
+        parts.append(f"失败 {summary['failed']}")
+    elif summary.get("failed_bcs"):
+        parts.append("通道失败")
     if summary.get("error"):
-        lines.append(EXECUTION_ERRORS.get(summary["error"], "执行失败"))
-    failed_bcs = summary.get("failed_bcs") or []
-    if failed_bcs:
-        reasons = sorted({str(bc["reason"]) for bc in failed_bcs})
-        lines.append(
-            f"失败的 BC：{len({bc['bc_id'] for bc in failed_bcs})} 个；"
-            f"原因：{feishu.compact_text('、'.join(reasons), 80)}"
-        )
-    details = summary.get("conflict_details") or []
-    if details:
-        lines.append(
-            f"冲突：规则「{feishu.compact_text(details[0]['rule_name'], 30)}」仍命中，"
-            "已阻止反向操作；完整冲突见明细"
-        )
-    return lines
+        parts.append(EXECUTION_ERRORS.get(summary["error"], "执行异常"))
+    if summary.get("submitted"):
+        parts.append(f"{action}已提交 {summary['submitted']}")
+    if summary.get("conflicts"):
+        parts.append(f"冲突 {summary['conflicts']}")
+    skipped = sum(
+        int(summary.get(k, 0) or 0)
+        for k in ("skipped_frequency", "unsupported", "no_change")
+    )
+    if skipped:
+        parts.append(f"跳过 {skipped}")
+    return "；".join(parts) or "未提交操作"
+
+
+def action_caption(definition: RuleDefinition) -> str:
+    return {"PAUSE": "暂停", "ENABLE": "启用", "BUDGET": "调预算", "ROAS": "调ROAS"}[
+        definition.action.type
+    ]
+
+
+def notification_worthy(run: AutomationRuleRun) -> bool:
+    """投递时再把关，升级前排队的普通无命中报告也不继续打扰用户。"""
+    if run.execution_status in ("EXPIRED", "DISMISSED"):
+        return False
+    notify = RuleDefinition.model_validate(run.definition).notification
+    return bool(
+        run.hit_count
+        or run.status == "FAILED"
+        or notify.notify_without_hits
+        or actionable_input_issues(run.skipped_accounts)
+    )
 
 
 def build_run_card(
     rule: AutomationRule,
     run: AutomationRuleRun,
-    hits: list[AutomationRuleHit],
     *,
     confirmation_id: UUID | None = None,
 ) -> dict[str, Any]:
-    """卡片按运行状态分三类:待确认、执行结果、预警/运行报告。"""
-    summary = [f"判断对象 {run.checked_count} 个，命中 {run.hit_count} 个"]
+    definition = RuleDefinition.model_validate(run.definition)
+    caption = feishu.rule_caption(rule.name)
+    action = action_caption(definition)
     base = f"{settings.FRONTEND_HOST.rstrip('/')}/tenants/{rule.tenant_id}"
     link = f"{base}/automation-rules?tab=runs&run={run.id}"
-    button = "查看明细"
+    button = "查看详情"
     status = run.execution_status
-    if status == "AWAITING_CONFIRMATION":
-        title, template = f"【待确认】{rule.name}", "yellow"
-        # 下一轮运行开始时未处理的批次会失效。
-        summary.append("请在规则下次运行前确认，过期后需等待新的判断结果")
-        if confirmation_id is not None:
-            link = (
-                f"{base}/automation-rules?tab=confirmations"
-                f"&confirmation={confirmation_id}"
-            )
-            button = "去确认"
-    elif status == "SKIPPED":
-        # 命中对象全部被频控或反向冲突等跳过，没有提交任何变更。
-        title, template = f"【未执行】{rule.name}", "grey"
-        summary.extend(_execution_lines(run.execution_summary))
-    elif status in ("SUBMITTED", "PARTIAL", "FAILED"):
-        failed = status == "FAILED" or bool(run.execution_summary.get("failed_bcs"))
-        kind = {"SUBMITTED": "已提交", "PARTIAL": "部分提交", "FAILED": "执行失败"}[
-            status
-        ]
-        title = f"【{kind}】{rule.name}"
-        template = "red" if failed else "orange" if status == "PARTIAL" else "green"
-        summary.extend(_execution_lines(run.execution_summary))
-    else:
-        kind = "预警" if run.hit_count else "运行报告"
-        title = f"【{kind}】{rule.name}"
-        template = "orange" if run.hit_count else "blue"
-    # 先呈现命中和处理结果，再放缺数摘要；账户/素材明细留在运行记录。
-    summary.extend(input_issue_lines(run.skipped_accounts))
-    if run.skipped_count:
-        summary.append(f"未参与判断共 {run.skipped_count} 个对象，缺数明细见运行记录")
-    card_hits = [
-        feishu.CardHit(
-            label=hit.subject_label,
-            drama=hit.drama_name if hit.drama_name != hit.subject_label else None,
-            metrics=[(_metric_name(k), v or "—") for k, v in hit.metrics.items()],
-            target_count=hit.target_count,
+    if run.status == "FAILED":
+        title, template, content = (
+            caption,
+            "red",
+            "规则检查失败，请查看详情",
         )
-        for hit in hits[: feishu.MAX_CARD_HITS]
-    ]
+    elif status == "AWAITING_CONFIRMATION":
+        title, template = caption, "yellow"
+        content = f"{run.hit_count} 项待{action}；下次运行前确认"
+        if confirmation_id is not None:
+            link = f"{base}/automation-rules?tab=confirmations&confirmation={confirmation_id}"
+            button = "去确认"
+    elif status in ("SUBMITTED", "PARTIAL", "FAILED", "SKIPPED"):
+        failed = status == "FAILED" or failed_summary(run.execution_summary)
+        title = caption
+        template = (
+            "red"
+            if failed
+            else {"SUBMITTED": "green", "PARTIAL": "orange", "SKIPPED": "grey"}.get(
+                status, "red"
+            )
+        )
+        content = execution_brief(run.execution_summary, action)
+        if status == "FAILED" and not failed_summary(run.execution_summary):
+            content = "执行失败；" + content
+    elif run.hit_count:
+        title, template, content = (
+            caption,
+            "orange",
+            f"命中 {run.hit_count} 项",
+        )
+    elif actionable_input_issues(run.skipped_accounts):
+        title, template = caption, "orange"
+        accounts = {
+            item["advertiser_id"]
+            for item in actionable_input_issues(run.skipped_accounts)
+        }
+        content = f"{len(accounts)} 个账户存在数据异常"
+    else:
+        title, template, content = caption, "blue", "本轮无命中"
     return feishu.build_card(
-        title=title,
-        rule_name=rule.name,
-        summary_lines=summary,
-        hits=card_hits,
-        total_hits=run.hit_count,
-        link=link,
-        template=template,
-        button=button,
+        title=title, text=content, link=link, template=template, button=button
     )
 
 
@@ -387,20 +369,17 @@ def deliver_notification(
     run = session.get(AutomationRuleRun, run_id)
     if run is None or run.notify_status != "PENDING":
         return run.notify_status if run else "NOT_REQUIRED"
+    if not notification_worthy(run):
+        run.notify_status = "NOT_REQUIRED"
+        run.notify_error = None
+        session.flush()
+        return run.notify_status
     rule = session.get(AutomationRule, run.rule_id)
     target = load_feishu(session, run.tenant_id)
     if rule is None or target is None:
         run.notify_status, run.notify_error = "FAILED", "未配置或未启用飞书通知"
         session.flush()
         return run.notify_status
-    hits = list(
-        session.exec(
-            select(AutomationRuleHit)
-            .where(AutomationRuleHit.run_id == run.id)
-            .order_by(col(AutomationRuleHit.sequence))
-            .limit(feishu.MAX_CARD_HITS)
-        ).all()
-    )
     try:
         confirmation_id = session.exec(
             select(AutomationConfirmation.id).where(
@@ -408,7 +387,7 @@ def deliver_notification(
                 AutomationConfirmation.status == "PENDING",
             )
         ).first()
-        card = build_run_card(rule, run, hits, confirmation_id=confirmation_id)
+        card = build_run_card(rule, run, confirmation_id=confirmation_id)
         feishu.send(target[0], target[1], card, transport=transport)
     except DomainError as exc:
         run.notify_status, run.notify_error = "FAILED", str(exc.message)[:500]

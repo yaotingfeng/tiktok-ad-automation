@@ -3,10 +3,8 @@
 import base64
 import hashlib
 import hmac
-import json
 import re
 import time
-from dataclasses import dataclass
 from typing import Any
 
 import httpx
@@ -16,8 +14,6 @@ from app.core.errors import DomainError
 _HOOK = re.compile(
     r"^https://open\.(feishu\.cn|larksuite\.com)/open-apis/bot/v2/hook/[A-Za-z0-9-]+$"
 )
-MAX_CARD_HITS = 3
-MAX_CARD_BYTES = 20 * 1024
 
 
 def validate_webhook(url: str) -> str:
@@ -38,100 +34,52 @@ def sign(secret: str, timestamp: int) -> str:
     return base64.b64encode(hmac.new(key, b"", hashlib.sha256).digest()).decode()
 
 
-@dataclass(frozen=True)
-class CardHit:
-    label: str
-    drama: str | None
-    metrics: list[tuple[str, str]]
-    target_count: int
-
-
 def compact_text(value: str, limit: int) -> str:
-    """通知只展示可扫读的名称；完整名称及执行身份保留在工具明细中。"""
     value = " ".join(value.split())
     return value if len(value) <= limit else value[: limit - 1] + "…"
 
 
-def _hit_line(hit: CardHit) -> str:
-    metrics = " · ".join(
-        f"{compact_text(name, 24)} {compact_text(value, 20)}"
-        for name, value in hit.metrics
-    )
-    drama = (
-        f"【{compact_text(hit.drama, 20)}】"
-        if hit.drama and hit.drama not in hit.label
-        else ""
-    )
-    targets = f"（涉及 {hit.target_count} 个对象）" if hit.target_count != 1 else ""
-    line = f"- {drama}{compact_text(hit.label, 60)}{targets}"
-    return f"{line}\n  {metrics}" if metrics else line
+def rule_caption(name: str) -> str:
+    # 条件、阈值和对象明细放工具里；通知标题只保留可识别的规则名。
+    return compact_text(name.split("｜", 1)[0].split("|", 1)[0], 18)
 
 
 def build_card(
     *,
     title: str,
-    rule_name: str,
-    summary_lines: list[str],
-    hits: list[CardHit],
-    total_hits: int,
+    text: str,
     link: str,
     template: str = "orange",
-    button: str = "查看明细",
+    button: str = "查看详情",
 ) -> dict[str, Any]:
-    shown = [_hit_line(hit) for hit in hits[:MAX_CARD_HITS]]
-
-    def hit_lines() -> list[str]:
-        # 「其余 N 个」始终按实际展示的条数计算。
-        if total_hits > len(shown):
-            return [*shown, f"其余 {total_hits - len(shown)} 个请在 TK-ADA 查看"]
-        return list(shown)
-
-    lines = hit_lines()
-    elements: list[dict[str, Any]] = [
-        {
-            "tag": "div",
-            "text": {
-                "tag": "lark_md",
-                # 标题已有规则名称，不在正文重复长条件名称。
-                "content": "\n".join(summary_lines) or compact_text(rule_name, 80),
-            },
-        },
-    ]
-    if lines:
-        elements.append(
-            {"tag": "div", "text": {"tag": "lark_md", "content": "\n".join(lines)}}
-        )
-    elements.append(
-        {
-            "tag": "action",
-            "actions": [
-                {
-                    "tag": "button",
-                    "type": "primary",
-                    "url": link,
-                    "text": {"tag": "plain_text", "content": button},
-                }
-            ],
-        }
-    )
-    card = {
+    """通知固定为短标题、一句结果和按钮，不在消息里展开报表。"""
+    return {
         "msg_type": "interactive",
         "card": {
-            "config": {"wide_screen_mode": True},
+            "config": {"wide_screen_mode": False},
             "header": {
                 "template": template,
-                "title": {"tag": "plain_text", "content": compact_text(title, 80)},
+                "title": {"tag": "plain_text", "content": compact_text(title, 24)},
             },
-            "elements": elements,
+            "elements": [
+                {
+                    "tag": "div",
+                    "text": {"tag": "plain_text", "content": compact_text(text, 48)},
+                },
+                {
+                    "tag": "action",
+                    "actions": [
+                        {
+                            "tag": "button",
+                            "type": "primary",
+                            "url": link,
+                            "text": {"tag": "plain_text", "content": button},
+                        }
+                    ],
+                },
+            ],
         },
     }
-    # 极端长名称下逐条减少明细,保证不超过飞书卡片体积上限。
-    while (
-        len(json.dumps(card, ensure_ascii=False).encode()) >= MAX_CARD_BYTES and shown
-    ):
-        shown.pop()
-        elements[1]["text"]["content"] = "\n".join(hit_lines())
-    return card
 
 
 def send(

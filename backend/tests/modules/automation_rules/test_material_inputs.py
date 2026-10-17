@@ -370,7 +370,10 @@ def test_partial_null_revenue_is_not_hidden_by_other_days(session, sync_seed):
     )
 
 
-def test_run_persists_partial_material_issue_and_card_explains_it(session, sync_seed):
+@pytest.mark.parametrize("notify_empty", [False, True])
+def test_waiting_material_is_recorded_but_only_notifies_when_opted_in(
+    session, sync_seed, notify_empty
+):
     from app.modules.automation_rules.models import AutomationRule
     from app.modules.automation_rules.runner import build_run_card, execute_run
 
@@ -381,7 +384,9 @@ def test_run_persists_partial_material_issue_and_card_explains_it(session, sync_
         name="广告内素材缺数",
         created_by=sync_seed.actor_id,
         updated_by=sync_seed.actor_id,
-        definition=rule().model_dump(mode="json"),
+        definition=rule(
+            notification={"enabled": True, "notify_without_hits": notify_empty}
+        ).model_dump(mode="json"),
     )
     session.add(current)
     session.flush()
@@ -390,9 +395,17 @@ def test_run_persists_partial_material_issue_and_card_explains_it(session, sync_
     assert run.skipped_accounts[0]["reason"] == "MATERIAL_LINK_MISSING"
     import json
 
-    card = json.dumps(build_run_card(current, run, []), ensure_ascii=False)
-    assert "素材与报表尚未关联" in card
+    card = json.dumps(build_run_card(current, run), ensure_ascii=False)
+    assert run.notify_status == ("PENDING" if notify_empty else "NOT_REQUIRED")
+    assert "素材与报表尚未关联" not in card
+    assert "本轮无命中" in card
     assert "账户数据未更新" not in card
+    if not notify_empty:
+        from app.modules.automation_rules.runner import deliver_notification
+
+        # 旧版已入队的普通待数据报告，也必须在发送前被拦住。
+        run.notify_status = "PENDING"
+        assert deliver_notification(session, run_id=run.id) == "NOT_REQUIRED"
 
 
 def test_one_missing_material_does_not_make_whole_account_unknown(session, sync_seed):
@@ -450,13 +463,11 @@ def test_summary_card_reports_material_issues_without_stale_account_claim(
         )
         for n in (0, 1)
     ]
-    card = json.dumps(
-        build_summary_card(current, runs, [], "Asia/Shanghai"), ensure_ascii=False
-    )
-    assert "素材与报表尚未关联" in card
-    assert "账户数据未更新" not in card
-    assert "2 个广告内素材" in card
-    assert "4 个广告内素材" not in card
+    card = json.dumps(build_summary_card(current, runs), ensure_ascii=False)
+    assert "素材与报表尚未关联" not in card
+    assert "运行 2 次" in card
+    assert runs[0].skipped_accounts[0]["count"] == "2"
+    assert runs[1].skipped_accounts[0]["count"] == "2"
 
 
 def test_video_total_does_not_ignore_stale_selected_account(session, sync_seed):

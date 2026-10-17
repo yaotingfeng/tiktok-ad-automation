@@ -16,17 +16,15 @@ from app.core.errors import DomainError
 from app.jobs.outbox import enqueue_after_commit
 from app.jobs.tasks import register_dispatch_task
 from app.modules.automation_rules import feishu
-from app.modules.automation_rules.data_issues import (
-    input_issue_lines,
-    merge_input_issues,
-)
 from app.modules.automation_rules.models import (
     AutomationRule,
-    AutomationRuleHit,
     AutomationRuleRun,
     AutomationTenantSetting,
 )
-from app.modules.automation_rules.runner import _execution_lines, _metric_name
+from app.modules.automation_rules.runner import (
+    execution_brief,
+    notification_worthy,
+)
 from app.modules.automation_rules.schemas import RuleDefinition
 from app.modules.automation_rules.settings_service import (
     load_feishu,
@@ -120,66 +118,36 @@ def scan_summaries(session: Session, *, now: datetime) -> int:
 def build_summary_card(
     rule: AutomationRule,
     runs: list[AutomationRuleRun],
-    hits: list[AutomationRuleHit],
-    timezone: str,
 ) -> dict[str, Any]:
-    zone = ZoneInfo(timezone)
-    start = runs[0].slot_at.astimezone(zone).strftime("%m-%d %H:%M")
-    end = runs[-1].slot_at.astimezone(zone).strftime("%m-%d %H:%M")
-    lines = [
-        f"{start} ~ {end}（{timezone}）运行 {len(runs)} 次，"
-        f"命中合计 {sum(run.hit_count for run in runs)} 次"
-    ]
-    executed = [
-        run
-        for run in runs
-        if run.execution_status in ("SUBMITTED", "PARTIAL", "FAILED", "SKIPPED")
-    ]
-    if executed:
-        totals: Counter[str] = Counter()
-        conflicts: list[dict[str, Any]] = []
-        failed_bcs: list[dict[str, Any]] = []
-        for run in executed:
-            for key in _COUNTS:
-                totals[key] += int(run.execution_summary.get(key, 0) or 0)
-            conflicts.extend(run.execution_summary.get("conflict_details") or [])
-            failed_bcs.extend(run.execution_summary.get("failed_bcs") or [])
-        lines.append(f"执行 {len(executed)} 次")
-        lines.extend(
-            _execution_lines(
-                {**totals, "conflict_details": conflicts, "failed_bcs": failed_bcs}
+    totals: Counter[str] = Counter()
+    failed = False
+    for run in runs:
+        for key in _COUNTS:
+            totals[key] += int(run.execution_summary.get(key, 0) or 0)
+        failed = (
+            failed
+            or run.execution_status == "FAILED"
+            or any(
+                run.execution_summary.get(k) for k in ("error", "failed_bcs", "failed")
             )
         )
-    issues = merge_input_issues([item for run in runs for item in run.skipped_accounts])
-    if any(item.get("reason", "").startswith("MATERIAL_") for item in issues):
-        lines.append("以下素材缺数数量为本时段各账户单次运行的最大值")
-    lines.extend(input_issue_lines(issues))
-    # 同一对象在多次运行中命中，只列最近一次。
-    latest: dict[str, AutomationRuleHit] = {}
-    for hit in hits:
-        latest[hit.subject_key] = hit
-    ordered = sorted(latest.values(), key=lambda hit: hit.sequence)
-    card_hits = [
-        feishu.CardHit(
-            label=hit.subject_label,
-            drama=hit.drama_name if hit.drama_name != hit.subject_label else None,
-            metrics=[(_metric_name(k), v or "—") for k, v in hit.metrics.items()],
-            target_count=hit.target_count,
-        )
-        for hit in ordered[: feishu.MAX_CARD_HITS]
-    ]
-    link = (
-        f"{settings.FRONTEND_HOST.rstrip('/')}/tenants/{rule.tenant_id}"
-        "/automation-rules?tab=runs"
-    )
+    content = f"运行 {len(runs)} 次，命中合计 {sum(r.hit_count for r in runs)} 次"
+    if any(totals.values()) or failed:
+        execution: dict[str, Any] = dict(totals)
+        if failed:
+            execution["error"] = "execution_error"
+        # 时段内规则可能改过操作，不能用当前操作名给历史提交贴错标签。
+        content += "；" + execution_brief(execution, "操作")
+    link = f"{settings.FRONTEND_HOST.rstrip('/')}/tenants/{rule.tenant_id}/automation-rules?tab=runs"
     return feishu.build_card(
-        title=f"【汇总】{rule.name}",
-        rule_name=rule.name,
-        summary_lines=lines,
-        hits=card_hits,
-        total_hits=len(latest),
+        title=f"汇总 · {feishu.rule_caption(rule.name)}",
+        text=content,
         link=link,
-        template="orange" if latest else "blue",
+        template="red"
+        if failed
+        else "orange"
+        if any(r.hit_count for r in runs)
+        else "blue",
     )
 
 
@@ -207,28 +175,24 @@ def deliver_summary(
     )
     if not runs:
         return "NOT_REQUIRED"
-    hits = list(
-        session.exec(
-            select(AutomationRuleHit)
-            .join(
-                AutomationRuleRun,
-                col(AutomationRuleRun.id) == AutomationRuleHit.run_id,
-            )
-            .where(col(AutomationRuleHit.run_id).in_([run.id for run in runs]))
-            .order_by(col(AutomationRuleRun.slot_at), col(AutomationRuleHit.sequence))
-        ).all()
-    )
+    for run in runs:
+        if not notification_worthy(run):
+            run.notify_status = "NOT_REQUIRED"
+            run.notify_error = None
+    runs = [run for run in runs if notification_worthy(run)]
+    if not runs:
+        session.flush()
+        return "NOT_REQUIRED"
     target = load_feishu(session, rule.tenant_id)
     status, error = "SENT", None
     if target is None:
         status, error = "FAILED", "未配置或未启用飞书通知"
     else:
-        timezone = load_tenant_setting(session, rule.tenant_id).schedule_timezone
         try:
             feishu.send(
                 target[0],
                 target[1],
-                build_summary_card(rule, runs, hits, timezone),
+                build_summary_card(rule, runs),
                 transport=transport,
             )
         except DomainError as exc:

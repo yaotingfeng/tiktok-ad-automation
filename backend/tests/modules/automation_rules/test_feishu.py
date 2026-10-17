@@ -8,7 +8,6 @@ import pytest
 
 from app.core.errors import DomainError
 from app.modules.automation_rules.feishu import (
-    CardHit,
     build_card,
     send,
     sign,
@@ -51,20 +50,13 @@ def test_sign_matches_feishu_algorithm():
     assert sign("sec", 1700000000) == expected
 
 
-def test_card_shows_three_examples_and_links_to_the_rest():
-    hits = [CardHit(f"对象{i}", "剧", [("消耗", "1.00")], 2) for i in range(12)]
-    card = build_card(
-        title="预警",
-        rule_name="r",
-        summary_lines=["命中 12"],
-        hits=hits,
-        total_hits=12,
-        link="https://x/y",
-    )
-    text = json.dumps(card, ensure_ascii=False)
-    assert "对象2" in text and "对象3" not in text
-    assert "https://x/y" in text and "其余 9 个" in text
-    assert len(text.encode()) < 20 * 1024
+def test_notification_is_one_result_and_a_details_button():
+    card = build_card(title="当日止损", text="暂停已提交 1", link="https://x/y")
+    elements = card["card"]["elements"]
+    assert len(elements) == 2
+    assert elements[0]["text"]["content"] == "暂停已提交 1"
+    assert elements[1]["actions"][0]["url"] == "https://x/y"
+    assert elements[1]["actions"][0]["text"]["content"] == "查看详情"
 
 
 def test_send_posts_signed_body_without_redirects():
@@ -103,56 +95,28 @@ def test_send_failures_raise(response):
         )
 
 
-def test_long_names_cannot_expand_the_card_and_counts_remain_correct():
-    long = "长" * 1500
-    hits = [
-        CardHit(label=f"{long}{i}", drama=None, metrics=[], target_count=1)
-        for i in range(10)
-    ]
+def test_long_text_cannot_turn_a_notification_into_a_report():
     card = build_card(
-        title="t",
-        rule_name="r",
-        summary_lines=[],
-        hits=hits,
-        total_hits=12,
-        link="https://example.test",
+        title="长名称" * 1000, text="很多文字\n" * 1000, link="https://x/y"
     )
-    assert len(json.dumps(card, ensure_ascii=False).encode()) < 20 * 1024
-    content = card["card"]["elements"][1]["text"]["content"]
-    assert long not in content
-    assert len(content) < 250
-    assert "其余 9 个请在 TK-ADA 查看" in content
+    title = card["card"]["header"]["title"]["content"]
+    body = card["card"]["elements"][0]["text"]["content"]
+    assert len(title) + len(body) <= 72
+    assert "\n" not in body
+    assert len(card["card"]["elements"]) == 2
 
 
-def test_many_account_issues_are_summarized_without_hiding_missing_data():
-    from app.modules.automation_rules.data_issues import input_issue_lines
+def test_only_normal_waiting_for_first_report_is_quiet():
+    from app.modules.automation_rules.data_issues import actionable_input_issues
 
-    issues = [
-        {
-            "advertiser_id": f"account-{n}",
-            "reason": "MATERIAL_LINK_MISSING",
-            "count": "2",
-        }
-        for n in range(49)
+    waiting = {"advertiser_id": "a", "reason": "MATERIAL_LINK_MISSING", "count": "29"}
+    stale = {"advertiser_id": "b", "reason": "STALE_REPORT"}
+    missing_parent = {
+        "advertiser_id": "c",
+        "reason": "MATERIAL_PARENT_UNKNOWN",
+        "count": "1",
+    }
+    assert actionable_input_issues([waiting, stale, missing_parent]) == [
+        stale,
+        missing_parent,
     ]
-    lines = input_issue_lines(issues + issues[:1])
-    assert len(lines) == 1
-    assert "98 个广告内素材" in lines[0] and "49 个账户" in lines[0]
-    assert "素材与报表尚未关联" in lines[0]
-    assert "account-" not in lines[0] and "账户数据未更新" not in lines[0]
-
-
-def test_issue_summary_bounds_reason_lines_and_keeps_stale_accounts_distinct():
-    from app.modules.automation_rules.data_issues import (
-        MATERIAL_REASONS,
-        input_issue_lines,
-    )
-
-    issues = [
-        {"advertiser_id": "a", "reason": reason, "count": "1"}
-        for reason in MATERIAL_REASONS
-    ] + [{"advertiser_id": "stale", "reason": "STALE_REPORT"}]
-    lines = input_issue_lines(issues)
-    assert len(lines) == 4
-    assert lines[0] == "1 个账户数据未更新，已跳过"
-    assert lines[-1] == "另有 5 类缺数问题，详见运行记录"

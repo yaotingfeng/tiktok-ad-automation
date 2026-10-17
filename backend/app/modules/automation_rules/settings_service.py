@@ -158,10 +158,7 @@ def send_test(
         url, secret = value["url"], value.get("secret", "")
     card = feishu.build_card(
         title="TK-ADA 自动规则测试消息",
-        rule_name="测试",
-        summary_lines=["飞书通知配置可用。"],
-        hits=[],
-        total_hits=0,
+        text="飞书通知已连通",
         link=_site_link(context.tenant_id),
         template="green",
     )
