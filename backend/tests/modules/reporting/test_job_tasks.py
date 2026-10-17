@@ -2,6 +2,7 @@ from contextlib import contextmanager
 from datetime import UTC, datetime
 
 import pytest
+from sqlmodel import select
 
 from app.modules.reporting import job_tasks
 
@@ -255,6 +256,7 @@ def test_cleanup_removes_expired_jobs_hours_and_snapshot_rows(session, sync_seed
         "hours": 1,
         "snapshots": 1,
         "balances": 2,
+        "directory_pages": 0,
     }
     session.expire_all()
     assert session.get(QuerySnapshotRow, (snapshot_id, "old")) is None
@@ -263,6 +265,83 @@ def test_cleanup_removes_expired_jobs_hours_and_snapshot_rows(session, sync_seed
         assert (session.get(ReportBalanceRun, run_id) is not None) == (
             status == "ACTIVE"
         )
+
+
+def test_cleanup_removes_only_finished_directory_staging_pages(
+    session, sync_seed, monkeypatch
+):
+    """已发布或作废超过保留期的运行删除暂存页；进行中、失败可重试及近期运行保留。"""
+    from datetime import timedelta
+
+    from app.modules.ads.sync_models import AdDirectoryPage, AdDirectoryRun
+    from tests.modules.reporting.test_jobs import _route
+
+    monkeypatch.setattr(job_tasks, "DIRECTORY_PAGE_CLEANUP_RUNS", 2)
+    now = datetime.now(UTC)
+    old, recent = now - timedelta(days=2), now - timedelta(hours=2)
+    cases = {
+        "published-old": ("COMPLETE", 1, old, True),
+        "cancelled-old": ("CANCELLED", None, old, True),
+        "stale-old": ("STALE", None, old, True),
+        "published-recent": ("COMPLETE", 1, recent, False),
+        "failed-old": ("FAILED", None, old, False),
+        "running-old": ("RUNNING", None, old, False),
+    }
+    runs = {}
+    for index, (name, (status, version, at, _)) in enumerate(cases.items()):
+        run = AdDirectoryRun(
+            tenant_id=sync_seed.tenant_id,
+            advertiser_id="acc-1",
+            bc_id="bc-a",
+            actor_id=sync_seed.actor_id,
+            connection_id=sync_seed.connection.id,
+            channel="OFFICIAL_API",
+            frozen_route=_route(sync_seed),
+            partition_key=f"{index:x}" * 64,
+            query={},
+            status=status,
+            claim_generation=1,
+            published_version=version,
+            created_at=at,
+            completed_at=at if version else None,
+            kind="campaign",
+            ad_type="SMART_PLUS",
+        )
+        session.add(run)
+        session.flush()
+        for page in (1, 2):
+            session.add(
+                AdDirectoryPage(
+                    run_id=run.id,
+                    page=page,
+                    tenant_id=sync_seed.tenant_id,
+                    advertiser_id="acc-1",
+                    claim_generation=1,
+                    next_page=None if page == 2 else 2,
+                    complete=page == 2,
+                    items=[{"id": name}],
+                    materials=[],
+                )
+            )
+        runs[name] = run.id
+    session.flush()
+
+    def remaining(name):
+        return len(
+            session.exec(
+                select(AdDirectoryPage).where(AdDirectoryPage.run_id == runs[name])
+            ).all()
+        )
+
+    # 每批最多 2 个运行：三个待清理运行分两批完成，第三批无可清理。
+    assert job_tasks.cleanup_store(session, now=now)["directory_pages"] == 4
+    assert job_tasks.cleanup_store(session, now=now)["directory_pages"] == 2
+    assert job_tasks.cleanup_store(session, now=now)["directory_pages"] == 0
+    session.expire_all()
+    for name, (*_, removed) in cases.items():
+        assert remaining(name) == (0 if removed else 2), name
+        # 运行记录本身保留，供目录刷新判断与审计。
+        assert session.get(AdDirectoryRun, runs[name]) is not None
 
 
 def test_revoked_actor_fails_job_before_gateway(

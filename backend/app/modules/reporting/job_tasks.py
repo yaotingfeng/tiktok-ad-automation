@@ -1,6 +1,7 @@
 """报表后台入口：冻结授权、分档规划、持久派发与有限租约恢复。"""
 
 import logging
+import time
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from hashlib import sha256
@@ -584,6 +585,33 @@ def run_job_step(*, database_engine, redis_client, job_id, claim_token):
         return result
 
 
+# 目录分页暂存只服务于本次运行的整批发布；运行发布或作废后不再被读取。
+# 保留 1 天便于排查；FAILED 可重试，不清理。
+DIRECTORY_PAGE_RETENTION = timedelta(days=1)
+# 单批清理的运行数上限：暂存页含大 JSONB，分批各自提交，避免长事务。
+DIRECTORY_PAGE_CLEANUP_RUNS = 2000
+# 每轮任务内继续分批清理的时间预算（任务软超时 55 秒）；积压时下一轮继续。
+DIRECTORY_PAGE_CLEANUP_SECONDS = 30
+
+
+def _expired_directory_runs(now):
+    finished = col(AdDirectoryRun.published_version).is_not(None) | col(
+        AdDirectoryRun.status
+    ).in_(["CANCELLED", "STALE"])
+    return (
+        select(AdDirectoryRun.id)
+        .where(
+            finished,
+            func.coalesce(AdDirectoryRun.completed_at, AdDirectoryRun.created_at)
+            < now - DIRECTORY_PAGE_RETENTION,
+            select(AdDirectoryPage.run_id)
+            .where(AdDirectoryPage.run_id == AdDirectoryRun.id)
+            .exists(),
+        )
+        .limit(DIRECTORY_PAGE_CLEANUP_RUNS)
+    )
+
+
 def cleanup_store(session, *, now):
     result = {}
     for key, model, condition in (
@@ -608,7 +636,21 @@ def cleanup_store(session, *, now):
         result[key] = (
             session.connection().execute(delete(model).where(condition)).rowcount
         )
+    result["directory_pages"] = cleanup_directory_pages(session, now=now)
     return result
+
+
+def cleanup_directory_pages(session, *, now):
+    """删除一批已发布或已作废运行的目录暂存页；返回删除的页数。"""
+    return (
+        session.connection()
+        .execute(
+            delete(AdDirectoryPage).where(
+                col(AdDirectoryPage.run_id).in_(_expired_directory_runs(now))
+            )
+        )
+        .rowcount
+    )
 
 
 @celery_app.task(name="reporting.plan_due", time_limit=200, soft_time_limit=180)
@@ -651,5 +693,14 @@ def job_step(*, tenant_id, actor_id, payload):
 
 @celery_app.task(name="reporting.cleanup_store", time_limit=60, soft_time_limit=55)
 def cleanup_store_task():
+    now = datetime.now(UTC)
     with Session(engine) as session, session.begin():
-        return cleanup_store(session, now=datetime.now(UTC))
+        result = cleanup_store(session, now=now)
+    # 首次上线时暂存页积压数 GB：在时间预算内继续分批，每批独立提交。
+    deadline = time.monotonic() + DIRECTORY_PAGE_CLEANUP_SECONDS
+    removed = result["directory_pages"]
+    while removed and time.monotonic() < deadline:
+        with Session(engine) as session, session.begin():
+            removed = cleanup_directory_pages(session, now=now)
+        result["directory_pages"] += removed
+    return result
