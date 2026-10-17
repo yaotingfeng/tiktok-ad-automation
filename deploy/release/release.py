@@ -441,7 +441,7 @@ class Release:
                     "full_page_writes=off",
                     # 并行恢复 4 个进程同时建索引；放大检查点间隔，避免恢复中频繁检查点。
                     "-c",
-                    "maintenance_work_mem=512MB",
+                    "maintenance_work_mem=1GB",
                     "-c",
                     "max_wal_size=8GB",
                     # 大表主键允许并行建索引；JSONB 以 lz4 写入 TOAST（实测比默认 pglz
@@ -462,8 +462,10 @@ class Release:
                     dict(backup, readOnly=True),
                 ],
                 "resources": {
-                    "requests": {"cpu": "500m", "memory": "1Gi"},
-                    "limits": {"cpu": "4", "memory": "4Gi"},
+                    # 4 个恢复进程各自建索引，每个最多用 maintenance_work_mem；
+                    # 仅停写期间存在，节点为 8 核 / 14 GiB。
+                    "requests": {"cpu": "2", "memory": "2Gi"},
+                    "limits": {"cpu": "6", "memory": "8Gi"},
                 },
             },
             {

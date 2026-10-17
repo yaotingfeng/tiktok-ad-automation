@@ -10,8 +10,9 @@ from uuid import UUID
 
 from billiard.exceptions import SoftTimeLimitExceeded
 from redis import Redis
-from sqlalchemy import case, delete, func, text
+from sqlalchemy import case, delete, func, text, update
 from sqlalchemy.dialects.postgresql import insert
+from sqlalchemy.orm import aliased
 from sqlmodel import Session, col, select
 
 from app.core.config import settings
@@ -594,6 +595,40 @@ DIRECTORY_PAGE_CLEANUP_RUNS = 2000
 DIRECTORY_PAGE_CLEANUP_SECONDS = 30
 
 
+def _supersede_stalled_directory_runs(now):
+    """同一账户、层级、广告类型已有更新运行发布后，较早的未完成运行不可能再发布
+    （publish_directory 会以 directory_run_stale 拒绝）：标记为 STALE，暂存页随后清理。
+    与 0031 迁移取消堆积运行同口径；租约有效的运行留给持有者结束，不抢改。"""
+    newer = aliased(AdDirectoryRun)
+    return (
+        update(AdDirectoryRun)
+        .where(
+            col(AdDirectoryRun.status).in_(["QUEUED", "RUNNING"]),
+            col(AdDirectoryRun.published_version).is_(None),
+            col(AdDirectoryRun.claimed_until).is_(None)
+            | (col(AdDirectoryRun.claimed_until) <= now),
+            col(AdDirectoryRun.created_at) < now - DIRECTORY_PAGE_RETENTION,
+            select(newer.id)
+            .where(
+                newer.tenant_id == AdDirectoryRun.tenant_id,
+                newer.advertiser_id == AdDirectoryRun.advertiser_id,
+                newer.kind == AdDirectoryRun.kind,
+                newer.ad_type == AdDirectoryRun.ad_type,
+                col(newer.request_sequence) > AdDirectoryRun.request_sequence,
+                col(newer.published_version).is_not(None),
+            )
+            .exists(),
+        )
+        .values(
+            status="STALE",
+            error_code="superseded",
+            completed_at=now,
+            claim_token=None,
+            claimed_until=None,
+        )
+    )
+
+
 def _expired_directory_runs(now):
     finished = col(AdDirectoryRun.published_version).is_not(None) | col(
         AdDirectoryRun.status
@@ -602,8 +637,12 @@ def _expired_directory_runs(now):
         select(AdDirectoryRun.id)
         .where(
             finished,
-            func.coalesce(AdDirectoryRun.completed_at, AdDirectoryRun.created_at)
-            < now - DIRECTORY_PAGE_RETENTION,
+            # 被新运行取代的运行（superseded）不再需要排查窗口，立即清理。
+            (col(AdDirectoryRun.error_code) == "superseded")
+            | (
+                func.coalesce(AdDirectoryRun.completed_at, AdDirectoryRun.created_at)
+                < now - DIRECTORY_PAGE_RETENTION
+            ),
             select(AdDirectoryPage.run_id)
             .where(AdDirectoryPage.run_id == AdDirectoryRun.id)
             .exists(),
@@ -636,6 +675,9 @@ def cleanup_store(session, *, now):
         result[key] = (
             session.connection().execute(delete(model).where(condition)).rowcount
         )
+    result["directory_superseded"] = (
+        session.connection().execute(_supersede_stalled_directory_runs(now)).rowcount
+    )
     result["directory_pages"] = cleanup_directory_pages(session, now=now)
     return result
 

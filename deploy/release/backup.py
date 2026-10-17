@@ -326,7 +326,8 @@ def restore_verify(pod, folder, directory, candidate_sha=None, candidate="candid
             candidate,
             "from alembic.config import main\nmain(argv=['upgrade', 'head'])",
         )
-        after = json.loads(guarded(pod, candidate, PROBE.read_text(), "fingerprint"))
+        # 恢复结果已与源库逐表核对；迁移后只需确认凭据仍可解密。
+        after = json.loads(guarded(pod, candidate, PROBE.read_text(), "credentials"))
         require(
             after["credentials_decrypted"] == fingerprint["credentials_decrypted"],
             "Migration lost readable credentials",

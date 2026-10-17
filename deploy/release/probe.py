@@ -6,7 +6,14 @@ import sys
 import time
 
 
-def fingerprint():
+def credentials():
+    """只统计可解密的加密凭据数；候选迁移后用，避免再次对全部表计数。"""
+    return {
+        "credentials_decrypted": fingerprint(count_rows=False)["credentials_decrypted"]
+    }
+
+
+def fingerprint(count_rows=True):
     from app.core.config import settings
     from app.core.credentials import decrypt_credentials
     from sqlalchemy import create_engine, inspect, text
@@ -17,12 +24,16 @@ def fingerprint():
         inspector = inspect(connection)
         names = inspector.get_table_names(schema="public")
         quote = engine.dialect.identifier_preparer.quote
-        rows = {
-            n: connection.execute(
-                text("SELECT count(*) FROM public." + quote(n))
-            ).scalar_one()
-            for n in names
-        }
+        rows = (
+            {
+                n: connection.execute(
+                    text("SELECT count(*) FROM public." + quote(n))
+                ).scalar_one()
+                for n in names
+            }
+            if count_rows
+            else {}
+        )
         decrypted = 0
         for name in names:
             columns = {c["name"] for c in inspector.get_columns(name, schema="public")}
@@ -136,6 +147,8 @@ if __name__ == "__main__":
     action = sys.argv[1]
     if action == "fingerprint":
         result = fingerprint()
+    elif action == "credentials":
+        result = credentials()
     elif action == "redis":
         # 积压时 Redis 可达数十 MB，经 exec 标准输出回传会断流；先写入容器文件，
         # 再由发布端带重试与校验和复制，标准输出只返回条数。

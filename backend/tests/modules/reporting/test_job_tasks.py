@@ -256,6 +256,7 @@ def test_cleanup_removes_expired_jobs_hours_and_snapshot_rows(session, sync_seed
         "hours": 1,
         "snapshots": 1,
         "balances": 2,
+        "directory_superseded": 0,
         "directory_pages": 0,
     }
     session.expire_all()
@@ -342,6 +343,73 @@ def test_cleanup_removes_only_finished_directory_staging_pages(
         assert remaining(name) == (0 if removed else 2), name
         # 运行记录本身保留，供目录刷新判断与审计。
         assert session.get(AdDirectoryRun, runs[name]) is not None
+
+
+def test_superseded_stalled_directory_runs_are_closed_and_cleaned(session, sync_seed):
+    """同层级已有更新运行发布后，较早的未完成运行标记为 STALE 并清理暂存页；
+    其他广告类型、租约有效、尚无更新发布的运行保持不动。"""
+    from datetime import timedelta
+
+    from app.modules.ads.sync_models import AdDirectoryPage, AdDirectoryRun
+    from tests.modules.reporting.test_jobs import _route
+
+    now = datetime.now(UTC)
+    old = now - timedelta(days=3)
+
+    def make(key, status, *, ad_type="SMART_PLUS", version=None, lease=None, at=old):
+        run = AdDirectoryRun(
+            tenant_id=sync_seed.tenant_id,
+            advertiser_id="acc-1",
+            bc_id="bc-a",
+            actor_id=sync_seed.actor_id,
+            connection_id=sync_seed.connection.id,
+            channel="OFFICIAL_API",
+            frozen_route=_route(sync_seed),
+            partition_key=key * 64,
+            query={},
+            status=status,
+            claim_generation=1,
+            published_version=version,
+            claimed_until=lease,
+            created_at=at,
+            completed_at=at if version else None,
+            kind="campaign",
+            ad_type=ad_type,
+        )
+        session.add(run)
+        session.flush()
+        session.add(
+            AdDirectoryPage(
+                run_id=run.id,
+                page=1,
+                tenant_id=sync_seed.tenant_id,
+                advertiser_id="acc-1",
+                claim_generation=1,
+                next_page=2,
+                complete=False,
+                items=[],
+                materials=[],
+            )
+        )
+        session.flush()
+        return run.id
+
+    stalled = make("1", "RUNNING")
+    leased = make("2", "RUNNING", lease=now + timedelta(minutes=5))
+    other_type = make("3", "QUEUED", ad_type="NORMAL")
+    make("4", "COMPLETE", version=1, at=now - timedelta(minutes=10))
+    newest_unpublished = make("5", "RUNNING", at=now - timedelta(hours=2))
+    result = job_tasks.cleanup_store(session, now=now)
+    assert result["directory_superseded"] == 1
+    assert result["directory_pages"] == 1
+    session.expire_all()
+    row = session.get(AdDirectoryRun, stalled)
+    assert (row.status, row.error_code) == ("STALE", "superseded")
+    for run_id in (leased, other_type, newest_unpublished):
+        assert session.get(AdDirectoryRun, run_id).status in {"RUNNING", "QUEUED"}
+        assert session.exec(
+            select(AdDirectoryPage).where(AdDirectoryPage.run_id == run_id)
+        ).first()
 
 
 def test_revoked_actor_fails_job_before_gateway(
