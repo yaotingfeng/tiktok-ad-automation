@@ -151,14 +151,18 @@ def snapshot(release):
         "-s",
         data=(
             exports
-            + "\npg_dump -Fc --no-owner --no-acl --schema=public -f "
+            # lz4 压缩远快于默认 gzip（2026-10-17 实测 1.4 GB 导出约 3 分钟，瓶颈在压缩 CPU）；
+            # 体积略大，备份盘余量充足。
+            + "\npg_dump -Fc --compress=lz4 --no-owner --no-acl --schema=public -f "
             + shlex.quote(target + "/postgres.dump")
             + "\n"
         ).encode(),
     )
     for filename, directory, excludes in [
         ("runtime-app.tar.gz", "/app", ["--exclude=.venv", "--exclude=__pycache__"]),
-        ("beat-data.tar.gz", "/var/run/celery", []),
+        # Beat 盘上的 .incident-* 是故障现场人工留存的快照（不完整、未经恢复验证），
+        # 不属于 Beat 运行状态，不随每次发布重复打包。
+        ("beat-data.tar.gz", "/var/run/celery", ["--exclude=.incident-*"]),
     ]:
         pod(
             "app",
@@ -231,7 +235,8 @@ def verify_archives(pod, folder, directory):
 
 RESTORE_SCRIPT = f"""set -e
 pg_restore --list "$1" | grep -v ' SCHEMA - public ' > /tmp/restore.toc
-pg_restore --use-list=/tmp/restore.toc --exit-on-error --single-transaction \\
+# 多进程并行恢复数据与索引（单事务与并行互斥）；中途失败即退出，临时库随 Pod 删除。
+pg_restore --use-list=/tmp/restore.toc --exit-on-error --jobs=4 \\
   --no-owner --no-acl -h 127.0.0.1 -p {VERIFY_PG_PORT} -U postgres -d tkada_verify "$1"
 """
 

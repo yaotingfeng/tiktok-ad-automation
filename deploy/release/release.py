@@ -419,7 +419,7 @@ class Release:
                 "volumeMounts": [backup],
                 "resources": {
                     "requests": {"cpu": "100m", "memory": "64Mi"},
-                    "limits": {"cpu": "1", "memory": "1Gi"},
+                    "limits": {"cpu": "2", "memory": "1Gi"},
                 },
             },
             {
@@ -438,6 +438,11 @@ class Release:
                     "synchronous_commit=off",
                     "-c",
                     "full_page_writes=off",
+                    # 并行恢复 4 个进程同时建索引；放大检查点间隔，避免恢复中频繁检查点。
+                    "-c",
+                    "maintenance_work_mem=512MB",
+                    "-c",
+                    "max_wal_size=8GB",
                 ],
                 "env": [
                     {"name": "POSTGRES_HOST_AUTH_METHOD", "value": "trust"},
@@ -450,8 +455,8 @@ class Release:
                     dict(backup, readOnly=True),
                 ],
                 "resources": {
-                    "requests": {"cpu": "250m", "memory": "512Mi"},
-                    "limits": {"cpu": "2", "memory": "2Gi"},
+                    "requests": {"cpu": "500m", "memory": "1Gi"},
+                    "limits": {"cpu": "4", "memory": "4Gi"},
                 },
             },
             {

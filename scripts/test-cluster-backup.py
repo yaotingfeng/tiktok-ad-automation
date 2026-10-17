@@ -161,6 +161,12 @@ class ClusterBackupTests(unittest.TestCase):
             self.assertFalse((self.state / name).exists())
         self.assertTrue((self.state / "manifest.json").exists())
 
+    def test_restore_is_parallel_and_never_single_transaction(self):
+        # pg_restore 的 --jobs 与 --single-transaction 互斥；恢复失败仍须立即退出。
+        self.assertIn("--jobs=4", backup.RESTORE_SCRIPT)
+        self.assertIn("--exit-on-error", backup.RESTORE_SCRIPT)
+        self.assertNotIn("--single-transaction", backup.RESTORE_SCRIPT)
+
     def test_verify_guard_pins_loopback_instances(self):
         self.assertIn("127.0.0.1", backup.VERIFY_ENV["DATABASE_URL"])
         self.assertIn(str(backup.VERIFY_PG_PORT), backup.VERIFY_GUARD)
