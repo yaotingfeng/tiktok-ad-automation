@@ -43,6 +43,7 @@ python3 deploy/local.py deploy
 - 控制台会输出各检查线的耗时行（`检查线通过：backend（N 分钟）`），其余检查输出仍只在私有日志。
 - 中断处理：在 Jenkins 手动运行该任务，`ACTION` 选 `status` 查看阶段，再按下文选 `recover` 或 `finish`。详细日志在私有目录的批次 `execution.log`，控制台只显示阶段。
 - 工具镜像 `deploy/ci/tools.Dockerfile` 与 Docker Hub 依赖镜像副本（`test/tiktok-ad-automation-base:*`）在能访问外网的机器上构建推送；改动工具版本时同步更新 `Jenkinsfile` 的 `TOOLS_IMAGE`。
+- 临时检查容器、恢复测试网络和备份卷以 `net.shortclipflix.tkada.ci-owner=$BUILD_TAG` 标记构建归属。`jenkins-run.sh` 退出与 Jenkins `post always` 双重回收；先结束本批工具容器，再删除同标签的测试容器、网络、卷，不按 `tkada-*` 前缀或年龄清理，也不执行全机 prune。Jenkins/宿主异常退出而未执行 post 时，核实构建结束后可运行 `bash deploy/ci/cleanup-resources.sh '<该构建 BUILD_TAG>'`；无标签的历史残留需人工核对，不由脚本猜测归属。
 
 ## 本机配置
 

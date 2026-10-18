@@ -32,7 +32,16 @@ from backup import (
     tree_digest,
     upload,
 )
-from common import PUBLIC, mirrored, require, run, write
+from common import PUBLIC, mirrored, require, write
+from common import run as common_run
+
+sys.path.insert(0, str(ROOT / "deploy/ci"))
+from resource_labels import with_owner
+
+
+def run(args, **kwargs):
+    # 恢复测试创建的容器、网络、卷与外层构建同属一个标签，中止后可从宿主回收。
+    return common_run(with_owner(args, os.environ.get("TKADA_CI_OWNER", "")), **kwargs)
 
 
 class DockerPod:
@@ -336,7 +345,7 @@ r.set('string',b'\\x00secret');r.rpush('queue',b'one',b'two');r.hset('hash',mapp
             else:
                 raise RuntimeError("Wrong Redis logical content accepted")
             write(folder / "redis.json", records)
-            pod, volume = start_pod(
+            pod, _volume = start_pod(
                 name, name, image, folder / "source.env", containers
             )
             space = check_space(pod, 1)

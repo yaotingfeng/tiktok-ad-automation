@@ -2752,3 +2752,7 @@
 ## 全量目录派发窗口被已消费消息永久占满
 
 08:4x 生产：最近1小时无任何 `ads.sync_step` 派发、10分钟无全量目录完成；2712 条全量运行已被 Worker 领取（claimed_until 已过期）但本代数 pending_dispatch 发布不足6小时，在途计数 `(enqueued & ~lost) | 租约有效` 把它们全算在途，窗口4/12 恒满，直到6小时判丢失前不再派发——扩并发无效的真正原因。改为已有领取记录（claimed_until 非空）且租约过期者不计在途，与同函数候选条件一致；过期运行按原逻辑换代重入队。新增回归先红（0派发）后绿；reporting/ads/jobs/automation_rules 825项通过。
+
+## Jenkins CI/CD 残留容器清理（2026-10-18）
+
+已核对本项目无在执行构建，清理公司 Jenkins 宿主 63 个合成测试容器（58 运行、5 退出，最老38小时）、5 个具名测试卷、6 个无端点测试网络；回读 tkada-* 容器0，Jenkins/Nginx及其他项目构建容器保留。根因是经宿主 Docker socket 启动的测试容器不随工具容器退出，ABORTED 后内部 EXIT/finally 清理未完成且外层缺兜底。新增构建 owner 标签与外层 EXIT/post always 定向回收，先停工具再删本批测试资源。真实 Docker 归属隔离/强制退出/重复清理等3项、发布资产76项、Ruff/编译/shell/差异检查通过。修复本地提交，未推送，Jenkins 尚未使用新逻辑；不触发应用发布。详见 [清理与验证记录](validation/2026-10-18-jenkins-container-cleanup.md)。

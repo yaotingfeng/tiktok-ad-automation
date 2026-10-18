@@ -6,7 +6,7 @@ repo=$(cd "$(dirname "$0")/../.." && pwd)
 # 仅继承工具连接配置，阻断终端中的生产数据库、云存储和平台凭据。
 if [[ ${1:-} != --isolated-environment ]]; then
   clean_env=("PATH=$PATH" "HOME=$HOME")
-  for key in TMPDIR LANG LC_ALL BUN_BIN PG_BIN_DIR CHECK_PLAN CHECK_CACHE_DIR CHECK_BACKEND_SHARDS CHECK_ACCEPTANCE_SHARDS CHECK_BROWSER_WORKERS ACCEPTANCE_SCALE DOCKER_HOST DOCKER_CONTEXT DOCKER_CONFIG DOCKER_TLS_VERIFY DOCKER_CERT_PATH UV_CACHE_DIR UV_PYTHON_INSTALL_DIR PLAYWRIGHT_BROWSERS_PATH TKADA_IMAGE_MIRROR DEBIAN_MIRROR PYPI_INDEX_URL PYPI_FILES_URL NPM_REGISTRY HTTPS_PROXY HTTP_PROXY ALL_PROXY NO_PROXY SSL_CERT_FILE SSL_CERT_DIR; do
+  for key in TKADA_CI_OWNER TMPDIR LANG LC_ALL BUN_BIN PG_BIN_DIR CHECK_PLAN CHECK_CACHE_DIR CHECK_BACKEND_SHARDS CHECK_ACCEPTANCE_SHARDS CHECK_BROWSER_WORKERS ACCEPTANCE_SCALE DOCKER_HOST DOCKER_CONTEXT DOCKER_CONFIG DOCKER_TLS_VERIFY DOCKER_CERT_PATH UV_CACHE_DIR UV_PYTHON_INSTALL_DIR PLAYWRIGHT_BROWSERS_PATH TKADA_IMAGE_MIRROR DEBIAN_MIRROR PYPI_INDEX_URL PYPI_FILES_URL NPM_REGISTRY HTTPS_PROXY HTTP_PROXY ALL_PROXY NO_PROXY SSL_CERT_FILE SSL_CERT_DIR; do
     if [[ -n ${!key:-} ]]; then clean_env+=("$key=${!key}"); fi
   done
   exec env -i "${clean_env[@]}" bash "$repo/deploy/ci/check.sh" --isolated-environment
@@ -61,6 +61,10 @@ pg_name="$run_id-pg"
 acceptance_pg_name="$run_id-acceptance-pg"
 browser_pg_name="$run_id-browser-pg"
 redis_name="$run_id-redis"
+ci_labels=()
+if [[ -n ${TKADA_CI_OWNER:-} ]]; then
+  ci_labels=(--label "net.shortclipflix.tkada.ci-owner=$TKADA_CI_OWNER")
+fi
 image_name="tiktok-ad-automation:ci-$run_id"
 # 与 deploy/release/common.py 的 mirrored 一致：Jenkins 用本项目 ACR 副本，本机用官方镜像。
 mirrored() { if [[ -n ${TKADA_IMAGE_MIRROR:-} ]]; then local ref=${1//\//-}; printf '%s%s' "$TKADA_IMAGE_MIRROR" "${ref//:/-}"; else printf '%s' "$1"; fi; }
@@ -76,6 +80,7 @@ cleanup() {
 trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
+python3 "$repo/deploy/ci/test_resource_cleanup.py"
 python3 "$repo/deploy/ci/test_snapshot.py"
 python3 "$repo/deploy/ci/test_select_tests.py"
 python3 "$repo/deploy/ci/test_backend_tests.py"
@@ -117,7 +122,7 @@ cd "$work/source"
 # 并行分组各用独立库与 Redis 库号；PG 连接数和 Redis 库数按并发放大。
 # 测试库用完即删：数据放内存盘并关闭落盘保证，只影响本次临时实例，不涉及任何正式数据。
 start_pg() {
-  docker run -d --name "$1" -p 127.0.0.1::5432 --tmpfs /var/lib/postgresql:rw,size=4g \
+  docker run ${ci_labels[@]+"${ci_labels[@]}"} -d --name "$1" -p 127.0.0.1::5432 --tmpfs /var/lib/postgresql:rw,size=4g \
     -e POSTGRES_USER=postgres -e POSTGRES_PASSWORD=ci-local-password -e POSTGRES_DB=tiktok_ci_test "$(mirrored postgres:18)" \
     -c max_connections=600 -c fsync=off -c synchronous_commit=off -c full_page_writes=off \
     -c shared_buffers=512MB -c work_mem=16MB >/dev/null
@@ -127,7 +132,7 @@ start_pg "$pg_name"
 # 互不争用同一个数据库，浏览器验收无需等后端验收结束。
 start_pg "$acceptance_pg_name"
 start_pg "$browser_pg_name"
-docker run -d --name "$redis_name" -p 127.0.0.1::6379 "$(mirrored redis:8)" --databases 64 >/dev/null
+docker run ${ci_labels[@]+"${ci_labels[@]}"} -d --name "$redis_name" -p 127.0.0.1::6379 "$(mirrored redis:8)" --databases 64 >/dev/null
 for ((attempt=0; attempt<60; attempt++)); do
   if docker exec "$pg_name" pg_isready -U postgres >/dev/null 2>&1 && docker exec "$acceptance_pg_name" pg_isready -U postgres >/dev/null 2>&1 && docker exec "$browser_pg_name" pg_isready -U postgres >/dev/null 2>&1 && docker exec "$redis_name" redis-cli ping >/dev/null 2>&1; then break; fi
   sleep 1

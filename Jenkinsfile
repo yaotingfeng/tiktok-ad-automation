@@ -95,6 +95,12 @@ pipeline {
 
     post {
         always {
+            // 外层 shell 被 Jenkins 强制结束时 EXIT trap 也可能失效；按本构建标签再清理一次。
+            script {
+                if (fileExists('deploy/ci/cleanup-resources.sh')) {
+                    sh 'bash deploy/ci/cleanup-resources.sh "$BUILD_TAG"'
+                }
+            }
             echo "TK-ADA ${params.ACTION}: ${currentBuild.currentResult}"
         }
         failure {

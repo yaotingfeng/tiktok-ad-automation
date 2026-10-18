@@ -47,11 +47,18 @@ mkdir -p "$TKADA_PRIVATE_DIR/cache/home"
 # 本次运行的临时凭据只放在私有目录，结束即删；镜像仓库登录不写入 Jenkins 全局配置。
 secrets_dir=$(mktemp -d "$TKADA_PRIVATE_DIR/.run-XXXXXXXX")
 container="tkada-jenkins-${BUILD_NUMBER:-manual}-$$"
+export TKADA_CI_OWNER="${BUILD_TAG:-tkada-manual-$$}"
 # Jenkins 中止构建时先停止工具容器再删凭据，避免发布在后台无人看管地继续；
 # 停在任何阶段都由 release.py 保留锁和状态，之后用 ACTION=status/recover/finish 处理。
 cleanup() {
+  local status=$? cleanup_status=0
+  trap - EXIT
   docker stop -t 60 "$container" >/dev/null 2>&1 || true
+  # 子容器通过宿主 docker.sock 创建，不随工具容器退出；由外层按本批标签兜底回收。
+  bash "$workspace/deploy/ci/cleanup-resources.sh" "$TKADA_CI_OWNER" || cleanup_status=$?
   rm -rf "$secrets_dir"
+  if (( status == 0 )); then status=$cleanup_status; fi
+  exit "$status"
 }
 trap cleanup EXIT
 trap 'exit 143' TERM
@@ -79,6 +86,8 @@ docker_gid=$(stat -c %g /var/run/docker.sock)
 DOCKER_CONFIG="$secrets_dir/docker" docker pull -q "$TOOLS_IMAGE" >/dev/null
 # 不用 exec：结束后还要由 trap 删除本次临时凭据。
 docker run --rm --init --name "$container" \
+  --label "net.shortclipflix.tkada.ci-owner=$TKADA_CI_OWNER" \
+  --label net.shortclipflix.tkada.ci-role=tools \
   --network host --user "$(id -u):$(id -g)" --group-add "$docker_gid" \
   -v /var/run/docker.sock:/var/run/docker.sock \
   -v "$workspace_host:$workspace_host" -v "$private_host:$private_host" \
@@ -89,5 +98,6 @@ docker run --rm --init --name "$container" \
   -e GIT_ASKPASS="$secrets_host/askpass" -e GIT_TERMINAL_PROMPT=0 \
   -e GIT_USER -e GIT_TOKEN \
   -e TKADA_IMAGE_MIRROR -e DEBIAN_MIRROR -e PYPI_INDEX_URL -e PYPI_FILES_URL -e NPM_REGISTRY \
+  -e TKADA_CI_OWNER \
   -e CHECK_BACKEND_SHARDS -e CHECK_ACCEPTANCE_SHARDS -e CHECK_BROWSER_WORKERS \
   "$TOOLS_IMAGE" python3 deploy/local.py "$action" --config "$private_host/config.json" "$@"
