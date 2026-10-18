@@ -29,6 +29,7 @@ const TREND_METRICS = [
   "roas_d0",
   "impressions",
   "ctr",
+  "cpm",
 ]
 
 function shiftDate(date: string, days: number): string {

@@ -2656,3 +2656,9 @@
 - 全部Worker限制DB池2+1；首次9→11、0037及精确broker消息迁移纳入标准完整备份和隔离恢复合同。候选验证和生产验收继续，见docs/validation/2026-10-18-realtime-sync-reliability.md；未发布前不声称永久修复。
 
 - 最后一轮交叉审查补齐同租户目录在LIMIT前排除在途、缺失/最旧优先；素材旧帖二分查找逐请求持久路径和页码，真实PG跨步完成200候选且错误保留已成功页。队列短期索引同步登记两个新队列，监控对未知活跃范围判降级，并能幂等重投原排队管理动作。全局Ruff/ty/编译、448项领域组合、部署资产/真实Redis迁移/K8s对象验证已通过，最终新建数据库整合308项通过，代码候选开始标准生产发布。
+
+## 2026-10-18：广告详情补充 CPM 趋势
+
+- 广告报表对象详情的趋势指标新增“千次展示成本 (CPM)”，复用现有日期范围、日/小时粒度与按币种绘图；后端已按消耗合计 / 展示量合计 × 1000 返回 CPM，无接口、数据库或开关变更。
+- 新增日/小时浏览器验证，使用与消耗相反的 CPM 走势核对切换、折线方向与悬停两位小数数值。`bunx playwright test tests/ads-detail.spec.ts --project=workspace --workers=2 --reporter=line`：14 passed；`bun run build`、三个改动前端文件的 Biome check 与 `git diff --check` 通过。
+- 本节与功能一并本地提交 `ads: add CPM to detail trends`；尚未推送或部署，浏览器验证使用模拟 API 数据。

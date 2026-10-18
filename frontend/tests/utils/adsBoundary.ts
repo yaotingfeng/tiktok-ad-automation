@@ -796,14 +796,15 @@ export async function adsBoundary(
           points: [
             [hour ? "2026-10-01T01:00Z" : "2026-10-01", "4.00"],
             [hour ? "2026-10-01T02:00Z" : "2026-10-02", "6.00"],
-          ].map(([at, spend]) => ({
+          ].map(([at, spend], index) => ({
             at,
             buckets: [
               {
                 currency: "USD",
                 timezone: timezone === "MIXED" ? "UTC" : timezone,
                 attribution: "IAA",
-                values: { spend },
+                // CPM 与消耗走势相反，验证切换指标后实际读取了 CPM。
+                values: { spend, cpm: index ? "1.25" : "2.50" },
               },
             ],
             coverage: "COMPLETE",

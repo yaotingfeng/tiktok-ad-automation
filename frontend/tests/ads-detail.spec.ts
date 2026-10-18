@@ -3,6 +3,41 @@ import { adsBoundary, BC_A, TENANT } from "./utils/adsBoundary"
 import { expectLineDrawn } from "./utils/trendChart"
 
 test.describe("ads detail", () => {
+  for (const hourly of [false, true]) {
+    test(`CPM 趋势切换并显示正确数值（${hourly ? "小时" : "日"}）`, async ({
+      page,
+    }) => {
+      await adsBoundary(page)
+      await page.goto(`/tenants/${TENANT}/ads?bc_id=${BC_A}`)
+      await page.getByRole("tab", { name: "系列", exact: true }).click()
+      await page
+        .getByRole("button", { name: "嘉书-总裁归来-测试", exact: true })
+        .click()
+      const sheet = page.getByRole("dialog")
+      await sheet.getByRole("tab", { name: "趋势" }).click()
+      if (hourly)
+        await sheet.getByRole("button", { name: "按小时", exact: true }).click()
+      const cpm = sheet.getByRole("button", {
+        name: "千次展示成本 (CPM)",
+        exact: true,
+      })
+      await cpm.click()
+      await expect(cpm).toHaveAttribute("aria-pressed", "true")
+      const chart = sheet.getByTestId("ads-trend-chart")
+      await expectLineDrawn(chart)
+      const dots = chart.locator(".recharts-line-dots circle")
+      await expect(dots).toHaveCount(2)
+      // SVG 的 y 值向下递增：CPM 从 2.50 降至 1.25，消耗则是 4 升至 6。
+      expect(Number(await dots.first().getAttribute("cy"))).toBeLessThan(
+        Number(await dots.last().getAttribute("cy")),
+      )
+      await dots.first().hover()
+      await expect(chart.locator(".recharts-tooltip-wrapper")).toContainText(
+        "2.50",
+      )
+    })
+  }
+
   test("点名称打开详情，各页签有内容", async ({ page }) => {
     const trendUrls: string[] = []
     page.on("request", (r) => {
