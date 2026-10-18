@@ -137,7 +137,7 @@ services:
       <<: *app-environment
       DATABASE_POOL_SIZE: "2"
       DATABASE_MAX_OVERFLOW: "1"
-    command: [celery, -A, app.jobs.celery_app:celery_app, worker, --pool=prefork, -Q, ads-live-directory, --concurrency, '${ADS_LIVE_DIRECTORY_WORKER_CONCURRENCY:-4}', '--hostname=ads-live-directory@%h', --loglevel=INFO]
+    command: [celery, -A, app.jobs.celery_app:celery_app, worker, --pool=prefork, -Q, 'ads-live-directory,ads-directory', --concurrency, '${ADS_LIVE_DIRECTORY_WORKER_CONCURRENCY:-10}', '--hostname=ads-live-directory@%h', --loglevel=INFO]
     depends_on:
       prestart: {condition: service_completed_successfully}
   worker-ad-management:

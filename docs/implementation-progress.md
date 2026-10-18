@@ -2740,3 +2740,7 @@
 ## 无命中规则停止推送素材待同步缺口
 
 2026-10-18 14:2x 生产只读：四条素材规则每5分钟运行，01/03两条近2小时零命中却仍各推19张飞书卡片“N个账户存在数据异常”。原因是 `actionable_input_issues` 只排除 MATERIAL_LINK_MISSING，MATERIAL_PARENT_UNKNOWN / MATERIAL_REPORT_UNLINKED / MATERIAL_LINK_UNRESOLVED 也是实时目录/关联追平中的待同步状态，数量每轮波动，“与上次相同不重发”去重永远失效。同期 ad_day/material_day 当日1042账户全部10分钟内成功、无 STALE_REPORT，报表同步本身未故障。改为四类待同步原因均不触发无命中提醒；相关素材仍带 judgement_issue 不参与判断（不会误停），明细仍留运行记录与页面，STALE_REPORT 及共享报表等仍提醒。规则领域291项通过、Ruff通过。
+
+## 全量目录抓取扩容（实时目录 Worker 共同消费）
+
+2026-10-18 07:3x 生产只读：报表/调用额度均有余量（目录约1次/秒、报表约2.2次/秒，远低于共享10次/秒；PG tkada连接30），瓶颈是全量目录：派发窗口4、仅单槽 `ads-directory` Worker 执行且5分钟忙306秒（sync_step约17步/分，balance_step单次35–43秒），大池排队约2.4小时、目录超30分钟待刷新5071条。改为实时目录 Worker 同时消费 `ads-live-directory,ads-directory`，prefork 4→10、申请500m/2Gi、上限3CPU/4Gi；全量派发窗口4→12。`ads-publish` 仍只由单槽目录 Worker 消费，发布串行不变；无新队列/迁移/开关，平台调用策略不变。K8s/Compose/staging/模板及清单校验同步。部署资产4组、K8s16对象、reporting/ads/jobs/runtime 545项通过。实时目录 Deployment 已先按精确 JSON test 补丁在线调整，代码窗口随本提交发布。
