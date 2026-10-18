@@ -70,9 +70,10 @@ logger = logging.getLogger(__name__)
 # 每次派发最多入队的目录运行数；其余留给后续轮次，保证规划耗时有界。
 DIRECTORY_DISPATCH_BATCH = 1000
 # 全量目录只提前投递有界数量的运行，历史初始请求不再持续填满 broker。
-# 抓取由单槽目录 Worker 与 10 并发实时目录 Worker 共同消费，窗口 12 让两者都有活可做；
-# 发布仍单槽。大池约 570 账户×3 层级须 30 分钟内刷新一轮，原窗口 4 单槽仅约 17 步/分钟。
-DIRECTORY_DISPATCH_WINDOW = 12
+# 抓取由单槽目录 Worker 与 10 并发实时目录 Worker 共同消费；单步约 2 秒而投递往返更长，
+# 窗口 12 实测仅约 50 步/分钟、Worker 大半空闲，放到 32 让 11 个消费者持续有活。
+# 发布仍单槽；超出调用准入的步骤由准入层延后，不会突破平台调用额度。
+DIRECTORY_DISPATCH_WINDOW = 32
 # 事实与关联独立限制在途任务；这是领取上限，不代表共享 Worker 中的专属执行槽。
 # 12 个 prefork 配两批有界在途名额，以候补吸收 outbox 交付空档；名额不等于执行并发。
 # 候补仍受领取后 240 秒租约约束；排队过期须重新领取，不能由旧消息直接续租。
@@ -301,6 +302,9 @@ def _dispatch_directories(session, now):
     ).one()
     available = max(0, DIRECTORY_DISPATCH_WINDOW - inflight)
     targeted_available = targeted_capacity(session, now)
+    # 素材目录每次十余页，系列/组/广告目录只有一两页且决定止损父链与目录新鲜度；
+    # 全量 lane 内对象目录优先，素材目录用剩余名额，避免旧素材积压饿死对象目录。
+    creative_last = case((col(AdDirectoryRun.kind) == "creative", 1), else_=0)
     lane_ranked = (
         select(
             AdDirectoryRun.id,
@@ -309,6 +313,7 @@ def _dispatch_directories(session, now):
                 partition_by=(targeted, col(AdDirectoryRun.tenant_id)),
                 order_by=(
                     targeted.desc(),
+                    creative_last,
                     col(AdDirectoryRun.created_at),
                     col(AdDirectoryRun.id),
                 ),
@@ -334,6 +339,7 @@ def _dispatch_directories(session, now):
                 partition_by=col(AdDirectoryRun.tenant_id),
                 order_by=(
                     targeted.desc(),
+                    creative_last,
                     col(AdDirectoryRun.created_at),
                     col(AdDirectoryRun.id),
                 ),
@@ -357,6 +363,7 @@ def _dispatch_directories(session, now):
             ranked.c.rn,
             col(DirectoryDispatchCursor.last_dispatched_at).asc().nulls_first(),
             targeted.desc(),
+            creative_last,
             col(AdDirectoryRun.created_at),
             col(AdDirectoryRun.id),
         )

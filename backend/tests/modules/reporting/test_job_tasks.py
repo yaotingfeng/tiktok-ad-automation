@@ -1235,6 +1235,51 @@ def test_expired_claim_frees_directory_window_slot(session, sync_seed, monkeypat
     assert job_tasks._dispatch_directories(session, now) == 2
 
 
+def test_object_directory_runs_dispatch_before_older_creative_scans(
+    session, sync_seed, monkeypatch
+):
+    """素材目录每次十余页，旧素材积压不能占满窗口，饿死止损依赖的系列/组/广告目录。"""
+    from datetime import timedelta
+    from uuid import UUID
+
+    from app.core.config import settings
+    from app.jobs.models import PendingDispatch
+    from app.modules.ads.directory_requests import request_directory
+    from app.modules.ads.sync_models import AdDirectoryRun
+    from tests.modules.ads.test_directory_requests import _route
+
+    monkeypatch.setattr(settings, "ADS_SYNC_ENABLED", True)
+    monkeypatch.setattr(job_tasks, "DIRECTORY_DISPATCH_WINDOW", 1, raising=False)
+    request_directory(
+        session,
+        tenant_id=sync_seed.tenant_id,
+        bc_id="bc-a",
+        frozen_route=_route(sync_seed),
+        actor_id=sync_seed.actor_id,
+        advertiser_ids=["acc-1"],
+        scope="directory",
+    )
+    runs = session.exec(
+        select(AdDirectoryRun).where(AdDirectoryRun.tenant_id == sync_seed.tenant_id)
+    ).all()
+    assert {run.kind for run in runs} >= {"creative", "ad"}
+    now = datetime.now(UTC)
+    for run in runs:
+        # 素材目录最旧，其余对象目录更新。
+        run.created_at = now - timedelta(days=3 if run.kind == "creative" else 1)
+    session.flush()
+    assert job_tasks._dispatch_directories(session, now) == 1
+    dispatched = session.exec(
+        select(PendingDispatch).where(
+            PendingDispatch.tenant_id == sync_seed.tenant_id,
+            PendingDispatch.task_name == "ads.sync_step",
+        )
+    ).one()
+    assert session.get(AdDirectoryRun, UUID(dispatched.payload["run_id"])).kind != (
+        "creative"
+    )
+
+
 def test_concurrent_directory_scans_share_one_dispatch_window(
     monkeypatch, committed_sync_seed
 ):
