@@ -72,7 +72,7 @@ class SlowReader:
         if self.error is not None:
             raise self.error
 
-    def material_ad_links(self, *, advertiser_id, page):
+    def material_ad_links(self, *, advertiser_id, page, ad_ids=()):
         self.tick(("overview", page))
         return RawReportPage((), page, 1, 0)
 
@@ -128,3 +128,90 @@ def test_completed_overview_and_query_page_survive_later_provider_error(
     assert step(factory, job_id, reader) == "WAITING"
     assert reader.history[-1][1] == 2
     assert reader.history.count(("overview", 1)) == 1
+
+
+def test_overview_filter_uses_report_window_and_freezes_across_pages(
+    committed_sync_seed,
+):
+    from datetime import timedelta
+
+    from app.modules.reporting.publish import AccountMeta, publish_ad_day
+    from tests.modules.reporting.sync_conftest import ad_row
+
+    seed, factory = committed_sync_seed
+    job_id = seed_job(factory, seed)
+    with factory() as session:
+        for adv, day, ads in [
+            ("acc-1", D, ["ad000", "ad199"]),
+            ("acc-1", D - timedelta(days=1), ["history-ad"]),
+            ("acc-2", D, ["other-account-ad"]),
+        ]:
+            publish_ad_day(
+                session,
+                tenant_id=seed.tenant_id,
+                job_id=uuid4(),
+                accounts={adv: AccountMeta("USD", "Asia/Hong_Kong")},
+                start=day,
+                end=day,
+                rows=[ad_row(ad, day, adv=adv, spend="0") for ad in ads],
+            )
+        job = session.get(ReportSyncJob, job_id)
+        job.progress = {"next_page": 9}  # 旧的未筛选页不能接到新的筛选查询之后。
+        session.commit()
+
+    class Reader(SlowReader):
+        def material_ad_links(self, *, advertiser_id, page, ad_ids=()):
+            self.history.append((page, ad_ids))
+            row = {
+                "dimensions": {
+                    "smart_plus_ad_id": "ad000",
+                    "main_material_id": f"known-post-{page}",
+                    "main_material_type": "VIDEO_SPARK_ADS",
+                },
+                "metrics": {"ad_material_id": "material0"},
+            }
+            return RawReportPage((row,), page, 2, 2)
+
+    reader = Reader()
+    assert step(factory, job_id, reader) == "WAITING"
+    assert reader.history == [(1, ("ad000", "ad199"))]
+    with factory() as session:
+        publish_ad_day(
+            session,
+            tenant_id=seed.tenant_id,
+            job_id=uuid4(),
+            accounts={"acc-1": AccountMeta("USD", "Asia/Hong_Kong")},
+            start=D,
+            end=D,
+            rows=[ad_row("new-ad", D, adv="acc-1")],
+        )
+        session.commit()
+    assert step(factory, job_id, reader) == "WAITING"
+    assert reader.history[-1] == (2, ("ad000", "ad199"))
+
+
+def test_wide_or_unknown_ad_scope_keeps_existing_full_scan_progress(
+    committed_sync_seed,
+):
+    from app.modules.reporting.jobs import _material_link_overview_ads
+    from app.modules.reporting.publish import AccountMeta, publish_ad_day
+    from tests.modules.reporting.sync_conftest import ad_row
+
+    seed, factory = committed_sync_seed
+    job_id = seed_job(factory, seed)
+    for count in (0, 201):
+        with factory() as session:
+            if count:
+                publish_ad_day(
+                    session,
+                    tenant_id=seed.tenant_id,
+                    job_id=uuid4(),
+                    accounts={"acc-1": AccountMeta("USD", "Asia/Hong_Kong")},
+                    start=D,
+                    end=D,
+                    rows=[ad_row(f"ad{x:03}", D, adv="acc-1") for x in range(count)],
+                )
+            job = session.get(ReportSyncJob, job_id)
+            job.progress = {"next_page": 9}
+            assert _material_link_overview_ads(session, job) == ()
+            assert job.progress["next_page"] == 9

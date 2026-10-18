@@ -611,6 +611,38 @@ def cleanup_material_pages(session, *, now: datetime, retention_days: int = 7) -
     return result.rowcount
 
 
+def _material_link_overview_ads(session, job):
+    """复用同日期报表的广告范围，避免为少量当天帖子扫描全账户历史。"""
+    if "overview_ad_ids" not in job.progress:
+        ids = list(
+            session.connection()
+            .execute(
+                text("""
+                SELECT DISTINCT ad_id FROM ad_report_day
+                WHERE tenant_id=:tenant AND advertiser_id=:advertiser
+                  AND stat_date BETWEEN :start AND :end
+                  AND campaign_automation_type='UPGRADED_SMART_PLUS'
+                ORDER BY ad_id LIMIT 201
+                """),
+                {
+                    "tenant": job.tenant_id,
+                    "advertiser": job.advertiser_ids[0],
+                    "start": job.start_date,
+                    "end": job.end_date,
+                },
+            )
+            .scalars()
+        )
+        # 无广告事实或范围超过接口上限时仍完整读取；零消耗广告也在同一范围内。
+        progress = job.progress | {"overview_ad_ids": ids if len(ids) <= 200 else []}
+        if ids and len(ids) <= 200 and not progress.get("overview_complete"):
+            # 旧的全账户页不能与筛选页混接；已写入的真实映射保留。
+            progress["next_page"] = 1
+        job.progress = progress
+    # 首次选定后随分页持久化，期间新增广告由下一轮补齐，不改变本轮查询。
+    return tuple(job.progress["overview_ad_ids"])
+
+
 def _run(session, job: ReportSyncJob, reader: _CountingReader) -> int | None:
     advertisers = tuple(job.advertiser_ids)
     accounts = _accounts(session, job.tenant_id, advertisers)
@@ -669,12 +701,13 @@ def _run(session, job: ReportSyncJob, reader: _CountingReader) -> int | None:
     if job.kind == "material_day":
         return _run_material(session, job, reader, accounts)
     if job.kind == "material_links":
+        overview_ads = _material_link_overview_ads(session, job)
         complete = material_links.refresh_material_links(
             session,
             tenant_id=t,
             advertiser_id=advertisers[0],
             read_overview=lambda p: reader.material_ad_links(
-                advertiser_id=advertisers[0], page=p
+                advertiser_id=advertisers[0], page=p, ad_ids=overview_ads
             ),
             read_ad_posts=lambda ads, first, last, p: reader.material_ad_posts(
                 advertiser_id=advertisers[0], ad_ids=ads, start=first, end=last, page=p

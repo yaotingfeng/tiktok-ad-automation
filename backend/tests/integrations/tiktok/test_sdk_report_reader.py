@@ -517,3 +517,17 @@ def test_batch_permission_check_runs_once_after_admission(monkeypatch):
     blocked[0] = False
     reader.ad_day(**args)
     assert events == ["admission", "permissions", "http"]
+
+
+def test_material_overview_filters_exact_advertiser_ad_ids():
+    reader, rec = _reader(PAGE)
+    reader.material_ad_links(advertiser_id="a", page=1, ad_ids=("ad-1", "ad-2"))
+    assert rec.calls[0][2]["filtering"] == {"smart_plus_ad_ids": ["ad-1", "ad-2"]}
+
+
+@pytest.mark.parametrize("ids", [("ad-1", "ad-1"), tuple(map(str, range(201)))])
+def test_material_overview_rejects_invalid_ad_filter_before_send(ids):
+    reader, rec = _reader(PAGE)
+    with pytest.raises(DomainError, match="筛选"):
+        reader.material_ad_links(advertiser_id="a", page=1, ad_ids=ids)
+    assert rec.calls == []

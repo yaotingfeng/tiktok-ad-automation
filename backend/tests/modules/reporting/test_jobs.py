@@ -510,7 +510,7 @@ def test_material_fact_commits_before_separately_claimed_link_job(committed_sync
             }
             return RawReportPage((row,), 1, 1, 1)
 
-        def material_ad_links(self, *, advertiser_id, page):
+        def material_ad_links(self, *, advertiser_id, page, ad_ids=()):
             self.calls.append(("links", advertiser_id, page))
             row = {
                 "dimensions": {

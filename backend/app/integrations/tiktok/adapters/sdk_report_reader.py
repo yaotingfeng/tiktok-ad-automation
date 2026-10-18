@@ -174,9 +174,11 @@ class SdkReportReader:
         )
         return page_from_data(data, requested_page=page)
 
-    def material_ad_links(self, *, advertiser_id, page):
+    def material_ad_links(self, *, advertiser_id, page, ad_ids=()):
         # 概览按“广告 × 主素材”分组时不返回收入，只用于对照；平台按帖子 ID 筛选
-        # 不生效，且无论日期都返回账户当前全部广告的素材，因此直接查全量历史。
+        # 不生效。按已确认广告 ID 筛选其当前素材；不传日期，仍查广告的完整生命周期。
+        if len(ad_ids) > 200 or len(set(ad_ids)) != len(ad_ids):
+            raise DomainError("report_query_invalid", "素材概览广告筛选范围无效")
         data = self._send(
             "reports.material_overview",
             advertiser_id,
@@ -187,6 +189,9 @@ class SdkReportReader:
                 "query_lifetime": True,
                 "page": page,
                 "page_size": 100,
+                **(
+                    {"filtering": {"smart_plus_ad_ids": list(ad_ids)}} if ad_ids else {}
+                ),
             },
         )
         return page_from_data(data, requested_page=page)
