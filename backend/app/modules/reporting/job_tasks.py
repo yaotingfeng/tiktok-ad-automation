@@ -296,6 +296,31 @@ def _dispatch_directories(session, now):
     ).one()
     available = max(0, DIRECTORY_DISPATCH_WINDOW - inflight)
     targeted_available = targeted_capacity(session, now)
+    lane_ranked = (
+        select(
+            AdDirectoryRun.id,
+            func.row_number()
+            .over(
+                partition_by=(targeted, col(AdDirectoryRun.tenant_id)),
+                order_by=(
+                    targeted.desc(),
+                    col(AdDirectoryRun.created_at),
+                    col(AdDirectoryRun.id),
+                ),
+            )
+            .label("lane_rn"),
+        ).where(
+            (targeted & (targeted_available > 0)) | (~targeted & (available > 0)),
+            col(AdDirectoryRun.status).in_(["QUEUED", "RUNNING", "WAITING_REMOTE"]),
+            AdDirectoryRun.channel == "OFFICIAL_API",
+            col(AdDirectoryRun.next_attempt_at).is_(None)
+            | (col(AdDirectoryRun.next_attempt_at) <= now),
+            # 租约过期的运行会进入新代数、生成新投递标识，仍需入队。
+            col(AdDirectoryRun.claimed_until).is_(None) & (~enqueued | lost)
+            | (col(AdDirectoryRun.claimed_until) <= now),
+        )
+    ).subquery()
+    # 各lane先按真实空槽裁剪，再恢复原租户逐轮次序；小批量也不会先取同租户两类。
     ranked = (
         select(
             AdDirectoryRun.id,
@@ -309,15 +334,11 @@ def _dispatch_directories(session, now):
                 ),
             )
             .label("rn"),
-        ).where(
-            (targeted & (targeted_available > 0)) | (~targeted & (available > 0)),
-            col(AdDirectoryRun.status).in_(["QUEUED", "RUNNING", "WAITING_REMOTE"]),
-            AdDirectoryRun.channel == "OFFICIAL_API",
-            col(AdDirectoryRun.next_attempt_at).is_(None)
-            | (col(AdDirectoryRun.next_attempt_at) <= now),
-            # 租约过期的运行会进入新代数、生成新投递标识，仍需入队。
-            col(AdDirectoryRun.claimed_until).is_(None) & (~enqueued | lost)
-            | (col(AdDirectoryRun.claimed_until) <= now),
+        )
+        .join(lane_ranked, lane_ranked.c.id == AdDirectoryRun.id)
+        .where(
+            lane_ranked.c.lane_rn
+            <= case((targeted, targeted_available), else_=available)
         )
     ).subquery()
     rows = session.exec(
@@ -703,17 +724,26 @@ def _report_refill_after(database_engine, redis_client, job):
                 )
                 # 当前步骤提交后直接执行有锁本地领取；新消息仍写正常 outbox，
                 # 去掉先发 control 唤醒再领取的双跳，不在读取 Worker 内发送 broker。
-                _dispatch_pending(database_engine, now, allow_backfill=allow_backfill)
+                # 仅补报表槽；目录保留自身完成唤醒和Control调度，不能每个事实步骤
+                # 都重新搬运其独立积压、延长报表窗口锁和CPU占用。
+                _dispatch_pending(
+                    database_engine,
+                    now,
+                    allow_backfill=allow_backfill,
+                    include_directories=False,
+                )
             except Exception:
                 # 已提交的报表不能因补位消息失败改成失败；30 秒 Beat 会再次补位。
                 logger.exception("report direct refill failed: job=%s", job.id)
 
 
-def _dispatch_pending(database_engine, now, *, allow_backfill=True):
+def _dispatch_pending(
+    database_engine, now, *, allow_backfill=True, include_directories=True
+):
     with Session(database_engine) as session, session.begin():
-        return _dispatch_report_jobs(
-            session, now, allow_backfill=allow_backfill
-        ) + _dispatch_directories(session, now)
+        return _dispatch_report_jobs(session, now, allow_backfill=allow_backfill) + (
+            _dispatch_directories(session, now) if include_directories else 0
+        )
 
 
 def _failed(session, job, code):

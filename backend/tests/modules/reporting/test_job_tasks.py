@@ -885,6 +885,11 @@ def test_report_worker_renews_lease_and_directly_refills_outbox(
 
     monkeypatch.setattr(job_tasks.settings, "ADS_SYNC_ENABLED", True)
     monkeypatch.setattr(job_tasks, "_reader_for", reader)
+
+    def forbidden_directory_scan(*_args, **_kwargs):
+        raise AssertionError("报表完成补位不得扫描无关目录积压")
+
+    monkeypatch.setattr(job_tasks, "_dispatch_directories", forbidden_directory_scan)
     if refill_failed:
 
         def fail_refill(*_args, **_kwargs):
@@ -1513,3 +1518,126 @@ def test_low_budget_links_only_claim_current_day_with_shared_capacity(
         with factory() as session:
             assert session.get(ReportSyncJob, current).status == "RUNNING"
     assert job_tasks._dispatch_pending(engine, now, allow_backfill=False) == 0
+
+
+@pytest.mark.parametrize("full_slots,targeted_slots", [(2, 1), (0, 1), (2, 0)])
+def test_directory_dispatch_loads_only_available_candidates(
+    session, sync_seed, monkeypatch, full_slots, targeted_slots
+):
+    """大积压不能完整搬进ORM；独立两类空槽仍须各自填满。"""
+    from datetime import timedelta
+
+    from sqlalchemy import event
+
+    from app.jobs.models import PendingDispatch
+    from app.modules.ads import directory_dispatch
+    from app.modules.ads.sync_models import AdDirectoryRun
+    from tests.modules.reporting.test_jobs import _route
+
+    now = datetime.now(UTC)
+    monkeypatch.setattr(job_tasks, "DIRECTORY_DISPATCH_WINDOW", full_slots)
+    monkeypatch.setattr(directory_dispatch, "TARGETED_DISPATCH_WINDOW", targeted_slots)
+    tenant_id, actor_id = sync_seed.tenant_id, sync_seed.actor_id
+    route, connection_id = _route(sync_seed), sync_seed.connection.id
+    for index in range(60):
+        session.add(
+            AdDirectoryRun(
+                tenant_id=tenant_id,
+                advertiser_id="acc-1",
+                bc_id="bc-a",
+                actor_id=actor_id,
+                connection_id=connection_id,
+                channel="OFFICIAL_API",
+                frozen_route=route,
+                partition_key=f"{index:064x}",
+                query={"ids": [f"ad-{index}"]} if index < 30 else {},
+                status="QUEUED",
+                kind="ad",
+                ad_type="SMART_PLUS",
+                created_at=now - timedelta(seconds=60 - index),
+            )
+        )
+    session.flush()
+    session.expunge_all()
+    loaded = []
+
+    def track_load(_session, row):
+        if isinstance(row, AdDirectoryRun):
+            loaded.append(row.id)
+
+    event.listen(session, "loaded_as_persistent", track_load)
+    try:
+        assert (
+            job_tasks._dispatch_directories(session, now) == full_slots + targeted_slots
+        )
+    finally:
+        event.remove(session, "loaded_as_persistent", track_load)
+    assert len(loaded) <= full_slots + targeted_slots
+    dispatched = session.exec(
+        select(PendingDispatch).where(
+            PendingDispatch.tenant_id == tenant_id,
+        )
+    ).all()
+    assert sum(d.task_name == "ads.sync_step" for d in dispatched) == full_slots
+    assert sum(d.task_name == "ads.targeted_step" for d in dispatched) == targeted_slots
+
+
+@pytest.mark.parametrize("batch", [1, 2])
+def test_bounded_directory_candidates_preserve_tenant_turns(monkeypatch, batch):
+    from contextlib import ExitStack
+    from datetime import timedelta
+
+    from app.jobs.models import PendingDispatch
+    from app.modules.ads import directory_dispatch
+    from app.modules.ads.sync_models import AdDirectoryRun
+    from tests.modules.reporting.sync_conftest import (
+        committed_sync_seed as seed_fixture,
+    )
+    from tests.modules.reporting.test_jobs import _route
+
+    monkeypatch.setattr(job_tasks, "DIRECTORY_DISPATCH_BATCH", batch)
+    monkeypatch.setattr(job_tasks, "DIRECTORY_DISPATCH_WINDOW", 2)
+    monkeypatch.setattr(directory_dispatch, "TARGETED_DISPATCH_WINDOW", 2)
+    with ExitStack() as stack:
+        seeds = [
+            stack.enter_context(contextmanager(seed_fixture.__wrapped__)())
+            for _ in range(2)
+        ]
+        factory, now = seeds[0][1], datetime.now(UTC)
+        with factory() as s, s.begin():
+            for rank, (seed, _) in enumerate(seeds):
+                s.add(
+                    job_tasks.DirectoryDispatchCursor(
+                        tenant_id=seed.tenant_id,
+                        last_dispatched_at=now - timedelta(minutes=2 - rank),
+                    )
+                )
+                for index in range(4):
+                    s.add(
+                        AdDirectoryRun(
+                            tenant_id=seed.tenant_id,
+                            advertiser_id="acc-1",
+                            bc_id="bc-a",
+                            actor_id=seed.actor_id,
+                            connection_id=seed.connection.id,
+                            channel="OFFICIAL_API",
+                            frozen_route=_route(seed),
+                            partition_key=f"{index:064x}",
+                            query={"ids": [f"ad-{index}"]} if index < 2 else {},
+                            status="QUEUED",
+                            kind="ad",
+                            ad_type="SMART_PLUS",
+                            created_at=now - timedelta(seconds=20 - rank * 5 - index),
+                        )
+                    )
+        with factory() as s, s.begin():
+            assert job_tasks._dispatch_directories(s, now) == batch
+        if batch == 1:
+            with factory() as s, s.begin():
+                assert (
+                    job_tasks._dispatch_directories(s, now + timedelta(seconds=1)) == 1
+                )
+        with factory() as s:
+            rows = s.exec(select(PendingDispatch)).all()
+            assert len(rows) == 2
+            assert {r.tenant_id for r in rows} == {seed.tenant_id for seed, _ in seeds}
