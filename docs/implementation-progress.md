@@ -2744,3 +2744,7 @@
 ## 全量目录抓取扩容（实时目录 Worker 共同消费）
 
 2026-10-18 07:3x 生产只读：报表/调用额度均有余量（目录约1次/秒、报表约2.2次/秒，远低于共享10次/秒；PG tkada连接30），瓶颈是全量目录：派发窗口4、仅单槽 `ads-directory` Worker 执行且5分钟忙306秒（sync_step约17步/分，balance_step单次35–43秒），大池排队约2.4小时、目录超30分钟待刷新5071条。改为实时目录 Worker 同时消费 `ads-live-directory,ads-directory`，prefork 4→10、申请500m/2Gi、上限3CPU/4Gi；全量派发窗口4→12。`ads-publish` 仍只由单槽目录 Worker 消费，发布串行不变；无新队列/迁移/开关，平台调用策略不变。K8s/Compose/staging/模板及清单校验同步。部署资产4组、K8s16对象、reporting/ads/jobs/runtime 545项通过。实时目录 Deployment 已先按精确 JSON test 补丁在线调整，代码窗口随本提交发布。
+
+## 生产调用并发放宽（速率上限不变）
+
+07:4x Redis 30次采样：`ads.get_ads` 在途平均2.73/上限3、速率1.9/上限3次/秒；应用在途峰值8/8、大池租户6/6；实时目录 Worker 3分钟内约560次 AccountAdmissionDeferred。仅放宽并发：base `app_max_inflight` 8→12、`tenant_max_inflight` 6→10，`endpoints.ads.get_ads.endpoint_max_inflight` 3→6；`app_calls_per_window` 10、`endpoint_calls_per_window` 3、window/lease、advertiser 4 均不变，TikTok 侧每秒请求上限不增加。生产 Secret 以 JSON test 补丁替换，原值私有留存；随0a0e7138发布重启，API/全部Worker/Beat统一加载。
