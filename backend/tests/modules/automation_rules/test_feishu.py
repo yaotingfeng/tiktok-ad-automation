@@ -111,12 +111,20 @@ def test_only_normal_waiting_for_first_report_is_quiet():
 
     waiting = {"advertiser_id": "a", "reason": "MATERIAL_LINK_MISSING", "count": "29"}
     stale = {"advertiser_id": "b", "reason": "STALE_REPORT"}
-    missing_parent = {
-        "advertiser_id": "c",
-        "reason": "MATERIAL_PARENT_UNKNOWN",
-        "count": "1",
-    }
-    assert actionable_input_issues([waiting, stale, missing_parent]) == [
-        stale,
-        missing_parent,
+    shared = {"advertiser_id": "c", "reason": "MATERIAL_SHARED_REPORT", "count": "1"}
+    assert actionable_input_issues([waiting, stale, shared]) == [stale, shared]
+
+
+def test_sync_lag_material_gaps_do_not_page_without_hits():
+    """实时目录/关联追平中的素材缺口每轮都在变化，无命中时不推飞书，页面仍保留明细。"""
+    from app.modules.automation_rules.data_issues import actionable_input_issues
+
+    lagging = [
+        {"advertiser_id": "a", "reason": reason, "count": "2"}
+        for reason in (
+            "MATERIAL_PARENT_UNKNOWN",
+            "MATERIAL_REPORT_UNLINKED",
+            "MATERIAL_LINK_UNRESOLVED",
+        )
     ]
+    assert actionable_input_issues(lagging) == []
