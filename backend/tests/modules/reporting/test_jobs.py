@@ -541,3 +541,58 @@ def test_material_job_links_new_posts_to_ads_in_same_job(committed_sync_seed):
             select(MaterialPostLink).where(MaterialPostLink.tenant_id == seed.tenant_id)
         ).one()
         assert (link.ad_remote_id, link.ad_material_id) == ("a1", "m1")
+
+
+def test_hot_report_queues_missing_ad_and_parent_directory(
+    session, sync_seed, monkeypatch
+):
+    from app.core.config import settings
+    from app.jobs.models import PendingDispatch
+    from app.modules.ads.sync_models import AdDirectoryRun
+    from app.modules.reporting.jobs import _CountingReader, _run
+
+    monkeypatch.setattr(settings, "ADS_SYNC_ENABLED", True)
+    today = datetime.now(UTC).date()
+    job_id = enqueue_job(
+        session,
+        tenant_id=sync_seed.tenant_id,
+        bc_id="bc-a",
+        kind="ad_day",
+        tier="hot",
+        advertiser_ids=["acc-2"],
+        start=today,
+        end=today,
+        frozen_route=_route(sync_seed),
+        actor_id=sync_seed.actor_id,
+    )
+    job = session.get(ReportSyncJob, job_id)
+    reader = FakeReader(
+        pages={(("acc-2",), (), 1): [ad_row("new-ad", today, adv="acc-2", spend="30")]}
+    )
+    assert _run(session, job, _CountingReader(reader)) == 1
+    runs = session.exec(
+        select(AdDirectoryRun).where(AdDirectoryRun.tenant_id == sync_seed.tenant_id)
+    ).all()
+    assert {r.kind for r in runs} == {"campaign", "adgroup", "ad"}
+    assert all(
+        r.ad_type == "SMART_PLUS" and (r.query["ids"] or r.query["parent_ids"])
+        for r in runs
+    )
+    dispatches = session.exec(
+        select(PendingDispatch).where(PendingDispatch.tenant_id == sync_seed.tenant_id)
+    ).all()
+    assert len(dispatches) == 3 and all(
+        r.task_name == "ads.targeted_step" for r in dispatches
+    )
+    # 后续热刷没有完成前合并相同回读，不能每份报表都叠加投递。
+    assert _run(session, job, _CountingReader(reader)) == 1
+    assert (
+        len(
+            session.exec(
+                select(AdDirectoryRun).where(
+                    AdDirectoryRun.tenant_id == sync_seed.tenant_id
+                )
+            ).all()
+        )
+        == 3
+    )

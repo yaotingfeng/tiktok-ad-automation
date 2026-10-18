@@ -32,6 +32,7 @@ from app.modules.ads.directory_dispatch import (
     TARGETED_TASK_NAME,
     directory_step_key,
     enqueue_directory_step,
+    is_targeted,
 )
 from app.modules.ads.directory_requests import (
     directory_ad_types,
@@ -62,6 +63,8 @@ logger = logging.getLogger(__name__)
 
 # 每次派发最多入队的目录运行数；其余留给后续轮次，保证规划耗时有界。
 DIRECTORY_DISPATCH_BATCH = 1000
+# 全量目录只提前投递少量运行，历史初始请求不再持续填满 broker。
+DIRECTORY_DISPATCH_WINDOW = 4
 # 与 ACK 两个报表执行槽配套；历史积压留在数据库，不提前变成上千个有效租约。
 REPORT_DISPATCH_WINDOW = 2
 # 目录消息发布后超过此时长仍未被领取，视为丢失并重新入队。
@@ -209,9 +212,33 @@ def _dispatch_directories(session, now):
         )
         .exists()
     )
+    # 并发唤醒须原子核对窗口；旧队列自然消费，不清队列或伪造完成。
+    locked = (
+        session.connection()
+        .execute(
+            text(
+                "SELECT pg_try_advisory_xact_lock(hashtextextended('tkada:directory-dispatch-window', 0))"
+            )
+        )
+        .scalar_one()
+    )
+    if not locked:
+        return 0
+    inflight = session.exec(
+        select(func.count())
+        .select_from(AdDirectoryRun)
+        .where(
+            col(AdDirectoryRun.status).in_(["QUEUED", "RUNNING", "WAITING_REMOTE"]),
+            AdDirectoryRun.channel == "OFFICIAL_API",
+            ~targeted,
+            (enqueued & ~lost) | (col(AdDirectoryRun.claimed_until) > now),
+        )
+    ).one()
+    available = max(0, DIRECTORY_DISPATCH_WINDOW - inflight)
     rows = session.exec(
         select(AdDirectoryRun)
         .where(
+            targeted | (available > 0),
             col(AdDirectoryRun.status).in_(["QUEUED", "RUNNING", "WAITING_REMOTE"]),
             AdDirectoryRun.channel == "OFFICIAL_API",
             col(AdDirectoryRun.next_attempt_at).is_(None)
@@ -241,6 +268,10 @@ def _dispatch_directories(session, now):
     )
     count = 0
     for row in rows:
+        if not is_targeted(row):
+            if available <= 0:
+                continue
+            available -= 1
         if row.claimed_until is not None or _message_lost(session, row, now):
             row.claim_generation += 1
             row.claim_token = row.claimed_until = None

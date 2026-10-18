@@ -621,9 +621,22 @@ def test_directory_dispatch_skips_enqueued_runs_and_is_bounded(
         first = job_tasks._dispatch_directories(s, now)
     assert first <= 2
     assert enqueued() == before + first
-    # 反复派发直到全部入队后，再派发不再产生任何重复入队。
+    # 窗口未腾出前不能继续填 broker；模拟消费者完成后再补位，最终每个运行只投递一次。
+    from uuid import UUID
+
+    assert enqueued() <= job_tasks.DIRECTORY_DISPATCH_WINDOW
     for _ in range(total):
         with Session(engine) as s, s.begin():
+            dispatched = s.exec(
+                select(PendingDispatch).where(
+                    PendingDispatch.tenant_id == seed.tenant_id,
+                    PendingDispatch.task_name == "ads.sync_step",
+                )
+            ).all()
+            for dispatch in dispatched:
+                run = s.get(AdDirectoryRun, UUID(dispatch.payload["run_id"]))
+                run.status = "COMPLETE"
+            s.flush()
             job_tasks._dispatch_directories(s, now)
     assert enqueued() == total
     with Session(engine) as s, s.begin():
@@ -1026,3 +1039,93 @@ def test_expired_broker_claim_cannot_bypass_dispatch_window(
         )
         == "FAILED"
     )
+
+
+def test_directory_dispatch_window_does_not_fill_broker_on_repeated_scans(
+    session, sync_seed, monkeypatch
+):
+    from app.core.config import settings
+    from app.jobs.models import PendingDispatch
+    from app.modules.ads.directory_requests import request_directory
+    from app.modules.ads.sync_models import AdDirectoryRun
+    from tests.modules.ads.test_directory_requests import _route
+
+    monkeypatch.setattr(settings, "ADS_SYNC_ENABLED", True)
+    monkeypatch.setattr(job_tasks, "DIRECTORY_DISPATCH_WINDOW", 2, raising=False)
+    request_directory(
+        session,
+        tenant_id=sync_seed.tenant_id,
+        bc_id="bc-a",
+        frozen_route=_route(sync_seed),
+        actor_id=sync_seed.actor_id,
+        advertiser_ids=["acc-1"],
+        scope="directory",
+    )
+    now = datetime.now(UTC)
+    job_tasks._dispatch_directories(session, now)
+    job_tasks._dispatch_directories(session, now)
+    dispatches = session.exec(
+        select(PendingDispatch).where(PendingDispatch.tenant_id == sync_seed.tenant_id)
+    ).all()
+    assert len(dispatches) == 2
+    first_id = dispatches[0].payload["run_id"]
+    from uuid import UUID
+
+    completed = session.get(AdDirectoryRun, UUID(first_id))
+    completed.status = "COMPLETE"
+    session.flush()
+    job_tasks._dispatch_directories(session, now)
+    assert (
+        len(
+            session.exec(
+                select(PendingDispatch).where(
+                    PendingDispatch.tenant_id == sync_seed.tenant_id
+                )
+            ).all()
+        )
+        == 3
+    )
+
+
+def test_concurrent_directory_scans_share_one_dispatch_window(
+    monkeypatch, committed_sync_seed
+):
+    from concurrent.futures import ThreadPoolExecutor
+
+    from app.jobs.models import PendingDispatch
+    from app.modules.ads.directory_requests import request_directory
+    from tests.modules.reporting.test_jobs import _route
+
+    seed, factory = committed_sync_seed
+    monkeypatch.setattr(job_tasks.settings, "ADS_SYNC_ENABLED", True)
+    monkeypatch.setattr(job_tasks, "DIRECTORY_DISPATCH_WINDOW", 2)
+    with factory() as session, session.begin():
+        request_directory(
+            session,
+            tenant_id=seed.tenant_id,
+            bc_id="bc-a",
+            frozen_route=_route(seed),
+            actor_id=seed.actor_id,
+            advertiser_ids=["acc-1"],
+            scope="directory",
+        )
+
+    def scan(_n):
+        with factory() as session, session.begin():
+            return job_tasks._dispatch_directories(session, datetime.now(UTC))
+
+    with ThreadPoolExecutor(2) as pool:
+        counts = list(pool.map(scan, range(2)))
+    assert sum(counts) == 2
+    with factory() as session:
+        assert (
+            len(
+                session.exec(
+                    select(PendingDispatch).where(
+                        PendingDispatch.tenant_id == seed.tenant_id,
+                        PendingDispatch.task_name == "ads.sync_step",
+                    )
+                ).all()
+            )
+            == 2
+        )

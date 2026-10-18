@@ -399,3 +399,36 @@ def test_locate_posts_splits_only_batches_with_targets():
     assert _locate_posts(ads, {"p1", "p2"}, posts_of) == owners
     # 8 个广告、2 个目标：整批 1 次 + 首层左半 1 次 + 每个目标往下每层 1 次，共 6 次。
     assert len(queried) == 6
+
+
+def test_new_directory_retries_cached_unresolved_posts(session, sync_seed):
+    # 首次素材报表先于目录：当时无法找到同名素材，旧负缓存不能永久挡住后来的目录。
+    publish(session, sync_seed, "acc-1", [material_row("late-post", "30", "late.mp4")])
+    assert refresh(session, sync_seed, overview()) == [1]
+    assert refresh(session, sync_seed, overview()) == []
+    use(
+        session,
+        sync_seed,
+        adv="acc-1",
+        ad="late-ad",
+        video="late-video",
+        ad_material="late-material",
+    )
+    session.exec(
+        update(AdMaterialReference)
+        .where(
+            AdMaterialReference.tenant_id == sync_seed.tenant_id,
+            AdMaterialReference.advertiser_id == "acc-1",
+            AdMaterialReference.ad_remote_id == "late-ad",
+        )
+        .values(name="late.mp4")
+    )
+    calls = refresh(session, sync_seed, overview(), ad_posts={"late-ad": ["late-post"]})
+    assert calls == [1, ("ads", ("late-ad",), D, D)]
+    link = session.exec(
+        select(MaterialPostLink).where(
+            MaterialPostLink.tenant_id == sync_seed.tenant_id,
+            MaterialPostLink.main_material_id == "late-post",
+        )
+    ).one()
+    assert link.ad_remote_id == "late-ad" and link.platform_material_id == "late-video"

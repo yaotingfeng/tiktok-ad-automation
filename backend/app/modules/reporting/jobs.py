@@ -20,6 +20,7 @@ from app.integrations.tiktok.contracts.report_reader import RawReportPage, Repor
 from app.integrations.tiktok.sdk import AccountAdmissionDeferred
 from app.modules.accounts.models import AdvertiserAccount
 from app.modules.reporting import material_links, publish
+from app.modules.reporting.directory_refresh import refresh_report_directory
 from app.modules.reporting.store_models import ReportSyncJob
 
 PRIORITY = {"hot": 1, "manual": 1, "material": 2, "daily": 3, "history": 4}
@@ -226,7 +227,7 @@ def _run(session, job: ReportSyncJob, reader: _CountingReader) -> int:
             ):
                 raise
             rows = _read_campaign_batches(reader, advertisers, s, e)
-        return publish.publish_ad_day(
+        count = publish.publish_ad_day(
             session,
             tenant_id=t,
             job_id=j,
@@ -236,6 +237,9 @@ def _run(session, job: ReportSyncJob, reader: _CountingReader) -> int:
             rows=rows,
             campaign_ids=tuple(job.campaign_ids),
         )
+        # 完整报表与补目录 outbox 同事务提交，新投放对象不等全量历史扫描。
+        refresh_report_directory(session, job)
+        return count
     if job.kind == "campaign_hour":
         rows = _read_all(
             lambda p: reader.campaign_hour(advertiser_ids=advertisers, day=s, page=p)

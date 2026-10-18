@@ -231,9 +231,33 @@ def refresh_material_links(
     """在素材日报发布后调用；同一事务内补齐对照，读取失败随任务一起重试。"""
     unlinked = _unlinked(session, tenant_id, advertiser_id)
     scan = session.get(MaterialLinkScan, (tenant_id, advertiser_id))
-    if unlinked and not (
-        scan is not None and set(unlinked) <= set(scan.unresolved_ids)
-    ):
+    cached = scan is not None and set(unlinked) <= set(scan.unresolved_ids)
+    if cached and unlinked:
+        # 首次素材报表可能早于广告目录；新目录出现同名候选后，旧负缓存必须重试。
+        # 没有新候选的已删除帖子仍保持缓存，避免每次热刷整账户重扫。
+        names = sorted({meta[0] for meta in unlinked.values() if meta[0]})
+        changed = (
+            session.connection()
+            .execute(
+                text("""
+                SELECT EXISTS (
+                    SELECT 1 FROM ad_material_reference u JOIN ad_object a
+                    ON a.tenant_id=u.tenant_id AND a.advertiser_id=u.advertiser_id
+                      AND a.kind='ad' AND a.remote_id=u.ad_remote_id
+                    WHERE u.tenant_id=:t AND u.advertiser_id=:a AND u.complete
+                      AND u.name=ANY(:names) AND a.observed_at>:scanned)
+            """),
+                {
+                    "t": tenant_id,
+                    "a": advertiser_id,
+                    "names": names,
+                    "scanned": scan.scanned_at,
+                },
+            )
+            .scalar_one()
+        )
+        cached = not changed
+    if unlinked and not cached:
         values = [
             _overview_link(row, tenant_id, advertiser_id, now)
             for row in read_all(read_overview)
