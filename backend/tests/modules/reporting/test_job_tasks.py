@@ -1190,6 +1190,51 @@ def test_directory_dispatch_window_does_not_fill_broker_on_repeated_scans(
     )
 
 
+def test_expired_claim_frees_directory_window_slot(session, sync_seed, monkeypatch):
+    """消息已被领取、租约过期的运行不再占窗口；否则 6 小时内窗口永久满，全量目录停摆。"""
+    from datetime import timedelta
+    from uuid import UUID
+
+    from app.core.config import settings
+    from app.jobs.models import PendingDispatch
+    from app.modules.ads.directory_requests import request_directory
+    from app.modules.ads.sync_models import AdDirectoryRun
+    from tests.modules.ads.test_directory_requests import _route
+
+    monkeypatch.setattr(settings, "ADS_SYNC_ENABLED", True)
+    monkeypatch.setattr(job_tasks, "DIRECTORY_DISPATCH_WINDOW", 2, raising=False)
+    request_directory(
+        session,
+        tenant_id=sync_seed.tenant_id,
+        bc_id="bc-a",
+        frozen_route=_route(sync_seed),
+        actor_id=sync_seed.actor_id,
+        advertiser_ids=["acc-1"],
+        scope="directory",
+    )
+    now = datetime.now(UTC)
+    job_tasks._dispatch_directories(session, now)
+
+    def sync_dispatches():
+        return session.exec(
+            select(PendingDispatch).where(
+                PendingDispatch.tenant_id == sync_seed.tenant_id,
+                PendingDispatch.task_name == "ads.sync_step",
+            )
+        ).all()
+
+    first = sync_dispatches()
+    assert len(first) == 2
+    # 两条消息都已发布并被 Worker 领取，Worker 随后中断，租约已过期。
+    for dispatch in first:
+        dispatch.published_at = now - timedelta(minutes=30)
+        run = session.get(AdDirectoryRun, UUID(dispatch.payload["run_id"]))
+        run.status = "RUNNING"
+        run.claimed_until = now - timedelta(minutes=5)
+    session.flush()
+    assert job_tasks._dispatch_directories(session, now) == 2
+
+
 def test_concurrent_directory_scans_share_one_dispatch_window(
     monkeypatch, committed_sync_seed
 ):

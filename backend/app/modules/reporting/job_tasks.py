@@ -293,7 +293,10 @@ def _dispatch_directories(session, now):
             col(AdDirectoryRun.status).in_(["QUEUED", "RUNNING", "WAITING_REMOTE"]),
             AdDirectoryRun.channel == "OFFICIAL_API",
             ~targeted,
-            (enqueued & ~lost) | (col(AdDirectoryRun.claimed_until) > now),
+            # 已有领取记录说明本代数消息已被消费；租约过期后不再算在途，否则未判丢失的
+            # 6 小时内窗口被永久占满。与下方候选条件一致，过期运行会换代重新入队。
+            (enqueued & ~lost & col(AdDirectoryRun.claimed_until).is_(None))
+            | (col(AdDirectoryRun.claimed_until) > now),
         )
     ).one()
     available = max(0, DIRECTORY_DISPATCH_WINDOW - inflight)

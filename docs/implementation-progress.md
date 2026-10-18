@@ -2748,3 +2748,7 @@
 ## 生产调用并发放宽（速率上限不变）
 
 07:4x Redis 30次采样：`ads.get_ads` 在途平均2.73/上限3、速率1.9/上限3次/秒；应用在途峰值8/8、大池租户6/6；实时目录 Worker 3分钟内约560次 AccountAdmissionDeferred。仅放宽并发：base `app_max_inflight` 8→12、`tenant_max_inflight` 6→10，`endpoints.ads.get_ads.endpoint_max_inflight` 3→6；`app_calls_per_window` 10、`endpoint_calls_per_window` 3、window/lease、advertiser 4 均不变，TikTok 侧每秒请求上限不增加。生产 Secret 以 JSON test 补丁替换，原值私有留存；随0a0e7138发布重启，API/全部Worker/Beat统一加载。
+
+## 全量目录派发窗口被已消费消息永久占满
+
+08:4x 生产：最近1小时无任何 `ads.sync_step` 派发、10分钟无全量目录完成；2712 条全量运行已被 Worker 领取（claimed_until 已过期）但本代数 pending_dispatch 发布不足6小时，在途计数 `(enqueued & ~lost) | 租约有效` 把它们全算在途，窗口4/12 恒满，直到6小时判丢失前不再派发——扩并发无效的真正原因。改为已有领取记录（claimed_until 非空）且租约过期者不计在途，与同函数候选条件一致；过期运行按原逻辑换代重入队。新增回归先红（0派发）后绿；reporting/ads/jobs/automation_rules 825项通过。
