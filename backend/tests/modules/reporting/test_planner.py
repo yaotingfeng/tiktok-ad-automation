@@ -536,3 +536,54 @@ def test_known_facts_do_not_expand_local_day_or_account_scope(
         planner.known_reporting_accounts(session, plan, accounts=accounts, now=now)
         == set()
     )
+
+
+@pytest.mark.parametrize("account_count", [2, 287])
+def test_confirmed_empty_window_uses_bounded_database_round_trips(
+    session, sync_seed, account_count
+):
+    """32 天空桶确认不能按账户×日期×类型逐条往返数据库。"""
+    from sqlalchemy import event
+
+    from app.modules.accounts.models import AdvertiserAccount
+    from app.modules.reporting.planner import daily_window, mark_confirmed_empty
+
+    accounts = ["acc-1", "acc-2"] + [f"empty-{i}" for i in range(account_count - 2)]
+    for account in accounts[2:]:
+        session.add(
+            AdvertiserAccount(
+                tenant_id=sync_seed.tenant_id, advertiser_id=account, timezone="UTC"
+            )
+        )
+    session.flush()
+    ensure_bc_plans(session, now=NOW)
+    plan = session.get(AdSyncBc, (sync_seed.tenant_id, "bc-a"))
+    statements = []
+
+    def collect(_conn, _cursor, statement, _parameters, _context, _executemany):
+        statements.append(statement)
+
+    connection = session.connection()
+    event.listen(connection, "before_cursor_execute", collect)
+    try:
+        first = mark_confirmed_empty(
+            session,
+            plan,
+            inactive=accounts,
+            window_fn=daily_window(NOW),
+            now=NOW,
+        )
+    finally:
+        event.remove(connection, "before_cursor_execute", collect)
+    assert first == account_count * 32 * 3
+    assert len(statements) <= 10
+    assert (
+        mark_confirmed_empty(
+            session,
+            plan,
+            inactive=accounts,
+            window_fn=daily_window(NOW),
+            now=NOW,
+        )
+        == 0
+    )

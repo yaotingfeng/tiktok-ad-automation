@@ -331,51 +331,79 @@ def mark_confirmed_empty(
     完整确认空桶采用 PG 的实际完成时刻，和报表发布水位使用同一个时钟。
     """
     del now  # 计划时钟不作为发布水位；窗口日期已由 window_fn 决定。
+    if not inactive:
+        return 0
     windows = _group_by_window(session, plan, inactive, window_fn)
-    advertisers_to_lock = sorted(
-        {account for accounts in windows.values() for account in accounts}
+    scopes = sorted(
+        f"report:{plan.tenant_id}:{account}:{kind}"
+        for account in {a for accounts in windows.values() for a in accounts}
+        for kind in ("ad_day", "material_day")
     )
-    for advertiser in advertisers_to_lock:
-        for kind in ("ad_day", "material_day"):
-            # account_day 与广告日共用发布锁；锁后重新读取 ORM 状态，防缓存旧零值。
-            session.connection().execute(
-                text("SELECT pg_advisory_xact_lock(hashtextextended(:scope, 0))"),
-                {"scope": f"report:{plan.tenant_id}:{advertiser}:{kind}"},
-            )
+    if not scopes:
+        return 0
+    # 锁与发布器完全相同，仍按固定顺序领取；一次 SQL 取完，避免数百次网络往返。
+    session.connection().execute(
+        text("""
+        WITH ordered AS MATERIALIZED (
+            SELECT scope FROM unnest(CAST(:scopes AS text[])) AS locks(scope)
+            ORDER BY scope)
+        SELECT pg_advisory_xact_lock(hashtextextended(scope, 0)) FROM ordered
+        """),
+        {"scopes": scopes},
+    ).all()
     completed_at = (
         session.connection().execute(text("SELECT clock_timestamp()")).scalar_one()
     )
+    keys = """
+        SELECT a.advertiser_id, k.report_kind, CAST(:start AS date) + d.day_offset AS stat_date
+        FROM unnest(CAST(:accounts AS text[])) AS a(advertiser_id)
+        CROSS JOIN unnest(CAST(:kinds AS text[])) AS k(report_kind)
+        CROSS JOIN generate_series(0, :days - 1) AS d(day_offset)
+    """
     marked = 0
     for (start, end), advertisers in windows.items():
-        day = start
-        while day <= end:
-            for advertiser in advertisers:
-                for kind in CONFIRMED_EMPTY_KINDS:
-                    key = (plan.tenant_id, advertiser, kind, day)
-                    state = session.get(ReportSyncState, key, populate_existing=True)
-                    if state is not None and state.status == "COMPLETE":
-                        if state.row_count:
-                            continue  # 已有事实不能仅凭BC零消耗筛查冒充重新完整拉取。
-                        state.last_success_at = state.updated_at = completed_at
-                        continue
-                    if state is None:
-                        state = ReportSyncState(
-                            tenant_id=plan.tenant_id,
-                            advertiser_id=advertiser,
-                            report_kind=kind,
-                            stat_date=day,
-                            status="COMPLETE",
-                        )
-                        session.add(state)
-                    state.status, state.error_code, state.row_count = (
-                        "COMPLETE",
-                        None,
-                        0,
-                    )
-                    state.last_success_at = state.updated_at = completed_at
-                    marked += 1
-            day += timedelta(days=1)
-    session.flush()
+        params = {
+            "tenant": plan.tenant_id,
+            "accounts": advertisers,
+            "kinds": list(CONFIRMED_EMPTY_KINDS),
+            "start": start,
+            "days": (end - start).days + 1,
+            "completed": completed_at,
+        }
+        # 已持有全部发布锁，先统计真正新确认的空桶；旧 COMPLETE/0 只刷新水位。
+        marked += (
+            session.connection()
+            .execute(
+                text(f"""
+            SELECT count(*) FROM ({keys}) candidates
+            LEFT JOIN report_sync_state s ON s.tenant_id=:tenant
+                AND s.advertiser_id=candidates.advertiser_id
+                AND s.report_kind=candidates.report_kind AND s.stat_date=candidates.stat_date
+            WHERE s.status IS DISTINCT FROM 'COMPLETE'
+            """),
+                params,
+            )
+            .scalar_one()
+        )
+        # PG 批量生成日期和类型，一次写完整窗口；已有非空成功事实不改行数与时间。
+        session.connection().execute(
+            text(f"""
+            INSERT INTO report_sync_state AS existing
+                (tenant_id,advertiser_id,report_kind,stat_date,status,row_count,last_success_at,updated_at)
+            SELECT :tenant,advertiser_id,report_kind,stat_date,'COMPLETE',0,:completed,:completed
+            FROM ({keys}) candidates WHERE true
+            ON CONFLICT (tenant_id,advertiser_id,report_kind,stat_date) DO UPDATE SET
+                status='COMPLETE',row_count=0,
+                error_code=CASE WHEN existing.status='COMPLETE' THEN existing.error_code ELSE NULL END,
+                last_success_at=EXCLUDED.last_success_at,updated_at=EXCLUDED.updated_at
+            WHERE existing.status<>'COMPLETE' OR existing.row_count=0
+            """),
+            params,
+        )
+    # 原函数会刷新已缓存的状态；批量 SQL 后过期同类 ORM 缓存，避免后续读到旧零值。
+    for state in list(session.identity_map.values()):
+        if isinstance(state, ReportSyncState):
+            session.expire(state)
     return marked
 
 
