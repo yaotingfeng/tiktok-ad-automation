@@ -20,7 +20,7 @@ from app.integrations.tiktok.contracts.report_reader import ReportReader
 from app.modules.accounts.connection_models import BCConnectionBinding
 from app.modules.accounts.models import AdvertiserAccount, DiscoveryRun
 from app.modules.accounts.routing import freeze_route
-from app.modules.reporting.jobs import enqueue_job
+from app.modules.reporting.jobs import enqueue_job, enqueue_jobs
 from app.modules.reporting.partitions import ensure_month_partitions_for_range
 from app.modules.reporting.store_models import (
     AdSyncAccount,
@@ -448,24 +448,23 @@ def plan_hot(
     for (start, end), advertisers in _group_by_window(
         session, plan, active, lambda tz: _hot_window(tz, now)
     ).items():
-        for batch in batch_accounts(
-            session,
-            tenant_id=plan.tenant_id,
-            advertiser_ids=advertisers,
-            days=(end - start).days + 1,
-        ):
-            # 系列小时报不在热刷新中定时拉取，只在用户打开小时趋势时按需拉取。
-            count += bool(
-                enqueue_job(
+        # 系列小时报仍按需读取；这里只批量写入原有广告日报任务。
+        count += len(
+            enqueue_jobs(
+                session,
+                kind="ad_day",
+                tier=tier,
+                advertiser_groups=batch_accounts(
                     session,
-                    kind="ad_day",
-                    tier=tier,
-                    advertiser_ids=batch,
-                    start=start,
-                    end=end,
-                    **_common(plan),
-                )
+                    tenant_id=plan.tenant_id,
+                    advertiser_ids=advertisers,
+                    days=(end - start).days + 1,
+                ),
+                start=start,
+                end=end,
+                **_common(plan),
             )
+        )
     return count
 
 
@@ -545,18 +544,18 @@ def plan_material(session, plan, *, active, now, tier: str = "material") -> int:
     for (start, end), advertisers in _group_by_window(
         session, plan, active, lambda tz: _hot_window(tz, now)
     ).items():
-        for advertiser in advertisers:  # 素材报表不支持多账户合并
-            count += bool(
-                enqueue_job(
-                    session,
-                    kind="material_day",
-                    tier=tier,
-                    advertiser_ids=[advertiser],
-                    start=start,
-                    end=end,
-                    **_common(plan),
-                )
+        # 素材读取仍每任务一个账户，数据库规划不再每账户查询整份在途覆盖。
+        count += len(
+            enqueue_jobs(
+                session,
+                kind="material_day",
+                tier=tier,
+                advertiser_groups=([advertiser] for advertiser in advertisers),
+                start=start,
+                end=end,
+                **_common(plan),
             )
+        )
     return count
 
 
@@ -633,18 +632,17 @@ def plan_daily(session, plan, *, active_32d, now) -> int:
                         days=(b - a).days + 1,
                     )
                 )
-                for batch in batches:
-                    count += bool(
-                        enqueue_job(
-                            session,
-                            kind=kind,
-                            tier="daily",
-                            advertiser_ids=batch,
-                            start=a,
-                            end=b,
-                            **_common(plan),
-                        )
+                count += len(
+                    enqueue_jobs(
+                        session,
+                        kind=kind,
+                        tier="daily",
+                        advertiser_groups=batches,
+                        start=a,
+                        end=b,
+                        **_common(plan),
                     )
+                )
     return count
 
 

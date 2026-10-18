@@ -12,7 +12,8 @@ from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
 
-from sqlalchemy import delete, text
+from sqlalchemy import delete, func, text
+from sqlalchemy.dialects.postgresql import insert
 from sqlmodel import Session, col, select
 
 from app.core.errors import DomainError
@@ -97,10 +98,47 @@ def enqueue_job(
     due_at=None,
     requested_at: datetime | None = None,
 ) -> UUID | None:
-    """同一租户相同 (类型, 档位, 账户, 日期段, 系列) 未结束时不重复入队；返回新任务 ID 或 None。"""
-    if PRIORITY[tier] <= 2:
-        # 覆盖查询与插入必须处于同一个范围事务锁；并发的 [1,2] / [2,3]
-        # 生产者不能都在查询时看见空集合，再各自重复安排账户 2。
+    """单任务入口与周期批量规划共用去重和写入，未新建时返回 None。"""
+    ids = enqueue_jobs(
+        session,
+        tenant_id=tenant_id,
+        bc_id=bc_id,
+        kind=kind,
+        tier=tier,
+        advertiser_groups=[advertiser_ids],
+        start=start,
+        end=end,
+        frozen_route=frozen_route,
+        actor_id=actor_id,
+        campaign_ids=campaign_ids,
+        due_at=due_at,
+        requested_at=requested_at,
+    )
+    return ids[0] if ids else None
+
+
+def enqueue_jobs(
+    session: Session,
+    *,
+    tenant_id,
+    bc_id,
+    kind,
+    tier,
+    advertiser_groups,
+    start,
+    end,
+    frozen_route,
+    actor_id,
+    campaign_ids=(),
+    due_at=None,
+    requested_at: datetime | None = None,
+) -> list[UUID]:
+    """同一冻结范围整批去重、整批写入；每个账户组仍是一条独立同步任务。"""
+    priority = PRIORITY[tier]
+    groups = [list(group) for group in advertiser_groups]
+    if not groups:
+        return []
+    if priority <= 2:
         coverage_key = _key(
             tenant_id,
             kind,
@@ -113,12 +151,11 @@ def enqueue_job(
             actor_id,
             frozen_route,
         )
+        # 同一范围仍由原事务锁串行规划；批内覆盖只需读取一次。
         session.connection().execute(
             text("SELECT pg_advisory_xact_lock(hashtextextended(:scope, 0))"),
             {"scope": f"report-enqueue:{coverage_key}"},
         )
-        # 相邻周期的批次边界可能变化；按实际账户与冻结范围合并正在执行的覆盖，
-        # 不能只按五账户数组生成新键，否则新增一个账户就会再复制整轮热任务。
         pending = session.exec(
             select(ReportSyncJob.advertiser_ids).where(
                 ReportSyncJob.tenant_id == tenant_id,
@@ -134,56 +171,63 @@ def enqueue_job(
             )
         ).all()
         covered = {advertiser for group in pending for advertiser in group}
-        advertiser_ids = [
-            advertiser for advertiser in advertiser_ids if advertiser not in covered
-        ]
-        if not advertiser_ids:
-            return None
-    job_id = uuid4()
-    row = (
-        session.connection()
-        .execute(
-            text("""
-        INSERT INTO report_sync_job (id, tenant_id, bc_id, kind, priority, status, advertiser_ids,
-            campaign_ids, start_date, end_date, job_key, frozen_route, actor_id, due_at, attempts,
-            request_count, progress, created_at)
-        VALUES (:id, :tenant, :bc, :kind, :priority, 'QUEUED', CAST(:advs AS jsonb), CAST(:camps AS jsonb),
-            :start, :end, :key, CAST(:route AS jsonb), :actor, :due, 0, 0, CAST(:progress AS jsonb), clock_timestamp())
-        ON CONFLICT (job_key) WHERE status IN ('QUEUED','RUNNING','WAITING') DO NOTHING
-        RETURNING id"""),
-            parameters={
-                "id": job_id,
-                "tenant": tenant_id,
-                "bc": bc_id,
-                "kind": kind,
-                "priority": PRIORITY[tier],
-                "advs": json.dumps(list(advertiser_ids)),
-                "camps": json.dumps(list(campaign_ids)),
-                "start": start,
-                "end": end,
-                "key": _key(
-                    tenant_id,
-                    kind,
-                    tier,
-                    advertiser_ids,
-                    start,
-                    end,
-                    campaign_ids,
-                    bc_id,
-                    actor_id,
-                    frozen_route,
-                ),
-                "route": json.dumps(frozen_route),
-                "actor": actor_id,
-                "due": due_at or datetime.now(UTC),
-                "progress": json.dumps(
-                    {"requested_at": requested_at.isoformat()} if requested_at else {}
-                ),
-            },
+        remaining = []
+        for group in groups:
+            uncovered = [
+                advertiser for advertiser in group if advertiser not in covered
+            ]
+            if uncovered:
+                remaining.append(uncovered)
+                covered.update(uncovered)
+        groups = remaining
+    if not groups:
+        return []
+    rows = [
+        {
+            "id": uuid4(),
+            "tenant_id": tenant_id,
+            "bc_id": bc_id,
+            "kind": kind,
+            "priority": priority,
+            "status": "QUEUED",
+            "advertiser_ids": advertisers,
+            "campaign_ids": list(campaign_ids),
+            "start_date": start,
+            "end_date": end,
+            "job_key": _key(
+                tenant_id,
+                kind,
+                tier,
+                advertisers,
+                start,
+                end,
+                campaign_ids,
+                bc_id,
+                actor_id,
+                frozen_route,
+            ),
+            "frozen_route": frozen_route,
+            "actor_id": actor_id,
+            "due_at": due_at or datetime.now(UTC),
+            "attempts": 0,
+            "request_count": 0,
+            "progress": {"requested_at": requested_at.isoformat()}
+            if requested_at
+            else {},
+        }
+        for advertisers in groups
+    ]
+    # SQLAlchemy 按 PostgreSQL 参数上限批量发送，保留原部分唯一键的并发兜底。
+    statement = (
+        insert(ReportSyncJob)
+        .values(created_at=func.clock_timestamp())
+        .on_conflict_do_nothing(
+            index_elements=["job_key"],
+            index_where=text("status IN ('QUEUED','RUNNING','WAITING')"),
         )
-        .first()
+        .returning(col(ReportSyncJob.id))
     )
-    return row[0] if row else None
+    return list(session.connection().execute(statement, rows).scalars())
 
 
 def claim_jobs(

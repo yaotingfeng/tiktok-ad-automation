@@ -587,3 +587,48 @@ def test_confirmed_empty_window_uses_bounded_database_round_trips(
         )
         == 0
     )
+
+
+@pytest.mark.parametrize("account_count", [24, 586])
+def test_material_cycle_enqueues_accounts_with_bounded_database_round_trips(
+    session, sync_seed, account_count
+):
+    from sqlalchemy import event
+
+    from app.modules.accounts.models import AdvertiserAccount
+    from app.modules.reporting.planner import plan_material
+
+    accounts = ["acc-1", "acc-2"] + [f"material-{i}" for i in range(account_count - 2)]
+    session.add_all(
+        AdvertiserAccount(
+            tenant_id=sync_seed.tenant_id, advertiser_id=account, timezone="UTC"
+        )
+        for account in accounts[2:]
+    )
+    session.flush()
+    ensure_bc_plans(session, now=NOW)
+    plan = session.get(AdSyncBc, (sync_seed.tenant_id, "bc-a"))
+    statements = []
+
+    def collect(_conn, _cursor, statement, _parameters, _context, _executemany):
+        statements.append(statement)
+
+    connection = session.connection()
+    event.listen(connection, "before_cursor_execute", collect)
+    try:
+        assert plan_material(session, plan, active=accounts, now=NOW) == account_count
+        first_count = len(statements)
+        statements.clear()
+        assert plan_material(session, plan, active=accounts, now=NOW) == 0
+        repeated_count = len(statements)
+    finally:
+        event.remove(connection, "before_cursor_execute", collect)
+    assert first_count <= 10
+    assert repeated_count <= 10
+    jobs = session.exec(
+        select(ReportSyncJob).where(ReportSyncJob.tenant_id == sync_seed.tenant_id)
+    ).all()
+    assert len(jobs) == account_count
+    assert all(
+        job.kind == "material_day" and len(job.advertiser_ids) == 1 for job in jobs
+    )

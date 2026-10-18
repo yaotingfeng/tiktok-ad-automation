@@ -720,3 +720,32 @@ def test_material_publish_only_queues_real_link_gaps(
         session.refresh(post)
         assert post.platform_material_id == "v0"
     assert reader.calls == [1]  # 减负判断只查本地库，不增加平台读取。
+
+
+@pytest.mark.parametrize("tier", ["hot", "daily"])
+def test_bulk_enqueue_preserves_coverage_and_unique_job_fallback(
+    session, sync_seed, tier
+):
+    day = datetime.now(UTC).date()
+    common = {
+        "tenant_id": sync_seed.tenant_id,
+        "bc_id": "bc-a",
+        "kind": "ad_day",
+        "tier": tier,
+        "start": day,
+        "end": day,
+        "frozen_route": _route(sync_seed),
+        "actor_id": sync_seed.actor_id,
+    }
+    groups = [["acc-1", "acc-2"], ["acc-2", "acc-3"]]
+    if tier == "daily":
+        groups = [["acc-1", "acc-2"], ["acc-1", "acc-2"]]
+    ids = jobs.enqueue_jobs(session, advertiser_groups=groups, **common)
+    rows = session.exec(
+        select(ReportSyncJob).where(ReportSyncJob.tenant_id == sync_seed.tenant_id)
+    ).all()
+    assert len(rows) == len(ids) == (2 if tier == "hot" else 1)
+    if tier == "hot":
+        advertisers = [adv for row in rows for adv in row.advertiser_ids]
+        assert sorted(advertisers) == ["acc-1", "acc-2", "acc-3"]
+    assert jobs.enqueue_jobs(session, advertiser_groups=groups, **common) == []
