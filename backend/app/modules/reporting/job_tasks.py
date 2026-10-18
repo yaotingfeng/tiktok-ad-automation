@@ -674,9 +674,9 @@ def _plan_one(
         # 筛选本轮成功时已规划热报，不重复创建；额外规则账户也仅取本 BC 已确认归属。
         if plan.enabled and material_due_at is not None:
             refresh_accounts = set(plan.last_active_advertiser_ids)
-            if not hot_planned:
-                # 筛选退避时，规则空账户仍须真实刷新；筛选本轮成功则已批量确认
-                # 无消耗账户的空状态，不再对同一空桶多发一次素材请求。
+            # 沿用最近一个热刷新周期内的完整筛选；两个到期时钟错开时，
+            # 已确认的空账户也不用再逐个读取。筛选过期才扩展到全部规则账户。
+            if plan.active_screened_at is None or plan.active_screened_at < now - hot:
                 refresh_accounts.update(
                     rule_accounts(
                         session,
@@ -685,6 +685,7 @@ def _plan_one(
                         accounts=accounts,
                     )
                 )
+            if not hot_planned:
                 planner.plan_hot(
                     session, plan, active=sorted(refresh_accounts), now=now
                 )

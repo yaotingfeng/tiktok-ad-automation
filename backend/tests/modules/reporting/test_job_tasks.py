@@ -1873,20 +1873,25 @@ def test_screening_deferral_cannot_skip_due_live_reports(
         assert plan.next_daily_at >= now + timedelta(minutes=5)
 
 
-@pytest.mark.parametrize("screen_ok", [False, True])
+@pytest.mark.parametrize("screen_state", ["success", "backoff", "recent", "expired"])
 @pytest.mark.parametrize(
     "rule_bc,enabled", [("bc-a", True), ("bc-b", True), ("bc-a", False)]
 )
 def test_screening_backoff_keeps_exact_enabled_rule_accounts_fresh(
-    monkeypatch, committed_sync_seed, redis_client, rule_bc, enabled, screen_ok
+    monkeypatch, committed_sync_seed, redis_client, rule_bc, enabled, screen_state
 ):
     from datetime import timedelta
 
     from app.core.db import engine
     from app.modules.automation_rules.models import AutomationRule
     from app.modules.reporting import planner
-    from app.modules.reporting.store_models import AdSyncBc, ReportSyncJob
+    from app.modules.reporting.store_models import (
+        AdSyncBc,
+        ReportSyncJob,
+        ReportSyncState,
+    )
 
+    screen_ok = screen_state == "success"
     seed, factory = committed_sync_seed
     now = datetime.now(UTC)
     with factory() as s, s.begin():
@@ -1895,6 +1900,22 @@ def test_screening_backoff_keeps_exact_enabled_rule_accounts_fresh(
         plan.last_active_advertiser_ids = ["acc-1"]
         plan.next_daily_at = plan.next_directory_at = now + timedelta(minutes=5)
         plan.next_hot_at = now if screen_ok else now + timedelta(minutes=5)
+        if screen_state in {"recent", "expired"}:
+            plan.active_screened_at = now - timedelta(
+                minutes=1 if screen_state == "recent" else 3
+            )
+            for kind in ("ad_day", "material_day", "account_day"):
+                s.add(
+                    ReportSyncState(
+                        tenant_id=seed.tenant_id,
+                        advertiser_id="acc-2",
+                        report_kind=kind,
+                        stat_date=now.date(),
+                        status="COMPLETE",
+                        row_count=0,
+                        last_success_at=plan.active_screened_at,
+                    )
+                )
         s.add(
             AutomationRule(
                 tenant_id=seed.tenant_id,
@@ -1943,10 +1964,20 @@ def test_screening_backoff_keeps_exact_enabled_rule_accounts_fresh(
         ).all()
         expected = (
             {"acc-1", "acc-2"}
-            if enabled and rule_bc == "bc-a" and not screen_ok
+            if enabled and rule_bc == "bc-a" and screen_state in {"backoff", "expired"}
             else {"acc-1"}
         )
         for kind in ("ad_day", "material_day"):
             assert {
                 a for j in jobs if j.kind == kind for a in j.advertiser_ids
             } == expected
+        from app.modules.reporting.health import measure_health
+
+        metrics, _, _ = measure_health(
+            s, s.get(AdSyncBc, (seed.tenant_id, "bc-a")), now=now
+        )
+        assert (
+            metrics["stale_ad_accounts"]
+            == metrics["stale_material_accounts"]
+            == (len(expected) if screen_state == "backoff" else 1)
+        )
