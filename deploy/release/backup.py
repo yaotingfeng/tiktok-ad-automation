@@ -136,9 +136,12 @@ def detached(pod, container, script, *args):
     return log
 
 
-# PostgreSQL 用目录格式并行导出，备份里唯一的目录项；其余都是普通文件。
+# PostgreSQL 用目录格式导出，备份里唯一的目录项；其余都是普通文件。
 PG_DUMP = "postgres.dir"
-PG_DUMP_JOBS = 4
+# 单连接导出。源库经 PolarDB 读写分离代理（rwlb）访问：并行导出的子连接须导入主连接快照、
+# 并以 NOWAIT 申请表锁，被代理分到其他节点或遇到排他锁请求即报错，只留下 toc.dat。
+# 2026-10-18 发布多次因此在停写后失败；同库单连接实测 292 秒（并行 101–187 秒）。
+PG_DUMP_JOBS = 1
 # 目录的校验和：按文件名字节序逐个 sha256sum，再对整段输出取 sha256（与 archive_check.py 一致）。
 TREE_DIGEST = 'cd "$1" && LC_ALL=C sha256sum -- * | sha256sum'
 
@@ -221,8 +224,7 @@ def snapshot(release):
         "postgres",
         'rm -f "$0"\nset -e\n'
         + exports
-        # 目录格式按表并行导出（ad_object 等数个 GB 级大表），lz4 压缩；
-        # 同一快照下多连接一致导出，只读。
+        # 目录格式导出（ad_object 等数个 GB 级大表），lz4 压缩；单连接单快照，只读。
         + f"\npg_dump -Fd --jobs={PG_DUMP_JOBS} --compress=lz4"
         + " --no-owner --no-acl --schema=public -f "
         + shlex.quote(target + "/" + PG_DUMP)

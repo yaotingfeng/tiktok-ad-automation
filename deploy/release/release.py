@@ -466,7 +466,7 @@ class Release:
                 "command": ["sleep", "86400"],
                 "volumeMounts": [backup],
                 "resources": {
-                    # 4 进程并行导出与压缩。
+                    # 单连接导出与 lz4 压缩；见 backup.PG_DUMP_JOBS。
                     "requests": {"cpu": "100m", "memory": "64Mi"},
                     "limits": {"cpu": "4", "memory": "1Gi"},
                 },
