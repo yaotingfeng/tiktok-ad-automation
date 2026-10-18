@@ -2780,3 +2780,7 @@
 - 大池2,635条未完成素材扫描仅782个独立冻结查询分区；同范围先推进最新素材扫描，真实成功后由既有superseded机制处理旧轮，不删除任务或拼接分页，不跨租户/BC/执行人/授权合并。生产只读选择谓词约21ms。无迁移、新开关、并发或额度变化。
 - 真实PG/Redis组合：`python3 .runtime/sync-rule-health-20261018/service-time-test-runner.py tests/modules/ads tests/modules/reporting tests/jobs tests/modules/automation_rules -q` 最终834 passed、3 skipped；目录执行/派发组合73 passed。额度四参数和同范围最新优先回归先红后绿，另测旧消息、换代竞态、同页恢复发布、不同路由隔离。Ruff、全app ty、编译、部署资产4组和diff检查通过。
 - 19:00原三PAUSE规则自然零命中且NOT_REQUIRED；真实STALE_REPORT仍提醒，未增加屏蔽。修复本地提交，尚未推送/发布，线上缺口仍待标准发布及自然周期验收。记录见 docs/validation/2026-10-18-directory-admission-recovery.md，私有只读/测试证据在`.runtime/remaining-sync-20261018/`。
+
+## 定向回读窗口 8→32（目录 30 分钟新鲜度的真正瓶颈）
+
+3b498c70 上线后全量对象目录已清空（在途0），但健康“待补齐目录”大池仍 5326/原骏伯 778。只读剖析：其中仅约70条为对象缺失，约5250条为对象存在但父链 observed_at 超30分钟；有消耗广告的新鲜度由热报触发的定向回读（每份热报≤100条在投广告及父链）维持，而非全量目录。定向回读积压约3300个运行、10分钟新建约333/完成约229、大池排队P50约2.2小时，在途仅4/8，实时目录 Worker 10进程大半空等派发。`TARGETED_DISPATCH_WINDOW` 8→32；实际调用仍由准入策略限流。原写死8的派发窗口测试改为显式固定窗口；reporting/ads/jobs/automation_rules 834项、app ty、Ruff 通过。

@@ -85,10 +85,12 @@ def test_targeted_entry_rejects_full_or_foreign_runs(
 def test_dispatch_only_refills_directory_and_respects_global_window(
     session, sync_seed, monkeypatch
 ):
-    """报表补位信号也须利用目录空槽，且重复唤醒不能越过八个在途窗口。"""
+    """报表补位信号也须利用目录空槽，且重复唤醒不能越过在途窗口（此处固定为八个）。"""
+    from app.modules.ads import directory_dispatch
     from app.modules.ads.sync_models import AdDirectoryRun
 
     monkeypatch.setattr(settings, "ADS_SYNC_ENABLED", True)
+    monkeypatch.setattr(directory_dispatch, "TARGETED_DISPATCH_WINDOW", 8)
     for index in range(4):
         request_directory(
             session,
