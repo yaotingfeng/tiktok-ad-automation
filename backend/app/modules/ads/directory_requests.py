@@ -328,8 +328,9 @@ def request_directory(
                     {ref.remote_id for ref in account_refs if ref.kind in parent_kind}
                 )
             )
-            # TikTok 的创意读取只接受创意 ID，父级广告 ID 不能作为筛选器。
-            if kind == "creative":
+            # 明确对象 ID 时不再附带父级筛选：分层刷新的父子候选未必相同，
+            # 两种条件取交集会漏掉本次明确要求读取的对象。创意接口也不接受父级。
+            if ids or kind == "creative":
                 parent_ids = ()
             if scope == "targeted" and not ids and not parent_ids:
                 continue

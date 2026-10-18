@@ -383,3 +383,66 @@ def test_periodic_ads_already_cover_creatives_without_second_full_scan(
         now=datetime.now(UTC),
     )
     assert types["acc-1"]["SMART_PLUS"] == ("campaign", "adgroup", "ad")
+
+
+@pytest.mark.parametrize(
+    "kind,parent_kind", [("ad", "adgroup"), ("adgroup", "campaign")]
+)
+def test_explicit_directory_ids_are_not_intersected_with_other_refresh_parents(
+    session, sync_seed, monkeypatch, kind, parent_kind
+):
+    """分层刷新时父子候选不同；明确的 101 个对象不能被另一批父级裁掉。"""
+    from app.integrations.tiktok.adapters.ads_read import compile_query
+    from app.integrations.tiktok.contracts.ads import DirectoryQuery, EntityRef
+
+    monkeypatch.setattr(settings, "ADS_SYNC_ENABLED", True)
+    expected = {f"object-{i}" for i in range(101)}
+    request_directory(
+        session,
+        tenant_id=sync_seed.tenant_id,
+        bc_id="bc-a",
+        frozen_route=_route(sync_seed),
+        actor_id=sync_seed.actor_id,
+        advertiser_ids=["acc-1"],
+        scope="targeted",
+        refs=[EntityRef(sync_seed.tenant_id, "acc-1", kind, x) for x in expected]
+        + [EntityRef(sync_seed.tenant_id, "acc-1", parent_kind, "other-parent")],
+        ad_types={"acc-1": {"SMART_PLUS": (kind,)}},
+    )
+    runs = session.exec(
+        select(AdDirectoryRun).where(AdDirectoryRun.tenant_id == sync_seed.tenant_id)
+    ).all()
+    assert len(runs) == 2
+    assert {x for r in runs for x in r.query["ids"]} == expected
+    assert all(not r.query["parent_ids"] for r in runs)
+    for run in runs:
+        data = run.query | {"ids": tuple(run.query["ids"]), "parent_ids": ()}
+        _, args = compile_query(DirectoryQuery(**data))
+        assert f"{parent_kind}_ids" not in args["filtering"]
+
+
+@pytest.mark.parametrize(
+    "kind,parent_kind", [("ad", "adgroup"), ("adgroup", "campaign")]
+)
+def test_parent_only_directory_request_still_reads_children(
+    session, sync_seed, monkeypatch, kind, parent_kind
+):
+    from app.integrations.tiktok.contracts.ads import EntityRef
+
+    monkeypatch.setattr(settings, "ADS_SYNC_ENABLED", True)
+    request_directory(
+        session,
+        tenant_id=sync_seed.tenant_id,
+        bc_id="bc-a",
+        frozen_route=_route(sync_seed),
+        actor_id=sync_seed.actor_id,
+        advertiser_ids=["acc-1"],
+        scope="targeted",
+        refs=[EntityRef(sync_seed.tenant_id, "acc-1", parent_kind, "parent-1")],
+        ad_types={"acc-1": {"SMART_PLUS": (kind,)}},
+    )
+    run = session.exec(
+        select(AdDirectoryRun).where(AdDirectoryRun.tenant_id == sync_seed.tenant_id)
+    ).one()
+    assert run.query["ids"] == []
+    assert run.query["parent_ids"] == ["parent-1"]
