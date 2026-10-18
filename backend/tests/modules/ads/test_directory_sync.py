@@ -700,3 +700,69 @@ def test_publish_rollback_also_rolls_back_refill(session, directory_seed, monkey
             PendingDispatch.task_key == f"directory-refill:{run.id}:1"
         )
     ).all()
+
+
+@pytest.mark.parametrize("late", [False, True])
+def test_superseded_directory_task_finishes_without_poisoning_window(
+    session, directory_seed, monkeypatch, late
+):
+    from app.modules.ads import tasks
+
+    _authority(session, directory_seed)
+    monkeypatch.setattr(settings, "ADS_SYNC_ENABLED", True)
+    older = _run(session, directory_seed)
+    stage_directory_page(
+        session, run_id=older.id, page=_page(directory_seed), claim_generation=1
+    )
+    newer = _run(session, directory_seed)
+    stage_directory_page(
+        session, run_id=newer.id, page=_page(directory_seed), claim_generation=1
+    )
+    publish_directory(session, run_id=newer.id, claim_generation=1)
+    if late:
+        monkeypatch.setattr(tasks, "directory_run_superseded", lambda *_: False)
+
+    def unexpected_gateway(**_kwargs):
+        raise AssertionError("已不可发布的旧目录不能再次调用平台")
+
+    monkeypatch.setattr(tasks, "open_tiktok_gateway", unexpected_gateway)
+    assert (
+        tasks.run_directory_step(
+            database_engine=session.connection(),
+            redis_client=None,
+            context=directory_seed.context,
+            run_id=older.id,
+            claim_generation=1,
+        )
+        == "READY"
+    )
+    session.refresh(older)
+    assert older.status == "STALE" and older.error_code == "directory_run_stale"
+    assert older.published_version is None and older.claimed_until is None
+    assert session.get(AdDirectoryPage, (older.id, 1)) is not None
+    wake = session.exec(
+        select(PendingDispatch).where(
+            PendingDispatch.task_key == f"directory-refill:{older.id}:1"
+        )
+    ).one()
+    assert wake.payload == {"dispatch_only": True}
+    assert (
+        tasks.run_directory_step(
+            database_engine=session.connection(),
+            redis_client=None,
+            context=directory_seed.context,
+            run_id=older.id,
+            claim_generation=1,
+        )
+        == "READY"
+    )
+    assert (
+        len(
+            session.exec(
+                select(PendingDispatch).where(
+                    PendingDispatch.task_key == f"directory-refill:{older.id}:1"
+                )
+            ).all()
+        )
+        == 1
+    )

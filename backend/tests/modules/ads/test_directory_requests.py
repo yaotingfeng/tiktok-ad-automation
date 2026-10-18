@@ -1,5 +1,6 @@
 from datetime import UTC, datetime, timedelta
 
+import pytest
 from sqlmodel import select
 
 from app.core.config import settings
@@ -251,7 +252,13 @@ def test_targeted_read_is_queued_immediately_and_completed_run_is_never_reused(
 
 def test_idle_accounts_refresh_daily(session, sync_seed):
     now = datetime.now(UTC)
-    args = {"tenant_id": sync_seed.tenant_id, "advertiser_ids": ["acc-1", "acc-2"]}
+    args = {
+        "tenant_id": sync_seed.tenant_id,
+        "bc_id": "bc-a",
+        "actor_id": sync_seed.actor_id,
+        "frozen_route": _route(sync_seed),
+        "advertiser_ids": ["acc-1", "acc-2"],
+    }
     # 从未成功过：全部需要刷新。
     assert directory_due_accounts(session, **args, active_ids=[], now=now) == [
         "acc-1",
@@ -287,3 +294,76 @@ def test_idle_accounts_refresh_daily(session, sync_seed):
         "acc-1",
         "acc-2",
     ]
+
+
+@pytest.mark.parametrize(
+    "status", ["QUEUED", "RUNNING", "ADMISSION_WAIT", "WAITING_REMOTE"]
+)
+def test_pending_full_directory_excludes_overlapping_accounts(
+    session, sync_seed, monkeypatch, status
+):
+    monkeypatch.setattr(settings, "ADS_SYNC_ENABLED", True)
+    args = {
+        "tenant_id": sync_seed.tenant_id,
+        "bc_id": "bc-a",
+        "actor_id": sync_seed.actor_id,
+        "frozen_route": _route(sync_seed),
+        "advertiser_ids": ["acc-1"],
+    }
+    request_directory(session, **args, scope="directory")
+    runs = session.exec(
+        select(AdDirectoryRun).where(AdDirectoryRun.tenant_id == sync_seed.tenant_id)
+    ).all()
+    for run in runs:
+        run.status = status
+    session.flush()
+    args["advertiser_ids"] = ["acc-1", "acc-2"]
+    assert directory_due_accounts(
+        session, **args, active_ids=["acc-1", "acc-2"], now=datetime.now(UTC)
+    ) == ["acc-2"]
+    # 冻结授权变化后的新任务不能被旧授权积压遮挡。
+    args["frozen_route"] = {**args["frozen_route"], "binding_revision": 1}
+    assert directory_due_accounts(
+        session, **args, active_ids=["acc-1", "acc-2"], now=datetime.now(UTC)
+    ) == ["acc-1", "acc-2"]
+
+
+@pytest.mark.parametrize(
+    "scope,status",
+    [
+        ("targeted", "RUNNING"),
+        ("directory", "COMPLETE"),
+        ("directory", "FAILED"),
+        ("directory", "CANCELLED"),
+        ("directory", "STALE"),
+    ],
+)
+def test_targeted_and_terminal_directory_do_not_block_active_refresh(
+    session, sync_seed, monkeypatch, scope, status
+):
+    from app.integrations.tiktok.contracts.ads import EntityRef
+
+    monkeypatch.setattr(settings, "ADS_SYNC_ENABLED", True)
+    args = {
+        "tenant_id": sync_seed.tenant_id,
+        "bc_id": "bc-a",
+        "actor_id": sync_seed.actor_id,
+        "frozen_route": _route(sync_seed),
+        "advertiser_ids": ["acc-1"],
+    }
+    request_directory(
+        session,
+        **args,
+        scope=scope,
+        refs=[EntityRef(sync_seed.tenant_id, "acc-1", "ad", "ad-1")]
+        if scope == "targeted"
+        else (),
+    )
+    for run in session.exec(
+        select(AdDirectoryRun).where(AdDirectoryRun.tenant_id == sync_seed.tenant_id)
+    ).all():
+        run.status = status
+    session.flush()
+    assert directory_due_accounts(
+        session, **args, active_ids=["acc-1"], now=datetime.now(UTC)
+    ) == ["acc-1"]

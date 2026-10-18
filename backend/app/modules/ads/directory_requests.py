@@ -135,6 +135,9 @@ def directory_due_accounts(
     session: Session,
     *,
     tenant_id: UUID,
+    bc_id: str,
+    actor_id: UUID,
+    frozen_route: dict,
     advertiser_ids: Collection[str],
     active_ids: Collection[str],
     now: datetime,
@@ -145,6 +148,36 @@ def directory_due_accounts(
     INACTIVE_DIRECTORY_INTERVAL 才刷新，从未成功过的账户立即刷新。
     """
     accounts = sorted(set(advertiser_ids))
+    if not accounts:
+        return []
+    # 旧全量仍在读取/等待时先让它完成；在扫描 ad_object 大表前去掉重叠账户。
+    # 定向回读和不同冻结授权不能替代本轮全量，不纳入这个周期去重范围。
+    pending = set(
+        session.exec(
+            select(AdDirectoryRun.advertiser_id)
+            .where(
+                AdDirectoryRun.tenant_id == tenant_id,
+                AdDirectoryRun.bc_id == bc_id,
+                AdDirectoryRun.actor_id == actor_id,
+                col(AdDirectoryRun.frozen_route) == frozen_route,
+                col(AdDirectoryRun.advertiser_id).in_(accounts),
+                col(AdDirectoryRun.status).in_(
+                    ["QUEUED", "RUNNING", "ADMISSION_WAIT", "WAITING_REMOTE"]
+                ),
+                AdDirectoryRun.query["include_deleted"].as_boolean().is_(True),
+                func.coalesce(func.jsonb_array_length(AdDirectoryRun.query["ids"]), 0)
+                == 0,
+                func.coalesce(
+                    func.jsonb_array_length(AdDirectoryRun.query["parent_ids"]), 0
+                )
+                == 0,
+            )
+            .distinct()
+        ).all()
+    )
+    accounts = [
+        advertiser_id for advertiser_id in accounts if advertiser_id not in pending
+    ]
     active = set(active_ids) & set(accounts)
     idle = [advertiser_id for advertiser_id in accounts if advertiser_id not in active]
     fresh: set[str] = set()

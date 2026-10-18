@@ -541,6 +541,27 @@ def _next_directory_version(session: Session) -> int:
     )
 
 
+def directory_run_superseded(session: Session, run: AdDirectoryRun) -> bool:
+    """沿用发布顺序判定；已被更新发布取代的运行不再占读取与恢复窗口。"""
+    if run.request_sequence is None:
+        return False
+    return (
+        session.exec(
+            select(AdDirectoryRun.id)
+            .where(
+                AdDirectoryRun.tenant_id == run.tenant_id,
+                AdDirectoryRun.advertiser_id == run.advertiser_id,
+                AdDirectoryRun.kind == run.kind,
+                AdDirectoryRun.ad_type == run.ad_type,
+                col(AdDirectoryRun.request_sequence) > run.request_sequence,
+                col(AdDirectoryRun.published_version).is_not(None),
+            )
+            .limit(1)
+        ).first()
+        is not None
+    )
+
+
 def publish_directory(session: Session, *, run_id: UUID, claim_generation: int) -> int:
     """验证完整分页后原子发布；返回本运行使用的单一 published_version。"""
     if type(claim_generation) is not int or claim_generation < 1:
@@ -578,21 +599,8 @@ def publish_directory(session: Session, *, run_id: UUID, claim_generation: int) 
             {"scope": f"directory-publish:{run.tenant_id}:{run.advertiser_id}"},
         )
         # 必须在租户版本锁之后重查，避免旧运行检查完毕后等待锁期间被新运行发布。
-        if run.request_sequence is not None:
-            newer_published = session.exec(
-                select(AdDirectoryRun.id)
-                .where(
-                    AdDirectoryRun.tenant_id == run.tenant_id,
-                    AdDirectoryRun.advertiser_id == run.advertiser_id,
-                    AdDirectoryRun.kind == run.kind,
-                    AdDirectoryRun.ad_type == run.ad_type,
-                    col(AdDirectoryRun.request_sequence) > run.request_sequence,
-                    col(AdDirectoryRun.published_version).is_not(None),
-                )
-                .limit(1)
-            ).first()
-            if newer_published is not None:
-                raise _domain("directory_run_stale", "较早目录运行不能晚于新运行发布")
+        if directory_run_superseded(session, run):
+            raise _domain("directory_run_stale", "较早目录运行不能晚于新运行发布")
         version = _next_directory_version(session)
         fallback = datetime.now(UTC)
         entities: list[dict[str, Any]] = []

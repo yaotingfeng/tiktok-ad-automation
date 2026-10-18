@@ -58,7 +58,7 @@ for workload in workloads:
     else:
         assert "readinessProbe" in container
 expected_workers = {
-    "worker-ads-reporting": ("ads-reporting", 4, "2Gi", "4Gi"),
+    "worker-ads-reporting": ("ads-reporting", 8, "2Gi", "4Gi"),
     "worker-ads-backfill": ("ads-backfill", 1, "512Mi", "1Gi"),
     "worker-ads-live-directory": ("ads-live-directory", 4, "1Gi", "3Gi"),
     "worker-ads-directory": ("ads-directory,ads-publish", 1, "1Gi", "2Gi"),
@@ -88,7 +88,7 @@ for name in ("compose.yml", "compose.production.yml"):
     for role, queue, concurrency in (
         ("worker-ads-backfill", "ads-backfill", 1),
         ("worker-ads-live-directory", "ads-live-directory", 4),
-        ("worker-ads-reporting", "ads-reporting", 4),
+        ("worker-ads-reporting", "ads-reporting", 8),
     ):
         command = services[role]["command"]
         assert command[command.index("-Q") + 1] == queue

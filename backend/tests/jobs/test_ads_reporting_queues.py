@@ -51,7 +51,7 @@ def test_worker_templates_keep_one_slot_and_shared_switch_injection():
     assert "--concurrency" in compose
     assert "--concurrency" in production
     assert "--concurrency 1" in directory_service
-    assert "--concurrency 4" in reporting_service
+    assert "--concurrency 8" in reporting_service
     import yaml
 
     workloads = list(

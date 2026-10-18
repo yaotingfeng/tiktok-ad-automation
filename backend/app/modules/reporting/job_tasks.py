@@ -12,6 +12,7 @@ from billiard.exceptions import SoftTimeLimitExceeded
 from redis import Redis
 from sqlalchemy import case, delete, func, text, update
 from sqlalchemy.dialects.postgresql import insert
+from sqlalchemy.exc import DBAPIError
 from sqlalchemy.orm import aliased
 from sqlmodel import Session, col, select
 
@@ -530,34 +531,64 @@ def _plan_one(
             if allow_backfill:
                 planner.plan_history(session, plan, now=now)
             if plan.next_directory_at <= now:
-                # 全量目录（含已删除）已覆盖只读在投对象的需求，周期只发这一种；
-                # 无消耗账户按天刷新，未使用类型只探测广告系列。
-                due = directory_due_accounts(
-                    session,
-                    tenant_id=plan.tenant_id,
-                    advertiser_ids=accounts,
-                    active_ids=plan.last_active_advertiser_ids,
-                    now=now,
-                )
-                request_directory(
-                    session,
-                    tenant_id=plan.tenant_id,
-                    bc_id=plan.bc_id,
-                    frozen_route=plan.frozen_route,
-                    actor_id=plan.actor_id,
-                    advertiser_ids=due,
-                    scope="directory",
-                    ad_types=directory_ad_types(
-                        session,
-                        tenant_id=plan.tenant_id,
-                        advertiser_ids=due,
-                        active_ids=plan.last_active_advertiser_ids,
-                        now=now,
-                    ),
-                )
-                plan.next_directory_at = _advance(
-                    plan.next_directory_at, now, planner.DIRECTORY_INTERVAL
-                )
+                # 目录扫描独立回滚：数据库超时不能撤销前面已经规划的实时任务。
+                try:
+                    with session.begin_nested():
+                        previous_timeout = (
+                            session.connection()
+                            .execute(text("SHOW statement_timeout"))
+                            .scalar_one()
+                        )
+                        session.connection().execute(
+                            text("SELECT set_config('statement_timeout', '8s', true)")
+                        )
+                        # 全量目录（含已删除）已覆盖只读在投对象的需求，周期只发这一种；
+                        # 无消耗账户按天刷新，未使用类型只探测广告系列。
+                        due = directory_due_accounts(
+                            session,
+                            tenant_id=plan.tenant_id,
+                            bc_id=plan.bc_id,
+                            actor_id=plan.actor_id,
+                            frozen_route=plan.frozen_route,
+                            advertiser_ids=accounts,
+                            active_ids=plan.last_active_advertiser_ids,
+                            now=now,
+                        )
+                        request_directory(
+                            session,
+                            tenant_id=plan.tenant_id,
+                            bc_id=plan.bc_id,
+                            frozen_route=plan.frozen_route,
+                            actor_id=plan.actor_id,
+                            advertiser_ids=due,
+                            scope="directory",
+                            ad_types=directory_ad_types(
+                                session,
+                                tenant_id=plan.tenant_id,
+                                advertiser_ids=due,
+                                active_ids=plan.last_active_advertiser_ids,
+                                now=now,
+                            ),
+                        )
+                        plan.next_directory_at = _advance(
+                            plan.next_directory_at, now, planner.DIRECTORY_INTERVAL
+                        )
+                        session.connection().execute(
+                            text(
+                                "SELECT set_config('statement_timeout', :value, true)"
+                            ),
+                            {"value": previous_timeout},
+                        )
+                except DBAPIError as error:
+                    if getattr(error.orig, "sqlstate", None) != "57014":
+                        raise
+                    # SAVEPOINT 已恢复事务和原 timeout；只让全量目录稍后再规划。
+                    plan.next_directory_at = now + timedelta(minutes=5)
+                    logger.warning(
+                        "directory planning query cancelled: tenant=%s bc=%s",
+                        plan.tenant_id,
+                        plan.bc_id,
+                    )
         except AccountAdmissionDeferred as error:
             _defer_plan(
                 plan, now + timedelta(milliseconds=max(1000, error.retry_after_ms))

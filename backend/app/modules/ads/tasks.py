@@ -25,10 +25,15 @@ from app.modules.ads.directory_dispatch import (
     PUBLISH_TASK_NAME,
     TARGETED_TASK_NAME,
     TASK_NAME,
+    enqueue_directory_refill,
     enqueue_directory_step,
     is_targeted,
 )
-from app.modules.ads.sync import publish_directory, stage_directory_page
+from app.modules.ads.sync import (
+    directory_run_superseded,
+    publish_directory,
+    stage_directory_page,
+)
 from app.modules.ads.sync_models import AdDirectoryPage, AdDirectoryRun
 
 _LEASE_SECONDS = 90
@@ -84,6 +89,16 @@ def _payload(payload: dict[str, Any]) -> tuple[UUID, int]:
     return run_id, generation
 
 
+def _finish_superseded_directory(session: Session, run: AdDirectoryRun) -> str:
+    # 这是不可再发布的明确终态，不删除已暂存页或把旧数据伪装成成功发布。
+    run.status, run.error_code = "STALE", "directory_run_stale"
+    run.completed_at = datetime.now(UTC)
+    run.claim_token = run.claimed_until = None
+    enqueue_directory_refill(session, run)
+    session.commit()
+    return "READY"
+
+
 def run_directory_step(
     *,
     database_engine: Any,
@@ -132,6 +147,8 @@ def run_directory_step(
             advertiser_id=run.advertiser_id,
             capability="read",
         )
+        if directory_run_superseded(session, run):
+            return _finish_superseded_directory(session, run)
         terminal = session.exec(
             select(AdDirectoryPage.page)
             .where(
@@ -142,7 +159,15 @@ def run_directory_step(
         ).first()
         if terminal is not None:
             # 末页已持久化：独占一次任务期限做本地发布，恢复时也不再读远端。
-            publish_directory(session, run_id=run_id, claim_generation=claim_generation)
+            try:
+                publish_directory(
+                    session, run_id=run_id, claim_generation=claim_generation
+                )
+            except DomainError as error:
+                if error.code != "directory_run_stale":
+                    raise
+                # 等账户发布锁期间也可能被新运行取代，独立保存终态并补位。
+                return _finish_superseded_directory(session, run)
             run.claim_token = run.claimed_until = None
             session.commit()
             return "READY"

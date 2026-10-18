@@ -1215,3 +1215,142 @@ def test_concurrent_directory_scans_share_one_dispatch_window(
             )
             == 2
         )
+
+
+def test_directory_query_cancel_preserves_hot_and_material_jobs(
+    monkeypatch, committed_sync_seed, redis_client
+):
+    from datetime import timedelta
+
+    from sqlalchemy import text
+
+    from app.core.db import engine
+    from app.integrations.tiktok.contracts.report_reader import RawReportPage
+    from app.modules.reporting import planner
+    from app.modules.reporting.store_models import AdSyncBc, ReportSyncJob
+
+    seed, factory = committed_sync_seed
+    now = datetime.now(UTC)
+    monkeypatch.setattr(job_tasks.settings, "ADS_SYNC_ENABLED", True)
+    with factory() as session, session.begin():
+        planner.ensure_bc_plans(session, now=now)
+
+    class Reader:
+        def bc_spend(self, **_kwargs):
+            return RawReportPage(
+                (
+                    {
+                        "dimensions": {"advertiser_id": "acc-1"},
+                        "metrics": {"spend": "1"},
+                    },
+                ),
+                1,
+                1,
+                1,
+            )
+
+    monkeypatch.setattr(job_tasks, "_reader_for", lambda **kwargs: _ctx(Reader()))
+    timeout_seen = []
+
+    def cancelled_directory_query(session, **_kwargs):
+        timeout_seen.append(
+            session.connection().execute(text("SHOW statement_timeout")).scalar_one()
+        )
+        # 真 PostgreSQL 查询取消，使事务进入失败状态；不靠等待或假异常模拟回滚。
+        session.connection().execute(text("SELECT pg_cancel_backend(pg_backend_pid())"))
+        session.connection().execute(text("SELECT 1"))
+
+    monkeypatch.setattr(job_tasks, "directory_ad_types", cancelled_directory_query)
+    job_tasks._plan_one(
+        engine,
+        redis_client,
+        (seed.tenant_id, "bc-a"),
+        now,
+        now + timedelta(seconds=20),
+        planner.HOT_INTERVAL,
+        planner.MATERIAL_INTERVAL,
+        allow_backfill=False,
+    )
+    assert timeout_seen == ["8s"]
+    with factory() as session:
+        plan = session.get(AdSyncBc, (seed.tenant_id, "bc-a"))
+        assert plan.next_hot_at > now and plan.next_material_at > now
+        assert plan.next_directory_at > now
+        assert plan.disabled_reason is None
+        kinds = set(
+            session.exec(
+                select(ReportSyncJob.kind).where(
+                    ReportSyncJob.tenant_id == seed.tenant_id
+                )
+            ).all()
+        )
+        assert {"ad_day", "material_day"} <= kinds
+        assert (
+            session.connection().execute(text("SHOW statement_timeout")).scalar_one()
+            == "0"
+        )
+
+
+def test_pending_full_directory_skips_object_scan_and_replanning(
+    monkeypatch, committed_sync_seed, redis_client
+):
+    from datetime import timedelta
+
+    from sqlalchemy import event
+
+    from app.core.db import engine
+    from app.modules.ads.directory_requests import request_directory
+    from app.modules.ads.sync_models import AdDirectoryRun
+    from app.modules.reporting import planner
+    from app.modules.reporting.store_models import AdSyncBc
+    from tests.modules.reporting.test_jobs import _route
+
+    seed, factory = committed_sync_seed
+    now = datetime.now(UTC)
+    monkeypatch.setattr(job_tasks.settings, "ADS_SYNC_ENABLED", True)
+    with factory() as session, session.begin():
+        planner.ensure_bc_plans(session, now=now)
+        plan = session.get(AdSyncBc, (seed.tenant_id, "bc-a"))
+        plan.next_hot_at = plan.next_material_at = plan.next_daily_at = now + timedelta(
+            hours=1
+        )
+        plan.last_active_advertiser_ids = ["acc-1", "acc-2"]
+        assert (
+            request_directory(
+                session,
+                tenant_id=seed.tenant_id,
+                bc_id="bc-a",
+                actor_id=seed.actor_id,
+                frozen_route=_route(seed),
+                advertiser_ids=["acc-1", "acc-2"],
+                scope="directory",
+            )
+            == 20
+        )
+
+    statements = []
+
+    def record(_connection, _cursor, statement, _parameters, _context, _many):
+        statements.append(statement)
+
+    event.listen(engine, "before_cursor_execute", record)
+    try:
+        job_tasks._plan_one(
+            engine,
+            redis_client,
+            (seed.tenant_id, "bc-a"),
+            now,
+            now + timedelta(seconds=20),
+            planner.HOT_INTERVAL,
+            planner.MATERIAL_INTERVAL,
+            allow_backfill=False,
+        )
+    finally:
+        event.remove(engine, "before_cursor_execute", record)
+    assert not any("FROM ad_object" in statement for statement in statements)
+    with factory() as session:
+        runs = session.exec(
+            select(AdDirectoryRun).where(AdDirectoryRun.tenant_id == seed.tenant_id)
+        ).all()
+        assert len(runs) == 20 and {run.status for run in runs} == {"QUEUED"}
+        assert session.get(AdSyncBc, (seed.tenant_id, "bc-a")).next_directory_at > now
