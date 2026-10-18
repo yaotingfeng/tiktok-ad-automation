@@ -74,9 +74,9 @@ services:
     environment:
       DATABASE_POOL_SIZE: "2"
       DATABASE_MAX_OVERFLOW: "1"
-    command: [celery, -A, app.jobs.celery_app:celery_app, worker, --pool=prefork, -Q, control, --concurrency=1, '--hostname=control@%h', --loglevel=INFO]
+    command: [celery, -A, app.jobs.celery_app:celery_app, worker, --pool=prefork, -Q, control, --concurrency=2, '--hostname=control@%h', --loglevel=INFO]
     cpus: 0.5
-    mem_limit: 512m
+    mem_limit: 2g
     stop_grace_period: 90s
     init: true
     logging: *production-logging
