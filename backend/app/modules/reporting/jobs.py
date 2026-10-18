@@ -194,14 +194,14 @@ def claim_jobs(
     lane: str | None = None,
     allow_historical_links: bool = True,
 ) -> list[ReportSyncJob]:
-    """按持久游标轮转租户；事实按创建顺序，其余按优先级/到期排序。"""
+    """按持久游标轮转租户；实时事实先均衡类型在途，类型内保留创建顺序。"""
     if lane not in {None, "live", "links", "backfill"}:
         raise ValueError("invalid report lane")
     lane_filter = "" if lane is None else f"AND {lane_predicate(lane=lane, alias='j')}"
     if lane == "links" and not allow_historical_links:
         # 额度紧张只新领当地今天关联；无时区不能猜作当天，已在途仍由外层全量计槽。
         lane_filter += f" AND {current_day_predicate('j')}"
-    # 事实按任务创建先后服务；due_at 仅控制重试准入，退避不能把老任务反复排到队尾。
+    # 每类事实按任务创建先后服务；due_at 仅控制准入，退避不能把老任务反复排到队尾。
     # 关联使用独立窗口，不能以旧关联 FIFO 阻挡较新的事实。
     # 历史等待满一天后提升到每日修正的优先级，仍保留跨租户持久轮转。
     priority = (
@@ -217,19 +217,45 @@ def claim_jobs(
     global_order = (
         "created_at, priority, id" if lane == "live" else "priority, due_at, id"
     )
-    ids = (
-        session.connection()
-        .execute(
-            text(f"""
-        WITH ranked AS (
-            SELECT j.id, {priority} AS priority, j.created_at, j.due_at, c.last_dispatched_at,
-                   ROW_NUMBER() OVER (PARTITION BY j.tenant_id ORDER BY {local_order}) AS rn
+    partition = "j.tenant_id, j.kind" if lane == "live" else "j.tenant_id"
+    rank_column = "kind_rn" if lane == "live" else "rn"
+    ranking = f"""
+        candidates AS (
+            SELECT j.id, j.tenant_id, j.kind, {priority} AS priority,
+                   j.created_at, j.due_at, c.last_dispatched_at,
+                   ROW_NUMBER() OVER (PARTITION BY {partition} ORDER BY {local_order}) AS {rank_column}
             FROM report_sync_job j
             LEFT JOIN report_dispatch_cursor c ON c.tenant_id = j.tenant_id
             WHERE (j.status IN ('QUEUED','WAITING') AND j.due_at <= :now
               AND (j.claimed_until IS NULL OR j.claimed_until <= :now)
               OR j.status = 'RUNNING' AND (j.claimed_until IS NULL OR j.claimed_until <= :now))
               {lane_filter})
+    """
+    if lane == "live":
+        # 同租户按有效在途数量补足较空的类型；kind_rn 把本批尚未落库的分配也算入。
+        # 单槽续补不会固定选择旧广告，批量领取也不会一口气排完广告再轮到素材。
+        ranking += f""",
+        inflight AS (
+            SELECT j.tenant_id, j.kind, count(*) AS running
+            FROM report_sync_job j
+            WHERE j.status = 'RUNNING' AND j.claimed_until > :now
+              AND {lane_predicate(lane="live", alias="j")}
+            GROUP BY j.tenant_id, j.kind),
+        ranked AS (
+            SELECT c.*, ROW_NUMBER() OVER (
+                PARTITION BY c.tenant_id
+                ORDER BY COALESCE(i.running, 0) + c.kind_rn,
+                         c.created_at, c.priority, c.id) AS rn
+            FROM candidates c LEFT JOIN inflight i
+              ON i.tenant_id = c.tenant_id AND i.kind = c.kind)
+        """
+    else:
+        ranking += ", ranked AS (SELECT * FROM candidates)"
+    ids = (
+        session.connection()
+        .execute(
+            text(f"""
+        WITH {ranking}
         SELECT id FROM ranked
         ORDER BY rn, last_dispatched_at NULLS FIRST, {global_order} LIMIT :limit"""),
             parameters={"now": now, "lane_now": now, "limit": limit},

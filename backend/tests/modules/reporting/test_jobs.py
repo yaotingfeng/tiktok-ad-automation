@@ -774,3 +774,123 @@ def test_admission_retry_keeps_original_fact_place_but_obeys_not_before(
             session, now=now + timedelta(seconds=6), limit=1, lane="live"
         )
     ] == [old]
+
+
+def _live_kind_backlog(session, seed, now, kinds=("ad_day", "material_day")):
+    from app.modules.accounts.models import AdvertiserAccount, BCAccountAccess
+
+    accounts = [f"kind-account-{index}" for index in range(8)]
+    for advertiser in accounts:
+        session.add(
+            AdvertiserAccount(
+                tenant_id=seed.tenant_id,
+                advertiser_id=advertiser,
+                currency="USD",
+                timezone="UTC",
+                name=advertiser,
+            )
+        )
+    session.flush()
+    for advertiser in accounts:
+        session.add(
+            BCAccountAccess(
+                tenant_id=seed.tenant_id,
+                bc_id="bc-a",
+                advertiser_id=advertiser,
+                connection_id=seed.connection.id,
+                in_bc=True,
+                authorized=True,
+                active=True,
+                checked_at=now,
+            )
+        )
+    session.flush()
+    result = {}
+    for rank, kind in enumerate(kinds):
+        result[kind] = []
+        for index, advertiser in enumerate(accounts):
+            job_id = enqueue_job(
+                session,
+                tenant_id=seed.tenant_id,
+                bc_id="bc-a",
+                kind=kind,
+                tier="hot",
+                advertiser_ids=[advertiser],
+                start=now.date(),
+                end=now.date(),
+                frozen_route=_route(seed),
+                actor_id=seed.actor_id,
+                due_at=now,
+            )
+            # 整批广告比全部素材都老，复现跨kind FIFO成波领取。
+            session.get(ReportSyncJob, job_id).created_at = now - timedelta(
+                minutes=20 - rank, seconds=8 - index
+            )
+            result[kind].append(job_id)
+    session.flush()
+    return result
+
+
+def test_live_batch_balances_kinds_with_virtual_inflight(session, sync_seed):
+    now = datetime.now(UTC)
+    ids = _live_kind_backlog(session, sync_seed, now)
+    claimed = claim_jobs(session, now=now, limit=8, lane="live")
+    assert [job.kind for job in claimed] == ["ad_day", "material_day"] * 4
+    for kind in ids:
+        assert [job.id for job in claimed if job.kind == kind] == ids[kind][:4]
+
+
+def test_single_fact_refill_replenishes_fast_kind_before_older_other_kind(
+    session, sync_seed
+):
+    now = datetime.now(UTC)
+    ids = _live_kind_backlog(session, sync_seed, now)
+    initial = claim_jobs(session, now=now, limit=8, lane="live")
+    assert sum(job.kind == "material_day" for job in initial) == 4
+    for index in range(4):
+        finished = session.get(ReportSyncJob, ids["material_day"][index])
+        finished.status, finished.claim_token, finished.claimed_until = (
+            "COMPLETE",
+            None,
+            None,
+        )
+        session.flush()
+        claimed = claim_jobs(session, now=now, limit=1, lane="live")
+        assert [job.id for job in claimed] == [ids["material_day"][index + 4]]
+        assert (
+            sum(
+                session.get(ReportSyncJob, job_id).status == "RUNNING"
+                for job_id in ids["ad_day"]
+            )
+            == 4
+        )
+
+
+@pytest.mark.parametrize("kind", ["ad_day", "material_day"])
+def test_single_available_fact_kind_borrows_entire_window(session, sync_seed, kind):
+    now = datetime.now(UTC)
+    ids = _live_kind_backlog(session, sync_seed, now, kinds=(kind,))
+    assert [
+        job.id for job in claim_jobs(session, now=now, limit=8, lane="live")
+    ] == ids[kind]
+
+
+def test_expired_fact_claims_do_not_count_as_kind_inflight(session, sync_seed):
+    from uuid import uuid4
+
+    now = datetime.now(UTC)
+    ids = _live_kind_backlog(session, sync_seed, now)
+    old_claim = uuid4()
+    for job_id in ids["material_day"]:
+        row = session.get(ReportSyncJob, job_id)
+        row.status, row.claim_token, row.claimed_until = (
+            "RUNNING",
+            old_claim,
+            now - timedelta(seconds=1),
+        )
+    session.flush()
+    claimed = claim_jobs(session, now=now, limit=8, lane="live")
+    assert [job.kind for job in claimed] == ["ad_day", "material_day"] * 4
+    assert all(
+        job.claim_token != old_claim and job.claimed_until > now for job in claimed
+    )
