@@ -2792,3 +2792,5 @@
 - 当前完整备份`/backup/latest`，清单729f0f8e…d3a7f865；隔离PG事实匹配/6授权解密、Redis24有效键内容及TTL验证、精确broker迁移0。实际定向窗口32/全量32：同期另一路修改窗口已进入1e62413f，82b0f088补齐测试合同，因此前节“窗口不变”的初始描述以此更正；调用速率/并发配额和Worker数量不变。
 - 生产准入等待分支已真实触发，无原AccountAdmissionDeferred未处理异常。19:34:50→19:39:28原骏伯广告/素材过期0/3→0/0，目录766→671；大池目录5198→5085，广告/素材过期447/453→130/196。全实例尚未追平，未声明全部问题解决；历史素材与定向积压继续自然消费，19:35旧零命中卡片带1个真实STALE_REPORT，不人为消音。
 - 只读PG连接102/200、tkada48/Lock等待0，资源与25次共享准入采样留证；单次平台响应失败已由原机制结束STALE。发布与业务证据见docs/validation/2026-10-18-directory-admission-recovery.md及私有`.runtime/remaining-sync-20261018/`。本节审计仅本地提交，不再推送触发重复发布。
+
+- 追加19:41:23样本：原骏伯0/0、目录658；大池过期回升247/230、目录5093。发布已成功，跨BC稳态容量仍未解决；补充只读Redis/执行中任务/PG活动快照，不据此再猜测放宽端点并发，未执行第二批发布。后续排查从`.runtime/remaining-sync-20261018/active-reporting-fast.json`、`pg-activity.json`、`report-capacity.jsonl`、`admission-sample.json`续接。
