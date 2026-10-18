@@ -313,6 +313,11 @@ def main():
     for nodeid in failed:
         print("  失败：" + nodeid)
     if failed:
+        # check.sh 退出会回收临时目录，先保留失败复跑的尾部证据供发布排查。
+        rerun_log = args.work / "rerun.log"
+        if rerun_log.exists():
+            print("失败复跑输出：", flush=True)
+            print("\n".join(rerun_log.read_text(errors="replace").splitlines()[-80:]))
         print(f"详细输出：{args.work}/shard*.log、rerun.log")
         return 1
     return 0

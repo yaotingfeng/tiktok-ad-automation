@@ -107,6 +107,10 @@ def seed_preceding_rows(database_engine, env, anchor_id, *, eligible):
         connection.execute(MaterialFile.__table__.insert(), materials)
         connection.execute(MaterialAssetOperation.__table__.insert(), operations)
         connection.execute(MaterialDistribution.__table__.insert(), distributions)
+        # 临时库一次灌入万条记录后立即查询，不能等待异步 autoanalyze；
+        # 先更新统计，让候选范围测试使用与正常运行库一致的查询计划。
+        for table in ("material_file", "material_asset_operation", "material_distribution"):
+            connection.execute(text(f"ANALYZE {table}"))
 
 
 @pytest.mark.parametrize(
