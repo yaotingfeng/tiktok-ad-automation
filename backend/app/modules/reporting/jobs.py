@@ -21,7 +21,7 @@ from app.integrations.tiktok.sdk import AccountAdmissionDeferred
 from app.modules.accounts.models import AdvertiserAccount
 from app.modules.reporting import material_links, publish
 from app.modules.reporting.directory_refresh import refresh_report_directory
-from app.modules.reporting.lanes import live_predicate
+from app.modules.reporting.lanes import current_day_predicate, lane_predicate
 from app.modules.reporting.metrics import material_metric_values, parse_local_day
 from app.modules.reporting.store_models import ReportSyncJob, ReportSyncPage
 
@@ -187,16 +187,22 @@ def enqueue_job(
 
 
 def claim_jobs(
-    session: Session, *, now: datetime, limit: int, lane: str | None = None
+    session: Session,
+    *,
+    now: datetime,
+    limit: int,
+    lane: str | None = None,
+    allow_historical_links: bool = True,
 ) -> list[ReportSyncJob]:
-    """按持久游标轮转租户，租户内部按优先级/到期排序；单槽补位也不能饿死其他租户。"""
-    if lane not in {None, "live", "backfill"}:
+    """按持久游标轮转租户；事实按创建顺序，其余按优先级/到期排序。"""
+    if lane not in {None, "live", "links", "backfill"}:
         raise ValueError("invalid report lane")
-    predicate = live_predicate("j")
-    lane_filter = (
-        "" if lane is None else f"AND {'' if lane == 'live' else 'NOT '}{predicate}"
-    )
-    # 实时金额与关联都按先到先服务，不能持续被较新广告任务插队。
+    lane_filter = "" if lane is None else f"AND {lane_predicate(lane=lane, alias='j')}"
+    if lane == "links" and not allow_historical_links:
+        # 额度紧张只新领当地今天关联；无时区不能猜作当天，已在途仍由外层全量计槽。
+        lane_filter += f" AND {current_day_predicate('j')}"
+    # 事实按任务创建先后服务；due_at 仅控制重试准入，退避不能把老任务反复排到队尾。
+    # 关联使用独立窗口，不能以旧关联 FIFO 阻挡较新的事实。
     # 历史等待满一天后提升到每日修正的优先级，仍保留跨租户持久轮转。
     priority = (
         "CASE WHEN j.created_at <= :now - interval '24 hours' THEN LEAST(j.priority, 3) ELSE j.priority END"
@@ -204,17 +210,19 @@ def claim_jobs(
         else "j.priority"
     )
     local_order = (
-        f"j.due_at, {priority}, j.id"
+        f"j.created_at, {priority}, j.id"
         if lane == "live"
         else f"{priority}, j.due_at, j.id"
     )
-    global_order = "due_at, priority, id" if lane == "live" else "priority, due_at, id"
+    global_order = (
+        "created_at, priority, id" if lane == "live" else "priority, due_at, id"
+    )
     ids = (
         session.connection()
         .execute(
             text(f"""
         WITH ranked AS (
-            SELECT j.id, {priority} AS priority, j.due_at, c.last_dispatched_at,
+            SELECT j.id, {priority} AS priority, j.created_at, j.due_at, c.last_dispatched_at,
                    ROW_NUMBER() OVER (PARTITION BY j.tenant_id ORDER BY {local_order}) AS rn
             FROM report_sync_job j
             LEFT JOIN report_dispatch_cursor c ON c.tenant_id = j.tenant_id
@@ -500,22 +508,29 @@ def _run_material(session, job, reader, accounts):
                 rows=rows,
                 requested_at=request_time(job),
             )
-            enqueue_job(
+            if material_links.needs_material_links(
                 session,
                 tenant_id=job.tenant_id,
-                bc_id=job.bc_id,
-                kind="material_links",
-                tier=next(
-                    tier
-                    for tier, priority in PRIORITY.items()
-                    if priority == job.priority
-                ),
-                advertiser_ids=job.advertiser_ids,
+                advertiser_id=job.advertiser_ids[0],
                 start=job.start_date,
                 end=job.end_date,
-                frozen_route=job.frozen_route,
-                actor_id=job.actor_id,
-            )
+            ):
+                enqueue_job(
+                    session,
+                    tenant_id=job.tenant_id,
+                    bc_id=job.bc_id,
+                    kind="material_links",
+                    tier=next(
+                        tier
+                        for tier, priority in PRIORITY.items()
+                        if priority == job.priority
+                    ),
+                    advertiser_ids=job.advertiser_ids,
+                    start=job.start_date,
+                    end=job.end_date,
+                    frozen_route=job.frozen_route,
+                    actor_id=job.actor_id,
+                )
             return count
         page = result.next_page
     # 只有完整页边界才让出账户锁；已提交页和游标在同一事务中持久化。

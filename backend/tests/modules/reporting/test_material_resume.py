@@ -346,7 +346,10 @@ def test_live_material_and_link_jobs_are_not_starved_by_new_ad_jobs(session, syn
         session, kind="ad_day", tier="hot", due_at=now - timedelta(minutes=1), **common
     )
     claimed = jobs.claim_jobs(session, now=now, limit=3, lane="live")
-    assert [job.id for job in claimed] == [material_id, links_id, ad_id]
+    assert [job.id for job in claimed] == [material_id, ad_id]
+    assert [
+        job.id for job in jobs.claim_jobs(session, now=now, limit=3, lane="links")
+    ] == [links_id]
 
 
 def test_day_old_history_is_admitted_before_new_daily_work(session, sync_seed):
@@ -626,3 +629,86 @@ def test_incomplete_declared_page_rows_never_mark_complete(committed_sync_seed):
             ).status
             == "FAILED"
         )
+
+
+@pytest.mark.parametrize(
+    "scenario,needs_links",
+    [
+        ("empty", False),
+        ("mapped", False),
+        ("missing", True),
+        ("null_vid", True),
+        ("other_tenant_map", True),
+        ("other_account_map", True),
+        ("outside_date", False),
+        ("other_tenant_facts", False),
+    ],
+)
+def test_material_publish_only_queues_real_link_gaps(
+    session, sync_seed, scenario, needs_links
+):
+    from app.modules.reporting.store_models import MaterialPostLink
+
+    tenant = sync_seed.tenant_id
+    foreign = uuid4()
+    if scenario in {"outside_date", "other_tenant_facts"}:
+        day = DAY - timedelta(days=1) if scenario == "outside_date" else DAY
+        publish_material_day(
+            session,
+            tenant_id=foreign if scenario == "other_tenant_facts" else tenant,
+            job_id=uuid4(),
+            accounts=ACCOUNTS,
+            start=day,
+            end=day,
+            rows=[row(0, day=day, spend="0")],
+        )
+    if scenario in {"mapped", "null_vid", "other_tenant_map", "other_account_map"}:
+        session.add(
+            MaterialPostLink(
+                tenant_id=foreign if scenario == "other_tenant_map" else tenant,
+                advertiser_id="acc-2" if scenario == "other_account_map" else "acc-1",
+                main_material_id="m0",
+                ad_remote_id="a0",
+                main_material_type="VIDEO",
+                platform_material_id=None if scenario == "null_vid" else "v0",
+                observed_at=datetime.now(UTC),
+            )
+        )
+        session.flush()
+    job_id = jobs.enqueue_job(
+        session,
+        tenant_id=tenant,
+        bc_id="bc-a",
+        kind="material_day",
+        tier="material",
+        advertiser_ids=["acc-1"],
+        start=DAY,
+        end=DAY,
+        frozen_route=_route(sync_seed),
+        actor_id=sync_seed.actor_id,
+    )
+    job = session.get(ReportSyncJob, job_id)
+    source = (
+        []
+        if scenario in {"empty", "outside_date", "other_tenant_facts"}
+        else [row(0, spend="0")]
+    )
+    reader = Pages(rows=source)
+    assert jobs._run_material(session, job, reader, ACCOUNTS) == len(source)
+    linked = session.exec(
+        select(ReportSyncJob).where(
+            ReportSyncJob.tenant_id == tenant, ReportSyncJob.kind == "material_links"
+        )
+    ).all()
+    assert bool(linked) is needs_links
+    if scenario == "null_vid":
+        from tests.modules.reporting.test_material_query import use
+
+        post = session.get(MaterialPostLink, (tenant, "acc-1", "m0", "a0"))
+        post.ad_material_id = "am0"
+        use(session, sync_seed, adv="acc-1", ad="a0", video="v0", ad_material="am0")
+        # 已知道帖子所属广告但缺 VID 时仍排关联；目录到齐后只做本地解析即可。
+        assert jobs._run(session, linked[0], jobs._CountingReader(reader)) == 0
+        session.refresh(post)
+        assert post.platform_material_id == "v0"
+    assert reader.calls == [1]  # 减负判断只查本地库，不增加平台读取。

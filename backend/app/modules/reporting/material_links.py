@@ -56,6 +56,40 @@ def post_video_map(
     return {(r.adv, r.mid): r.vid for r in rows}
 
 
+def needs_material_links(
+    session: Session,
+    *,
+    tenant_id: UUID,
+    advertiser_id: str,
+    start: date,
+    end: date,
+) -> bool:
+    """仅真实事实缺有效视频映射时排关联；零消费也需要对照，空窗口不制造空跑。"""
+    return bool(
+        session.connection()
+        .execute(
+            text("""
+            SELECT EXISTS (
+                SELECT 1 FROM material_report_day d
+                WHERE d.tenant_id=:tenant AND d.advertiser_id=:advertiser
+                  AND d.stat_date BETWEEN :start AND :end
+                  AND NOT EXISTS (
+                      SELECT 1 FROM material_post_link l
+                      WHERE l.tenant_id=d.tenant_id AND l.advertiser_id=d.advertiser_id
+                        AND l.main_material_id=d.main_material_id
+                        AND NULLIF(l.platform_material_id, '') IS NOT NULL))
+            """),
+            {
+                "tenant": tenant_id,
+                "advertiser": advertiser_id,
+                "start": start,
+                "end": end,
+            },
+        )
+        .scalar_one()
+    )
+
+
 def _unlinked(
     session: Session,
     tenant_id: UUID,

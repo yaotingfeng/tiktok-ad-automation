@@ -470,3 +470,95 @@ for (const missing of [false, true]) {
     ).toHaveCount(missing ? 1 : 0)
   })
 }
+
+const degradedHealthCases = [
+  {
+    name: "具体异常计数与数据时间分开着色",
+    health: {
+      stale_ad_accounts: 2,
+      stale_material_accounts: 3,
+      missing_directory_ads: 167,
+      unlinked_material_posts: 9,
+      pending_actions: 1,
+      issues: ["MONITOR_STALE"],
+    },
+    labels: [
+      "该 BC 广告 2 个账户超时",
+      "该 BC 素材 3 个账户超时",
+      "该 BC 目录 167 条待补齐或刷新",
+      "该 BC 素材 9 项待关联",
+      "该 BC 动作 1 项积压",
+      "该 BC 健康监测已过期，当前同步状态待确认",
+    ],
+  },
+  {
+    name: "零计数保留筛选过期告警",
+    health: { issues: ["ACCOUNT_SCREEN_STALE"] },
+    labels: ["该 BC 账户筛选已过期，活跃账户覆盖待确认"],
+  },
+  {
+    name: "零计数保留监测尚未完成告警",
+    health: { issues: ["MONITOR_PENDING"] },
+    labels: ["该 BC 健康监测尚未完成，当前同步状态待确认"],
+  },
+  {
+    name: "零计数保留监测失败告警",
+    health: { issues: ["MONITOR_QUERY_FAILED"] },
+    labels: ["该 BC 健康监测读取失败，当前同步状态待确认"],
+  },
+  {
+    name: "未知降级原因不能消音",
+    health: { issues: ["FUTURE_ISSUE"] },
+    labels: ["该 BC 同步健康异常，原因待确认"],
+  },
+  {
+    name: "缺失降级原因不能消音",
+    health: { issues: [] },
+    labels: ["该 BC 同步健康异常，原因待确认"],
+  },
+]
+
+for (const scenario of degradedHealthCases) {
+  test(`同步健康：${scenario.name}`, async ({ page }) => {
+    await page.clock.install({ time: new Date("2026-10-18T06:00:00Z") })
+    await adsBoundary(page)
+    await page.route("**/ad-sync-status?*", async (route) =>
+      route.fulfill({
+        json: {
+          accounts: [
+            {
+              advertiser_id: "adv-1",
+              timezone: "Asia/Hong_Kong",
+              local_today: "2026-10-18",
+              last_success_at: "2026-10-18T05:59:00Z",
+              incomplete_dates: [],
+              failed_dates: [],
+            },
+          ],
+          plan: { enabled: true, disabled_reason: null, slowed: false },
+          health: {
+            status: "DEGRADED",
+            stale_ad_accounts: 0,
+            stale_material_accounts: 0,
+            missing_directory_ads: 0,
+            unlinked_material_posts: 0,
+            pending_actions: 0,
+            ...scenario.health,
+          },
+        },
+      }),
+    )
+    await page.goto(`/tenants/${TENANT}/ads?bc_id=${BC_A}`)
+    for (const text of scenario.labels) {
+      const warning = page.getByText(text, { exact: true })
+      await expect(warning).toBeVisible()
+      await expect(warning).toHaveClass(/text-destructive/)
+    }
+    await expect(
+      page.getByText("最旧有效数据更新到 13:59（账户本地）", { exact: true }),
+    ).toHaveClass(/text-muted-foreground/)
+    await expect(
+      page.getByText("该 BC 实时同步存在延迟或关联缺口", { exact: true }),
+    ).toHaveCount(0)
+  })
+}

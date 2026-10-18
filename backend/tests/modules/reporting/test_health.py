@@ -81,3 +81,23 @@ def test_unknown_empty_active_scope_is_not_healthy(session, sync_seed):
     jobs = session.exec(select(ReportSyncJob)).all()
     assert {adv for job in jobs for adv in job.advertiser_ids} == {"acc-1", "acc-2"}
     assert all(job.kind == "ad_day" for job in jobs)
+
+
+def test_zero_spend_facts_are_monitored_before_active_screen_catches_up(
+    session, sync_seed
+):
+    from app.modules.reporting.health import measure_health
+    from tests.modules.reporting.test_planner import NOW, _zero_spend_fact
+
+    now = NOW.replace(hour=20)
+    planner.ensure_bc_plans(session, now=now)
+    plan = session.get(AdSyncBc, (sync_seed.tenant_id, "bc-a"))
+    plan.last_active_advertiser_ids = []
+    plan.active_screened_at = now
+    _zero_spend_fact(
+        session, sync_seed.tenant_id, "material_day", now.date() + timedelta(days=1)
+    )
+    metrics, issues, repairs = measure_health(session, plan, now=now)
+    assert metrics["stale_ad_accounts"] == metrics["stale_material_accounts"] == 1
+    assert "stale_ad_accounts" in issues and "stale_material_accounts" in issues
+    assert repairs["ad"] == repairs["material"] == {"acc-1"}

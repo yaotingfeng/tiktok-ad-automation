@@ -20,6 +20,7 @@ from app.modules.reporting.planner import (
     _common,
     _group_by_window,
     _hot_window,
+    known_reporting_accounts,
     owned_accounts,
     plan_hot,
     plan_material,
@@ -42,7 +43,10 @@ def measure_health(session, plan, *, now, accounts=None):
         "t": plan.tenant_id,
         "bc": plan.bc_id,
         "ids": owned,
-        "active": plan.last_active_advertiser_ids,
+        "active": sorted(
+            set(plan.last_active_advertiser_ids)
+            | known_reporting_accounts(session, plan, accounts=owned, now=now)
+        ),
         "now": now,
         "cutoff": now - SLO,
         "general_cutoff": now - GENERAL_DIRECTORY_FRESHNESS,
@@ -59,9 +63,7 @@ def measure_health(session, plan, *, now, accounts=None):
         WITH active AS (
           SELECT a.advertiser_id,(CAST(:now AS timestamptz) AT TIME ZONE a.timezone)::date AS local_day
           FROM advertiser_account a WHERE a.tenant_id=:t AND a.advertiser_id=ANY(:ids)
-            AND (a.advertiser_id=ANY(:active) OR EXISTS (
-              SELECT 1 FROM ad_report_day r WHERE r.tenant_id=a.tenant_id AND r.advertiser_id=a.advertiser_id
-              AND r.stat_date=(CAST(:now AS timestamptz) AT TIME ZONE a.timezone)::date AND r.spend>0)))
+            AND a.advertiser_id=ANY(:active))
         SELECT a.advertiser_id,kinds.kind AS report_kind,s.status,s.last_success_at
         FROM active a CROSS JOIN (VALUES ('ad_day'),('material_day')) kinds(kind)
         LEFT JOIN report_sync_state s ON s.tenant_id=:t AND s.advertiser_id=a.advertiser_id

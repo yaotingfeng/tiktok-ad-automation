@@ -836,8 +836,9 @@ def test_cold_dispatch_window_cannot_block_new_current_day_work(
     assert job_tasks._dispatch_pending(engine, now) == 0
 
 
-def test_report_worker_renews_lease_and_durably_wakes_dispatch(
-    monkeypatch, committed_sync_seed, redis_client
+@pytest.mark.parametrize("refill_failed", [False, True])
+def test_report_worker_renews_lease_and_directly_refills_outbox(
+    monkeypatch, committed_sync_seed, redis_client, refill_failed
 ):
     from datetime import timedelta
 
@@ -884,6 +885,12 @@ def test_report_worker_renews_lease_and_durably_wakes_dispatch(
 
     monkeypatch.setattr(job_tasks.settings, "ADS_SYNC_ENABLED", True)
     monkeypatch.setattr(job_tasks, "_reader_for", reader)
+    if refill_failed:
+
+        def fail_refill(*_args, **_kwargs):
+            raise RuntimeError("temporary refill failure")
+
+        monkeypatch.setattr(job_tasks, "_dispatch_pending", fail_refill)
     assert (
         job_tasks.run_job_step(
             database_engine=engine,
@@ -894,30 +901,27 @@ def test_report_worker_renews_lease_and_durably_wakes_dispatch(
         == "COMPLETE"
     )
     with factory() as session:
-        signal = session.exec(
+        assert session.get(ReportSyncJob, job.id).status == "COMPLETE"
+        if refill_failed:
+            assert session.get(ReportSyncJob, next_id).status == "QUEUED"
+            return
+        assert session.get(ReportSyncJob, next_id).status == "RUNNING"
+        dispatch = session.exec(
             select(PendingDispatch).where(
                 PendingDispatch.tenant_id == seed.tenant_id,
-                PendingDispatch.task_key == f"report-refill:{job.id}:{claim}",
+                PendingDispatch.task_name == "reporting.backfill_step",
             )
         ).one()
-        assert signal.task_name == "reporting.plan_due" and signal.payload == {
-            "dispatch_only": True
-        }
-
-    def unexpected_reader(**_kwargs):
-        raise AssertionError("补位仅领取本地任务，不能重新筛选或读取平台")
-
-    monkeypatch.setattr(job_tasks, "_reader_for", unexpected_reader)
-    assert (
-        job_tasks.plan_due.run(
-            tenant_id=str(seed.tenant_id),
-            actor_id=str(seed.actor_id),
-            payload=signal.payload,
-        )
-        == 1
-    )
-    with factory() as session:
-        assert session.get(ReportSyncJob, next_id).status == "RUNNING"
+        assert dispatch.payload["job_id"] == str(next_id)
+        assert (
+            dispatch.published_at is None
+        )  # 仍由正常 outbox 发布，任务不直发 broker。
+        assert not session.exec(
+            select(PendingDispatch).where(
+                PendingDispatch.tenant_id == seed.tenant_id,
+                PendingDispatch.task_name == "reporting.plan_due",
+            )
+        ).all()
 
 
 def _lane_job_scope(now, lane, index):
@@ -930,10 +934,12 @@ def _lane_job_scope(now, lane, index):
     day = now.astimezone(ZoneInfo(timezone)).date()
     if lane == "backfill":
         return advertiser, "ad_day", day - timedelta(days=index + 1)
+    if lane == "links":
+        return advertiser, "material_links", day - timedelta(days=index)
     return advertiser, ("ad_day", "material_day", "campaign_hour")[index // 2], day
 
 
-@pytest.mark.parametrize("lane", ["live", "backfill"])
+@pytest.mark.parametrize("lane", ["live", "links", "backfill"])
 def test_concurrent_report_dispatchers_cannot_overfill_window(
     monkeypatch, committed_sync_seed, lane
 ):
@@ -950,11 +956,13 @@ def test_concurrent_report_dispatchers_cannot_overfill_window(
     seed, factory = committed_sync_seed
     monkeypatch.setattr(job_tasks.settings, "ADS_SYNC_ENABLED", True)
     now = datetime.now(UTC)
-    window = (
-        job_tasks.REPORT_DISPATCH_WINDOW
-        if lane == "live"
-        else job_tasks.BACKFILL_DISPATCH_WINDOW
-    )
+    window_name = {
+        "live": "REPORT_DISPATCH_WINDOW",
+        "links": "LINK_DISPATCH_WINDOW",
+        "backfill": "BACKFILL_DISPATCH_WINDOW",
+    }[lane]
+    monkeypatch.setattr(job_tasks, window_name, 2)
+    window = 2
     with factory() as session, session.begin():
         for index in range(6):
             advertiser, kind, day = _lane_job_scope(now, lane, index)
@@ -990,7 +998,7 @@ def test_concurrent_report_dispatchers_cannot_overfill_window(
         )
 
 
-@pytest.mark.parametrize("lane", ["live", "backfill"])
+@pytest.mark.parametrize("lane", ["live", "links", "backfill"])
 def test_single_slot_refill_round_robins_three_tenants_across_rounds(monkeypatch, lane):
     from contextlib import ExitStack
     from datetime import timedelta
@@ -1009,7 +1017,11 @@ def test_single_slot_refill_round_robins_three_tenants_across_rounds(monkeypatch
     # 两槽逐次补一槽，分别验证两条 lane 的跨租户游标而非依赖默认容量。
     monkeypatch.setattr(
         job_tasks,
-        "REPORT_DISPATCH_WINDOW" if lane == "live" else "BACKFILL_DISPATCH_WINDOW",
+        {
+            "live": "REPORT_DISPATCH_WINDOW",
+            "links": "LINK_DISPATCH_WINDOW",
+            "backfill": "BACKFILL_DISPATCH_WINDOW",
+        }[lane],
         2,
     )
     with ExitStack() as stack:
@@ -1354,3 +1366,150 @@ def test_pending_full_directory_skips_object_scan_and_replanning(
         ).all()
         assert len(runs) == 20 and {run.status for run in runs} == {"QUEUED"}
         assert session.get(AdSyncBc, (seed.tenant_id, "bc-a")).next_directory_at > now
+
+
+def test_link_backlog_cannot_consume_fact_or_cold_windows(
+    monkeypatch, committed_sync_seed
+):
+    from datetime import timedelta
+    from zoneinfo import ZoneInfo
+
+    from app.core.db import engine
+    from app.modules.reporting.jobs import enqueue_job
+    from app.modules.reporting.store_models import ReportSyncJob
+    from tests.modules.reporting.test_jobs import _route
+
+    seed, factory = committed_sync_seed
+    now = datetime.now(UTC)
+    today = now.astimezone(ZoneInfo("Asia/Hong_Kong")).date()
+    monkeypatch.setattr(job_tasks, "REPORT_DISPATCH_WINDOW", 1)
+    monkeypatch.setattr(job_tasks, "LINK_DISPATCH_WINDOW", 1, raising=False)
+    monkeypatch.setattr(job_tasks, "BACKFILL_DISPATCH_WINDOW", 1)
+    with factory() as session, session.begin():
+        common = {
+            "tenant_id": seed.tenant_id,
+            "bc_id": "bc-a",
+            "advertiser_ids": ["acc-1"],
+            "frozen_route": _route(seed),
+            "actor_id": seed.actor_id,
+        }
+        for index in range(6):
+            day = today - timedelta(days=index)
+            enqueue_job(
+                session,
+                **common,
+                kind="material_links",
+                tier="material",
+                start=day,
+                end=day,
+                due_at=now - timedelta(hours=1),
+            )
+        first = enqueue_job(
+            session,
+            **common,
+            kind="ad_day",
+            tier="hot",
+            start=today,
+            end=today,
+            due_at=now,
+        )
+        second = enqueue_job(
+            session,
+            **common,
+            kind="material_day",
+            tier="material",
+            start=today,
+            end=today,
+            due_at=now,
+        )
+        cold = enqueue_job(
+            session,
+            **common,
+            kind="ad_day",
+            tier="history",
+            start=today - timedelta(days=40),
+            end=today - timedelta(days=40),
+            due_at=now,
+        )
+    assert job_tasks._dispatch_pending(engine, now) == 3
+    with factory() as session, session.begin():
+        running = session.exec(
+            select(ReportSyncJob).where(
+                ReportSyncJob.tenant_id == seed.tenant_id,
+                ReportSyncJob.status == "RUNNING",
+            )
+        ).all()
+        assert {row.kind for row in running} == {"ad_day", "material_links"}
+        assert session.get(ReportSyncJob, first).status == "RUNNING"
+        assert session.get(ReportSyncJob, cold).status == "RUNNING"
+        session.get(ReportSyncJob, first).status = "COMPLETE"
+    assert job_tasks._dispatch_pending(engine, now) == 1
+    with factory() as session:
+        assert session.get(ReportSyncJob, second).status == "RUNNING"
+    assert job_tasks._dispatch_pending(engine, now) == 0
+
+
+@pytest.mark.parametrize(
+    "historical_running,missing_timezone",
+    [(False, False), (True, False), (False, True)],
+)
+def test_low_budget_links_only_claim_current_day_with_shared_capacity(
+    monkeypatch, committed_sync_seed, historical_running, missing_timezone
+):
+    from datetime import timedelta
+    from uuid import uuid4
+    from zoneinfo import ZoneInfo
+
+    from app.core.db import engine
+    from app.modules.accounts.models import AdvertiserAccount
+    from app.modules.reporting.jobs import enqueue_job
+    from app.modules.reporting.store_models import ReportSyncJob
+    from tests.modules.reporting.test_jobs import _route
+
+    seed, factory = committed_sync_seed
+    now = datetime.now(UTC)
+    today = now.astimezone(ZoneInfo("Asia/Hong_Kong")).date()
+    monkeypatch.setattr(job_tasks, "LINK_DISPATCH_WINDOW", 1)
+    with factory() as session, session.begin():
+        common = {
+            "tenant_id": seed.tenant_id,
+            "bc_id": "bc-a",
+            "actor_id": seed.actor_id,
+            "frozen_route": _route(seed),
+            "kind": "material_links",
+            "tier": "material",
+            "advertiser_ids": ["acc-1"],
+        }
+        old = enqueue_job(
+            session,
+            **common,
+            start=today - timedelta(days=1),
+            end=today - timedelta(days=1),
+            due_at=now - timedelta(hours=1),
+        )
+        current = enqueue_job(session, **common, start=today, end=today, due_at=now)
+        if historical_running:
+            row = session.get(ReportSyncJob, old)
+            row.status, row.claim_token, row.claimed_until = (
+                "RUNNING",
+                uuid4(),
+                now + timedelta(minutes=4),
+            )
+        if missing_timezone:
+            session.get(AdvertiserAccount, (seed.tenant_id, "acc-1")).timezone = ""
+    first_count = job_tasks._dispatch_pending(engine, now, allow_backfill=False)
+    assert first_count == (0 if historical_running or missing_timezone else 1)
+    with factory() as session, session.begin():
+        assert session.get(ReportSyncJob, old).status == (
+            "RUNNING" if historical_running else "QUEUED"
+        )
+        assert session.get(ReportSyncJob, current).status == (
+            "QUEUED" if historical_running or missing_timezone else "RUNNING"
+        )
+        if historical_running:
+            session.get(ReportSyncJob, old).status = "COMPLETE"
+    if historical_running:
+        assert job_tasks._dispatch_pending(engine, now, allow_backfill=False) == 1
+        with factory() as session:
+            assert session.get(ReportSyncJob, current).status == "RUNNING"
+    assert job_tasks._dispatch_pending(engine, now, allow_backfill=False) == 0

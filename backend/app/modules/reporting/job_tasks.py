@@ -71,8 +71,9 @@ logger = logging.getLogger(__name__)
 DIRECTORY_DISPATCH_BATCH = 1000
 # 全量目录只提前投递少量运行，历史初始请求不再持续填满 broker。
 DIRECTORY_DISPATCH_WINDOW = 4
-# 与 ACK 四个实时执行槽配套；历史积压留在数据库，不提前变成上千个有效租约。
-REPORT_DISPATCH_WINDOW = 4
+# 事实与关联独立限制在途任务；这是领取上限，不代表共享 Worker 中的专属执行槽。
+REPORT_DISPATCH_WINDOW = 8
+LINK_DISPATCH_WINDOW = 1
 BACKFILL_DISPATCH_WINDOW = 1
 # 目录消息发布后超过此时长仍未被领取，视为丢失并重新入队。
 DIRECTORY_MESSAGE_LOST_AFTER = timedelta(hours=6)
@@ -497,7 +498,7 @@ def _plan_one(
                     if plan.next_hot_at <= now:
                         active = sorted(
                             set(_active(session, counted, plan, accounts, now, days=1))
-                            | planner.known_spending_accounts(
+                            | planner.known_reporting_accounts(
                                 session, plan, accounts=accounts, now=now
                             )
                         )
@@ -632,6 +633,7 @@ def _dispatch_report_jobs(
     jobs = []
     for lane, window, task in (
         ("live", REPORT_DISPATCH_WINDOW, "reporting.job_step"),
+        ("links", LINK_DISPATCH_WINDOW, "reporting.job_step"),
         ("backfill", BACKFILL_DISPATCH_WINDOW, "reporting.backfill_step"),
     ):
         if lane == "backfill" and not allow_backfill:
@@ -647,7 +649,13 @@ def _dispatch_report_jobs(
         ).one()
         available = max(0, window - inflight)
         claimed = (
-            claim_jobs(session, now=now, limit=available, lane=lane)
+            claim_jobs(
+                session,
+                now=now,
+                limit=available,
+                lane=lane,
+                allow_historical_links=allow_backfill,
+            )
             if available
             else []
         )
@@ -680,24 +688,23 @@ def _dispatch_report_jobs(
 
 
 @contextmanager
-def _report_refill_after(database_engine, job, claim_token):
+def _report_refill_after(database_engine, redis_client, job):
     try:
         yield
     finally:
         if settings.ADS_SYNC_ENABLED:
             try:
-                with Session(database_engine) as session, session.begin():
-                    # 只唤醒本地派发，不重新筛选账户或读取平台；Beat 仍负责中断兜底。
-                    enqueue_after_commit(
-                        session,
-                        context=_context(job),
-                        task_name="reporting.plan_due",
-                        task_key=f"report-refill:{job.id}:{claim_token}",
-                        payload={"dispatch_only": True},
-                    )
+                now = datetime.now(UTC)
+                allow_backfill = (
+                    planner.calls_today(redis_client, now)
+                    <= settings.TIKTOK_REPORT_DAILY_CALL_BUDGET * 0.7
+                )
+                # 当前步骤提交后直接执行有锁本地领取；新消息仍写正常 outbox，
+                # 去掉先发 control 唤醒再领取的双跳，不在读取 Worker 内发送 broker。
+                _dispatch_pending(database_engine, now, allow_backfill=allow_backfill)
             except Exception:
                 # 已提交的报表不能因补位消息失败改成失败；30 秒 Beat 会再次补位。
-                logger.exception("report refill wake failed: job=%s", job.id)
+                logger.exception("report direct refill failed: job=%s", job.id)
 
 
 def _dispatch_pending(database_engine, now, *, allow_backfill=True):
@@ -761,7 +768,7 @@ def run_job_step(*, database_engine, redis_client, job_id, claim_token):
     def factory():
         return Session(database_engine)
 
-    with _report_refill_after(database_engine, job, claim_token):
+    with _report_refill_after(database_engine, redis_client, job):
         try:
             with _reader_for(
                 database_engine=database_engine,

@@ -418,3 +418,121 @@ def test_zero_screen_waits_for_publish_and_does_not_reuse_cached_zero_state(
     with factory() as session:
         state = session.get(ReportSyncState, (seed.tenant_id, "acc-1", "ad_day", day))
         assert state.row_count == 1 and state.last_success_at == published
+
+
+def _zero_spend_fact(session, tenant_id, kind, day):
+    from decimal import Decimal
+    from uuid import uuid4
+
+    from app.modules.reporting.store_models import AdReportDay, MaterialReportDay
+
+    common = {
+        "tenant_id": tenant_id,
+        "advertiser_id": "acc-1",
+        "stat_date": day,
+        "currency": "USD",
+        "timezone": "Asia/Hong_Kong",
+        "fetched_at": NOW - timedelta(hours=1),
+        "sync_job_id": uuid4(),
+        "spend": Decimal("0"),
+        "impressions": Decimal("1"),
+    }
+    fact = (
+        AdReportDay(**common, ad_id="zero-ad", campaign_id="c", adgroup_id="g")
+        if kind == "ad_day"
+        else MaterialReportDay(
+            **common, main_material_id="zero-post", main_material_type="VIDEO"
+        )
+    )
+    session.add(fact)
+    session.flush()
+    return fact
+
+
+@pytest.mark.parametrize("kind", ["ad_day", "material_day"])
+def test_zero_spend_actual_facts_stay_hot_without_fabricating_watermark(
+    session, sync_seed, kind
+):
+    from app.modules.reporting import planner
+    from app.modules.reporting.store_models import ReportSyncState
+
+    now = NOW.replace(hour=20)  # 香港已是次日，UTC 账户仍在前一天。
+    day = date(2026, 10, 13)
+    ensure_bc_plans(session, now=now)
+    plan = session.get(AdSyncBc, (sync_seed.tenant_id, "bc-a"))
+    fact = _zero_spend_fact(session, sync_seed.tenant_id, kind, day)
+    state = ReportSyncState(
+        tenant_id=sync_seed.tenant_id,
+        advertiser_id="acc-1",
+        report_kind=kind,
+        stat_date=day,
+        status="COMPLETE",
+        row_count=1,
+        last_success_at=NOW - timedelta(hours=1),
+    )
+    session.add(state)
+    session.flush()
+    active = planner.known_reporting_accounts(
+        session, plan, accounts=planner.owned_accounts(session, plan), now=now
+    )
+    assert active == {"acc-1"}
+    for _ in range(2):
+        planner.plan_hot(session, plan, active=sorted(active), now=now)
+        planner.plan_material(session, plan, active=sorted(active), now=now)
+    planner.mark_confirmed_empty(
+        session,
+        plan,
+        inactive=sorted({"acc-1", "acc-2"} - active),
+        window_fn=lambda tz: planner._hot_window(tz, now),
+        now=now,
+    )
+    jobs = session.exec(
+        select(ReportSyncJob).where(ReportSyncJob.tenant_id == sync_seed.tenant_id)
+    ).all()
+    assert len(jobs) == 2 and {job.kind for job in jobs} == {"ad_day", "material_day"}
+    assert all(
+        job.advertiser_ids == ["acc-1"]
+        and job.start_date == job.end_date == day
+        and job.frozen_route == plan.frozen_route
+        and job.actor_id == plan.actor_id
+        for job in jobs
+    )
+    assert state.row_count == 1 and state.last_success_at == NOW - timedelta(hours=1)
+    assert fact.spend == 0 and fact.impressions == 1
+    empty = session.get(
+        ReportSyncState, (sync_seed.tenant_id, "acc-2", "ad_day", now.date())
+    )
+    assert empty.status == "COMPLETE" and empty.row_count == 0
+
+
+@pytest.mark.parametrize("kind", ["ad_day", "material_day"])
+@pytest.mark.parametrize(
+    "excluded", ["yesterday", "tomorrow", "tenant", "ownership", "unknown_timezone"]
+)
+def test_known_facts_do_not_expand_local_day_or_account_scope(
+    session, sync_seed, kind, excluded
+):
+    from uuid import uuid4
+
+    from app.modules.accounts.models import AdvertiserAccount
+    from app.modules.reporting import planner
+
+    now = NOW.replace(hour=20)
+    day = date(2026, 10, 13)
+    if excluded == "yesterday":
+        day -= timedelta(days=1)
+    elif excluded == "tomorrow":
+        day += timedelta(days=1)
+    ensure_bc_plans(session, now=now)
+    plan = session.get(AdSyncBc, (sync_seed.tenant_id, "bc-a"))
+    _zero_spend_fact(
+        session, uuid4() if excluded == "tenant" else sync_seed.tenant_id, kind, day
+    )
+    if excluded == "unknown_timezone":
+        session.get(AdvertiserAccount, (sync_seed.tenant_id, "acc-1")).timezone = ""
+        session.flush()
+    accounts = ["acc-2"] if excluded == "ownership" else ["acc-1", "acc-2"]
+    assert (
+        planner.known_reporting_accounts(session, plan, accounts=accounts, now=now)
+        == set()
+    )

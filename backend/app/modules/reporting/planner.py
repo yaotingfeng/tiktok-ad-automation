@@ -8,7 +8,7 @@ from collections.abc import Sequence
 from datetime import UTC, date, datetime, time, timedelta
 from math import ceil
 from uuid import UUID
-from zoneinfo import ZoneInfo
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from sqlalchemy import exists, or_, text
 from sqlmodel import Session, col, select
@@ -379,20 +379,38 @@ def mark_confirmed_empty(
     return marked
 
 
-def known_spending_accounts(session, plan, *, accounts, now) -> set[str]:
-    """已有当前日正消耗不能因筛查接口短时返回0而从热刷消失。"""
-    return set(
-        session.connection()
-        .execute(
-            text("""
-        SELECT DISTINCT advertiser_id FROM ad_report_day
-        WHERE tenant_id=:tenant AND advertiser_id=ANY(:accounts) AND spend>0
-          AND stat_date=(CAST(:now AS timestamptz) AT TIME ZONE timezone)::date
-    """),
-            {"tenant": plan.tenant_id, "accounts": accounts, "now": now},
+def known_reporting_accounts(session, plan, *, accounts, now) -> set[str]:
+    """当前当地日已有广告/素材事实的账户继续热刷，零消耗不能当作空报表。"""
+    days: dict[date, list[str]] = {}
+    for advertiser, timezone in _timezones(session, plan.tenant_id, accounts).items():
+        try:
+            day = local_today(timezone, now)
+        except ZoneInfoNotFoundError, ValueError, TypeError:
+            # 未知时区不能借用 UTC 或事实旧时区扩大当前日范围。
+            continue
+        days.setdefault(day, []).append(advertiser)
+    known: set[str] = set()
+    for day, candidates in days.items():
+        # 每账户用事实表主键前缀探测，找到任意一行即结束；不按消费金额筛选。
+        known.update(
+            session.connection()
+            .execute(
+                text("""
+            SELECT a.advertiser_id FROM advertiser_account a
+            WHERE a.tenant_id=:tenant AND a.advertiser_id=ANY(:accounts)
+              AND (EXISTS (
+                SELECT 1 FROM ad_report_day r WHERE r.tenant_id=a.tenant_id
+                  AND r.advertiser_id=a.advertiser_id AND r.stat_date=:day
+              ) OR EXISTS (
+                SELECT 1 FROM material_report_day r WHERE r.tenant_id=a.tenant_id
+                  AND r.advertiser_id=a.advertiser_id AND r.stat_date=:day
+              ))
+        """),
+                {"tenant": plan.tenant_id, "accounts": candidates, "day": day},
+            )
+            .scalars()
         )
-        .scalars()
-    )
+    return known
 
 
 def plan_hot(

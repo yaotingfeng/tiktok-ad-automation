@@ -732,3 +732,45 @@ def test_split_child_preserves_hot_publish_after_parent_was_requested(
             ).last_success_at
             == successful_at
         )
+
+
+def test_admission_retry_keeps_original_fact_place_but_obeys_not_before(
+    session, sync_seed
+):
+    from zoneinfo import ZoneInfo
+
+    now = datetime.now(UTC)
+    today = now.astimezone(ZoneInfo("Asia/Hong_Kong")).date()
+    common = {
+        "tenant_id": sync_seed.tenant_id,
+        "bc_id": "bc-a",
+        "tier": "hot",
+        "advertiser_ids": ["acc-1"],
+        "start": today,
+        "end": today,
+        "frozen_route": _route(sync_seed),
+        "actor_id": sync_seed.actor_id,
+    }
+    old = enqueue_job(
+        session, **common, kind="material_day", due_at=now + timedelta(seconds=5)
+    )
+    new = enqueue_job(
+        session, **common, kind="ad_day", due_at=now - timedelta(seconds=30)
+    )
+    session.get(ReportSyncJob, old).created_at = now - timedelta(minutes=5)
+    session.get(ReportSyncJob, old).status = "WAITING"
+    session.flush()
+    assert [job.id for job in claim_jobs(session, now=now, limit=1, lane="live")] == [
+        new
+    ]
+    session.get(ReportSyncJob, new).status = "QUEUED"
+    session.get(ReportSyncJob, new).claim_token = None
+    session.get(ReportSyncJob, new).claimed_until = None
+    session.flush()
+    # 到准入时间后，老素材请求先于新广告领取，不因修改 due_at 被反复推后。
+    assert [
+        job.id
+        for job in claim_jobs(
+            session, now=now + timedelta(seconds=6), limit=1, lane="live"
+        )
+    ] == [old]

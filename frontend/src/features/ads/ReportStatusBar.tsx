@@ -1,6 +1,10 @@
 import { CircleAlert, CircleCheck, LoaderCircle } from "lucide-react"
 import { useEffect, useState } from "react"
-import type { SyncAccountStatus, SyncStatusPublic } from "@/client"
+import type {
+  SyncAccountStatus,
+  SyncHealthPublic,
+  SyncStatusPublic,
+} from "@/client"
 import { Button } from "@/components/ui/button"
 import {
   Sheet,
@@ -10,6 +14,8 @@ import {
   SheetTitle,
 } from "@/components/ui/sheet"
 
+import { cn } from "@/lib/utils"
+
 type Tone = "ok" | "pending" | "warn" | "error"
 
 const TONE_CLASS: Record<Tone, string> = {
@@ -17,6 +23,42 @@ const TONE_CLASS: Record<Tone, string> = {
   pending: "text-muted-foreground",
   warn: "text-amber-600",
   error: "text-destructive",
+}
+
+const HEALTH_COUNTS = [
+  ["stale_ad_accounts", "广告", "个账户超时"],
+  ["stale_material_accounts", "素材", "个账户超时"],
+  ["missing_directory_ads", "目录", "条待补齐或刷新"],
+  ["unlinked_material_posts", "素材", "项待关联"],
+  ["pending_actions", "动作", "项积压"],
+] as const
+const HEALTH_ISSUES: Record<string, string> = {
+  ACCOUNT_SCREEN_STALE: "账户筛选已过期，活跃账户覆盖待确认",
+  MONITOR_PENDING: "健康监测尚未完成，当前同步状态待确认",
+  MONITOR_STALE: "健康监测已过期，当前同步状态待确认",
+  MONITOR_QUERY_FAILED: "健康监测读取失败，当前同步状态待确认",
+}
+
+function healthWarnings(health?: SyncHealthPublic | null): string[] {
+  if (health?.status !== "DEGRADED") return []
+  const messages: string[] = []
+  const explained = new Set<string>()
+  for (const [key, label, unit] of HEALTH_COUNTS) {
+    const count = health[key] ?? 0
+    if (count > 0) {
+      messages.push(`该 BC ${label} ${count} ${unit}`)
+      explained.add(key)
+    }
+  }
+  let unknown = false
+  for (const issue of new Set(health.issues ?? [])) {
+    if (HEALTH_ISSUES[issue]) messages.push(`该 BC ${HEALTH_ISSUES[issue]}`)
+    else if (!explained.has(issue)) unknown = true
+  }
+  // 全零不代表监测已成功；新原因或缺失原因也必须保留降级结论。
+  if (unknown || !messages.length)
+    messages.push("该 BC 同步健康异常，原因待确认")
+  return messages
 }
 
 function accountTime(account: SyncAccountStatus) {
@@ -127,8 +169,8 @@ export function ReportStatusBar({
       text: `${future.length} 个账户当地尚未到所选日期`,
       tone: "ok",
     })
-  if (status?.health?.status === "DEGRADED")
-    extras.push({ text: "该 BC 实时同步存在延迟或关联缺口", tone: "error" })
+  for (const text of healthWarnings(status?.health))
+    extras.push({ text, tone: "error" })
   // 历史回填只覆盖到开户日之后的部分区间：告诉用户从哪天起数据完整，
   // 选择更早的日期时就能理解缺口来自回填范围，而不是同步出错。
   if (status?.complete_from)
@@ -157,9 +199,8 @@ export function ReportStatusBar({
   // 刷新按钮的回执与主结论相同时不重复显示。
   if (notice && notice !== headline) extras.push({ text: notice, tone: "ok" })
 
-  if (extras.some((item) => item.tone === "error")) tone = "error"
-  else if (tone === "ok" && extras.some((item) => item.tone === "warn"))
-    tone = "warn"
+  // 更新时间只反映所选账户的数据覆盖；全 BC 的目录、关联等告警独立着色。
+  if (tone === "ok" && (stale.length || incomplete.length)) tone = "warn"
   const Icon =
     tone === "pending"
       ? LoaderCircle
@@ -172,15 +213,17 @@ export function ReportStatusBar({
       role="status"
       className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm"
     >
-      <span className={`inline-flex items-center gap-1.5 ${TONE_CLASS[tone]}`}>
+      <span
+        className={cn("inline-flex items-center gap-1.5", TONE_CLASS[tone])}
+      >
         <Icon
-          className={`size-4 ${tone === "pending" ? "animate-spin" : ""}`}
+          className={cn("size-4", tone === "pending" && "animate-spin")}
           aria-hidden="true"
         />
         {headline}
       </span>
       {extras.map((item) => (
-        <span key={item.text} className={`text-xs ${TONE_CLASS[item.tone]}`}>
+        <span key={item.text} className={cn("text-xs", TONE_CLASS[item.tone])}>
           {item.text}
         </span>
       ))}
