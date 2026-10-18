@@ -38,6 +38,12 @@ KINDS_BY_TYPE = {
     )
     for ad_type in DIRECTORY_AD_TYPES
 }
+# 广告整页读取会补齐同组创意与素材关联；周期目录不再重复扫全账户创意。
+# 显式目录请求仍保留 DIRECTORY_SPECS 的完整能力。
+_PERIODIC_KINDS_BY_TYPE = {
+    ad_type: tuple(kind for kind in kinds if kind != "creative")
+    for ad_type, kinds in KINDS_BY_TYPE.items()
+}
 # 未使用类型的探测只读广告系列：该类型没有系列就不可能有广告组和广告。
 PROBE_KINDS = ("campaign",)
 # 账户未使用的广告类型只按此间隔复查，避免每轮都发必然为空的目录请求。
@@ -121,10 +127,12 @@ def directory_ad_types(
     for advertiser_id in accounts:
         in_use = used.get(advertiser_id, set())
         if advertiser_id in active and not in_use:
-            result[advertiser_id] = dict(KINDS_BY_TYPE)
+            result[advertiser_id] = dict(_PERIODIC_KINDS_BY_TYPE)
             continue
         result[advertiser_id] = {
-            ad_type: KINDS_BY_TYPE[ad_type] if ad_type in in_use else PROBE_KINDS
+            ad_type: _PERIODIC_KINDS_BY_TYPE[ad_type]
+            if ad_type in in_use
+            else PROBE_KINDS
             for ad_type in DIRECTORY_AD_TYPES
             if ad_type in in_use or (advertiser_id, ad_type) not in probed
         }

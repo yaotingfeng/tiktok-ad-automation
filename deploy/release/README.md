@@ -91,7 +91,7 @@ python3 deploy/local.py deploy
 
 ### 2026-10-18 首次 9→11 与 broker 迁移
 
-新增 `worker-ads-backfill`（队列 `ads-backfill`，prefork 1，申请512Mi/上限1Gi）与 `worker-ads-live-directory`（prefork 4，申请1Gi/上限3Gi）。2026-10-18吞吐修复把共享实时 `worker-ads-reporting` 调至prefork12、CPU申请2/上限4、内存申请4Gi/上限6Gi，事实在途候补6（先前24导致大量未发送准入争抢，见2026-10-18简单同步修复）、关联1、历史事实1；候补不是专属执行槽。Control2，其余并发不变。四开关及所有平台配额原值保留。全部Worker显式注入 `DATABASE_POOL_SIZE=2` / `DATABASE_MAX_OVERFLOW=1`，API保留5/10。
+新增 `worker-ads-backfill`（队列 `ads-backfill`，prefork 1，申请512Mi/上限1Gi）与 `worker-ads-live-directory`（prefork 4，申请1Gi/上限3Gi）。2026-10-18吞吐修复把共享实时 `worker-ads-reporting` 调至prefork12、CPU申请2/上限4、内存申请4Gi/上限6Gi，事实在途候补24、关联1、历史事实1；素材已独立周期投递，周期目录由广告读取补齐创意，不再额外全量扫描创意；候补不是专属执行槽。Control2，其余并发不变。四开关及所有平台配额原值保留。全部Worker显式注入 `DATABASE_POOL_SIZE=2` / `DATABASE_MAX_OVERFLOW=1`，API保留5/10。
 
 27个Worker子进程池上限81，9个父进程预留27，API15，事故期间其它连接实测54，合计177/200；54是快照而非硬上限，发布后仍核对实际连接。必须沿原发布流程冻结旧Worker后启动新Worker；不能临时滚动双开reporting（额外39，预算会到216/200）。十一角色总request 5.75CPU/14Gi、limit16.5CPU/27Gi。原reporting节点释放旧Pod后CPU余量1.935，不足新2CPU；另三个节点可用CPU2.735–3.235、内存6.5–7.8Gi，允许调度迁移，不固定原节点。
 

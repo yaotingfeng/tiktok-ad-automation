@@ -142,20 +142,19 @@ def test_unused_ad_types_are_probed_once_per_day(session, sync_seed, monkeypatch
     session.flush()
     later = now + timedelta(hours=3)
     assert directory_ad_types(session, **args, active_ids=[], now=later) == {
-        "acc-1": {"SMART_PLUS": KINDS_BY_TYPE["SMART_PLUS"]},
+        "acc-1": {"SMART_PLUS": ("campaign", "adgroup", "ad")},
         "acc-2": {},
     }
 
     # 有消耗但目录还没有任何对象的账户，不等复查立即请求全部类型全部层级。
-    assert (
-        directory_ad_types(session, **args, active_ids=["acc-2"], now=later)["acc-2"]
-        == KINDS_BY_TYPE
-    )
+    assert directory_ad_types(session, **args, active_ids=["acc-2"], now=later)[
+        "acc-2"
+    ] == dict.fromkeys(DIRECTORY_AD_TYPES, ("campaign", "adgroup", "ad"))
 
     # 超过 24 小时，未使用类型重新探测一次广告系列。
     stale = now + AD_TYPE_PROBE_INTERVAL + timedelta(minutes=1)
     assert directory_ad_types(session, **args, active_ids=[], now=stale) == {
-        "acc-1": {**PROBES, "SMART_PLUS": KINDS_BY_TYPE["SMART_PLUS"]},
+        "acc-1": {**PROBES, "SMART_PLUS": ("campaign", "adgroup", "ad")},
         "acc-2": PROBES,
     }
 
@@ -367,3 +366,20 @@ def test_targeted_and_terminal_directory_do_not_block_active_refresh(
     assert directory_due_accounts(
         session, **args, active_ids=["acc-1"], now=datetime.now(UTC)
     ) == ["acc-1"]
+
+
+@pytest.mark.parametrize("active", [[], ["acc-1"]])
+def test_periodic_ads_already_cover_creatives_without_second_full_scan(
+    session, sync_seed, active
+):
+    """广告整页读取自带创意补齐，周期只投系列、组、广告；显式完整请求仍可含创意。"""
+    session.add(_ad_object(sync_seed, "acc-1", "SMART_PLUS"))
+    session.flush()
+    types = directory_ad_types(
+        session,
+        tenant_id=sync_seed.tenant_id,
+        advertiser_ids=["acc-1"],
+        active_ids=active,
+        now=datetime.now(UTC),
+    )
+    assert types["acc-1"]["SMART_PLUS"] == ("campaign", "adgroup", "ad")
