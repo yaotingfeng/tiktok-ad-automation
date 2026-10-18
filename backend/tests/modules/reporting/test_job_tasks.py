@@ -1873,11 +1873,12 @@ def test_screening_deferral_cannot_skip_due_live_reports(
         assert plan.next_daily_at >= now + timedelta(minutes=5)
 
 
+@pytest.mark.parametrize("screen_ok", [False, True])
 @pytest.mark.parametrize(
     "rule_bc,enabled", [("bc-a", True), ("bc-b", True), ("bc-a", False)]
 )
 def test_screening_backoff_keeps_exact_enabled_rule_accounts_fresh(
-    monkeypatch, committed_sync_seed, redis_client, rule_bc, enabled
+    monkeypatch, committed_sync_seed, redis_client, rule_bc, enabled, screen_ok
 ):
     from datetime import timedelta
 
@@ -1892,9 +1893,8 @@ def test_screening_backoff_keeps_exact_enabled_rule_accounts_fresh(
         planner.ensure_bc_plans(s, now=now)
         plan = s.get(AdSyncBc, (seed.tenant_id, "bc-a"))
         plan.last_active_advertiser_ids = ["acc-1"]
-        plan.next_hot_at = plan.next_daily_at = plan.next_directory_at = (
-            now + timedelta(minutes=5)
-        )
+        plan.next_daily_at = plan.next_directory_at = now + timedelta(minutes=5)
+        plan.next_hot_at = now if screen_ok else now + timedelta(minutes=5)
         s.add(
             AutomationRule(
                 tenant_id=seed.tenant_id,
@@ -1906,8 +1906,25 @@ def test_screening_backoff_keeps_exact_enabled_rule_accounts_fresh(
             )
         )
 
+    class Reader:
+        def bc_spend(self, **_kwargs):
+            from app.integrations.tiktok.contracts.report_reader import RawReportPage
+
+            return RawReportPage(
+                (
+                    {
+                        "dimensions": {"advertiser_id": "acc-1"},
+                        "metrics": {"spend": "1"},
+                    },
+                ),
+                1,
+                1,
+                1,
+            )
+
     def unexpected_reader(**_kwargs):
-        raise AssertionError("仍须尊重账户发现的退避")
+        assert screen_ok, "仍须尊重账户发现的退避"
+        return _ctx(Reader())
 
     monkeypatch.setattr(job_tasks, "_reader_for", unexpected_reader)
     job_tasks._plan_one(
@@ -1924,7 +1941,11 @@ def test_screening_backoff_keeps_exact_enabled_rule_accounts_fresh(
         jobs = s.exec(
             select(ReportSyncJob).where(ReportSyncJob.tenant_id == seed.tenant_id)
         ).all()
-        expected = {"acc-1", "acc-2"} if enabled and rule_bc == "bc-a" else {"acc-1"}
+        expected = (
+            {"acc-1", "acc-2"}
+            if enabled and rule_bc == "bc-a" and not screen_ok
+            else {"acc-1"}
+        )
         for kind in ("ad_day", "material_day"):
             assert {
                 a for j in jobs if j.kind == kind for a in j.advertiser_ids
