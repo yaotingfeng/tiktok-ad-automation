@@ -109,24 +109,29 @@ def detached(pod, container, script, *args):
     进程随会话被终止：PG 导出只写出 toc.dat 就失败，造成停写后发布中止。脚本首行须删除自身，
     以免含连接凭据的脚本留在容器内。
     """
+    # pod 返回原始字节（与 remote_digest 等调用一致）。
     job = pod(container, "sh", "-c", _DETACH, "sh", *args, data=script.encode())
-    job = job.strip().splitlines()[-1]
+    job = job.decode().strip().splitlines()[-1]
     require(job.startswith("/tmp/tkada-job."), "Detached job did not start")
     deadline = time.monotonic() + DETACHED_TIMEOUT_SECONDS
     failures = 0
     while True:
         time.sleep(DETACHED_POLL_SECONDS)
         try:
-            status = pod(container, "sh", "-c", _POLL, "sh", job).strip()
+            status = pod(container, "sh", "-c", _POLL, "sh", job).decode().strip()
         except RuntimeError:
             failures += 1
-            require(failures <= DETACHED_POLL_FAILURES, "Detached job status unreachable")
+            require(
+                failures <= DETACHED_POLL_FAILURES, "Detached job status unreachable"
+            )
             continue
         failures = 0
         if status != "running":
             break
         require(time.monotonic() < deadline, "Detached job timed out")
-    log = pod(container, "sh", "-c", 'tail -c 4000 "$1/log"; rm -rf "$1"', "sh", job)
+    log = pod(
+        container, "sh", "-c", 'tail -c 4000 "$1/log"; rm -rf "$1"', "sh", job
+    ).decode(errors="replace")
     require(status == "0", f"Detached job failed ({status}): {log[-2000:]}")
     return log
 
