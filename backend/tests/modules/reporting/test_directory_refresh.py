@@ -169,3 +169,57 @@ def test_pending_top_spenders_cannot_hide_new_missing_ad(
     ).all()
     assert len(runs) == 2
     assert sum(len(run.query["ids"]) for run in runs) == 101
+
+
+@pytest.mark.parametrize("stale_kind", ["ad", "adgroup", "campaign"])
+def test_only_expired_layer_is_refreshed(session, sync_seed, monkeypatch, stale_kind):
+    monkeypatch.setattr(settings, "ADS_SYNC_ENABLED", True)
+    now = datetime.now(UTC)
+    job = prepared(session, sync_seed)
+    for kind, remote in [("ad", "a0"), ("adgroup", "g0"), ("campaign", "c0")]:
+        session.add(
+            AdObject(
+                tenant_id=sync_seed.tenant_id,
+                advertiser_id="acc-2",
+                kind=kind,
+                remote_id=remote,
+                ad_type="SMART_PLUS",
+                observed_at=now - timedelta(hours=2 if kind == stale_kind else 0),
+                published_version=1,
+            )
+        )
+    session.flush()
+    assert refresh_report_directory(session, job, now=now) == 1
+    runs = session.exec(
+        select(AdDirectoryRun).where(AdDirectoryRun.tenant_id == sync_seed.tenant_id)
+    ).all()
+    assert [run.kind for run in runs] == [stale_kind]
+
+
+def test_pending_parent_only_refresh_does_not_hide_next_missing_parent(
+    session, sync_seed, monkeypatch
+):
+    monkeypatch.setattr(settings, "ADS_SYNC_ENABLED", True)
+    now = datetime.now(UTC)
+    job = prepared(session, sync_seed, count=101)
+    for x in range(101):
+        for kind, remote in [("ad", f"a{x}"), ("adgroup", f"g{x}")]:
+            session.add(
+                AdObject(
+                    tenant_id=sync_seed.tenant_id,
+                    advertiser_id="acc-2",
+                    kind=kind,
+                    remote_id=remote,
+                    ad_type="SMART_PLUS",
+                    observed_at=now,
+                    published_version=1,
+                )
+            )
+    session.flush()
+    assert refresh_report_directory(session, job, now=now) == 1
+    assert refresh_report_directory(session, job, now=now) == 1
+    runs = session.exec(
+        select(AdDirectoryRun).where(AdDirectoryRun.tenant_id == sync_seed.tenant_id)
+    ).all()
+    assert all(run.kind == "campaign" for run in runs)
+    assert sum(len(run.query["ids"]) for run in runs) == 101

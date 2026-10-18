@@ -59,24 +59,29 @@ def refresh_report_directory(
         session.connection()
         .execute(
             text("""
-        SELECT r.advertiser_id, r.ad_id, r.adgroup_id, r.campaign_id, r.campaign_automation_type
+        SELECT r.advertiser_id, r.ad_id, r.adgroup_id, r.campaign_id, r.campaign_automation_type,
+          a.observed_at AS ad_observed_at, g.observed_at AS adgroup_observed_at,
+          c.observed_at AS campaign_observed_at
         FROM ad_report_day r
         LEFT JOIN ad_object a ON a.tenant_id=r.tenant_id AND a.advertiser_id=r.advertiser_id AND a.kind='ad' AND a.remote_id=r.ad_id
         LEFT JOIN ad_object g ON g.tenant_id=r.tenant_id AND g.advertiser_id=r.advertiser_id AND g.kind='adgroup' AND g.remote_id=r.adgroup_id
         LEFT JOIN ad_object c ON c.tenant_id=r.tenant_id AND c.advertiser_id=r.advertiser_id AND c.kind='campaign' AND c.remote_id=r.campaign_id
         WHERE r.tenant_id=:tenant AND r.sync_job_id=:job AND r.advertiser_id=ANY(:accounts) AND r.spend>0
           AND r.stat_date=(CAST(:now AS timestamptz) AT TIME ZONE r.timezone)::date
-          AND (a.remote_id IS NULL OR g.remote_id IS NULL OR c.remote_id IS NULL
-            OR LEAST(a.observed_at,g.observed_at,c.observed_at) < CASE
+          AND EXISTS (
+            SELECT 1 FROM (VALUES ('ad',r.ad_id,a.observed_at),
+              ('adgroup',r.adgroup_id,g.observed_at),
+              ('campaign',r.campaign_id,c.observed_at)) target(kind,remote_id,observed_at)
+            WHERE (target.observed_at IS NULL OR target.observed_at < CASE
               WHEN r.advertiser_id=ANY(:strict_accounts) THEN :cutoff ELSE :general_cutoff END)
-        AND NOT EXISTS (
+            AND NOT EXISTS (
             SELECT 1 FROM ad_directory_run d WHERE d.tenant_id=r.tenant_id
               AND d.bc_id=:bc AND d.actor_id=:actor AND d.frozen_route=CAST(:route AS jsonb)
-              AND d.advertiser_id=r.advertiser_id AND d.kind='ad'
+              AND d.advertiser_id=r.advertiser_id AND d.kind=target.kind
               AND d.ad_type=CASE r.campaign_automation_type WHEN 'UPGRADED_SMART_PLUS' THEN 'SMART_PLUS'
                 WHEN 'SMART_PLUS' THEN 'LEGACY_SMART_PLUS' WHEN 'MANUAL' THEN 'REGULAR' END
               AND d.status IN ('QUEUED','RUNNING','ADMISSION_WAIT','WAITING_REMOTE')
-              AND d.query->'ids' ? r.ad_id)
+              AND d.query->'ids' ? target.remote_id))
         ORDER BY (a.remote_id IS NOT NULL AND g.remote_id IS NOT NULL AND c.remote_id IS NOT NULL),
           LEAST(a.observed_at,g.observed_at,c.observed_at) ASC NULLS FIRST,
           r.spend DESC, r.advertiser_id, r.ad_id LIMIT :limit
@@ -125,11 +130,20 @@ def refresh_report_directory(
         ad_type = _AD_TYPES.get(row.campaign_automation_type)
         if ad_type is None:
             continue  # 报表未证明类型时不猜测，也不把金额当目录状态。
+        cutoff = now - (
+            DIRECTORY_FRESHNESS
+            if row.advertiser_id in strict_accounts
+            else GENERAL_DIRECTORY_FRESHNESS
+        )
         for kind, column in (
             ("campaign", "campaign_id"),
             ("adgroup", "adgroup_id"),
             ("ad", "ad_id"),
         ):
+            # 三层分别判断：父链某层过期，不应连带重读仍新鲜的另外两层。
+            observed_at = row[f"{kind}_observed_at"]
+            if observed_at is not None and observed_at >= cutoff:
+                continue
             key = (row.advertiser_id, ad_type, kind, row[column])
             if key not in covered:
                 refs[key] = EntityRef(
