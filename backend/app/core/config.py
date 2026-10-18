@@ -53,6 +53,9 @@ class Settings(BaseSettings):
     TIKTOK_REDIRECT_URI: str = ""
     TIKTOK_AUTHORIZATION_URL: str = ""
     TIKTOK_CALL_POLICIES: dict[str, Any] = Field(default_factory=dict)
+    # API 使用常规池；各 prefork Worker 的部署显式设为 2+1，约束共享 PG 连接预算。
+    DATABASE_POOL_SIZE: int = Field(default=5, ge=1, le=20)
+    DATABASE_MAX_OVERFLOW: int = Field(default=10, ge=0, le=20)
     # MCP 独立使用本环境注册材料；缺少 Marketing API 应用不影响该通道。
     MCP_CLIENT_REGISTRATION_REF: str = Field(default="", repr=False)
     MCP_REDIRECT_URI: str = ""

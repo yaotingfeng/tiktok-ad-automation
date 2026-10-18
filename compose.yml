@@ -5,6 +5,8 @@ x-app-environment: &app-environment
   SECRET_KEY: ${SECRET_KEY:?Set SECRET_KEY}
   FIRST_SUPERUSER: ${FIRST_SUPERUSER:?Set FIRST_SUPERUSER}
   FIRST_SUPERUSER_PASSWORD: ${FIRST_SUPERUSER_PASSWORD:?Set FIRST_SUPERUSER_PASSWORD}
+  DATABASE_POOL_SIZE: ${DATABASE_POOL_SIZE:-5}
+  DATABASE_MAX_OVERFLOW: ${DATABASE_MAX_OVERFLOW:-10}
   DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}@db:5432/app
   REDIS_URL: redis://redis:6379/0
   DISPATCH_MAX_ROUNDS: ${DISPATCH_MAX_ROUNDS:-20}
@@ -18,7 +20,7 @@ x-app-environment: &app-environment
   ADS_SYNC_ENABLED: ${ADS_SYNC_ENABLED:-false}
   AUTOMATED_RULES_ENABLED: ${AUTOMATED_RULES_ENABLED:-false}
   ADS_DIRECTORY_WORKER_CONCURRENCY: ${ADS_DIRECTORY_WORKER_CONCURRENCY:-1}
-  ADS_REPORTING_WORKER_CONCURRENCY: ${ADS_REPORTING_WORKER_CONCURRENCY:-1}
+  ADS_REPORTING_WORKER_CONCURRENCY: ${ADS_REPORTING_WORKER_CONCURRENCY:-4}
   AD_MANAGEMENT_WORKER_CONCURRENCY: ${AD_MANAGEMENT_WORKER_CONCURRENCY:-1}
   BC_CAPABILITY_MAX_AGE_SECONDS: ${BC_CAPABILITY_MAX_AGE_SECONDS:-86400}
   SCENE_MAX_AGE_SECONDS: ${SCENE_MAX_AGE_SECONDS:-86400}
@@ -95,21 +97,55 @@ services:
       retries: 5
   worker:
     <<: *app
+    environment:
+      <<: *app-environment
+      DATABASE_POOL_SIZE: "2"
+      DATABASE_MAX_OVERFLOW: "1"
     command: [celery, -A, app.jobs.celery_app:celery_app, worker, -Q, 'resources,resource-results,builds,control', --loglevel=INFO]
     depends_on:
       prestart: {condition: service_completed_successfully}
   worker-ads-directory:
     <<: *app
+    environment:
+      <<: *app-environment
+      DATABASE_POOL_SIZE: "2"
+      DATABASE_MAX_OVERFLOW: "1"
     command: [celery, -A, app.jobs.celery_app:celery_app, worker, --pool=prefork, -Q, "ads-directory,ads-publish", --concurrency, '${ADS_DIRECTORY_WORKER_CONCURRENCY:-1}', '--hostname=ads-directory@%h', --loglevel=INFO]
     depends_on:
       prestart: {condition: service_completed_successfully}
   worker-ads-reporting:
     <<: *app
-    command: [celery, -A, app.jobs.celery_app:celery_app, worker, --pool=prefork, -Q, ads-reporting, --concurrency, '${ADS_REPORTING_WORKER_CONCURRENCY:-1}', '--hostname=ads-reporting@%h', --loglevel=INFO]
+    environment:
+      <<: *app-environment
+      DATABASE_POOL_SIZE: "2"
+      DATABASE_MAX_OVERFLOW: "1"
+    command: [celery, -A, app.jobs.celery_app:celery_app, worker, --pool=prefork, -Q, ads-reporting, --concurrency, '${ADS_REPORTING_WORKER_CONCURRENCY:-4}', '--hostname=ads-reporting@%h', --loglevel=INFO]
+    depends_on:
+      prestart: {condition: service_completed_successfully}
+  worker-ads-backfill:
+    <<: *app
+    environment:
+      <<: *app-environment
+      DATABASE_POOL_SIZE: "2"
+      DATABASE_MAX_OVERFLOW: "1"
+    command: [celery, -A, app.jobs.celery_app:celery_app, worker, --pool=prefork, -Q, ads-backfill, --concurrency, '${ADS_BACKFILL_WORKER_CONCURRENCY:-1}', '--hostname=ads-backfill@%h', --loglevel=INFO]
+    depends_on:
+      prestart: {condition: service_completed_successfully}
+  worker-ads-live-directory:
+    <<: *app
+    environment:
+      <<: *app-environment
+      DATABASE_POOL_SIZE: "2"
+      DATABASE_MAX_OVERFLOW: "1"
+    command: [celery, -A, app.jobs.celery_app:celery_app, worker, --pool=prefork, -Q, ads-live-directory, --concurrency, '${ADS_LIVE_DIRECTORY_WORKER_CONCURRENCY:-4}', '--hostname=ads-live-directory@%h', --loglevel=INFO]
     depends_on:
       prestart: {condition: service_completed_successfully}
   worker-ad-management:
     <<: *app
+    environment:
+      <<: *app-environment
+      DATABASE_POOL_SIZE: "2"
+      DATABASE_MAX_OVERFLOW: "1"
     command: [celery, -A, app.jobs.celery_app:celery_app, worker, --pool=prefork, -Q, ad-management, --concurrency, '${AD_MANAGEMENT_WORKER_CONCURRENCY:-1}', '--hostname=ad-management@%h', --loglevel=INFO]
     depends_on:
       prestart: {condition: service_completed_successfully}

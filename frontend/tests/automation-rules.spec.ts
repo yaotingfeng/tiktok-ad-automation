@@ -713,3 +713,23 @@ test("素材规则使用状态下拉并提交广告开启条件", async ({ page 
     },
   })
 })
+
+test("运行频率仅暂停开放5分钟，切换启用后禁用该选项", async ({ page }) => {
+  await automationBoundary(page)
+  await page.goto(`/tenants/${TENANT}/automation-rules`)
+  await page.getByRole("button", { name: "新建规则" }).click()
+  await chooseAction(page, "暂停")
+  await page.getByRole("combobox", { name: "运行频率" }).click()
+  await expect(
+    page.getByRole("option", { name: "每 5 分钟", exact: true }),
+  ).toBeEnabled()
+  await page.getByRole("option", { name: "每 5 分钟", exact: true }).click()
+  await chooseAction(page, "启用")
+  await page.getByRole("combobox", { name: "运行频率" }).click()
+  await expect(
+    page.getByRole("option", { name: "每 5 分钟", exact: true }),
+  ).toBeDisabled()
+  await expect(
+    page.getByRole("option", { name: "每 30 分钟", exact: true }),
+  ).toBeEnabled()
+})

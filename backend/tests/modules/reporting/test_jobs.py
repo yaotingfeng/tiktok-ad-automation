@@ -7,7 +7,12 @@ from sqlmodel import Session, select
 from app.core.errors import DomainError
 from app.integrations.tiktok.contracts.report_reader import RawReportPage
 from app.integrations.tiktok.sdk import AccountAdmissionDeferred
-from app.modules.reporting.jobs import claim_jobs, enqueue_job, execute_job
+from app.modules.reporting.jobs import (
+    claim_jobs,
+    enqueue_job,
+    execute_job,
+    request_time,
+)
 from app.modules.reporting.store_models import (
     AdReportDay,
     ReportSyncJob,
@@ -168,6 +173,9 @@ def test_truncation_splits_then_fails_visibly(committed_sync_seed):
             )
         ).all()
         assert sorted(c.advertiser_ids for c in children) == [["acc-1"], ["acc-2"]]
+        assert all(request_time(child) == request_time(job) for child in children)
+        assert all(child.created_at >= job.created_at for child in children)
+        assert s.get(ReportSyncJob, job.id).status == "COMPLETE"
 
 
 def _enqueue_and_claim(factory, seed, advertisers=None):
@@ -484,9 +492,9 @@ def test_split_timeout_eventually_fails(committed_sync_seed, code):
         ).status in ("FAILED", "STALE")
 
 
-def test_material_job_links_new_posts_to_ads_in_same_job(committed_sync_seed):
-    # 素材日报不带广告：同一任务内用创意概览补齐“帖子 → 广告”对照。
-    from app.modules.reporting.store_models import MaterialPostLink
+def test_material_fact_commits_before_separately_claimed_link_job(committed_sync_seed):
+    # 素材金额先提交，再正常领取独立关联任务；概览读取不阻挡事实。
+    from app.modules.reporting.store_models import MaterialPostLink, MaterialReportDay
 
     seed, factory = committed_sync_seed
 
@@ -533,6 +541,31 @@ def test_material_job_links_new_posts_to_ads_in_same_job(committed_sync_seed):
     reader = Reader()
     assert (
         execute_job(factory, job_id=job.id, claim_token=job.claim_token, reader=reader)
+        == "COMPLETE"
+    )
+    assert reader.calls == []
+    with factory() as s:
+        assert s.get(ReportSyncJob, job.id).status == "COMPLETE"
+        fact = s.get(MaterialReportDay, (seed.tenant_id, "acc-1", D, "p1"))
+        assert fact is not None and fact.spend == 3
+        assert (
+            s.exec(
+                select(MaterialPostLink).where(
+                    MaterialPostLink.tenant_id == seed.tenant_id
+                )
+            ).all()
+            == []
+        )
+        linked_jobs = claim_jobs(
+            s, now=datetime.now(UTC) + timedelta(seconds=1), limit=10
+        )
+        assert len(linked_jobs) == 1 and linked_jobs[0].kind == "material_links"
+        link_job = linked_jobs[0]
+        s.commit()
+    assert (
+        execute_job(
+            factory, job_id=link_job.id, claim_token=link_job.claim_token, reader=reader
+        )
         == "COMPLETE"
     )
     assert reader.calls == [("links", "acc-1", 1)]
@@ -584,8 +617,23 @@ def test_hot_report_queues_missing_ad_and_parent_directory(
     assert len(dispatches) == 3 and all(
         r.task_name == "ads.targeted_step" for r in dispatches
     )
-    # 后续热刷没有完成前合并相同回读，不能每份报表都叠加投递。
-    assert _run(session, job, _CountingReader(reader)) == 1
+    # 完整新一轮热刷仍合并未完成的回读，不靠重放同一旧水位任务验证去重。
+    job.status = "COMPLETE"
+    session.flush()
+    newer_id = enqueue_job(
+        session,
+        tenant_id=sync_seed.tenant_id,
+        bc_id="bc-a",
+        kind="ad_day",
+        tier="hot",
+        advertiser_ids=["acc-2"],
+        start=today,
+        end=today,
+        frozen_route=_route(sync_seed),
+        actor_id=sync_seed.actor_id,
+    )
+    newer = session.get(ReportSyncJob, newer_id)
+    assert _run(session, newer, _CountingReader(reader)) == 1
     assert (
         len(
             session.exec(
@@ -596,3 +644,91 @@ def test_hot_report_queues_missing_ad_and_parent_directory(
         )
         == 3
     )
+
+
+def test_old_cross_day_hot_job_cannot_deduplicate_or_occupy_current_day_lane(
+    session, sync_seed
+):
+    """旧版昨天至今天任务转冷后，新的当天请求必须仍能独立规划和领取。"""
+    from zoneinfo import ZoneInfo
+
+    now = datetime.now(UTC)
+    today = now.astimezone(ZoneInfo("Asia/Hong_Kong")).date()
+    kwargs = {
+        "tenant_id": sync_seed.tenant_id,
+        "bc_id": "bc-a",
+        "kind": "ad_day",
+        "tier": "hot",
+        "advertiser_ids": ["acc-1"],
+        "end": today,
+        "frozen_route": _route(sync_seed),
+        "actor_id": sync_seed.actor_id,
+        "due_at": now,
+    }
+    old_id = enqueue_job(session, start=today - timedelta(days=1), **kwargs)
+    current_id = enqueue_job(session, start=today, **kwargs)
+    assert old_id is not None and current_id is not None
+    current = claim_jobs(session, now=now, limit=10, lane="live")
+    old = claim_jobs(session, now=now, limit=10, lane="backfill")
+    assert [job.id for job in current] == [current_id]
+    assert [job.id for job in old] == [old_id]
+
+
+@pytest.mark.parametrize("old_rows", [[], [ad_row("a1", D, spend="1")]])
+def test_split_child_preserves_hot_publish_after_parent_was_requested(
+    committed_sync_seed, old_rows
+):
+    """父请求等待时新热刷先完成，稍后生成的子任务也必须沿用父请求水位。"""
+    from uuid import uuid4
+
+    from app.modules.reporting.publish import AccountMeta, publish_ad_day
+
+    seed, factory = committed_sync_seed
+    parent = _enqueue_and_claim(factory, seed, advertisers=["acc-1", "acc-2"])
+    with factory() as session:
+        publish_ad_day(
+            session,
+            tenant_id=seed.tenant_id,
+            job_id=uuid4(),
+            accounts={"acc-1": AccountMeta("USD", "Asia/Hong_Kong")},
+            start=D,
+            end=D,
+            rows=[ad_row("a1", D, spend="20")],
+        )
+        successful_at = session.get(
+            ReportSyncState, (seed.tenant_id, "acc-1", "ad_day", D)
+        ).last_success_at
+        session.commit()
+    assert (
+        execute_job(
+            factory,
+            job_id=parent.id,
+            claim_token=parent.claim_token,
+            reader=FakeReader(total=lambda _advs, _camps: 20_000),
+        )
+        == "SPLIT"
+    )
+    with factory() as session:
+        children = claim_jobs(
+            session, now=datetime.now(UTC) + timedelta(seconds=1), limit=10
+        )
+        child = next(job for job in children if job.advertiser_ids == ["acc-1"])
+        assert child.created_at > successful_at > request_time(child)
+        session.commit()
+    assert (
+        execute_job(
+            factory,
+            job_id=child.id,
+            claim_token=child.claim_token,
+            reader=FakeReader(pages={(("acc-1",), (), 1): old_rows}),
+        )
+        == "COMPLETE"
+    )
+    with factory() as session:
+        assert session.get(AdReportDay, (seed.tenant_id, "acc-1", D, "a1")).spend == 20
+        assert (
+            session.get(
+                ReportSyncState, (seed.tenant_id, "acc-1", "ad_day", D)
+            ).last_success_at
+            == successful_at
+        )

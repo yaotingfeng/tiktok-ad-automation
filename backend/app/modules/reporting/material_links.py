@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable, Sequence
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from typing import Any
 from uuid import UUID
 
@@ -41,8 +41,6 @@ POST_VIDEO_SQL = """
     ORDER BY l.advertiser_id, l.main_material_id, l.platform_material_id COLLATE "C"
 """
 
-ReadAll = Callable[[Callable[[int], RawReportPage]], list[dict[str, Any]]]
-
 
 def material_row_key(adv: str, mid: str, vid: str | None) -> str:
     """素材维度行键：对上视频的按视频跨账户一行；对不上的帖子单独一行，金额不丢。"""
@@ -59,7 +57,12 @@ def post_video_map(
 
 
 def _unlinked(
-    session: Session, tenant_id: UUID, advertiser_id: str
+    session: Session,
+    tenant_id: UUID,
+    advertiser_id: str,
+    *,
+    start: date | None = None,
+    end: date | None = None,
 ) -> dict[str, tuple[str | None, str, date, date]]:
     """尚无对照的主素材 → (最新名称, 类型, 最早日, 最晚日)。"""
     rows = session.connection().execute(
@@ -71,13 +74,15 @@ def _unlinked(
             max(d.stat_date) AS last_day
         FROM material_report_day d
         WHERE d.tenant_id = :t AND d.advertiser_id = :a
+          AND (CAST(:start AS date) IS NULL OR d.stat_date >= :start)
+          AND (CAST(:end AS date) IS NULL OR d.stat_date <= :end)
           AND NOT EXISTS (
             SELECT 1 FROM material_post_link l
             WHERE l.tenant_id = d.tenant_id AND l.advertiser_id = d.advertiser_id
               AND l.main_material_id = d.main_material_id)
         GROUP BY d.main_material_id
         """),
-        {"t": tenant_id, "a": advertiser_id},
+        {"t": tenant_id, "a": advertiser_id, "start": start, "end": end},
     )
     return {r.mid: (r.name, r.mtype, r.first_day, r.last_day) for r in rows}
 
@@ -165,36 +170,52 @@ def _candidate_ads(
 AD_FILTER_LIMIT = 200
 
 
-def _locate_posts(
-    ads: Sequence[str],
-    targets: set[str],
-    posts_of: Callable[[tuple[str, ...]], set[str]],
-) -> dict[str, str]:
-    """二分定位帖子所属广告：一个帖子只属于一条广告，查左半后，左半没有的目标必在右半，
-    右半无需再查。请求次数约为“目标帖子数 × log2(广告数)”，不随无关广告线性增长。
+def _locate_post_step(state, *, read_ad_posts, first, last):
+    """单帖二分路径与当前查询页持久化；每步最多一次平台读取。
+
+    已确认包含目标的右半无需读取。栈仅保留尚未定位的路径，避免把每次完整
+    二分查找塞进一个期限；跨 200 广告批次、分页也分别提交后再继续。
     """
-    owner: dict[str, str] = {}
-
-    def search(batch: tuple[str, ...], present: set[str]) -> None:
-        # present：已确认都在本批广告里的目标帖子。
-        if not present:
-            return
-        if len(batch) == 1:
-            for mid in present:
-                owner[mid] = batch[0]
-            return
-        half = len(batch) // 2
-        left = posts_of(batch[:half]) & present
-        search(batch[:half], left)
-        search(batch[half:], present - left)
-
-    for start in range(0, len(ads), AD_FILTER_LIMIT):
-        remaining = targets - set(owner)
-        if not remaining:
-            break
-        batch = tuple(ads[start : start + AD_FILTER_LIMIT])
-        search(batch, posts_of(batch) & remaining)
-    return owner
+    stack = state["search_stack"]
+    if not stack:
+        offset = state["next_batch"]
+        batch = state["candidates"][offset : offset + AD_FILTER_LIMIT]
+        if not batch:
+            return True, None
+        stack.append({"ads": batch, "confirmed": False})
+        state["next_batch"] += len(batch)
+    node = stack[-1]
+    ads = node["ads"]
+    query_ads = ads[: len(ads) // 2] if node["confirmed"] else ads
+    query = state.get("query", {"page": 1, "found": False})
+    result = read_ad_posts(tuple(query_ads), first, last, query["page"])
+    if result.total_number >= 20_000:
+        raise DomainError("report_truncation_risk", "报表行数达到平台上限，可能被截断")
+    signature = [result.total_page, result.total_number]
+    if query.get("signature", signature) != signature:
+        # 翻页期间集合改变时只重读当前子集；不能把不完整的缺失推导为右半命中。
+        state.pop("query", None)
+        return False, None
+    query["signature"] = signature
+    query["found"] = query["found"] or any(
+        str((row.get("dimensions") or {}).get("main_material_id") or "") == state["mid"]
+        for row in result.rows
+    )
+    if result.next_page is not None:
+        query["page"] = result.next_page
+        state["query"] = query
+        return False, None
+    state.pop("query", None)
+    if node["confirmed"]:
+        node["ads"] = query_ads if query["found"] else ads[len(ads) // 2 :]
+    elif query["found"]:
+        node["confirmed"] = True
+    else:
+        stack.pop()
+        return state["next_batch"] >= len(state["candidates"]), None
+    if len(node["ads"]) == 1:
+        return True, node["ads"][0]
+    return False, None
 
 
 def _resolve_videos(session: Session, tenant_id: UUID, advertiser_id: str) -> None:
@@ -225,28 +246,33 @@ def refresh_material_links(
     advertiser_id: str,
     read_overview: Callable[[int], RawReportPage],
     read_ad_posts: Callable[[tuple[str, ...], date, date, int], RawReportPage],
-    read_all: ReadAll,
     now: datetime,
-) -> None:
-    """在素材日报发布后调用；同一事务内补齐对照，读取失败随任务一起重试。"""
-    unlinked = _unlinked(session, tenant_id, advertiser_id)
+    start: date | None = None,
+    end: date | None = None,
+    progress: dict[str, Any] | None = None,
+) -> bool:
+    """推进有界关联扫描；返回是否完成，调用方把游标、已解析关联一起提交。
+
+    当前日报只修其日期内的帖子，旧帖子由补数扫描处理；概览逐页保存，不能因一个
+    历史帖子的定位超时反复重读整账户。缺少目录的帖子保留真实缺口，不能填零。
+    """
+    progress = progress if progress is not None else {}
+    unlinked = _unlinked(session, tenant_id, advertiser_id, start=start, end=end)
     scan = session.get(MaterialLinkScan, (tenant_id, advertiser_id))
     cached = scan is not None and set(unlinked) <= set(scan.unresolved_ids)
     if cached and unlinked:
-        # 首次素材报表可能早于广告目录；新目录出现同名候选后，旧负缓存必须重试。
-        # 没有新候选的已删除帖子仍保持缓存，避免每次热刷整账户重扫。
         names = sorted({meta[0] for meta in unlinked.values() if meta[0]})
         changed = (
             session.connection()
             .execute(
                 text("""
-                SELECT EXISTS (
-                    SELECT 1 FROM ad_material_reference u JOIN ad_object a
-                    ON a.tenant_id=u.tenant_id AND a.advertiser_id=u.advertiser_id
-                      AND a.kind='ad' AND a.remote_id=u.ad_remote_id
-                    WHERE u.tenant_id=:t AND u.advertiser_id=:a AND u.complete
-                      AND u.name=ANY(:names) AND a.observed_at>:scanned)
-            """),
+            SELECT EXISTS (
+                SELECT 1 FROM ad_material_reference u JOIN ad_object a
+                ON a.tenant_id=u.tenant_id AND a.advertiser_id=u.advertiser_id
+                  AND a.kind='ad' AND a.remote_id=u.ad_remote_id
+                WHERE u.tenant_id=:t AND u.advertiser_id=:a AND u.complete
+                  AND u.name=ANY(:names) AND a.observed_at>:scanned)
+        """),
                 {
                     "t": tenant_id,
                     "a": advertiser_id,
@@ -256,54 +282,89 @@ def refresh_material_links(
             )
             .scalar_one()
         )
-        cached = not changed
+        # 无新候选仍定期复核：目录或平台概览可能在最初读取后才变得完整。
+        cached = not changed and scan.scanned_at >= now - timedelta(minutes=10)
     if unlinked and not cached:
-        values = [
-            _overview_link(row, tenant_id, advertiser_id, now)
-            for row in read_all(read_overview)
-        ]
-        _upsert_links(session, values)
-        found = {item["m"] for item in values}
-        stale = {mid: meta for mid, meta in unlinked.items() if mid not in found}
-        # 概览不再列出的旧帖子：只在同名文件所在广告里，按广告筛选拆分报表定位。
-        if stale:
-            first = min(meta[2] for meta in stale.values())
-            last = max(meta[3] for meta in stale.values())
-            names = {meta[0] for meta in stale.values() if meta[0]}
-            owner = _locate_posts(
-                _candidate_ads(session, tenant_id, advertiser_id, names),
-                set(stale),
-                lambda ads: {
-                    str((row.get("dimensions") or {}).get("main_material_id") or "")
-                    for row in read_all(
-                        lambda page: read_ad_posts(ads, first, last, page)
-                    )
-                },
-            )
+        if not progress.get("overview_complete"):
+            page = read_overview(int(progress.get("next_page", 1)))
             _upsert_links(
                 session,
                 [
-                    _link(
-                        tenant_id,
-                        advertiser_id,
-                        material_id=mid,
-                        ad_id=ad_id,
-                        material_type=stale[mid][1],
-                        ad_material_id=None,
-                        name=stale[mid][0],
-                        now=now,
-                    )
-                    for mid, ad_id in sorted(owner.items())
+                    _overview_link(row, tenant_id, advertiser_id, now)
+                    for row in page.rows
                 ],
             )
-        unresolved = sorted(set(_unlinked(session, tenant_id, advertiser_id)))
+            if page.next_page is None:
+                progress["overview_complete"] = True
+            else:
+                progress["next_page"] = page.next_page
+            # 包括概览终页都先独立落库，后面的旧帖定位异常不能撤回这些页。
+            _resolve_videos(session, tenant_id, advertiser_id)
+            session.flush()
+            return bool(progress.get("overview_complete")) and not _unlinked(
+                session, tenant_id, advertiser_id, start=start, end=end
+            )
+        stale = _unlinked(session, tenant_id, advertiser_id, start=start, end=end)
+        checked = set(progress.get("checked_ids", []))
+        remaining = sorted(set(stale) - checked)
+        if remaining:
+            current = progress.get("locate_post")
+            mid = (
+                current["mid"]
+                if current and current["mid"] in remaining
+                else remaining[0]
+            )
+            name, mtype, first, last = stale[mid]
+            if not current or current["mid"] != mid:
+                current = {
+                    "mid": mid,
+                    "candidates": _candidate_ads(
+                        session, tenant_id, advertiser_id, {name} if name else set()
+                    ),
+                    "next_batch": 0,
+                    "search_stack": [],
+                }
+                progress["locate_post"] = current
+            complete, owner = _locate_post_step(
+                current, read_ad_posts=read_ad_posts, first=first, last=last
+            )
+            if complete:
+                if owner is not None:
+                    _upsert_links(
+                        session,
+                        [
+                            _link(
+                                tenant_id,
+                                advertiser_id,
+                                material_id=mid,
+                                ad_id=owner,
+                                material_type=mtype,
+                                ad_material_id=None,
+                                name=name,
+                                now=now,
+                            )
+                        ],
+                    )
+                checked.add(mid)
+                progress["checked_ids"] = sorted(checked)
+                progress.pop("locate_post", None)
+            if not complete or len(remaining) > 1:
+                _resolve_videos(session, tenant_id, advertiser_id)
+                session.flush()
+                return False
+        unresolved = set(
+            _unlinked(session, tenant_id, advertiser_id, start=start, end=end)
+        )
         if scan is None:
             scan = MaterialLinkScan(
                 tenant_id=tenant_id, advertiser_id=advertiser_id, scanned_at=now
             )
+        # 不抹掉其他日期的负缓存；本次已经解决的帖子从缓存移除。
+        scan.unresolved_ids = sorted(
+            (set(scan.unresolved_ids) - set(unlinked)) | unresolved
+        )
         scan.scanned_at = now
-        scan.unresolved_ids = unresolved
         session.add(scan)
-    # 目录同步可能晚于对照：每次都重试解析尚无视频的对照，只是数据库内更新。
     _resolve_videos(session, tenant_id, advertiser_id)
     session.flush()
+    return True

@@ -27,11 +27,18 @@ for path in sorted(root.glob("*.yaml")):
         assert resource["metadata"]["labels"]["app"] == "tiktok-ad-automation"
         objects.append(resource)
 workloads = [o for o in objects if o["kind"] == "Deployment"]
-assert len(workloads) == 9
+assert len(workloads) == 11
 for workload in workloads:
     spec = workload["spec"]["template"]["spec"]
     assert spec["imagePullSecrets"] == [{"name": "tiktok-ad-automation-registry"}]
     container = spec["containers"][0]
+    role = workload["metadata"]["labels"]["role"]
+    env = {item["name"]: item.get("value") for item in container.get("env", [])}
+    if role.startswith("worker-"):
+        assert env.get("DATABASE_POOL_SIZE") == "2"
+        assert env.get("DATABASE_MAX_OVERFLOW") == "1"
+    else:
+        assert "DATABASE_POOL_SIZE" not in env and "DATABASE_MAX_OVERFLOW" not in env
     assert all(
         k in container["resources"][budget]
         for budget in ("requests", "limits")
@@ -50,6 +57,52 @@ for workload in workloads:
         )
     else:
         assert "readinessProbe" in container
+expected_workers = {
+    "worker-ads-reporting": ("ads-reporting", 4, "2Gi", "4Gi"),
+    "worker-ads-backfill": ("ads-backfill", 1, "512Mi", "1Gi"),
+    "worker-ads-live-directory": ("ads-live-directory", 4, "1Gi", "3Gi"),
+    "worker-ads-directory": ("ads-directory,ads-publish", 1, "1Gi", "2Gi"),
+    "worker-ad-management": ("ad-management", 1, "1Gi", "2Gi"),
+}
+for workload in workloads:
+    role = workload["metadata"]["labels"]["role"]
+    if role not in expected_workers:
+        continue
+    queue, concurrency, request, limit = expected_workers[role]
+    container = workload["spec"]["template"]["spec"]["containers"][0]
+    command = container["command"]
+    assert command[command.index("-Q") + 1] == queue
+    assert command[command.index("--pool") + 1] == "prefork"
+    assert command[command.index("--concurrency") + 1] == str(concurrency)
+    assert (
+        command[command.index("--hostname") + 1] == role.removeprefix("worker-") + "@%h"
+    )
+    assert container["resources"]["requests"]["memory"] == request
+    assert container["resources"]["limits"]["memory"] == limit
+for name in ("compose.yml", "compose.production.yml"):
+    services = yaml.safe_load((root.parents[1] / name).read_text())["services"]
+    for role, service in services.items():
+        if role.startswith("worker"):
+            assert service["environment"]["DATABASE_POOL_SIZE"] == "2"
+            assert service["environment"]["DATABASE_MAX_OVERFLOW"] == "1"
+    for role, queue, concurrency in (
+        ("worker-ads-backfill", "ads-backfill", 1),
+        ("worker-ads-live-directory", "ads-live-directory", 4),
+        ("worker-ads-reporting", "ads-reporting", 4),
+    ):
+        command = services[role]["command"]
+        assert command[command.index("-Q") + 1] == queue
+        assert "--pool=prefork" in command
+        assert command[command.index("--concurrency") + 1].endswith(
+            ":-" + str(concurrency) + "}"
+        )
+for path in root.parent.glob("staging-*.service"):
+    content = path.read_text()
+    if " worker " in content:
+        assert (
+            "ExecStart=/usr/bin/env DATABASE_POOL_SIZE=2 DATABASE_MAX_OVERFLOW=1 "
+            in content
+        )
 api = next(o for o in workloads if o["metadata"]["labels"]["role"] == "api")["spec"][
     "template"
 ]["spec"]["containers"][0]

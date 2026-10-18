@@ -15,7 +15,7 @@ from app.modules.automation_rules.catalog import (
 )
 
 Level = Literal["campaign", "adgroup", "ad", "material"]
-FREQUENCY_MINUTES = {"30M": 30, "1H": 60, "2H": 120, "4H": 240, "DAILY": 1440}
+FREQUENCY_MINUTES = {"5M": 5, "30M": 30, "1H": 60, "2H": 120, "4H": 240, "DAILY": 1440}
 
 
 class _Strict(BaseModel):
@@ -143,7 +143,7 @@ class Period(_Strict):
 
 
 class Schedule(_Strict):
-    frequency: Literal["30M", "1H", "2H", "4H", "DAILY"]
+    frequency: Literal["5M", "30M", "1H", "2H", "4H", "DAILY"]
     daily_at: time | None = None
     window: Literal["CONTINUOUS", "CUSTOM", "ONCE"]
     periods: tuple[Period, ...] = Field(default=(), max_length=7)
@@ -244,7 +244,7 @@ class RuleDefinition(_Strict):
             raise ValueError("action level outside the judged scope")
         if self.aggregation != "EACH" and self.schedule.timezone_basis == "ACCOUNT":
             raise ValueError("totals across accounts run on the rule timezone")
-        minimum = min_frequency_minutes(level, self.action.level)
+        minimum = min_frequency_minutes(level, self.action.level, self.action.type)
         if FREQUENCY_MINUTES[self.schedule.frequency] < minimum:
             raise ValueError(f"run at most every {minimum} minutes")
         # 仅发送通知的规则，作用就是发飞书通知，通知不能关闭。

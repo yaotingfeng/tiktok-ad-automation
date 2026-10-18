@@ -12,6 +12,15 @@ const token = "ads-workspace-test-token"
 
 export type AdsBoundaryOptions = {
   lastSuccess?: string
+  reportSpend?: string
+  syncAccounts?: Array<{
+    advertiser_id: string
+    timezone: string
+    local_today: string
+    last_success_at: string | null
+    incomplete_dates?: string[]
+    failed_dates?: string[]
+  }>
   slowed?: boolean
   delayedA?: boolean
   /** 让某个维度的报表响应延迟，用于验证切换维度时不显示上一维度的行。 */
@@ -304,7 +313,7 @@ export async function adsBoundary(
                   timezone: "UTC",
                   attribution: "IAA",
                   values: {
-                    spend: "100",
+                    spend: options.reportSpend ?? "100",
                     revenue_d0: "120",
                     revenue_total: "150",
                     ad_impression_events: "50",
@@ -345,7 +354,7 @@ export async function adsBoundary(
                         timezone: "Asia/Shanghai",
                         attribution: "IAA",
                         values: {
-                          spend: "100",
+                          spend: options.reportSpend ?? "100",
                           revenue_d0: "120",
                           revenue_total: "150",
                           ad_impression_events: "50",
@@ -404,7 +413,7 @@ export async function adsBoundary(
                 timezone: "UTC",
                 attribution: "IAA",
                 values: {
-                  spend: "100",
+                  spend: options.reportSpend ?? "100",
                   revenue_d0: "120",
                   revenue_total: "150",
                   ad_impression_events: "50",
@@ -449,7 +458,7 @@ export async function adsBoundary(
                       timezone: "Asia/Shanghai",
                       attribution: "IAA",
                       values: {
-                        spend: "100",
+                        spend: options.reportSpend ?? "100",
                         revenue_d0: "120",
                         revenue_total: "150",
                         ad_impression_events: "50",
@@ -695,10 +704,13 @@ export async function adsBoundary(
       return route.fulfill({
         headers,
         json: {
-          accounts: [
+          accounts: options.syncAccounts ?? [
             {
               advertiser_id: ADVERTISER,
               timezone: "Asia/Hong_Kong",
+              local_today: new Date().toLocaleDateString("en-CA", {
+                timeZone: "Asia/Hong_Kong",
+              }),
               last_success_at: options.lastSuccess ?? "2026-10-05T05:00:00Z",
               incomplete_dates: options.incomplete ? ["2026-10-04"] : [],
               failed_dates: [],

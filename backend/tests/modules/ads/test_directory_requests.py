@@ -242,7 +242,7 @@ def test_targeted_read_is_queued_immediately_and_completed_run_is_never_reused(
         )
     ).one()
     assert dispatch.task_name == "ads.targeted_step"
-    assert dispatch_queue(dispatch.task_name) == "ad-management"
+    assert dispatch_queue(dispatch.task_name) == "ads-live-directory"
     run.status, run.completed_at = "COMPLETE", datetime.now(UTC)
     session.flush()
     # 同一秒再次启停也必须读取新的平台状态；完成的旧结果不作为新操作回读。

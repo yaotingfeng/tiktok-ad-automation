@@ -118,6 +118,11 @@ spec:
             - secretRef:
                 name: tiktok-ad-automation-runtime
           env:
+            # 每个 prefork 子进程最多 3 个数据库连接，避免共享 PG 超额。
+            - name: DATABASE_POOL_SIZE
+              value: "2"
+            - name: DATABASE_MAX_OVERFLOW
+              value: "1"
             - name: PYTHONUNBUFFERED
               value: "1"
             - name: MCP_CLIENT_REGISTRATION_REF
@@ -179,6 +184,11 @@ spec:
             - secretRef:
                 name: tiktok-ad-automation-runtime
           env:
+            # 每个 prefork 子进程最多 3 个数据库连接，避免共享 PG 超额。
+            - name: DATABASE_POOL_SIZE
+              value: "2"
+            - name: DATABASE_MAX_OVERFLOW
+              value: "1"
             - name: PYTHONUNBUFFERED
               value: "1"
             - name: MCP_CLIENT_REGISTRATION_REF
@@ -240,6 +250,11 @@ spec:
             - secretRef:
                 name: tiktok-ad-automation-runtime
           env:
+            # 每个 prefork 子进程最多 3 个数据库连接，避免共享 PG 超额。
+            - name: DATABASE_POOL_SIZE
+              value: "2"
+            - name: DATABASE_MAX_OVERFLOW
+              value: "1"
             - name: PYTHONUNBUFFERED
               value: "1"
             - name: MCP_CLIENT_REGISTRATION_REF
@@ -301,6 +316,11 @@ spec:
             - secretRef:
                 name: tiktok-ad-automation-runtime
           env:
+            # 每个 prefork 子进程最多 3 个数据库连接，避免共享 PG 超额。
+            - name: DATABASE_POOL_SIZE
+              value: "2"
+            - name: DATABASE_MAX_OVERFLOW
+              value: "1"
             - name: PYTHONUNBUFFERED
               value: "1"
             - name: MCP_CLIENT_REGISTRATION_REF
@@ -362,6 +382,11 @@ spec:
             - secretRef:
                 name: tiktok-ad-automation-runtime
           env:
+            # 每个 prefork 子进程最多 3 个数据库连接，避免共享 PG 超额。
+            - name: DATABASE_POOL_SIZE
+              value: "2"
+            - name: DATABASE_MAX_OVERFLOW
+              value: "1"
             - name: PYTHONUNBUFFERED
               value: "1"
             - name: MCP_CLIENT_REGISTRATION_REF
@@ -409,7 +434,7 @@ spec:
           resources:
             requests: {cpu: "1", memory: 2Gi}
             limits: {cpu: "2", memory: 4Gi}
-          command: [celery, -A, "app.jobs.celery_app:celery_app", worker, -Q, ads-reporting, --pool, prefork, --concurrency, "2", --loglevel=INFO, --hostname, "ads-reporting@%h"]
+          command: [celery, -A, "app.jobs.celery_app:celery_app", worker, -Q, ads-reporting, --pool, prefork, --concurrency, "4", --loglevel=INFO, --hostname, "ads-reporting@%h"]
           readinessProbe:
             exec:
               command: [python, -c, "import socket; from app.jobs.celery_app import celery_app; r=celery_app.control.ping(destination=['ads-reporting@'+socket.gethostname()], timeout=5); raise SystemExit(0 if r else 1)"]
@@ -423,6 +448,11 @@ spec:
             - secretRef:
                 name: tiktok-ad-automation-runtime
           env:
+            # 每个 prefork 子进程最多 3 个数据库连接，避免共享 PG 超额。
+            - name: DATABASE_POOL_SIZE
+              value: "2"
+            - name: DATABASE_MAX_OVERFLOW
+              value: "1"
             - name: PYTHONUNBUFFERED
               value: "1"
             - name: MCP_CLIENT_REGISTRATION_REF
@@ -484,6 +514,11 @@ spec:
             - secretRef:
                 name: tiktok-ad-automation-runtime
           env:
+            # 每个 prefork 子进程最多 3 个数据库连接，避免共享 PG 超额。
+            - name: DATABASE_POOL_SIZE
+              value: "2"
+            - name: DATABASE_MAX_OVERFLOW
+              value: "1"
             - name: PYTHONUNBUFFERED
               value: "1"
             - name: MCP_CLIENT_REGISTRATION_REF
@@ -556,6 +591,138 @@ spec:
         - name: beat-data
           persistentVolumeClaim:
             claimName: tiktok-ad-automation-beat
+        - name: mcp-registration
+          secret:
+            secretName: tiktok-ad-automation-mcp-registration
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: tiktok-ad-automation-worker-ads-backfill
+  labels:
+    app: tiktok-ad-automation
+    role: worker-ads-backfill
+spec:
+  replicas: 1
+  revisionHistoryLimit: 2
+  selector:
+    matchLabels:
+      app: tiktok-ad-automation
+      role: worker-ads-backfill
+  template:
+    metadata:
+      annotations:
+        tk-ada/config-digest: "__CONFIG_DIGEST__"
+      labels:
+        app: tiktok-ad-automation
+        role: worker-ads-backfill
+    spec:
+      imagePullSecrets:
+        - name: tiktok-ad-automation-registry
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 120
+      containers:
+        - name: worker-ads-backfill
+          image: __APP_IMAGE__
+          imagePullPolicy: IfNotPresent
+          resources:
+            requests: {cpu: "250m", memory: 512Mi}
+            limits: {cpu: "2", memory: 1Gi}
+          command: [celery, -A, "app.jobs.celery_app:celery_app", worker, -Q, ads-backfill, --pool, prefork, --concurrency, "1", --loglevel=INFO, --hostname, "ads-backfill@%h"]
+          readinessProbe:
+            exec:
+              command: [python, -c, "import socket; from app.jobs.celery_app import celery_app; r=celery_app.control.ping(destination=['ads-backfill@'+socket.gethostname()], timeout=5); raise SystemExit(0 if r else 1)"]
+            initialDelaySeconds: 20
+            periodSeconds: 30
+            timeoutSeconds: 10
+            failureThreshold: 4
+          envFrom:
+            - configMapRef:
+                name: tiktok-ad-automation-defaults
+            - secretRef:
+                name: tiktok-ad-automation-runtime
+          env:
+            # 每个 prefork 子进程最多 3 个数据库连接，避免共享 PG 超额。
+            - name: DATABASE_POOL_SIZE
+              value: "2"
+            - name: DATABASE_MAX_OVERFLOW
+              value: "1"
+            - name: PYTHONUNBUFFERED
+              value: "1"
+            - name: MCP_CLIENT_REGISTRATION_REF
+              value: /run/tk-ada/mcp-client.json
+          volumeMounts:
+            - name: mcp-registration
+              mountPath: /run/tk-ada/mcp-client.json
+              subPath: mcp-client.json
+              readOnly: true
+      volumes:
+        - name: mcp-registration
+          secret:
+            secretName: tiktok-ad-automation-mcp-registration
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: tiktok-ad-automation-worker-ads-live-directory
+  labels:
+    app: tiktok-ad-automation
+    role: worker-ads-live-directory
+spec:
+  replicas: 1
+  revisionHistoryLimit: 2
+  selector:
+    matchLabels:
+      app: tiktok-ad-automation
+      role: worker-ads-live-directory
+  template:
+    metadata:
+      annotations:
+        tk-ada/config-digest: "__CONFIG_DIGEST__"
+      labels:
+        app: tiktok-ad-automation
+        role: worker-ads-live-directory
+    spec:
+      imagePullSecrets:
+        - name: tiktok-ad-automation-registry
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 120
+      containers:
+        - name: worker-ads-live-directory
+          image: __APP_IMAGE__
+          imagePullPolicy: IfNotPresent
+          resources:
+            requests: {cpu: "250m", memory: 1Gi}
+            limits: {cpu: "2", memory: 3Gi}
+          command: [celery, -A, "app.jobs.celery_app:celery_app", worker, -Q, ads-live-directory, --pool, prefork, --concurrency, "4", --loglevel=INFO, --hostname, "ads-live-directory@%h"]
+          readinessProbe:
+            exec:
+              command: [python, -c, "import socket; from app.jobs.celery_app import celery_app; r=celery_app.control.ping(destination=['ads-live-directory@'+socket.gethostname()], timeout=5); raise SystemExit(0 if r else 1)"]
+            initialDelaySeconds: 20
+            periodSeconds: 30
+            timeoutSeconds: 10
+            failureThreshold: 4
+          envFrom:
+            - configMapRef:
+                name: tiktok-ad-automation-defaults
+            - secretRef:
+                name: tiktok-ad-automation-runtime
+          env:
+            # 每个 prefork 子进程最多 3 个数据库连接，避免共享 PG 超额。
+            - name: DATABASE_POOL_SIZE
+              value: "2"
+            - name: DATABASE_MAX_OVERFLOW
+              value: "1"
+            - name: PYTHONUNBUFFERED
+              value: "1"
+            - name: MCP_CLIENT_REGISTRATION_REF
+              value: /run/tk-ada/mcp-client.json
+          volumeMounts:
+            - name: mcp-registration
+              mountPath: /run/tk-ada/mcp-client.json
+              subPath: mcp-client.json
+              readOnly: true
+      volumes:
         - name: mcp-registration
           secret:
             secretName: tiktok-ad-automation-mcp-registration

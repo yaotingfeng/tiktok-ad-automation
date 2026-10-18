@@ -12,7 +12,7 @@ from app.modules.automation_rules.runner import deliver_notification, execute_ru
 from app.modules.automation_rules.schemas import AutomationSettingsUpdate
 from app.modules.automation_rules.settings_service import update_settings
 from tests.modules.automation_rules.test_definition import base
-from tests.modules.automation_rules.test_inputs import NOW, _seed
+from tests.modules.automation_rules.test_inputs import NOW, _seed, advance_reports
 
 HOOK = "https://open.feishu.cn/open-apis/bot/v2/hook/run-hook"
 
@@ -183,6 +183,7 @@ def test_confirm_run_opens_batch_and_expires_previous(session, sync_seed):
     ).one()
     assert hit.outcome == "PENDING_CONFIRMATION"
     later = NOW + timedelta(minutes=30)
+    advance_reports(session, sync_seed, later)
     second = execute_run(session, rule=rule, slot_at=later, now=later)
     batches = {
         b.run_id: b.status for b in session.exec(select(AutomationConfirmation)).all()
@@ -361,5 +362,6 @@ def test_repeated_stale_accounts_without_hits_not_resent(session, sync_seed):
     assert first.notify_status == "PENDING"
     first.notify_status = "SENT"
     later = NOW + timedelta(minutes=30)
+    advance_reports(session, sync_seed, later, advertiser_ids=("acc-1",))
     second = execute_run(session, rule=rule, slot_at=later, now=later)
     assert second.notify_status == "NOT_REQUIRED"

@@ -184,7 +184,7 @@ test("同步发布后清除第二页快照和选择并显示放缓", async ({ pa
 test("额度放缓状态可见", async ({ page }) => {
   await adsBoundary(page, { slowed: true })
   await page.goto(`/tenants/${TENANT}/ads?bc_id=${BC_A}`)
-  await expect(page.getByText("数据更新放缓", { exact: true })).toBeVisible()
+  await expect(page.getByText("历史补数暂缓", { exact: true })).toBeVisible()
 })
 
 test("账户余额单独显示币种和共享资金池", async ({ page }) => {
@@ -221,3 +221,252 @@ test("后台发布不打断第二页选择，用户可选择加载最新数据",
   )
   await expect(page.getByText("已选 1 条", { exact: true })).toHaveCount(0)
 })
+
+test("空闲页面后台发布自动更新汇总且同版本不循环刷新", async ({ page }) => {
+  await page.clock.install()
+  const options = { lastSuccess: "2026-10-05T05:00:00Z", reportSpend: "100" }
+  await adsBoundary(page, options)
+  const requests: string[] = []
+  page.on("request", (request) => {
+    if (new URL(request.url()).pathname.endsWith(`/tenants/${TENANT}/ads`))
+      requests.push(request.url())
+  })
+  await page.goto(`/tenants/${TENANT}/ads?bc_id=${BC_A}`)
+  await expect(page.getByTestId("summary-spend")).toContainText("100.00")
+  const before = requests.length
+  options.lastSuccess = "2026-10-05T05:01:00Z"
+  options.reportSpend = "240"
+  await page.clock.fastForward(31_000)
+  await expect(page.getByTestId("summary-spend")).toContainText("240.00")
+  expect(requests.length).toBe(before + 1)
+  expect(new URL(requests.at(-1)!).searchParams.get("snapshot_id")).toBeNull()
+  await page.clock.fastForward(31_000)
+  expect(requests.length).toBe(before + 1)
+  await expect(
+    page.getByRole("button", { name: "有新数据，点击加载" }),
+  ).toHaveCount(0)
+})
+
+test("第一页勾选保留汇总，取消选择后自动加载已发布数据", async ({ page }) => {
+  await page.clock.install()
+  const options = { lastSuccess: "2026-10-05T05:00:00Z", reportSpend: "100" }
+  await adsBoundary(page, options)
+  await page.goto(`/tenants/${TENANT}/ads?bc_id=${BC_A}`)
+  const checkbox = page.getByRole("checkbox", { name: "选择 甲账户" })
+  await checkbox.check()
+  options.lastSuccess = "2026-10-05T05:01:00Z"
+  options.reportSpend = "240"
+  await page.clock.fastForward(31_000)
+  await expect(checkbox).toBeChecked()
+  await expect(page.getByTestId("summary-spend")).toContainText("100.00")
+  await expect(
+    page.getByRole("button", { name: "有新数据，点击加载" }),
+  ).toBeVisible()
+  await checkbox.uncheck()
+  await expect(page.getByTestId("summary-spend")).toContainText("240.00")
+})
+
+test("覆盖时间取最旧账户，混时区明确本地日期及超时账户数", async ({ page }) => {
+  await page.clock.install({ time: new Date("2026-10-18T06:00:00Z") })
+  await adsBoundary(page, {
+    syncAccounts: [
+      {
+        advertiser_id: "adv-1",
+        timezone: "Asia/Hong_Kong",
+        local_today: "2026-10-18",
+        last_success_at: "2026-10-18T05:59:00Z",
+      },
+      {
+        advertiser_id: "adv-2",
+        timezone: "Etc/GMT",
+        local_today: "2026-10-18",
+        last_success_at: "2026-10-18T05:50:00Z",
+      },
+      {
+        advertiser_id: "adv-3",
+        timezone: "Etc/GMT+8",
+        local_today: "2026-10-17",
+        last_success_at: null,
+      },
+    ],
+  })
+  await page.goto(`/tenants/${TENANT}/ads?bc_id=${BC_A}`)
+  const oldest = await page.evaluate(() =>
+    new Date("2026-10-18T05:50:00Z").toLocaleTimeString("zh-CN", {
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false,
+    }),
+  )
+  await expect(
+    page.getByText(`最旧有效数据更新到 ${oldest}（浏览器本地，账户时区不同）`, {
+      exact: true,
+    }),
+  ).toBeVisible()
+  await expect(
+    page.getByText("1 个账户数据超过 5 分钟", { exact: true }),
+  ).toBeVisible()
+  await expect(
+    page.getByText("查询日期按各账户本地日", { exact: true }),
+  ).toBeVisible()
+  await expect(
+    page.getByText("1 个账户当地尚未到所选日期", { exact: true }),
+  ).toBeVisible()
+  await expect(page.getByText("1 个账户同步中", { exact: true })).toHaveCount(0)
+  await page.getByRole("button", { name: "同步明细" }).click()
+  await expect(
+    page.getByText("账户当地今天为 2026-10-17，尚未到查询日期"),
+  ).toBeVisible()
+})
+
+for (const busy of ["详情", "第二页"] as const) {
+  test(`后台发布保留正在查看的${busy}，返回空闲页面后自动更新`, async ({
+    page,
+  }) => {
+    await page.clock.install()
+    const options = {
+      paged: true,
+      lastSuccess: "2026-10-05T05:00:00Z",
+      reportSpend: "100",
+    }
+    await adsBoundary(page, options)
+    await page.goto(`/tenants/${TENANT}/ads?bc_id=${BC_A}`)
+    await page.getByRole("tab", { name: "系列", exact: true }).click()
+    if (busy === "详情")
+      await page
+        .getByRole("button", { name: "嘉书-总裁归来-测试", exact: true })
+        .click()
+    else await page.getByRole("button", { name: "下一页" }).click()
+    options.lastSuccess = "2026-10-05T05:01:00Z"
+    options.reportSpend = "240"
+    await page.clock.fastForward(31_000)
+    await expect(page.getByTestId("summary-spend")).toContainText("100.00")
+    if (busy === "详情") {
+      await expect(page.getByRole("dialog")).toBeVisible()
+      await page.keyboard.press("Escape")
+    } else {
+      await expect(
+        page.getByText("嘉书-第二页-测试", { exact: true }),
+      ).toBeVisible()
+      await page.getByRole("button", { name: "上一页" }).click()
+    }
+    await expect(page.getByTestId("summary-spend")).toContainText("240.00")
+  })
+}
+
+test("下钻指定账户后覆盖状态仅统计所选账户", async ({ page }) => {
+  await page.clock.install({ time: new Date("2026-10-18T06:00:00Z") })
+  await adsBoundary(page, {
+    syncAccounts: [
+      {
+        advertiser_id: "adv-1",
+        timezone: "Asia/Hong_Kong",
+        local_today: "2026-10-18",
+        last_success_at: "2026-10-18T05:59:00Z",
+      },
+      {
+        advertiser_id: "adv-2",
+        timezone: "Asia/Hong_Kong",
+        local_today: "2026-10-18",
+        last_success_at: "2026-10-18T05:50:00Z",
+      },
+    ],
+  })
+  await page.goto(`/tenants/${TENANT}/ads?bc_id=${BC_A}`)
+  await expect(
+    page.getByText("最旧有效数据更新到 13:50（账户本地）", { exact: true }),
+  ).toBeVisible()
+  await page
+    .getByRole("button", { name: "查看 甲账户 的下级", exact: true })
+    .click()
+  await expect(
+    page.getByText("最旧有效数据更新到 13:59（账户本地）", { exact: true }),
+  ).toBeVisible()
+  await expect(
+    page.getByText("1 个账户数据超过 5 分钟", { exact: true }),
+  ).toHaveCount(0)
+})
+
+test("接口版本不变时数据超过5分钟仍自动显示超时提示", async ({ page }) => {
+  await page.clock.install({ time: new Date("2026-10-18T06:00:00Z") })
+  await adsBoundary(page, { lastSuccess: "2026-10-18T05:55:01Z" })
+  await page.goto(`/tenants/${TENANT}/ads?bc_id=${BC_A}`)
+  await expect(
+    page.getByText("最旧有效数据更新到 13:55（账户本地）", { exact: true }),
+  ).toBeVisible()
+  await expect(
+    page.getByText("1 个账户数据超过 5 分钟", { exact: true }),
+  ).toHaveCount(0)
+  await page.clock.fastForward(31_000)
+  await expect(
+    page.getByText("1 个账户数据超过 5 分钟", { exact: true }),
+  ).toBeVisible()
+})
+
+for (const missing of [false, true]) {
+  test(`未来账户保留空事实，部分覆盖${missing ? "仍提示真实日期缺口" : "不误报同步失败"}`, async ({
+    page,
+  }) => {
+    await page.clock.install({ time: new Date("2026-10-18T06:00:00Z") })
+    await adsBoundary(page, {
+      syncAccounts: [
+        {
+          advertiser_id: "adv-1",
+          timezone: "Asia/Hong_Kong",
+          local_today: "2026-10-18",
+          last_success_at: "2026-10-18T05:59:00Z",
+          incomplete_dates: missing ? ["2026-10-18"] : [],
+        },
+        {
+          advertiser_id: "adv-2",
+          timezone: "Etc/GMT+8",
+          local_today: "2026-10-17",
+          last_success_at: null,
+        },
+      ],
+    })
+    await page.route("**/api/**", async (route) => {
+      if (
+        !new URL(route.request().url()).pathname.endsWith(
+          `/tenants/${TENANT}/ads`,
+        )
+      )
+        return route.fallback()
+      return route.fulfill({
+        json: {
+          snapshot: {
+            snapshot_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+            expires_at: "2099-01-01T00:00:00Z",
+          },
+          items: [],
+          total: 0,
+          summary: {
+            buckets: [
+              {
+                currency: "USD",
+                values: { spend: null },
+                availability: { spend: "MISSING" },
+              },
+            ],
+          },
+          coverage: { status: "INCOMPLETE" },
+        },
+      })
+    })
+    await page.goto(`/tenants/${TENANT}/ads?bc_id=${BC_A}`)
+    await expect(
+      page.getByText("1 个账户当地尚未到所选日期", { exact: true }),
+    ).toBeVisible()
+    await expect(
+      page.getByText("当前范围部分数据仍在同步", { exact: true }),
+    ).toHaveCount(0)
+    await expect(
+      page.getByText("部分数据读取失败，请刷新重试", { exact: true }),
+    ).toHaveCount(0)
+    await expect(page.getByTestId("summary-spend")).toContainText("—")
+    await expect(page.getByTestId("summary-spend")).not.toContainText("0.00")
+    await expect(
+      page.getByText("1 个账户有日期缺失", { exact: true }),
+    ).toHaveCount(missing ? 1 : 0)
+  })
+}

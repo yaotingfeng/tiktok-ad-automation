@@ -16,14 +16,16 @@ def test_ads_reporting_tasks_have_dedicated_queues_and_standard_beat_gate():
     celery_app.loader.import_default_modules()
     assert dispatch_queue("ads.sync_step") == "ads-directory"
     assert dispatch_queue("ads.publish_step") == "ads-publish"
-    assert dispatch_queue("ads.targeted_step") == "ad-management"
-    assert celery_app.conf.task_routes["ads.targeted_step"]["queue"] == "ad-management"
+    assert dispatch_queue("ads.targeted_step") == "ads-live-directory"
+    assert celery_app.conf.task_routes["ads.targeted_step"]["queue"] == "ads-live-directory"
     assert "ads-publish" in _QUEUES
     assert dispatch_queue("reporting.job_step") == "ads-reporting"
     assert celery_app.conf.task_routes["reporting.plan_due"]["queue"] == "control"
     assert "scan-ads-reporting-due" in celery_app.conf.beat_schedule
     assert "ads-directory" in _QUEUES
-    assert "ads-reporting" in _QUEUES
+    assert {"ads-reporting", "ads-backfill", "ads-live-directory"} <= set(_QUEUES)
+    assert dispatch_queue("reporting.backfill_step") == "ads-backfill"
+    assert celery_app.conf.task_routes["reporting.check_health"]["queue"] == "control"
 
     previous = settings.ADS_SYNC_ENABLED
     settings.ADS_SYNC_ENABLED = False
@@ -49,7 +51,7 @@ def test_worker_templates_keep_one_slot_and_shared_switch_injection():
     assert "--concurrency" in compose
     assert "--concurrency" in production
     assert "--concurrency 1" in directory_service
-    assert "--concurrency 1" in reporting_service
+    assert "--concurrency 4" in reporting_service
     import yaml
 
     workloads = list(

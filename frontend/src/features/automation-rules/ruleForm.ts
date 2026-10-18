@@ -74,6 +74,7 @@ export const OPERATOR_LABELS: Record<Operator, string> = {
   ENDS_WITH: "结尾是",
 }
 export const FREQUENCY_LABELS: Record<Frequency, string> = {
+  "5M": "每 5 分钟",
   "30M": "每 30 分钟",
   "1H": "每 1 小时",
   "2H": "每 2 小时",
@@ -151,8 +152,13 @@ export function actionLevels(
   return supported.filter((level) => LEVELS.indexOf(level) >= depth)
 }
 
-/** 素材报表 60 分钟同步一次，涉及素材的规则最短 1 小时运行一次。 */
-export function minFrequency(applyLevel: Level, actionLevel: Level): Frequency {
+/** 仅暂停允许每 5 分钟止损；恢复和金额调整保持原来的最短频率。 */
+export function minFrequency(
+  applyLevel: Level,
+  actionLevel: Level,
+  actionType: ActionType,
+): Frequency {
+  if (actionType === "PAUSE") return "5M"
   return applyLevel === "material" || actionLevel === "material" ? "1H" : "30M"
 }
 
@@ -254,7 +260,7 @@ const TEXT_OPERATORS: Operator[] = [
   "STARTS_WITH",
   "ENDS_WITH",
 ]
-const FREQUENCY_RANK: Frequency[] = ["30M", "1H", "2H", "4H", "DAILY"]
+const FREQUENCY_RANK: Frequency[] = ["5M", "30M", "1H", "2H", "4H", "DAILY"]
 
 function blank(value: unknown) {
   return value === null || value === undefined || String(value).trim() === ""
@@ -358,9 +364,13 @@ export function validateDefinition(
     errors.push("汇总发送至少设置一个时刻")
   if (
     FREQUENCY_RANK.indexOf(schedule.frequency) <
-    FREQUENCY_RANK.indexOf(minFrequency(def.apply_to.level, def.action.level))
+    FREQUENCY_RANK.indexOf(
+      minFrequency(def.apply_to.level, def.action.level, def.action.type),
+    )
   )
-    errors.push("涉及素材的规则最短 1 小时运行一次")
+    errors.push(
+      `当前操作最短${FREQUENCY_LABELS[minFrequency(def.apply_to.level, def.action.level, def.action.type)]}运行一次`,
+    )
   return errors
 }
 

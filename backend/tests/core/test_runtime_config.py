@@ -127,6 +127,8 @@ def test_celery_routes_control_and_has_no_result_backend():
         "ads-directory",
         "ads-publish",
         "ads-reporting",
+        "ads-backfill",
+        "ads-live-directory",
         "builds",
         "control",
         "resources",

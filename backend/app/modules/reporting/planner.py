@@ -25,12 +25,14 @@ from app.modules.reporting.partitions import ensure_month_partitions_for_range
 from app.modules.reporting.store_models import (
     AdSyncAccount,
     AdSyncBc,
+    ReportSyncJob,
     ReportSyncState,
 )
 from app.modules.tenants.permissions import require_tenant
 
-HOT_INTERVAL = timedelta(minutes=30)
-MATERIAL_INTERVAL = timedelta(minutes=60)
+HOT_INTERVAL = timedelta(minutes=2)
+MATERIAL_INTERVAL = timedelta(minutes=2)
+HOUR_INTERVAL = timedelta(minutes=30)  # 小时趋势按需缓存，不占当前日止损热刷容量。
 DIRECTORY_INTERVAL = timedelta(hours=3)
 REFRESH_DAYS = 32
 DAILY_AT = time(12, 30)  # 平台 UTC 12:00 修正数据之后
@@ -291,11 +293,8 @@ def _timezones(session, tenant_id, advertiser_ids) -> dict[str, str]:
 
 def _hot_window(timezone: str, now: datetime) -> tuple[date, date]:
     today = local_today(timezone, now)
-    # UTC 12:00 前平台还会修正昨天的数据，热刷一并覆盖昨天。
-    start = (
-        today - timedelta(days=1) if now.astimezone(UTC).time() < time(12, 0) else today
-    )
-    return start, today
+    # 当前日独占实时容量；昨天修正仍由每日回刷负责，不能反复搬运旧窗口。
+    return today, today
 
 
 def _common(plan: AdSyncBc) -> dict:
@@ -328,22 +327,36 @@ def mark_confirmed_empty(
 ) -> int:
     """平台筛查确认这些账户在窗口内无消耗：补齐从未成功或失败的日期为完成 0 行。
 
-    已完成的日期保留原有事实与行数，只把确认时间推进到本次筛查时间。否则全部账户
-    无消耗时没有任何报表任务会更新时间，页面"数据更新到"会一直停在最后一次有消耗
-    的同步时刻，看起来像同步停了。
+    有事实的日期保留原有行数与成功时间；筛查不能代替完整报表读取。
+    完整确认空桶采用 PG 的实际完成时刻，和报表发布水位使用同一个时钟。
     """
+    del now  # 计划时钟不作为发布水位；窗口日期已由 window_fn 决定。
+    windows = _group_by_window(session, plan, inactive, window_fn)
+    advertisers_to_lock = sorted(
+        {account for accounts in windows.values() for account in accounts}
+    )
+    for advertiser in advertisers_to_lock:
+        for kind in ("ad_day", "material_day"):
+            # account_day 与广告日共用发布锁；锁后重新读取 ORM 状态，防缓存旧零值。
+            session.connection().execute(
+                text("SELECT pg_advisory_xact_lock(hashtextextended(:scope, 0))"),
+                {"scope": f"report:{plan.tenant_id}:{advertiser}:{kind}"},
+            )
+    completed_at = (
+        session.connection().execute(text("SELECT clock_timestamp()")).scalar_one()
+    )
     marked = 0
-    for (start, end), advertisers in _group_by_window(
-        session, plan, inactive, window_fn
-    ).items():
+    for (start, end), advertisers in windows.items():
         day = start
         while day <= end:
             for advertiser in advertisers:
                 for kind in CONFIRMED_EMPTY_KINDS:
                     key = (plan.tenant_id, advertiser, kind, day)
-                    state = session.get(ReportSyncState, key)
+                    state = session.get(ReportSyncState, key, populate_existing=True)
                     if state is not None and state.status == "COMPLETE":
-                        state.last_success_at = state.updated_at = now
+                        if state.row_count:
+                            continue  # 已有事实不能仅凭BC零消耗筛查冒充重新完整拉取。
+                        state.last_success_at = state.updated_at = completed_at
                         continue
                     if state is None:
                         state = ReportSyncState(
@@ -359,11 +372,27 @@ def mark_confirmed_empty(
                         None,
                         0,
                     )
-                    state.last_success_at = state.updated_at = now
+                    state.last_success_at = state.updated_at = completed_at
                     marked += 1
             day += timedelta(days=1)
     session.flush()
     return marked
+
+
+def known_spending_accounts(session, plan, *, accounts, now) -> set[str]:
+    """已有当前日正消耗不能因筛查接口短时返回0而从热刷消失。"""
+    return set(
+        session.connection()
+        .execute(
+            text("""
+        SELECT DISTINCT advertiser_id FROM ad_report_day
+        WHERE tenant_id=:tenant AND advertiser_id=ANY(:accounts) AND spend>0
+          AND stat_date=(CAST(:now AS timestamptz) AT TIME ZONE timezone)::date
+    """),
+            {"tenant": plan.tenant_id, "accounts": accounts, "now": now},
+        )
+        .scalars()
+    )
 
 
 def plan_hot(
@@ -441,10 +470,10 @@ def request_campaign_hours(
                 due = (
                     day >= today - timedelta(days=1)
                     and state.last_success_at is not None
-                    and state.last_success_at < now - HOT_INTERVAL
+                    and state.last_success_at < now - HOUR_INTERVAL
                 )
             else:
-                due = state.updated_at < now - HOT_INTERVAL
+                due = state.updated_at < now - HOUR_INTERVAL
             if due:
                 pending.setdefault(day, []).append(advertiser)
             day += timedelta(days=1)
@@ -506,41 +535,70 @@ def daily_window(now: datetime):
 
 
 def plan_daily(session, plan, *, active_32d, now) -> int:
+    """每日修正已结束的日期；未执行的旧回刷覆盖重叠日期，不按天复制整月任务。"""
+    pending = session.exec(
+        select(
+            col(ReportSyncJob.kind),
+            col(ReportSyncJob.advertiser_ids),
+            col(ReportSyncJob.start_date),
+            col(ReportSyncJob.end_date),
+        ).where(
+            ReportSyncJob.tenant_id == plan.tenant_id,
+            ReportSyncJob.bc_id == plan.bc_id,
+            ReportSyncJob.actor_id == plan.actor_id,
+            ReportSyncJob.frozen_route == plan.frozen_route,
+            ReportSyncJob.priority >= 3,
+            col(ReportSyncJob.status).in_(["QUEUED", "RUNNING", "WAITING"]),
+        )
+    ).all()
+    covered = {}
+    for kind, advertisers, first, last in pending:
+        for advertiser in advertisers:
+            covered.setdefault((kind, advertiser), []).append((first, last))
     count = 0
-    for (start, end), advertisers in _group_by_window(
+    for (start, current), advertisers in _group_by_window(
         session, plan, active_32d, daily_window(now)
     ).items():
-        for s, e in _shards(start, end):
-            for batch in batch_accounts(
-                session,
-                tenant_id=plan.tenant_id,
-                advertiser_ids=advertisers,
-                days=(e - s).days + 1,
-            ):
-                for kind in ("ad_day", "account_day"):
+        end = current - timedelta(days=1)  # 当前日由实时槽负责，冷档不重复拉它。
+        for kind in ("ad_day", "account_day", "material_day"):
+            windows = {}
+            for advertiser in advertisers:
+                first = None
+                day = start
+                while day <= end + timedelta(days=1):
+                    due = day <= end and not any(
+                        a <= day <= b for a, b in covered.get((kind, advertiser), [])
+                    )
+                    if due and first is None:
+                        first = day
+                    if not due and first is not None:
+                        for a, b in _shards(first, day - timedelta(days=1)):
+                            windows.setdefault((a, b), []).append(advertiser)
+                        first = None
+                    day += timedelta(days=1)
+            for (a, b), ids in windows.items():
+                batches = (
+                    ([advertiser] for advertiser in ids)
+                    if kind == "material_day"
+                    else batch_accounts(
+                        session,
+                        tenant_id=plan.tenant_id,
+                        advertiser_ids=ids,
+                        days=(b - a).days + 1,
+                    )
+                )
+                for batch in batches:
                     count += bool(
                         enqueue_job(
                             session,
                             kind=kind,
                             tier="daily",
                             advertiser_ids=batch,
-                            start=s,
-                            end=e,
+                            start=a,
+                            end=b,
                             **_common(plan),
                         )
                     )
-            for advertiser in advertisers:
-                count += bool(
-                    enqueue_job(
-                        session,
-                        kind="material_day",
-                        tier="daily",
-                        advertiser_ids=[advertiser],
-                        start=s,
-                        end=e,
-                        **_common(plan),
-                    )
-                )
     return count
 
 

@@ -127,6 +127,8 @@ def allowed_action_levels(
     return tuple(level for level in supported if _DEPTH[level] >= _DEPTH[apply_level])
 
 
-def min_frequency_minutes(apply_level: str, action_level: str) -> int:
-    # 素材报表 60 分钟同步一次,更频繁的检查只会看到同一份数据。
+def min_frequency_minutes(apply_level: str, action_level: str, action_type: str) -> int:
+    # 当前日报表每 2 分钟同步：仅暂停允许 5 分钟止损，恢复和金额调整保持原频率。
+    if action_type == "PAUSE":
+        return 5
     return 60 if "material" in (apply_level, action_level) else 30

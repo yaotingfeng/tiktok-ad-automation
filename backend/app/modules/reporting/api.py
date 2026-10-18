@@ -69,6 +69,7 @@ from app.modules.reporting.schemas import (
     SavedViewPublic,
     SelectionRequest,
     SyncAccountStatus,
+    SyncHealthPublic,
     SyncPlanStatus,
     SyncRefreshPublic,
     SyncRefreshRequest,
@@ -77,7 +78,11 @@ from app.modules.reporting.schemas import (
     TrendPublic,
 )
 from app.modules.reporting.selection import freeze_selection
-from app.modules.reporting.store_models import AdSyncBc, ReportSyncState
+from app.modules.reporting.store_models import (
+    AdSyncBc,
+    ReportSyncHealth,
+    ReportSyncState,
+)
 from app.modules.reporting.trend import build_trend
 from app.modules.tenants.permissions import require_tenant
 
@@ -721,8 +726,11 @@ def get_ad_sync_status_route(
         start_date + timedelta(days=i) for i in range((end_date - start_date).days + 1)
     ]
     result = []
+    now = datetime.now(UTC)
     for account in accounts:
-        current = [by_key.get((account.advertiser_id, day)) for day in days]
+        today = local_today(account.timezone or "UTC", now)
+        current_days = [day for day in days if day <= today]
+        current = [by_key.get((account.advertiser_id, day)) for day in current_days]
         successes = [
             r.last_success_at
             for r in current
@@ -732,15 +740,16 @@ def get_ad_sync_status_route(
             SyncAccountStatus(
                 advertiser_id=account.advertiser_id,
                 timezone=account.timezone,
-                last_success_at=max(successes) if successes else None,
+                local_today=today,
+                last_success_at=min(successes) if successes else None,
                 incomplete_dates=tuple(
                     day
-                    for day, row in zip(days, current, strict=True)
+                    for day, row in zip(current_days, current, strict=True)
                     if row is None or row.status != "COMPLETE"
                 ),
                 failed_dates=tuple(
                     day
-                    for day, row in zip(days, current, strict=True)
+                    for day, row in zip(current_days, current, strict=True)
                     if row is not None and row.status == "FAILED"
                 ),
             )
@@ -751,7 +760,23 @@ def get_ad_sync_status_route(
         if not settings.ADS_SYNC_ENABLED
         else (plan.disabled_reason if plan is not None else "api_binding_required")
     )
+    health_row = session.get(ReportSyncHealth, (tenant_id, bc_id))
+    health = SyncHealthPublic(
+        status="DISABLED" if not enabled else "DEGRADED",
+        issues=("MONITOR_PENDING",) if enabled else (),
+    )
+    if enabled and health_row is not None:
+        health = SyncHealthPublic(
+            status="HEALTHY" if health_row.status == "HEALTHY" else "DEGRADED",
+            observed_at=health_row.observed_at,
+            issues=tuple(health_row.issues),
+            **health_row.metrics,
+        )
+        if health_row.observed_at < now - timedelta(minutes=3):
+            health.status = "DEGRADED"
+            health.issues = (*health.issues, "MONITOR_STALE")
     return SyncStatusPublic(
+        health=health,
         accounts=tuple(result),
         complete_from=complete_data_start(
             session, tenant_id, accounts, datetime.now(UTC)

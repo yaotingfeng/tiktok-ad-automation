@@ -55,7 +55,7 @@ import {
   validateDefinition,
 } from "./ruleForm"
 
-const FREQUENCY_ORDER: Frequency[] = ["30M", "1H", "2H", "4H", "DAILY"]
+const FREQUENCY_ORDER: Frequency[] = ["5M", "30M", "1H", "2H", "4H", "DAILY"]
 const WEEKDAYS = ["一", "二", "三", "四", "五", "六", "日"]
 
 export type EditorTarget =
@@ -256,7 +256,7 @@ export function RuleEditorSheet({
     def.action.type,
   )
   const minimum = FREQUENCY_ORDER.indexOf(
-    minFrequency(def.apply_to.level, def.action.level),
+    minFrequency(def.apply_to.level, def.action.level, def.action.type),
   )
   const adjusts = def.action.type === "BUDGET" || def.action.type === "ROAS"
   const notifyOnly = def.mode === "NOTIFY"

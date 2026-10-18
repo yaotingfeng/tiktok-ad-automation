@@ -565,13 +565,17 @@ def publish_directory(session: Session, *, run_id: UUID, claim_generation: int) 
             .with_for_update()
         ).all()
         ordered = _complete_chain(list(pages))
-        # Tenant 行是现有模型中的稳定锁点；先串行化同租户所有 BC 的版本分配，
-        # 保证同租户较早运行的过期检查与发布提交顺序一致。
+        # 版本来自数据库序列；同账户的请求排序用账户锁保护。整租户行锁会让
+        # 一个大历史目录挡住其他账户的实时发布，不能作为多账户的执行容量。
         tenant = session.exec(
-            select(Tenant).where(Tenant.id == run.tenant_id).with_for_update()
+            select(Tenant).where(Tenant.id == run.tenant_id)
         ).one_or_none()
         if tenant is None:
             raise _domain("tenant_forbidden", "目录运行的租户不存在")
+        session.connection().execute(
+            text("SELECT pg_advisory_xact_lock(hashtextextended(:scope, 0))"),
+            {"scope": f"directory-publish:{run.tenant_id}:{run.advertiser_id}"},
+        )
         # 必须在租户版本锁之后重查，避免旧运行检查完毕后等待锁期间被新运行发布。
         if run.request_sequence is not None:
             newer_published = session.exec(

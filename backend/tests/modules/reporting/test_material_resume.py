@@ -1,0 +1,628 @@
+"""真实 PostgreSQL 验证素材分页续传、原子发布、范围与新旧请求隔离。"""
+
+from datetime import UTC, date, datetime, timedelta
+from decimal import Decimal
+from uuid import uuid4
+
+import pytest
+from sqlmodel import select
+
+from app.core.errors import DomainError
+from app.integrations.tiktok.contracts.report_reader import RawReportPage
+from app.integrations.tiktok.sdk import AccountAdmissionDeferred
+from app.modules.reporting import jobs
+from app.modules.reporting.publish import AccountMeta, publish_material_day
+from app.modules.reporting.store_models import (
+    MaterialReportDay,
+    ReportSyncJob,
+    ReportSyncPage,
+    ReportSyncState,
+)
+from tests.modules.reporting.test_jobs import _route
+
+DAY = date(2026, 10, 5)
+ACCOUNTS = {"acc-1": AccountMeta("USD", "Asia/Hong_Kong")}
+
+
+def row(index, *, day=DAY, spend="1", advertiser="acc-1"):
+    return {
+        "dimensions": {
+            "stat_time_day": str(day),
+            "main_material_id": f"m{index}",
+            "main_material_type": "VIDEO",
+        },
+        "metrics": {"advertiser_id": advertiser, "spend": spend},
+    }
+
+
+class Pages:
+    def __init__(self, count=7, *, rows=None, failure=None):
+        self.rows = rows if rows is not None else [row(index) for index in range(count)]
+        self.failure = failure
+        self.calls = []
+
+    def material_day(self, *, advertiser_id, start, end, page):
+        self.calls.append(page)
+        if self.failure and page == self.failure[0]:
+            raise self.failure[1]
+        count = len(self.rows)
+        return RawReportPage(tuple(self.rows[page - 1 : page]), page, count, count)
+
+
+def enqueue(factory, seed, *, start=DAY, end=DAY):
+    with factory() as session:
+        job_id = jobs.enqueue_job(
+            session,
+            tenant_id=seed.tenant_id,
+            bc_id="bc-a",
+            kind="material_day",
+            tier="material",
+            advertiser_ids=["acc-1"],
+            start=start,
+            end=end,
+            frozen_route=_route(seed),
+            actor_id=seed.actor_id,
+        )
+        session.commit()
+    return claim(factory, job_id)
+
+
+def claim(factory, job_id):
+    with factory() as session:
+        target = session.get(ReportSyncJob, job_id)
+        target.due_at = datetime.now(UTC) - timedelta(seconds=1)
+        session.commit()
+        candidates = jobs.claim_jobs(session, now=datetime.now(UTC), limit=100)
+        result = next(job for job in candidates if job.id == job_id)
+        session.commit()
+        return result
+
+
+def run(factory, job, reader):
+    return jobs.execute_job(
+        factory, job_id=job.id, claim_token=job.claim_token, reader=reader
+    )
+
+
+def pages(factory, job_id):
+    with factory() as session:
+        return session.exec(
+            select(ReportSyncPage)
+            .where(ReportSyncPage.job_id == job_id)
+            .order_by(ReportSyncPage.page)
+        ).all()
+
+
+def facts(factory, tenant):
+    with factory() as session:
+        return session.exec(
+            select(MaterialReportDay).where(MaterialReportDay.tenant_id == tenant)
+        ).all()
+
+
+def test_pages_commit_between_steps_without_publishing_partial_facts(
+    committed_sync_seed,
+):
+    seed, factory = committed_sync_seed
+    job = enqueue(factory, seed)
+    reader = Pages()
+    assert run(factory, job, reader) == "WAITING"
+    assert reader.calls == list(range(1, 6))
+    assert [page.page for page in pages(factory, job.id)] == list(range(1, 6))
+    assert facts(factory, seed.tenant_id) == []
+    with factory() as session:
+        assert (
+            session.get(ReportSyncState, (seed.tenant_id, "acc-1", "material_day", DAY))
+            is None
+        )
+    assert run(factory, claim(factory, job.id), reader) == "COMPLETE"
+    assert reader.calls == list(range(1, 8))
+    assert len(facts(factory, seed.tenant_id)) == 7
+    with factory() as session:
+        state = session.get(
+            ReportSyncState, (seed.tenant_id, "acc-1", "material_day", DAY)
+        )
+        assert state.status == "COMPLETE" and state.row_count == 7
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [
+        AccountAdmissionDeferred(1000),
+        DomainError("read_deadline_exceeded", "deadline"),
+        DomainError("tiktok_response_error", "temporary"),
+    ],
+)
+def test_later_failure_preserves_prior_step_and_only_replays_current_step(
+    committed_sync_seed, failure
+):
+    seed, factory = committed_sync_seed
+    job = enqueue(factory, seed)
+    reader = Pages(count=8, failure=(7, failure))
+    assert run(factory, job, reader) == "WAITING"
+    assert run(factory, claim(factory, job.id), reader) == "WAITING"
+    assert [page.page for page in pages(factory, job.id)] == [1, 2, 3, 4, 5]
+    assert facts(factory, seed.tenant_id) == []
+    reader.failure = None
+    assert run(factory, claim(factory, job.id), reader) == "COMPLETE"
+    assert reader.calls == [1, 2, 3, 4, 5, 6, 7, 6, 7, 8]
+    assert len(facts(factory, seed.tenant_id)) == 8
+    with factory() as session:
+        job = session.get(ReportSyncJob, job.id)
+        assert job.attempts == (
+            0 if isinstance(failure, AccountAdmissionDeferred) else 1
+        )
+        assert job.request_count == len(reader.calls)
+
+
+def test_unfinished_and_overtaken_old_request_preserve_new_facts(committed_sync_seed):
+    seed, factory = committed_sync_seed
+    with factory() as session:
+        publish_material_day(
+            session,
+            tenant_id=seed.tenant_id,
+            job_id=uuid4(),
+            accounts=ACCOUNTS,
+            start=DAY,
+            end=DAY,
+            rows=[row("old", spend="9")],
+        )
+        session.commit()
+    job = enqueue(factory, seed)
+    reader = Pages()
+    assert run(factory, job, reader) == "WAITING"
+    assert [(r.main_material_id, r.spend) for r in facts(factory, seed.tenant_id)] == [
+        ("mold", Decimal("9"))
+    ]
+    with factory() as session:
+        publish_material_day(
+            session,
+            tenant_id=seed.tenant_id,
+            job_id=uuid4(),
+            accounts=ACCOUNTS,
+            start=DAY,
+            end=DAY,
+            rows=[row("hot", spend="20")],
+        )
+        stamp = session.get(
+            ReportSyncState, (seed.tenant_id, "acc-1", "material_day", DAY)
+        ).last_success_at
+        session.commit()
+    assert run(factory, claim(factory, job.id), reader) == "COMPLETE"
+    assert [(r.main_material_id, r.spend) for r in facts(factory, seed.tenant_id)] == [
+        ("mhot", Decimal("20"))
+    ]
+    with factory() as session:
+        assert (
+            session.get(
+                ReportSyncState, (seed.tenant_id, "acc-1", "material_day", DAY)
+            ).last_success_at
+            == stamp
+        )
+
+
+def test_old_token_cannot_read_or_duplicate_staged_pages(committed_sync_seed):
+    seed, factory = committed_sync_seed
+    job = enqueue(factory, seed)
+    reader = Pages()
+    assert run(factory, job, reader) == "WAITING"
+    next_job = claim(factory, job.id)
+    assert run(factory, job, reader) == "FAILED"
+    assert reader.calls == [1, 2, 3, 4, 5]
+    assert run(factory, next_job, reader) == "COMPLETE"
+    assert run(factory, next_job, reader) == "FAILED"
+    assert reader.calls == list(range(1, 8))
+
+
+def test_small_cross_day_report_keeps_one_paginated_request(committed_sync_seed):
+    seed, factory = committed_sync_seed
+    job = enqueue(factory, seed, end=DAY + timedelta(days=6))
+    reader = Pages(
+        rows=[row(index, day=DAY + timedelta(days=index)) for index in range(7)]
+    )
+    assert run(factory, job, reader) == "WAITING"
+    assert run(factory, claim(factory, job.id), reader) == "COMPLETE"
+    with factory() as session:
+        children = session.exec(
+            select(ReportSyncJob).where(
+                ReportSyncJob.tenant_id == seed.tenant_id,
+                ReportSyncJob.kind == "material_day",
+            )
+        ).all()
+        assert len(children) == 1
+    assert len(facts(factory, seed.tenant_id)) == 7
+
+
+def test_large_cross_day_splits_after_first_page_without_losing_dates(
+    committed_sync_seed, monkeypatch
+):
+    seed, factory = committed_sync_seed
+    monkeypatch.setattr(jobs, "MATERIAL_SPLIT_ROWS", 5)
+    end = DAY + timedelta(days=12)
+    job = enqueue(factory, seed, end=end)
+    reader = Pages(count=13)
+    assert run(factory, job, reader) == "COMPLETE"
+    assert reader.calls == [1]
+    assert pages(factory, job.id) == []
+    assert facts(factory, seed.tenant_id) == []
+    with factory() as session:
+        children = session.exec(
+            select(ReportSyncJob).where(
+                ReportSyncJob.tenant_id == seed.tenant_id,
+                ReportSyncJob.kind == "material_day",
+                ReportSyncJob.id != job.id,
+            )
+        ).all()
+        assert children and all(child.status == "QUEUED" for child in children)
+        assert session.get(ReportSyncJob, job.id).progress["material_split"] == {
+            "total_number": 13,
+            "total_page": 13,
+            "chunk_days": 5,
+        }
+        assert all(
+            jobs.request_time(child) == jobs.request_time(job) for child in children
+        )
+        covered = [
+            child.start_date + timedelta(days=i)
+            for child in children
+            for i in range((child.end_date - child.start_date).days + 1)
+        ]
+        assert sorted(covered) == [DAY + timedelta(days=i) for i in range(13)]
+        assert all((child.end_date - child.start_date).days < 7 for child in children)
+
+
+def test_large_single_day_uses_all_pages_instead_of_ad_truncation_guard(
+    committed_sync_seed, monkeypatch
+):
+    seed, factory = committed_sync_seed
+    monkeypatch.setattr(jobs, "MATERIAL_SPLIT_ROWS", 2)
+    monkeypatch.setattr(jobs, "TRUNCATION_ROWS", 3)
+    job = enqueue(factory, seed)
+    reader = Pages(count=7)
+    assert run(factory, job, reader) == "WAITING"
+    assert run(factory, claim(factory, job.id), reader) == "COMPLETE"
+    assert len(facts(factory, seed.tenant_id)) == 7
+
+
+@pytest.mark.parametrize(
+    "bad_row",
+    [row("bad", day=DAY + timedelta(days=1)), row("bad", advertiser="outside"), row(0)],
+)
+def test_later_out_of_scope_or_duplicate_row_never_replaces_fact(
+    committed_sync_seed, bad_row
+):
+    seed, factory = committed_sync_seed
+    job = enqueue(factory, seed)
+    reader = Pages(rows=[*[row(i) for i in range(5)], bad_row])
+    assert run(factory, job, reader) == "WAITING"
+    assert run(factory, claim(factory, job.id), reader) == "FAILED"
+    assert facts(factory, seed.tenant_id) == []
+    assert len(pages(factory, job.id)) == 5
+
+
+def test_changed_frozen_scope_cannot_resume_existing_pages(committed_sync_seed):
+    seed, factory = committed_sync_seed
+    job = enqueue(factory, seed)
+    reader = Pages()
+    assert run(factory, job, reader) == "WAITING"
+    with factory() as session:
+        target = session.get(ReportSyncJob, job.id)
+        target.frozen_route = target.frozen_route | {"authorization_revision": 99}
+        session.commit()
+    assert run(factory, claim(factory, job.id), reader) == "FAILED"
+    assert reader.calls == [1, 2, 3, 4, 5]
+    assert facts(factory, seed.tenant_id) == []
+
+
+def test_live_material_and_link_jobs_are_not_starved_by_new_ad_jobs(session, sync_seed):
+    from zoneinfo import ZoneInfo
+
+    now = datetime.now(UTC)
+    today = now.astimezone(ZoneInfo("Asia/Hong_Kong")).date()
+    common = {
+        "tenant_id": sync_seed.tenant_id,
+        "bc_id": "bc-a",
+        "advertiser_ids": ["acc-1"],
+        "start": today,
+        "end": today,
+        "frozen_route": _route(sync_seed),
+        "actor_id": sync_seed.actor_id,
+    }
+    material_id = jobs.enqueue_job(
+        session,
+        kind="material_day",
+        tier="material",
+        due_at=now - timedelta(minutes=4),
+        **common,
+    )
+    links_id = jobs.enqueue_job(
+        session,
+        kind="material_links",
+        tier="material",
+        due_at=now - timedelta(minutes=3),
+        **common,
+    )
+    ad_id = jobs.enqueue_job(
+        session, kind="ad_day", tier="hot", due_at=now - timedelta(minutes=1), **common
+    )
+    claimed = jobs.claim_jobs(session, now=now, limit=3, lane="live")
+    assert [job.id for job in claimed] == [material_id, links_id, ad_id]
+
+
+def test_day_old_history_is_admitted_before_new_daily_work(session, sync_seed):
+    now = datetime.now(UTC)
+    common = {
+        "tenant_id": sync_seed.tenant_id,
+        "bc_id": "bc-a",
+        "advertiser_ids": ["acc-1"],
+        "start": DAY,
+        "end": DAY,
+        "frozen_route": _route(sync_seed),
+        "actor_id": sync_seed.actor_id,
+        "kind": "material_day",
+    }
+    history_id = jobs.enqueue_job(
+        session, tier="history", due_at=now - timedelta(hours=25), **common
+    )
+    history = session.get(ReportSyncJob, history_id)
+    history.created_at = now - timedelta(hours=25)
+    daily_id = jobs.enqueue_job(
+        session, tier="daily", due_at=now - timedelta(minutes=1), **common
+    )
+    session.flush()
+    claimed = jobs.claim_jobs(session, now=now, limit=2, lane="backfill")
+    assert [job.id for job in claimed] == [history_id, daily_id]
+
+
+def test_concurrent_overlapping_live_batches_have_one_owner_per_account(
+    committed_sync_seed,
+):
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Event
+    from zoneinfo import ZoneInfo
+
+    from sqlalchemy import text
+
+    seed, factory = committed_sync_seed
+    now = datetime.now(UTC)
+    today = now.astimezone(ZoneInfo("Asia/Hong_Kong")).date()
+    common = {
+        "tenant_id": seed.tenant_id,
+        "bc_id": "bc-a",
+        "kind": "ad_day",
+        "tier": "hot",
+        "start": today,
+        "end": today,
+        "frozen_route": _route(seed),
+        "actor_id": seed.actor_id,
+    }
+    started = Event()
+    with factory() as first, ThreadPoolExecutor(max_workers=1) as pool:
+        first_id = jobs.enqueue_job(first, advertiser_ids=["acc-1", "acc-2"], **common)
+
+        def second_producer():
+            with factory() as second:
+                second.connection().execute(
+                    text("SET LOCAL application_name = 'material-resume-producer'")
+                )
+                started.set()
+                second_id = jobs.enqueue_job(
+                    second, advertiser_ids=["acc-2", "acc-3"], **common
+                )
+                second.commit()
+                return second_id
+
+        future = pool.submit(second_producer)
+        try:
+            assert started.wait(5)
+            # 通过真实 pg_locks 观察等待，证明竞争确实发生在提交前。
+            from time import monotonic, sleep
+
+            deadline = monotonic() + 5
+            blocked = False
+            while monotonic() < deadline:
+                with factory() as monitor:
+                    blocked = (
+                        monitor.connection()
+                        .execute(
+                            text("""
+                        SELECT EXISTS(SELECT 1 FROM pg_locks l JOIN pg_stat_activity a ON a.pid=l.pid
+                        WHERE a.application_name='material-resume-producer' AND l.locktype='advisory' AND NOT l.granted)
+                    """)
+                        )
+                        .scalar_one()
+                    )
+                if blocked:
+                    break
+                sleep(0.01)
+        finally:
+            first.commit()
+        assert blocked
+        second_id = future.result(timeout=5)
+    with factory() as session:
+        assert session.get(ReportSyncJob, first_id).advertiser_ids == ["acc-1", "acc-2"]
+        assert session.get(ReportSyncJob, second_id).advertiser_ids == ["acc-3"]
+
+
+def test_snapshot_count_change_restarts_with_bounded_retry_and_no_partial_publish(
+    committed_sync_seed,
+):
+    seed, factory = committed_sync_seed
+    job = enqueue(factory, seed)
+    reader = Pages(count=7)
+    assert run(factory, job, reader) == "WAITING"
+    reader.rows.append(row(7))
+    assert run(factory, claim(factory, job.id), reader) == "WAITING"
+    assert pages(factory, job.id) == []
+    assert facts(factory, seed.tenant_id) == []
+    with factory() as session:
+        changed = session.get(ReportSyncJob, job.id)
+        assert changed.error_code == "report_snapshot_changed" and changed.attempts == 1
+    assert run(factory, claim(factory, job.id), reader) == "WAITING"
+    assert run(factory, claim(factory, job.id), reader) == "COMPLETE"
+    assert reader.calls == [1, 2, 3, 4, 5, 6, 1, 2, 3, 4, 5, 6, 7, 8]
+    assert len(facts(factory, seed.tenant_id)) == 8
+
+
+def test_staging_cleanup_only_removes_old_terminal_jobs(committed_sync_seed):
+    seed, factory = committed_sync_seed
+    old = enqueue(factory, seed)
+    assert run(factory, old, Pages()) == "WAITING"
+    now = datetime.now(UTC)
+    with factory() as session:
+        target = session.get(ReportSyncJob, old.id)
+        target.created_at = now - timedelta(days=30)
+        session.commit()
+    with factory() as session:
+        assert jobs.cleanup_material_pages(session, now=now) == 0
+        session.commit()
+    with factory() as session:
+        target = session.get(ReportSyncJob, old.id)
+        target.status = "FAILED"
+        target.finished_at = now - timedelta(days=6)
+        session.commit()
+    with factory() as session:
+        assert jobs.cleanup_material_pages(session, now=now) == 0
+        session.get(ReportSyncJob, old.id).finished_at = now - timedelta(days=8)
+        session.commit()
+    with factory() as session:
+        assert jobs.cleanup_material_pages(session, now=now) == 5
+        session.commit()
+    assert pages(factory, old.id) == []
+
+
+def test_duplicate_claim_tokens_cannot_concurrently_stage_twice(committed_sync_seed):
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Barrier
+
+    seed, factory = committed_sync_seed
+    job = enqueue(factory, seed)
+    reader, barrier = Pages(), Barrier(2)
+
+    def execute(_index):
+        barrier.wait(timeout=5)
+        return run(factory, job, reader)
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(execute, range(2)))
+    assert sorted(results) == ["FAILED", "WAITING"]
+    assert reader.calls == [1, 2, 3, 4, 5]
+    assert len(pages(factory, job.id)) == 5
+
+
+def test_final_publish_database_failure_rolls_back_delete_and_partial_inserts(
+    committed_sync_seed,
+):
+    from sqlalchemy import text
+    from sqlalchemy.exc import DBAPIError
+
+    seed, factory = committed_sync_seed
+    with factory() as session:
+        publish_material_day(
+            session,
+            tenant_id=seed.tenant_id,
+            job_id=uuid4(),
+            accounts=ACCOUNTS,
+            start=DAY,
+            end=DAY,
+            rows=[row("old", spend="9")],
+        )
+        stamp = session.get(
+            ReportSyncState, (seed.tenant_id, "acc-1", "material_day", DAY)
+        ).last_success_at
+        session.commit()
+    job, reader = enqueue(factory, seed), Pages()
+    assert run(factory, job, reader) == "WAITING"
+    current = claim(factory, job.id)
+    function_name = f"test_material_atomic_{uuid4().hex}"
+    # 故障落在真实 PG 写入最后一行时，而非替换发布函数，验证删除与已插入行一并回滚。
+    with factory() as session:
+        session.connection().execute(
+            text(f"""
+            CREATE FUNCTION {function_name}() RETURNS trigger LANGUAGE plpgsql AS $$
+            BEGIN
+                IF NEW.tenant_id = '{seed.tenant_id}'::uuid AND NEW.main_material_id = 'm6' THEN
+                    RAISE EXCEPTION 'synthetic final row failure';
+                END IF;
+                RETURN NEW;
+            END $$
+        """)
+        )
+        session.connection().execute(
+            text(
+                f"CREATE TRIGGER {function_name} BEFORE INSERT ON material_report_day FOR EACH ROW EXECUTE FUNCTION {function_name}()"
+            )
+        )
+        session.commit()
+    try:
+        with pytest.raises(DBAPIError):
+            run(factory, current, reader)
+        assert [
+            (item.main_material_id, item.spend)
+            for item in facts(factory, seed.tenant_id)
+        ] == [("mold", Decimal("9"))]
+        assert len(pages(factory, job.id)) == 5
+        with factory() as session:
+            assert (
+                session.get(
+                    ReportSyncState, (seed.tenant_id, "acc-1", "material_day", DAY)
+                ).last_success_at
+                == stamp
+            )
+    finally:
+        with factory() as session:
+            session.connection().execute(
+                text(f"DROP TRIGGER {function_name} ON material_report_day")
+            )
+            session.connection().execute(text(f"DROP FUNCTION {function_name}()"))
+            session.commit()
+    assert run(factory, current, reader) == "COMPLETE"
+    assert len(facts(factory, seed.tenant_id)) == 7
+
+
+def test_repeated_snapshot_changes_exhaust_retry_budget_without_false_success(
+    committed_sync_seed,
+):
+    seed, factory = committed_sync_seed
+    job, reader = enqueue(factory, seed), Pages()
+    assert run(factory, job, reader) == "WAITING"
+    for attempt in range(jobs.MAX_PROVIDER_RETRIES + 1):
+        reader.rows.append(row(7 + attempt))
+        expected = "FAILED" if attempt == jobs.MAX_PROVIDER_RETRIES else "WAITING"
+        assert run(factory, claim(factory, job.id), reader) == expected
+        if expected == "WAITING":
+            assert run(factory, claim(factory, job.id), reader) == "WAITING"
+    with factory() as session:
+        terminal = session.get(ReportSyncJob, job.id)
+        assert (
+            terminal.status == "FAILED"
+            and terminal.attempts == jobs.MAX_PROVIDER_RETRIES
+        )
+        assert terminal.error_code == "report_snapshot_changed"
+        assert (
+            session.get(
+                ReportSyncState, (seed.tenant_id, "acc-1", "material_day", DAY)
+            ).status
+            == "FAILED"
+        )
+    assert facts(factory, seed.tenant_id) == []
+
+
+def test_incomplete_declared_page_rows_never_mark_complete(committed_sync_seed):
+    seed, factory = committed_sync_seed
+    job = enqueue(factory, seed)
+
+    class MissingRows:
+        def material_day(self, *, page, **_kwargs):
+            return RawReportPage((row(page),), page, 1, 2)
+
+    assert run(factory, job, MissingRows()) == "FAILED"
+    assert pages(factory, job.id) == []
+    assert facts(factory, seed.tenant_id) == []
+    with factory() as session:
+        assert (
+            session.get(
+                ReportSyncState, (seed.tenant_id, "acc-1", "material_day", DAY)
+            ).status
+            == "FAILED"
+        )

@@ -2,6 +2,8 @@ from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from uuid import uuid4
 
+import pytest
+
 from app.modules.ads.models import (
     AdMaterialReference,
     AdObject,
@@ -279,3 +281,41 @@ def test_materials_carry_video_from_report_links(session, sync_seed):
     assert by_video["v-p1"].report_ids == ("p1",)
     assert by_video["v-p1"].judgement_issue is None
     assert by_video["v-p2"].judgement_issue == "MATERIAL_LINK_MISSING"
+
+
+@pytest.mark.parametrize("kind", ["ad_day", "material_day"])
+@pytest.mark.parametrize(
+    "age_seconds,expected_fresh", [(599, True), (600, True), (601, False)]
+)
+def test_report_freshness_ten_minute_boundary(
+    session, sync_seed, kind, age_seconds, expected_fresh
+):
+    from app.modules.automation_rules.inputs import _fresh_accounts
+
+    session.add(
+        ReportSyncState(
+            tenant_id=sync_seed.tenant_id,
+            advertiser_id="acc-1",
+            report_kind=kind,
+            stat_date=TODAY,
+            status="COMPLETE",
+            last_success_at=NOW - timedelta(seconds=age_seconds),
+        )
+    )
+    session.flush()
+    accounts = {"acc-1": AccountInfo("acc-1", "bc-a", "UTC", "USD", "A")}
+    fresh, skipped = _fresh_accounts(
+        session, tenant_id=sync_seed.tenant_id, accounts=accounts, kind=kind, now=NOW
+    )
+    assert bool(fresh) is expected_fresh
+    assert skipped == (
+        [] if expected_fresh else [{"advertiser_id": "acc-1", "reason": "STALE_REPORT"}]
+    )
+
+
+def advance_reports(session, seed, now, advertiser_ids=("acc-1", "acc-2")):
+    # 多次运行之间模拟 2 分钟热同步；保留未指定账户的旧状态以验证缺数通知去重。
+    for adv in advertiser_ids:
+        state = session.get(ReportSyncState, (seed.tenant_id, adv, "ad_day", TODAY))
+        state.last_success_at = now
+    session.flush()

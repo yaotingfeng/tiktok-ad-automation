@@ -172,7 +172,7 @@ def test_material_level_lacks_day2_revenue():
         },
         {
             "apply_to": {"level": "material", "status": "ACTIVE"},
-            "action": {"type": "PAUSE", "level": "material"},
+            "action": {"type": "ENABLE", "level": "material"},
         },
         {"apply_to": {"level": "adgroup", "status": "SELECTED"}},
         {"accounts": {"mode": "BC"}},
@@ -240,3 +240,52 @@ def test_video_total_is_a_material_scope():
     assert allowed_action_levels("VIDEO", "material", "PAUSE") == ("material",)
     assert "VIDEO" in RULE_METRICS["spend"].aggregations
     assert "VIDEO" not in RULE_METRICS["roas_d3"].aggregations
+
+
+@pytest.mark.parametrize(
+    "level,aggregation",
+    [
+        ("campaign", "EACH"),
+        ("adgroup", "DRAMA"),
+        ("ad", "ALL"),
+        ("material", "EACH"),
+        ("material", "VIDEO"),
+    ],
+)
+def test_five_minute_pause_preserves_existing_judgment_scopes(level, aggregation):
+    value = base(
+        apply_to={"level": level, "status": "ACTIVE"},
+        aggregation=aggregation,
+        action={"type": "PAUSE", "level": level},
+        schedule={"frequency": "5M", "window": "CONTINUOUS"},
+    )
+    assert RuleDefinition.model_validate(value).schedule.frequency == "5M"
+
+
+@pytest.mark.parametrize(
+    "action_type,level,minimum",
+    [
+        ("ENABLE", "adgroup", "30M"),
+        ("ENABLE", "material", "1H"),
+        ("BUDGET", "adgroup", "30M"),
+        ("ROAS", "campaign", "30M"),
+    ],
+)
+def test_five_minute_frequency_does_not_expand_restore_or_adjustments(
+    action_type, level, minimum
+):
+    action = {"type": action_type, "level": level}
+    if action_type in ("BUDGET", "ROAS"):
+        action.update(
+            adjustment={"mode": "SET", "value_type": "AMOUNT", "value": "10"},
+            frequency={"type": "EVERY_24H"},
+        )
+    value = base(
+        apply_to={"level": level, "status": "ACTIVE"},
+        action=action,
+        schedule={"frequency": "5M", "window": "CONTINUOUS"},
+    )
+    with pytest.raises(ValidationError, match="run at most every"):
+        RuleDefinition.model_validate(value)
+    value["schedule"]["frequency"] = minimum
+    assert RuleDefinition.model_validate(value).schedule.frequency == minimum

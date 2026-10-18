@@ -14,6 +14,7 @@ from app.modules.reporting.store_models import (
     AccountReconciliationDay,
     AdReportDay,
     MaterialReportDay,
+    ReportSyncState,
 )
 from tests.modules.reporting.sync_conftest import ad_row
 from tests.modules.reporting.test_jobs import (
@@ -137,7 +138,7 @@ def test_reconciliation_tracks_latest_ad_publication(session, sync_seed, account
     )
 
 
-def test_overlapping_tiers_defer_before_reading_and_publish_in_order(
+def test_overlapping_tiers_defer_before_reading_and_respect_request_watermarks(
     committed_sync_seed,
 ):
     seed, factory = committed_sync_seed
@@ -148,7 +149,7 @@ def test_overlapping_tiers_defer_before_reading_and_publish_in_order(
             tenant_id=seed.tenant_id,
             bc_id="bc-a",
             kind="ad_day",
-            tier="manual",
+            tier="daily",
             advertiser_ids=["acc-1"],
             start=D,
             end=D,
@@ -184,6 +185,10 @@ def test_overlapping_tiers_defer_before_reading_and_publish_in_order(
             release.set()
         assert pending.result(timeout=10) == "COMPLETE"
     assert result == "WAITING" and new.calls == []
+    with factory() as session:
+        first_success = session.get(
+            ReportSyncState, (seed.tenant_id, "acc-1", "ad_day", D)
+        ).last_success_at
     second = _reclaim(factory, second.id)
     assert (
         execute_job(
@@ -191,7 +196,29 @@ def test_overlapping_tiers_defer_before_reading_and_publish_in_order(
         )
         == "COMPLETE"
     )
+    # 第二个请求排队期间已有完整成功，读取完成也不能覆盖该水位。
+    with factory() as s:
+        assert s.exec(
+            select(AdReportDay).where(AdReportDay.tenant_id == seed.tenant_id)
+        ).one().spend == Decimal("10")
+        assert (
+            s.get(
+                ReportSyncState, (seed.tenant_id, "acc-1", "ad_day", D)
+            ).last_success_at
+            == first_success
+        )
+    third = _enqueue_and_claim(factory, seed)
+    assert (
+        execute_job(factory, job_id=third.id, claim_token=third.claim_token, reader=new)
+        == "COMPLETE"
+    )
     with factory() as s:
         assert s.exec(
             select(AdReportDay).where(AdReportDay.tenant_id == seed.tenant_id)
         ).one().spend == Decimal("20")
+        assert (
+            s.get(
+                ReportSyncState, (seed.tenant_id, "acc-1", "ad_day", D)
+            ).last_success_at
+            > first_success
+        )

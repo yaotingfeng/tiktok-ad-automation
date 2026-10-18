@@ -276,6 +276,7 @@ class SyncRefreshPublic(BaseModel):
 class SyncAccountStatus(BaseModel):
     advertiser_id: str
     timezone: str
+    local_today: date | None = None
     last_success_at: datetime | None = None
     incomplete_dates: tuple[date, ...] = ()
     failed_dates: tuple[date, ...] = ()
@@ -288,12 +289,25 @@ class SyncPlanStatus(BaseModel):
     next_hot_at: datetime | None = None
 
 
+class SyncHealthPublic(BaseModel):
+    status: Literal["HEALTHY", "DEGRADED", "DISABLED"]
+    observed_at: datetime | None = None
+    stale_ad_accounts: int = 0
+    stale_material_accounts: int = 0
+    missing_directory_ads: int = 0
+    unlinked_material_posts: int = 0
+    pending_actions: int = 0
+    oldest_data_at: datetime | None = None
+    issues: tuple[str, ...] = ()
+
+
 class SyncStatusPublic(BaseModel):
     publication_version: str
     accounts: tuple[SyncAccountStatus, ...]
     # 完整数据起始日：此日至账户本地昨天全部账户已同步完成；无完整区间时为空。
     complete_from: date | None = None
     plan: SyncPlanStatus
+    health: SyncHealthPublic | None = None
 
 
 class MetricDefinitionPublic(BaseModel):

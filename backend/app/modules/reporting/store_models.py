@@ -143,7 +143,7 @@ class MaterialPostLink(SQLModel, table=True):
 
 
 class MaterialLinkScan(SQLModel, table=True):
-    """每个账户最近一次对照扫描；只在出现新的未对照主素材时重扫。
+    """每个账户最近一次对照扫描；新帖子、新目录候选或十分钟复核时重扫。
 
     概览接口按帖子 ID 筛选不生效，每次只能拉全账户；已删除广告的帖子永远查不到，
     记下它们以免每次热刷新都重复整账户扫描。
@@ -188,6 +188,16 @@ class ReportDispatchCursor(SQLModel, table=True):
         primary_key=True, foreign_key="tenant.id", ondelete="CASCADE"
     )
     last_dispatched_at: datetime = Field(sa_type=AwareDateTime)
+
+
+class DirectoryDispatchCursor(SQLModel, table=True):
+    """定向目录窗口的持久租户游标，不与报表的轮转状态混用。"""
+
+    __tablename__ = "directory_dispatch_cursor"
+    tenant_id: UUID = Field(
+        primary_key=True, foreign_key="tenant.id", ondelete="CASCADE"
+    )
+    last_dispatched_at: datetime | None = Field(default=None, sa_type=AwareDateTime)
 
 
 class ReportSyncState(SQLModel, table=True):
@@ -251,10 +261,40 @@ class ReportSyncJob(SQLModel, table=True):
     attempts: int = 0
     error_code: str | None = Field(default=None, max_length=128)
     request_count: int = 0
+    # 关联扫描保存概览游标；已写入的页不随下一次截止重新从第一页开始。
+    progress: dict[str, Any] = Field(
+        default_factory=dict, sa_column=Column(JSONB, nullable=False)
+    )
     created_at: datetime = Field(
         default_factory=lambda: datetime.now(UTC), sa_type=AwareDateTime
     )
     finished_at: datetime | None = Field(default=None, sa_type=AwareDateTime)
+
+
+class ReportSyncPage(SQLModel, table=True):
+    """素材完整发布前的私有分页证据；任务删除时级联清理，页面查询不读暂存。"""
+
+    __tablename__ = "report_sync_page"
+    __table_args__ = (
+        CheckConstraint(
+            "page >= 1 AND total_page >= 0 AND total_number >= 0",
+            name="ck_report_sync_page_numbers",
+        ),
+        Index("ix_report_sync_page_row_keys", "row_keys", postgresql_using="gin"),
+    )
+    job_id: UUID = Field(
+        primary_key=True, foreign_key="report_sync_job.id", ondelete="CASCADE"
+    )
+    page: int = Field(primary_key=True)
+    tenant_id: UUID
+    scope_key: str = Field(max_length=64)
+    rows: list[dict[str, Any]] = Field(sa_column=Column(JSONB, nullable=False))
+    row_keys: list[str] = Field(sa_column=Column(JSONB, nullable=False))
+    total_page: int
+    total_number: int
+    fetched_at: datetime = Field(
+        default_factory=lambda: datetime.now(UTC), sa_type=AwareDateTime
+    )
 
 
 class AdSyncBc(SQLModel, table=True):
@@ -272,6 +312,8 @@ class AdSyncBc(SQLModel, table=True):
     actor_id: UUID
     enabled: bool = True
     disabled_reason: str | None = Field(default=None, max_length=128)
+    # 仅在当天完整筛选成功时推进；部分页和缓存命中不能伪造新鲜度。
+    active_screened_at: datetime | None = Field(default=None, sa_type=AwareDateTime)
     # None=未检查；False=授权用户无 BC 报表权限，退回账户级报表筛选。
     bc_report_supported: bool | None = None
     next_hot_at: datetime = Field(sa_type=AwareDateTime)
@@ -316,6 +358,52 @@ class ReportBalanceRun(SQLModel, table=True):
     remaining_advertiser_ids: list[str] = Field(sa_column=Column(JSONB, nullable=False))
     next_page: int = 1
     status: str = Field(default="ACTIVE", max_length=16)
+    created_at: datetime = Field(
+        default_factory=lambda: datetime.now(UTC), sa_type=AwareDateTime
+    )
+
+
+class ReportSyncHealth(SQLModel, table=True):
+    """BC 同步健康观测与恢复动作；页面和告警以真实数据年龄、覆盖为准。"""
+
+    __tablename__ = "report_sync_health"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["tenant_id", "bc_id"], ["tenant_bc.tenant_id", "tenant_bc.bc_id"]
+        ),
+    )
+    tenant_id: UUID = Field(primary_key=True)
+    bc_id: str = Field(primary_key=True, max_length=128)
+    status: str = Field(default="DEGRADED", max_length=16)
+    metrics: dict[str, Any] = Field(
+        default_factory=dict, sa_column=Column(JSONB, nullable=False)
+    )
+    issues: list[str] = Field(
+        default_factory=list, sa_column=Column(JSONB, nullable=False)
+    )
+    observed_at: datetime = Field(
+        default_factory=lambda: datetime.now(UTC), sa_type=AwareDateTime
+    )
+    last_repair_at: datetime | None = Field(default=None, sa_type=AwareDateTime)
+
+
+class ReportSyncHealthEvent(SQLModel, table=True):
+    """健康状态切换的持久告警/恢复记录，不因进程重启丢失。"""
+
+    __tablename__ = "report_sync_health_event"
+    __table_args__ = (
+        Index("ix_report_sync_health_event_scope", "tenant_id", "bc_id", "created_at"),
+    )
+    id: UUID = Field(default_factory=uuid4, primary_key=True)
+    tenant_id: UUID
+    bc_id: str = Field(max_length=128)
+    status: str = Field(max_length=16)
+    issues: list[str] = Field(
+        default_factory=list, sa_column=Column(JSONB, nullable=False)
+    )
+    metrics: dict[str, Any] = Field(
+        default_factory=dict, sa_column=Column(JSONB, nullable=False)
+    )
     created_at: datetime = Field(
         default_factory=lambda: datetime.now(UTC), sa_type=AwareDateTime
     )

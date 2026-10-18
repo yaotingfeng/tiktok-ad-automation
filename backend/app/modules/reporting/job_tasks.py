@@ -33,6 +33,7 @@ from app.modules.ads.directory_dispatch import (
     directory_step_key,
     enqueue_directory_step,
     is_targeted,
+    targeted_capacity,
 )
 from app.modules.ads.directory_requests import (
     directory_ad_types,
@@ -46,14 +47,18 @@ from app.modules.reporting.jobs import (
     _CountingReader,
     _read_all,
     claim_jobs,
+    cleanup_material_pages,
     execute_job,
+    request_time,
 )
+from app.modules.reporting.lanes import lane_condition
 from app.modules.reporting.metrics import parse_decimal
 from app.modules.reporting.partitions import ensure_month_partitions
 from app.modules.reporting.query_models import QuerySnapshot
 from app.modules.reporting.store_models import (
     AdSyncBc,
     CampaignReportHour,
+    DirectoryDispatchCursor,
     ReportBalanceRun,
     ReportDispatchCursor,
     ReportSyncJob,
@@ -65,12 +70,15 @@ logger = logging.getLogger(__name__)
 DIRECTORY_DISPATCH_BATCH = 1000
 # 全量目录只提前投递少量运行，历史初始请求不再持续填满 broker。
 DIRECTORY_DISPATCH_WINDOW = 4
-# 与 ACK 两个报表执行槽配套；历史积压留在数据库，不提前变成上千个有效租约。
-REPORT_DISPATCH_WINDOW = 2
+# 与 ACK 四个实时执行槽配套；历史积压留在数据库，不提前变成上千个有效租约。
+REPORT_DISPATCH_WINDOW = 4
+BACKFILL_DISPATCH_WINDOW = 1
 # 目录消息发布后超过此时长仍未被领取，视为丢失并重新入队。
 DIRECTORY_MESSAGE_LOST_AFTER = timedelta(hours=6)
+TARGETED_MESSAGE_LOST_AFTER = timedelta(minutes=2)
 
 register_dispatch_task("reporting.job_step", "ads-reporting")
+register_dispatch_task("reporting.backfill_step", "ads-backfill")
 register_dispatch_task("reporting.plan_due", "control")
 
 
@@ -108,16 +116,53 @@ def _active(session, reader, plan, accounts, now, *, days):
         windows.setdefault((end - timedelta(days=days - 1), end), []).append(account)
     active = set()
     if plan.bc_report_supported is not False:
-        for (start, end), candidates in windows.items():
-            active.update(
-                planner.screen_active(
-                    reader,
-                    bc_id=plan.bc_id,
-                    start=start,
-                    end=end,
-                    candidates=set(candidates),
+        requests = [
+            (start, end, tuple(sorted(candidates)))
+            for (start, end), candidates in sorted(windows.items())
+        ]
+        fingerprint = sha256(
+            repr((plan.frozen_route, str(plan.actor_id), requests)).encode()
+        ).hexdigest()
+        key = f"bc:{days}"
+        progress: dict[str, Any] = plan.screening_progress.get(key, {})
+        if progress.get("fingerprint") != fingerprint:
+            progress = {
+                "fingerprint": fingerprint,
+                "offset": 0,
+                "page": 1,
+                "active": [],
+            }
+        active.update(progress["active"])
+        for index in range(progress["offset"], len(requests)):
+            start, end, candidates = requests[index]
+            page = progress["page"] if index == progress["offset"] else 1
+            while True:
+                result = reader.bc_spend(
+                    bc_id=plan.bc_id, start=start, end=end, page=page
                 )
-            )
+                for row in result.rows:
+                    account = str((row.get("dimensions") or {}).get("advertiser_id"))
+                    spend = parse_decimal((row.get("metrics") or {}).get("spend"))
+                    if account in candidates and spend is not None and spend > 0:
+                        active.add(account)
+                plan.screening_progress = {
+                    **plan.screening_progress,
+                    key: {
+                        "fingerprint": fingerprint,
+                        "offset": index if result.next_page else index + 1,
+                        "page": result.next_page or 1,
+                        "active": sorted(active),
+                    },
+                }
+                session.flush()
+                if result.next_page is None:
+                    break
+                page = result.next_page
+        plan.screening_progress = {
+            k: v for k, v in plan.screening_progress.items() if k != key
+        }
+        if days == 1:
+            plan.active_screened_at = now
         return sorted(active)
     requests = []
     for (start, end), candidates in sorted(windows.items()):
@@ -158,6 +203,8 @@ def _active(session, reader, plan, accounts, now, *, days):
     plan.screening_progress = {
         k: v for k, v in plan.screening_progress.items() if k != key
     }
+    if days == 1:
+        plan.active_screened_at = now
     return sorted(active)
 
 
@@ -173,7 +220,12 @@ def _message_lost(session: Session, row: AdDirectoryRun, now: datetime) -> bool:
             PendingDispatch.task_key == key,
         )
     ).first()
-    return published is not None and published < now - DIRECTORY_MESSAGE_LOST_AFTER
+    threshold = (
+        TARGETED_MESSAGE_LOST_AFTER
+        if is_targeted(row)
+        else DIRECTORY_MESSAGE_LOST_AFTER
+    )
+    return published is not None and published < now - threshold
 
 
 def _dispatch_directories(session, now):
@@ -208,7 +260,11 @@ def _dispatch_directories(session, now):
         .where(
             PendingDispatch.tenant_id == col(AdDirectoryRun.tenant_id),
             PendingDispatch.task_key == current_key,
-            col(PendingDispatch.published_at) < now - DIRECTORY_MESSAGE_LOST_AFTER,
+            col(PendingDispatch.published_at)
+            < case(
+                (targeted, now - TARGETED_MESSAGE_LOST_AFTER),
+                else_=now - DIRECTORY_MESSAGE_LOST_AFTER,
+            ),
         )
         .exists()
     )
@@ -235,10 +291,22 @@ def _dispatch_directories(session, now):
         )
     ).one()
     available = max(0, DIRECTORY_DISPATCH_WINDOW - inflight)
-    rows = session.exec(
-        select(AdDirectoryRun)
-        .where(
-            targeted | (available > 0),
+    targeted_available = targeted_capacity(session, now)
+    ranked = (
+        select(
+            AdDirectoryRun.id,
+            func.row_number()
+            .over(
+                partition_by=col(AdDirectoryRun.tenant_id),
+                order_by=(
+                    targeted.desc(),
+                    col(AdDirectoryRun.created_at),
+                    col(AdDirectoryRun.id),
+                ),
+            )
+            .label("rn"),
+        ).where(
+            (targeted & (targeted_available > 0)) | (~targeted & (available > 0)),
             col(AdDirectoryRun.status).in_(["QUEUED", "RUNNING", "WAITING_REMOTE"]),
             AdDirectoryRun.channel == "OFFICIAL_API",
             col(AdDirectoryRun.next_attempt_at).is_(None)
@@ -247,13 +315,25 @@ def _dispatch_directories(session, now):
             col(AdDirectoryRun.claimed_until).is_(None) & (~enqueued | lost)
             | (col(AdDirectoryRun.claimed_until) <= now),
         )
+    ).subquery()
+    rows = session.exec(
+        select(AdDirectoryRun)
+        .join(ranked, ranked.c.id == AdDirectoryRun.id)
+        .outerjoin(
+            DirectoryDispatchCursor,
+            col(DirectoryDispatchCursor.tenant_id) == col(AdDirectoryRun.tenant_id),
+        )
         .order_by(
-            targeted.desc(), col(AdDirectoryRun.created_at), col(AdDirectoryRun.id)
+            ranked.c.rn,
+            col(DirectoryDispatchCursor.last_dispatched_at).asc().nulls_first(),
+            targeted.desc(),
+            col(AdDirectoryRun.created_at),
+            col(AdDirectoryRun.id),
         )
         .limit(DIRECTORY_DISPATCH_BATCH)
-        .with_for_update(skip_locked=True)
+        .with_for_update(skip_locked=True, of=AdDirectoryRun)
     ).all()
-    # 批量识别末页；全量发布保留独立队列，定向抓取/发布均留在广告管理槽。
+    # 批量识别末页；全量发布保留独立队列，定向抓取/发布使用实时目录队列。
     terminal_runs = (
         set(
             session.exec(
@@ -267,8 +347,13 @@ def _dispatch_directories(session, now):
         else set()
     )
     count = 0
+    served = set()
     for row in rows:
-        if not is_targeted(row):
+        if is_targeted(row):
+            if targeted_available <= 0:
+                continue
+            targeted_available -= 1
+        else:
             if available <= 0:
                 continue
             available -= 1
@@ -276,7 +361,23 @@ def _dispatch_directories(session, now):
             row.claim_generation += 1
             row.claim_token = row.claimed_until = None
         enqueue_directory_step(session, row, publish_only=row.id in terminal_runs)
+        served.add(row.tenant_id)
         count += 1
+    for tenant in sorted(served):
+        statement = insert(DirectoryDispatchCursor).values(
+            tenant_id=tenant, last_dispatched_at=now
+        )
+        session.exec(
+            statement.on_conflict_do_update(
+                index_elements=["tenant_id"],
+                set_={
+                    "last_dispatched_at": func.greatest(
+                        col(DirectoryDispatchCursor.last_dispatched_at),
+                        statement.excluded.last_dispatched_at,
+                    )
+                },
+            )
+        )
     return count
 
 
@@ -284,23 +385,32 @@ def plan_due_runs(*, database_engine, redis_client, now=None):
     if not settings.ADS_SYNC_ENABLED:
         return 0
     now = now or datetime.now(UTC)
-    deadline = datetime.now(UTC) + timedelta(seconds=150)
-    slow = (
+    allow_backfill = (
         planner.calls_today(redis_client, now)
-        > settings.TIKTOK_REPORT_DAILY_CALL_BUDGET * 0.7
+        <= settings.TIKTOK_REPORT_DAILY_CALL_BUDGET * 0.7
     )
-    hot = timedelta(minutes=60 if slow else 30)
-    material = timedelta(minutes=120 if slow else 60)
+    deadline = datetime.now(UTC) + timedelta(seconds=10)
+    # 额度紧张优先让出历史补数，不静默把止损数据降成小时级。
+    hot, material = planner.HOT_INTERVAL, planner.MATERIAL_INTERVAL
     with Session(database_engine) as session, session.begin():
         ensure_month_partitions(session, today=now.date())
         planner.ensure_bc_plans(session, now=now)
         keys = [(p.tenant_id, p.bc_id) for p in planner.due_plans(session, now=now)]
-    dispatched = _dispatch_pending(database_engine, now)
+    dispatched = _dispatch_pending(database_engine, now, allow_backfill=allow_backfill)
     for key in keys:
         if datetime.now(UTC) >= deadline:
             break
         try:
-            _plan_one(database_engine, redis_client, key, now, deadline, hot, material)
+            _plan_one(
+                database_engine,
+                redis_client,
+                key,
+                now,
+                deadline,
+                hot,
+                material,
+                allow_backfill=allow_backfill,
+            )
         except SoftTimeLimitExceeded:
             # 已提交计划和派发不随后续慢请求回滚，下一轮从未完成计划继续。
             break
@@ -309,7 +419,9 @@ def plan_due_runs(*, database_engine, redis_client, now=None):
             # 否则它会回滚、到期时间不前进，每轮都排在最前面拖垮所有租户。
             logger.exception("report plan failed: tenant=%s bc=%s", *key)
             _defer_failed_plan(database_engine, key, now)
-        dispatched += _dispatch_pending(database_engine, now)
+        dispatched += _dispatch_pending(
+            database_engine, now, allow_backfill=allow_backfill
+        )
     return dispatched
 
 
@@ -339,7 +451,17 @@ def _defer_plan(plan, retry_at):
         setattr(plan, field, max(getattr(plan, field), retry_at))
 
 
-def _plan_one(database_engine, redis_client, key, now, deadline, hot, material):
+def _plan_one(
+    database_engine,
+    redis_client,
+    key,
+    now,
+    deadline,
+    hot,
+    material,
+    *,
+    allow_backfill=True,
+):
     with Session(database_engine) as session, session.begin():
         plan = session.exec(
             select(AdSyncBc)
@@ -353,12 +475,16 @@ def _plan_one(database_engine, redis_client, key, now, deadline, hot, material):
             return
         counted = None
         try:
-            if plan.next_hot_at <= now or plan.next_daily_at <= now:
+            if plan.next_hot_at <= now or (
+                allow_backfill and plan.next_daily_at <= now
+            ):
                 with _reader_for(
                     database_engine=database_engine,
                     redis_client=redis_client,
                     plan=plan,
-                    deadline=deadline,
+                    # 控制面不等待整 BC 数百次外部请求；账户筛选游标逐批持久化，
+                    # 8 秒到期后下一轮继续，让 outbox、监控和止损调度仍有执行机会。
+                    deadline=min(deadline, datetime.now(UTC) + timedelta(seconds=8)),
                 ) as reader:
                     if reader is None:
                         plan.enabled, plan.disabled_reason = (
@@ -368,7 +494,12 @@ def _plan_one(database_engine, redis_client, key, now, deadline, hot, material):
                         return
                     counted = _CountingReader(reader)
                     if plan.next_hot_at <= now:
-                        active = _active(session, counted, plan, accounts, now, days=1)
+                        active = sorted(
+                            set(_active(session, counted, plan, accounts, now, days=1))
+                            | planner.known_spending_accounts(
+                                session, plan, accounts=accounts, now=now
+                            )
+                        )
                         planner.plan_hot(session, plan, active=active, now=now)
                         planner.mark_confirmed_empty(
                             session,
@@ -379,7 +510,7 @@ def _plan_one(database_engine, redis_client, key, now, deadline, hot, material):
                         )
                         plan.last_active_advertiser_ids = active
                         plan.next_hot_at = _advance(plan.next_hot_at, now, hot)
-                    if plan.next_daily_at <= now:
+                    if allow_backfill and plan.next_daily_at <= now:
                         active = _active(session, counted, plan, accounts, now, days=32)
                         planner.plan_daily(session, plan, active_32d=active, now=now)
                         planner.mark_confirmed_empty(
@@ -396,7 +527,8 @@ def _plan_one(database_engine, redis_client, key, now, deadline, hot, material):
                 )
                 plan.next_material_at = _advance(plan.next_material_at, now, material)
             # 授权后的历史回补立即规划一次，不等到每日回刷；未知开户时间稍后重查。
-            planner.plan_history(session, plan, now=now)
+            if allow_backfill:
+                planner.plan_history(session, plan, now=now)
             if plan.next_directory_at <= now:
                 # 全量目录（含已删除）已覆盖只读在投对象的需求，周期只发这一种；
                 # 无消耗账户按天刷新，未使用类型只探测广告系列。
@@ -431,7 +563,12 @@ def _plan_one(database_engine, redis_client, key, now, deadline, hot, material):
                 plan, now + timedelta(milliseconds=max(1000, error.retry_after_ms))
             )
         except DomainError as error:
-            if (
+            if error.code in {
+                "read_deadline_exceeded",
+                "tiktok_call_deadline_exceeded",
+            }:
+                _defer_plan(plan, now + timedelta(seconds=5))
+            elif (
                 error.code == "report_permission_denied"
                 or error.code == "tiktok_response_error"
                 and any(v in error.message.lower() for v in ("permission", "权限"))
@@ -446,7 +583,9 @@ def _plan_one(database_engine, redis_client, key, now, deadline, hot, material):
                 planner.record_calls(redis_client, now, counted.count)
 
 
-def _dispatch_report_jobs(session: Session, now: datetime) -> int:
+def _dispatch_report_jobs(
+    session: Session, now: datetime, *, allow_backfill=True
+) -> int:
     # 多个调度唤醒也必须原子核对全局窗口，不能各自看到两个空槽后重复领取。
     locked = (
         session.connection()
@@ -459,24 +598,37 @@ def _dispatch_report_jobs(session: Session, now: datetime) -> int:
     )
     if not locked:
         return 0
-    inflight = session.exec(
-        select(func.count())
-        .select_from(ReportSyncJob)
-        .where(
-            ReportSyncJob.status == "RUNNING",
-            col(ReportSyncJob.claimed_until) > now,
+    jobs = []
+    for lane, window, task in (
+        ("live", REPORT_DISPATCH_WINDOW, "reporting.job_step"),
+        ("backfill", BACKFILL_DISPATCH_WINDOW, "reporting.backfill_step"),
+    ):
+        if lane == "backfill" and not allow_backfill:
+            continue
+        inflight = session.exec(
+            select(func.count())
+            .select_from(ReportSyncJob)
+            .where(
+                ReportSyncJob.status == "RUNNING",
+                col(ReportSyncJob.claimed_until) > now,
+                lane_condition(lane=lane, now=now),
+            )
+        ).one()
+        available = max(0, window - inflight)
+        claimed = (
+            claim_jobs(session, now=now, limit=available, lane=lane)
+            if available
+            else []
         )
-    ).one()
-    available = max(0, REPORT_DISPATCH_WINDOW - inflight)
-    jobs = claim_jobs(session, now=now, limit=available) if available else []
-    for job in jobs:
-        enqueue_after_commit(
-            session,
-            context=_context(job),
-            task_name="reporting.job_step",
-            task_key=f"report-job:{job.id}:{job.claim_token}",
-            payload={"job_id": str(job.id), "claim_id": str(job.claim_token)},
-        )
+        for job in claimed:
+            enqueue_after_commit(
+                session,
+                context=_context(job),
+                task_name=task,
+                task_key=f"report-job:{job.id}:{job.claim_token}",
+                payload={"job_id": str(job.id), "claim_id": str(job.claim_token)},
+            )
+        jobs.extend(claimed)
     for tenant_id in sorted({job.tenant_id for job in jobs}):
         # 游标与领取/outbox 同事务提交，失败不跳过租户，也不干扰其他业务队列。
         statement = insert(ReportDispatchCursor).values(
@@ -517,9 +669,11 @@ def _report_refill_after(database_engine, job, claim_token):
                 logger.exception("report refill wake failed: job=%s", job.id)
 
 
-def _dispatch_pending(database_engine, now):
+def _dispatch_pending(database_engine, now, *, allow_backfill=True):
     with Session(database_engine) as session, session.begin():
-        return _dispatch_report_jobs(session, now) + _dispatch_directories(session, now)
+        return _dispatch_report_jobs(
+            session, now, allow_backfill=allow_backfill
+        ) + _dispatch_directories(session, now)
 
 
 def _failed(session, job, code):
@@ -533,6 +687,7 @@ def _failed(session, job, code):
         start=job.start_date,
         end=job.end_date,
         error_code=code,
+        requested_at=request_time(job),
     )
 
 
@@ -710,6 +865,7 @@ def cleanup_store(session, *, now):
         session.connection().execute(_supersede_stalled_directory_runs(now)).rowcount
     )
     result["directory_pages"] = cleanup_directory_pages(session, now=now)
+    result["material_pages"] = cleanup_material_pages(session, now=now)
     return result
 
 
@@ -726,14 +882,20 @@ def cleanup_directory_pages(session, *, now):
     )
 
 
-@celery_app.task(name="reporting.plan_due", time_limit=200, soft_time_limit=180)
+@celery_app.task(name="reporting.plan_due", time_limit=30, soft_time_limit=25)
 def plan_due(*, tenant_id=None, actor_id=None, payload=None):
     del tenant_id, actor_id
     if payload == {"dispatch_only": True}:
         if not settings.ADS_SYNC_ENABLED:
             return 0
+        now = datetime.now(UTC)
+        with Redis.from_url(settings.REDIS_URL) as redis:
+            allow_backfill = (
+                planner.calls_today(redis, now)
+                <= settings.TIKTOK_REPORT_DAILY_CALL_BUDGET * 0.7
+            )
         with Session(engine) as session, session.begin():
-            return _dispatch_report_jobs(session, datetime.now(UTC))
+            return _dispatch_report_jobs(session, now, allow_backfill=allow_backfill)
     with Redis.from_url(settings.REDIS_URL) as redis:
         return plan_due_runs(database_engine=engine, redis_client=redis)
 
@@ -762,6 +924,18 @@ def job_step(*, tenant_id, actor_id, payload):
         return run_job_step(
             database_engine=engine, redis_client=redis, job_id=job_id, claim_token=token
         )
+
+
+@celery_app.task(
+    name="reporting.backfill_step",
+    time_limit=200,
+    soft_time_limit=180,
+    acks_late=True,
+    reject_on_worker_lost=True,
+)
+def backfill_step(*, tenant_id, actor_id, payload):
+    # 相同执行合同与冻结权限，只把慢任务的物理执行容量隔离。
+    return job_step.run(tenant_id=tenant_id, actor_id=actor_id, payload=payload)
 
 
 @celery_app.task(name="reporting.cleanup_store", time_limit=60, soft_time_limit=55)

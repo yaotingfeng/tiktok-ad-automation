@@ -106,3 +106,66 @@ def test_report_refresh_respects_limit_and_ad_type(session, sync_seed, monkeypat
     ).all()
     ads = {r.ad_type: r.query["ids"] for r in runs if r.kind == "ad"}
     assert ads == {"SMART_PLUS": ["a0"], "REGULAR": ["a1"]}
+
+
+@pytest.mark.parametrize(
+    "mode,selected_bc,expected",
+    [("BC", "bc-a", 3), ("BC", "bc-b", 0), ("ALL", None, 3), ("ACCOUNTS", None, 3)],
+)
+def test_existing_directory_refresh_prioritizes_exact_rule_scope(
+    session, sync_seed, monkeypatch, mode, selected_bc, expected
+):
+    from app.modules.automation_rules.models import AutomationRule
+
+    monkeypatch.setattr(settings, "ADS_SYNC_ENABLED", True)
+    now = datetime.now(UTC)
+    job = prepared(session, sync_seed)
+    for kind, remote in [("ad", "a0"), ("adgroup", "g0"), ("campaign", "c0")]:
+        session.add(
+            AdObject(
+                tenant_id=sync_seed.tenant_id,
+                advertiser_id="acc-2",
+                kind=kind,
+                remote_id=remote,
+                ad_type="SMART_PLUS",
+                observed_at=now - timedelta(minutes=10),
+                published_version=1,
+            )
+        )
+    session.add(
+        AutomationRule(
+            tenant_id=sync_seed.tenant_id,
+            name="scope-test",
+            created_by=sync_seed.actor_id,
+            updated_by=sync_seed.actor_id,
+            definition={
+                "accounts": {
+                    "mode": mode,
+                    "bc_ids": [selected_bc] if selected_bc else [],
+                    "advertiser_ids": ["acc-2"],
+                }
+            },
+        )
+    )
+    session.flush()
+    assert refresh_report_directory(session, job, now=now) == expected
+
+
+def test_pending_top_spenders_cannot_hide_new_missing_ad(
+    session, sync_seed, monkeypatch
+):
+    from app.modules.reporting import directory_refresh
+
+    monkeypatch.setattr(settings, "ADS_SYNC_ENABLED", True)
+    job = prepared(session, sync_seed, count=101)
+    monkeypatch.setattr(directory_refresh, "MAX_REFRESH_ADS", 100)
+    assert refresh_report_directory(session, job) == 3
+    # 原100个ID仍在途，下一轮必须能选到第101个，不能先LIMIT后去重。
+    assert refresh_report_directory(session, job) == 3
+    runs = session.exec(
+        select(AdDirectoryRun).where(
+            AdDirectoryRun.tenant_id == sync_seed.tenant_id, AdDirectoryRun.kind == "ad"
+        )
+    ).all()
+    assert len(runs) == 2
+    assert sum(len(run.query["ids"]) for run in runs) == 101

@@ -191,39 +191,6 @@ export function AdsWorkspace() {
         query.queryKey[4] === currentBcId,
     })
   }, [refetchRows, queryClient, tenantId, currentBcId])
-  useEffect(() => {
-    if (!syncStatus.data) return
-    const version = syncStatus.data.publication_version
-    const previous = publicationRef.current
-    publicationRef.current = { scope: publicationScope, version }
-    const followOwnOperation =
-      submittedTask?.bc_id === currentBcId &&
-      !!ads.snapshot &&
-      Date.parse(ads.snapshot.expires_at) > Date.now()
-    if (!previous || previous.scope !== publicationScope) {
-      pendingRefreshScope.current = null
-      setNewDataAvailable(false)
-      // 早于首次同步状态响应完成的提交，也要读取当前页的真实状态。
-      if (followOwnOperation) void refreshCurrentPage()
-      return
-    }
-    if (previous.version === version) return
-    // 主动刷新完成后换快照；普通后台发布不能打断跨页选择和已打开的预览。
-    if (pendingRefreshScope.current === publicationScope) loadLatest()
-    else if (followOwnOperation) {
-      // 本人操作的回读结果自动补全原快照；不换成员、不重排，也不清掉后续勾选或预览。
-      void refreshCurrentPage()
-      setNewDataAvailable(false)
-    } else setNewDataAvailable(true)
-  }, [
-    syncStatus.data,
-    publicationScope,
-    loadLatest,
-    submittedTask,
-    currentBcId,
-    ads.snapshot,
-    refreshCurrentPage,
-  ])
   const syncMutation = useMutation({
     mutationFn: async () => {
       // 手动刷新按当前筛选账户插队，不从当前页推导范围，也不触发历史回补。
@@ -531,6 +498,52 @@ export function AdsWorkspace() {
       )
     })
   }
+  const canAutoLoadLatest =
+    !ads.selection.selected.size &&
+    !ads.selection.allMatching &&
+    !previewOpen &&
+    !detail &&
+    !selectionMutation.isPending &&
+    !adMaterialSelection.isPending &&
+    !ads.query.isFetching &&
+    applied.page === 1
+  useEffect(() => {
+    if (!syncStatus.data) return
+    const version = syncStatus.data.publication_version
+    const previous = publicationRef.current
+    publicationRef.current = { scope: publicationScope, version }
+    const followOwnOperation =
+      submittedTask?.bc_id === currentBcId &&
+      !!ads.snapshot &&
+      Date.parse(ads.snapshot.expires_at) > Date.now()
+    if (!previous || previous.scope !== publicationScope) {
+      pendingRefreshScope.current = null
+      setNewDataAvailable(false)
+      // 早于首次同步状态响应完成的提交，也要读取当前页的真实状态。
+      if (followOwnOperation) void refreshCurrentPage()
+      return
+    }
+    // 延迟的新版本在操作结束后仍可自动加载；同一版本只加载一次，避免刷新循环。
+    if (previous.version === version && !newDataAvailable) return
+    // 只有空闲且当前请求结束时换快照，避免打断选择、详情、预览或跨页操作。
+    if (pendingRefreshScope.current === publicationScope) loadLatest()
+    else if (canAutoLoadLatest) loadLatest()
+    else if (previous.version !== version && followOwnOperation) {
+      // 本人操作的回读结果自动补全原快照；不换成员、不重排，也不清掉后续勾选或预览。
+      void refreshCurrentPage()
+      setNewDataAvailable(true)
+    } else setNewDataAvailable(true)
+  }, [
+    syncStatus.data,
+    publicationScope,
+    loadLatest,
+    submittedTask,
+    currentBcId,
+    ads.snapshot,
+    refreshCurrentPage,
+    canAutoLoadLatest,
+    newDataAvailable,
+  ])
   const nextPage = () => {
     const nextCursor = ads.query.data?.next_cursor
     if (!nextCursor) return
@@ -617,6 +630,8 @@ export function AdsWorkspace() {
       </div>
       <ReportStatusBar
         status={syncStatus.data}
+        selectedAdvertiserIds={applied.advertiser_ids}
+        startDate={applied.start_date}
         coverage={ads.query.data?.coverage}
         notice={syncNotice}
         onLoadLatest={newDataAvailable ? loadLatest : undefined}

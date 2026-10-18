@@ -473,7 +473,7 @@ else:
         first_write = next(i for i, c in enumerate(calls) if "apply" in c["args"])
         self.assertTrue(any("-A" in c["args"] for c in calls[:first_write]))
         self.assertTrue(any("secret" in c["args"] for c in calls[:first_write]))
-        self.assertEqual(sum("rollout" in c["args"] for c in calls), 9)
+        self.assertEqual(sum("rollout" in c["args"] for c in calls), 11)
         secret_calls = [
             c
             for c in calls

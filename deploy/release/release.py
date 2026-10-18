@@ -33,9 +33,11 @@ from common import (
     FLAGS,
     PROJECT,
     PUBLIC,
+    ROLES,
     ROOT,
     VPC,
     Cluster,
+    digest,
     require,
     run,
     write,
@@ -50,9 +52,29 @@ WORKERS = {
     "worker-ads-directory": "ads-directory",
     "worker-ads-reporting": "ads-reporting",
     "worker-ad-management": "ad-management",
+    "worker-ads-backfill": "ads-backfill",
+    "worker-ads-live-directory": "ads-live-directory",
 }
 # 与 Beat 磁盘相同的存储类：按首个消费者所在可用区建盘，辅助 Pod 才能同时挂载。
 STORAGE_CLASS = "alicloud-disk-topology-alltype"
+
+
+WORKER_DATABASE_POOL = {"DATABASE_POOL_SIZE": "2", "DATABASE_MAX_OVERFLOW": "1"}
+
+
+def role_environment(shared, role, pool_contract):
+    # 仅 Worker 按角色覆盖；私有共享 Secret 与 API 的池配置不变。
+    values = dict(shared)
+    if pool_contract and role in WORKERS:
+        values.update(WORKER_DATABASE_POOL)
+    return values
+
+
+def expected_database_pool(environment):
+    return {
+        "DATABASE_POOL_SIZE": int(environment.get("DATABASE_POOL_SIZE", 5)),
+        "DATABASE_MAX_OVERFLOW": int(environment.get("DATABASE_MAX_OVERFLOW", 10)),
+    }
 
 
 def manifest_items(payload):
@@ -117,6 +139,11 @@ class Release:
 
     def validate_deployments(self, original=False):
         current = self.cluster.deployments()
+        if original:
+            require(
+                set(current) == set(self.state["deployments"]),
+                "Original deployment role set changed",
+            )
         for name, before in self.state["deployments"].items():
             require(
                 current[name]["metadata"]["uid"] == before["metadata"]["uid"],
@@ -128,6 +155,22 @@ class Release:
                     "Cannot resume old release after template changes",
                 )
         return current
+
+    @property
+    def original_roles(self):
+        return {name.removeprefix(PROJECT + "-") for name in self.state["deployments"]}
+
+    @property
+    def original_workers(self):
+        return {role: WORKERS[role] for role in self.original_roles if role in WORKERS}
+
+    def expected_roles(self, sha):
+        # 备份/迁移前恢复必须只启动原角色；候选版本必须具有完整的新合同。
+        if self.state.get("candidate_applied") and sha == self.state.get(
+            "candidate_sha"
+        ):
+            return set(ROLES)
+        return self.original_roles if sha == self.state["old_sha"] else set(ROLES)
 
     def check_source(self, sha):
         run(["git", "-C", str(ROOT), "cat-file", "-e", sha + "^{commit}"])
@@ -306,7 +349,12 @@ class Release:
             for version in {self.state["old_sha"], sha or self.state["old_sha"]}
         }
         old_pods = self.cluster.app_pods()
-        require(len(old_pods) == 9, "Existing rollout must be stable before release")
+        require(
+            len(old_pods) == len(self.state["deployments"])
+            and {p["metadata"]["labels"]["role"] for p in old_pods}
+            == self.original_roles,
+            "Existing rollout must be stable before release",
+        )
         for pod in old_pods:
             statuses = pod.get("status", {}).get("containerStatuses", [])
             require(
@@ -576,8 +624,11 @@ class Release:
             for p in pods
         ]
         require(
-            len(expected) == 7 and len(set(expected)) == 7,
-            "Exactly seven live workers are required",
+            len(expected) == len(self.original_workers)
+            and len(set(expected)) == len(expected)
+            and {p["metadata"]["labels"]["role"] for p in pods}
+            == set(self.original_workers),
+            "Exactly one live worker per original role is required",
         )
         self.state["workers"] = expected
         self.save("cancelling-consumers")
@@ -585,9 +636,9 @@ class Release:
         self.save("draining")
         self.wait_drained(expected)
         self.save("stopping-workers")
-        for role in WORKERS:
+        for role in self.original_workers:
             self.cluster.scale(PROJECT + "-" + role, 0)
-        self.wait_pods(set(WORKERS))
+        self.wait_pods(set(self.original_workers))
         broker = self.probe("broker")
         write(self.folder / "broker-frozen.json", broker)
         require(
@@ -646,12 +697,17 @@ class Release:
             ),
             "Refusing to start an unexpected image",
         )
+        roles = self.expected_roles(sha)
+        require(
+            set(current) == {PROJECT + "-" + role for role in roles},
+            "Unexpected resume role set",
+        )
         self.config_unchanged()
         self.remove_helper()  # Beat RWO 磁盘先卸载，避免重启时多节点挂载冲突。
         self.save("resuming")
-        # API 与七个 Worker 同时启动并一起等待就绪；Beat 仍最后启动，
+        # API 与全部现有 Worker 同时启动并一起等待就绪；Beat 仍最后启动，
         # 保证周期任务投递时所有消费者已在线。
-        for group in (("api", *WORKERS), ("beat",)):
+        for group in (("api", *(role for role in WORKERS if role in roles)), ("beat",)):
             for role in group:
                 self.cluster.scale(PROJECT + "-" + role, 1)
             for role in group:
@@ -674,10 +730,10 @@ class Release:
         )
         pods = self.cluster.app_pods()
         require(
-            len(pods) == 9
+            len(pods) == len(self.expected_roles(sha))
             and {p["metadata"]["labels"]["role"] for p in pods}
-            == {"api", "beat", *WORKERS},
-            "Expected exactly one Pod for each of nine roles",
+            == self.expected_roles(sha),
+            "Expected exactly one Pod for each required role",
         )
         require(
             all(
@@ -706,19 +762,28 @@ class Release:
             PYTHONUNBUFFERED="1",
             MCP_CLIENT_REGISTRATION_REF="/run/tk-ada/mcp-client.json",
         )
-        config_hash = hashlib.sha256(
-            json.dumps(expected_env, sort_keys=True).encode()
-        ).hexdigest()
+        # 旧九角色迁移前恢复可能仍不认识新 Settings 字段；完整十一角色强制池合同。
+        pool_contract = self.expected_roles(sha) == set(ROLES)
+        environments = {
+            role: role_environment(expected_env, role, pool_contract)
+            for role in self.expected_roles(sha)
+        }
+        config_hashes = {
+            role: hashlib.sha256(json.dumps(env, sort_keys=True).encode()).hexdigest()
+            for role, env in environments.items()
+        }
         registration_hash = hashlib.sha256(
             (self.folder / "mcp-client.json").read_bytes()
         ).hexdigest()
-        config_code = (
-            "import os,json,hashlib; from pathlib import Path; print(json.dumps([hashlib.sha256(json.dumps({k:os.environ.get(k) for k in "
-            + repr(sorted(expected_env))
-            + "},sort_keys=True).encode()).hexdigest(),hashlib.sha256(Path('/run/tk-ada/mcp-client.json').read_bytes()).hexdigest()]))"
-        )
 
         def verify(pod):
+            role = pod["metadata"]["labels"]["role"]
+            environment = environments[role]
+            config_code = (
+                "import os,json,hashlib; from pathlib import Path; print(json.dumps([hashlib.sha256(json.dumps({k:os.environ.get(k) for k in "
+                + repr(sorted(environment))
+                + "},sort_keys=True).encode()).hexdigest(),hashlib.sha256(Path('/run/tk-ada/mcp-client.json').read_bytes()).hexdigest()]))"
+            )
             statuses = pod.get("status", {}).get("containerStatuses", [])
             require(
                 len(statuses) == 1
@@ -733,7 +798,7 @@ class Release:
                 )
             )
             require(
-                hashes == [config_hash, registration_hash],
+                hashes == [config_hashes[role], registration_hash],
                 "Effective runtime or MCP registration differs",
             )
             result = (
@@ -749,7 +814,10 @@ class Release:
                 "Effective feature flags differ",
             )
 
-        # 九个 Pod 的实际配置互不依赖，并行核对；任一失败即抛出。
+            if pool_contract:
+                self.verify_database_pool(pod, environment)
+
+        # 各个 Pod 的实际配置互不依赖，并行核对；任一失败即抛出。
         with ThreadPoolExecutor(max_workers=len(pods)) as pool:
             list(pool.map(verify, pods))
         with urlopen(
@@ -760,15 +828,35 @@ class Release:
             self.folder / "acceptance.json",
             {
                 "sha": sha,
-                "pods_ready": 9,
-                "worker_readiness_checks": 7,
+                "pods_ready": len(pods),
+                "worker_readiness_checks": len(pods) - 2,
                 "beat_count": 1,
                 "flags": json.loads(expected_values),
                 "https": True,
-                "effective_config_sha256": config_hash,
+                "effective_config_sha256_by_role": config_hashes,
+                "database_pool_by_role": {
+                    role: expected_database_pool(env)
+                    for role, env in environments.items()
+                }
+                if pool_contract
+                else None,
                 "image_digest": self.state["image_digests"][sha],
                 "business_oauth_tested": False,
             },
+        )
+
+    def verify_database_pool(self, pod, environment):
+        code = (
+            "import json; from app.core.config import settings; print(json.dumps({k:getattr(settings,k) for k in "
+            + repr(tuple(WORKER_DATABASE_POOL))
+            + "}))"
+        )
+        actual = json.loads(
+            self.cluster.k("exec", pod["metadata"]["name"], "--", "python", "-c", code)
+        )
+        require(
+            actual == expected_database_pool(environment),
+            "Effective database pool differs for " + pod["metadata"]["labels"]["role"],
         )
 
     def unlock(self):
@@ -785,7 +873,14 @@ class Release:
         # migration-started 之后绝不自动启动旧应用或恢复数据库。
         require(
             self.state["phase"]
-            not in ("migration-started", "candidate-held", "resuming", "complete"),
+            not in (
+                "broker-migration-started",
+                "broker-migrated",
+                "migration-started",
+                "candidate-held",
+                "resuming",
+                "complete",
+            ),
             "Inspect migration/acceptance state; automatic old-version recovery is forbidden",
         )
         self.validate_deployments(original=True)
@@ -801,14 +896,37 @@ class Release:
             if expected:
                 self.probe("cancel", expected)
                 self.wait_drained(expected)
-            for role in WORKERS:
+            for role in self.original_workers:
                 self.cluster.scale(PROJECT + "-" + role, 0)
-            self.wait_pods(set(WORKERS))
+            self.wait_pods(set(self.original_workers))
         if "image_digests" not in self.state:
             self.state["image_digests"] = {
                 self.state["old_sha"]: self.image_digest(self.state["old_sha"])
             }
         self.resume(self.state["old_sha"])
+
+    def migrate_targeted_queue(self):
+        # 备份证明绑定本批清单；迁移前写阶段，网络断开也不会误恢复不识别新队列的旧版本。
+        proof = json.loads((self.folder / "restore-verified.json").read_text())
+        require(
+            self.state["phase"] == "backup-verified"
+            and proof.get("postgres_matches") is True
+            and "redis" in proof
+            and proof.get("manifest_sha256") == digest(self.folder / "manifest.json")
+            and proof.get("candidate_sha") == self.state["candidate_sha"],
+            "Verified candidate backup required before broker migration",
+        )
+        self.save("broker-migration-started")
+        receipt = self.probe(
+            "migrate-targeted",
+            {"token": self.state["token"], "manifest_sha256": proof["manifest_sha256"]},
+        )
+        require(
+            receipt.get("verified") is True,
+            "Broker migration readback must be verified",
+        )
+        write(self.folder / "broker-migration.json", receipt)
+        self.save("broker-migrated")
 
     def execute(self, action, sha):
         self.begin(action)
@@ -830,11 +948,17 @@ class Release:
             self.assert_lock()
             self.config_unchanged()
             require(not self.cluster.app_pods(), "Application restarted during backup")
+            self.migrate_targeted_queue()
             self.save("migration-started")
             run(
                 ["bash", str(ROOT / "deploy/k8s/apply.sh")],
-                env=dict(self.env(sha), RELEASE_HOLD_WORKLOADS="1"),
+                env=dict(
+                    self.env(sha),
+                    RELEASE_HOLD_WORKLOADS="1",
+                    RELEASE_STATE_DIR=str(self.folder),
+                ),
             )
+            self.state["candidate_applied"] = True
             self.save("candidate-held")
         self.resume(sha or self.state["old_sha"])
 

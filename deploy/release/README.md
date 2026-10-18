@@ -60,7 +60,7 @@ python3 deploy/local.py deploy
 
 依赖 Python3.14、uv、Bun1.4.2、Node、Docker/buildx、ffmpeg/ffprobe、PostgreSQL18客户端、kubectl。需具备公司 Git 推送凭据、ACR push/pull 登录及已授权 ACK 访问。不需要 age、AWS CLI 或任何备份桶凭据；发布端不再拉取应用镜像。工具不输出真实连接配置。
 
-配置中的 ACK context 固定为 `kubernetes-admin-c19dbd82590a34b9f87cebb8c1a858796`，不接受隐式切换目标。旧 prod 资源停用清单用于核对残留资源，不能省略。首次部署参考 `deploy/k8s/README.md`；此入口只用于现有九角色、各一副本的部署。
+配置中的 ACK context 固定为 `kubernetes-admin-c19dbd82590a34b9f87cebb8c1a858796`，不接受隐式切换目标。旧 prod 资源停用清单用于核对残留资源，不能省略。首次部署参考 `deploy/k8s/README.md`；此入口接受完整旧九角色或新十一角色、各一副本；旧角色任何一个缺失、新角色只出现一个或多出未知角色均阻断。首次 9→11 只在备份与恢复验证通过后创建两个新 Worker。
 
 ## 备份位置与保留
 
@@ -79,13 +79,30 @@ python3 deploy/local.py deploy
 
 1. 在独立源码副本中按检查计划并行运行发布门禁、后端检查/测试、前端构建/浏览器测试，以及按需的镜像构建与真实 PostgreSQL/Redis 恢复测试（见上文“检查范围”）。
 2. 将指定 SHA 快进推送公司 main，核对远端一致，再构建上传 ACR。
-3. 获取集群独占锁，保存九 Deployment UID、原配置和版本。从镜像仓库取旧/新镜像摘要，确保备份盘存在，经运行中的 API 只读查询数据库大小，核对现有资源、开关及只读预检。
-4. 停止 API/Beat；创建发布辅助 Pod（挂 Beat 盘、备份盘与按数据库大小新建的临时恢复盘）并检查备份盘余量。取消七 Worker 的消费，等待在途任务自然完成并连续两次空闲。停止 Worker，保留待处理队列，不清队列或重放 UNKNOWN。
+3. 获取集群独占锁，保存全部现存 Deployment UID（首次升级九个，升级后十一个）、原配置和版本。从镜像仓库取旧/新镜像摘要，确保备份盘存在，经运行中的 API 只读查询数据库大小，核对现有资源、开关及只读预检。
+4. 停止 API/Beat；创建发布辅助 Pod（挂 Beat 盘、备份盘与按数据库大小新建的临时恢复盘）并检查备份盘余量。取消现存全部 Worker（七个或九个） 的消费，等待在途任务自然完成并连续两次空闲。停止 Worker，保留待处理队列，不清队列或重放 UNKNOWN。
 5. 在同一停写窗口把备份直接写入备份盘并生成 SHA256 清单（PostgreSQL 用目录格式 4 进程并行导出、lz4 压缩，目录校验和为按文件名排序的 sha256sum 输出再取 sha256；Beat 盘上人工留存的 `.incident-*` 故障快照不打包）。在辅助 Pod 内只监听回环地址的临时 PostgreSQL/Redis 上 4 进程并行恢复，验证表行数、迁移 head、授权可解密、Redis内容/TTL，并用候选镜像容器试跑迁移；执行前强制覆盖连接并断言只连回环临时实例。
-6. 核对恢复证明后以目录改名替换 `/backup/latest`。成功后才迁移正式数据库，九服务保持停止直到迁移完成。
-7. 删除本次辅助 Pod（临时恢复盘随之删除），同时启动 API 与七 Worker、全部就绪后启动唯一 Beat。并行核对九 Pod Ready、镜像摘要、实际配置/开关，再查 HTTPS健康，解锁并清理私密配置副本。
+6. 核对恢复证明后以目录改名替换 `/backup/latest`。成功后先迁移指定 broker 消息，再迁移正式数据库并创建新角色；全部角色保持零副本直到迁移完成。
+7. 删除本次辅助 Pod（临时恢复盘随之删除），同时启动 API 与本批目标全部 Worker、全部就绪后启动唯一 Beat。候选升级须核对十一 Pod Ready（九 Worker）；单独备份或迁移前恢复按原九/十一角色核对、镜像摘要、实际配置/开关，再查 HTTPS健康，解锁并清理私密配置副本。
 
 普通发版保留线上四个开关的实际值（2026-10-16 核实均为 true），不被本地模板覆盖。OAuth重新授权和真实广告业务写入不属于自动验收，不能把健康检查称为真实业务联调成功。
+
+
+### 2026-10-18 首次 9→11 与 broker 迁移
+
+新增 `worker-ads-backfill`（队列 `ads-backfill`，prefork 1，申请 512Mi/上限 1Gi）与 `worker-ads-live-directory`（`ads-live-directory`，prefork 4，申请 1Gi/上限 3Gi），实时 `worker-ads-reporting` 调至 prefork 4。全量目录 `ads-directory,ads-publish` 与广告管理仍各单槽。四开关及所有平台配额原值保留。全部 Worker 显式注入 `DATABASE_POOL_SIZE=2` / `DATABASE_MAX_OVERFLOW=1`，API 保留共享配置默认 5/10；验收按角色核对环境摘要及实际 Settings 池值，十八个业务子进程池上限合计 54 连接。
+
+停写、正常排空、备份及隔离恢复、备份发布全部成功后，`migrate-targeted` 专门探针只筛选 `ad-management` 及 Kombu 优先级键内 `headers.task == ads.targeted_step` 的消息。Celery `body`、ID、参数及其余 header 不变；仅将 delivery routing_key（及存在时的同名 header）改为 `ads-live-directory`，保证 reject/requeue 不返回写队列。源队列未命中消息保留原字节与顺序；目标已有消息先消费，迁入消息内部仍按原 FIFO，各优先级相互独立。异常优先级键、非标准 exchange/routing、未确认消息、过期队列、类型异常或并发修改都阻断。
+
+队列变化与包含数量/迁移前后 SHA256 的凭据在同一个 Redis WATCH/MULTI 事务中提交，凭据绑定 release token 与备份清单；回包丢失可按相同 token 取回结果。私有批次保留 `broker-migration.json`。不执行 FLUSH，不删除未匹配消息，不重建任务 ID。正式迁移开始前的旧版恢复只针对原角色；一旦进入 broker 迁移或数据库迁移阶段，自动旧版恢复被禁止。候选清单应用只完成部分新角色时也停止并保留现场，管理员核对后继续完整候选，不能容忍缺失老角色或启动半套新合同。
+
+底层 `operations.py` 在旧九角色上扩容时额外校验冻结零副本、原 UID、集群锁、本批发布状态与已经发布的恢复证明；不能绕过编排直接创建两个新角色。首次无历史部署仍走 bootstrap 流程。
+
+真实 Redis 回归（独立回环 DB12；CI 使用专用 DB42，只清理测试随机前缀）：
+
+```bash
+TEST_RELEASE_REDIS_URL=redis://127.0.0.1:<本地测试端口>/12 uv run python scripts/test-broker-migration.py
+```
 
 ## 中断处理
 
@@ -93,8 +110,9 @@ python3 deploy/local.py deploy
 
 - 迁移前失败：排除问题后执行 `python3 deploy/local.py recover`，验证原模板/锁/配置，排空在途任务，恢复旧版服务。不会回退数据库或清队列。
 - `candidate-held` / `resuming`：执行 `python3 deploy/local.py finish`，继续候选版本启动与验收。
+- `broker-migration-started` / `broker-migrated`：可能已移动队列，不能启动不认识新队列的旧镜像；核对本批 Redis 原子迁移凭据及私有 `broker-migration.json`，由管理员继续候选迁移或按一致备份制定恢复方案。命令回包丢失时同 token 重跑迁移为幂等，不能改 token 重跑或手改 phase。
 - `migration-started`：需检查迁移 Job、数据库 head 和兼容性后制定继续方案，脚本拒绝自动恢复旧应用。不要手改 phase 或盲目 rollout undo。
-- 本机状态丢失或锁创建/删除中断：先核对锁 token、九服务和迁移状态，由管理员处理。不会按锁的年龄自动抢锁。
+- 本机状态丢失或锁创建/删除中断：先核对锁 token、现存角色和迁移状态，由管理员处理。不会按锁的年龄自动抢锁。
 
 `DRAIN_TIMEOUT_SECONDS` 默认1200，超时停止而非强杀在途任务。
 

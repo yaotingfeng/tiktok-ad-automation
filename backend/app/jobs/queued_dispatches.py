@@ -20,6 +20,8 @@ _QUEUES = (
     "ads-directory",
     "ads-publish",
     "ads-reporting",
+    "ads-backfill",
+    "ads-live-directory",
     "ad-management",
 )
 _CACHE_SECONDS = 5.0

@@ -42,6 +42,9 @@ services:
     logging: *production-logging
   worker:
     image: *release-image
+    environment:
+      DATABASE_POOL_SIZE: "2"
+      DATABASE_MAX_OVERFLOW: "1"
     command: [celery, -A, app.jobs.celery_app:celery_app, worker, --pool=prefork, -Q, 'resources,resource-results', --concurrency=1, '--hostname=resources@%h', --loglevel=INFO]
     cpus: 1.0
     mem_limit: 2048m
@@ -54,6 +57,9 @@ services:
       file: compose.yml
       service: worker
     image: *release-image
+    environment:
+      DATABASE_POOL_SIZE: "2"
+      DATABASE_MAX_OVERFLOW: "1"
     command: [celery, -A, app.jobs.celery_app:celery_app, worker, --pool=prefork, -Q, builds, --concurrency=1, '--hostname=builds@%h', --loglevel=INFO]
     cpus: 0.75
     mem_limit: 768m
@@ -65,6 +71,9 @@ services:
       file: compose.yml
       service: worker
     image: *release-image
+    environment:
+      DATABASE_POOL_SIZE: "2"
+      DATABASE_MAX_OVERFLOW: "1"
     command: [celery, -A, app.jobs.celery_app:celery_app, worker, --pool=prefork, -Q, control, --concurrency=1, '--hostname=control@%h', --loglevel=INFO]
     cpus: 0.5
     mem_limit: 512m
@@ -77,6 +86,8 @@ services:
       service: worker-ads-directory
     image: *release-image
     environment:
+      DATABASE_POOL_SIZE: "2"
+      DATABASE_MAX_OVERFLOW: "1"
       ADS_SYNC_ENABLED: ${ADS_SYNC_ENABLED:-false}
       ADS_DIRECTORY_WORKER_CONCURRENCY: ${ADS_DIRECTORY_WORKER_CONCURRENCY:-1}
     command: [celery, -A, app.jobs.celery_app:celery_app, worker, --pool=prefork, -Q, "ads-directory,ads-publish", --concurrency, '${ADS_DIRECTORY_WORKER_CONCURRENCY:-1}', '--hostname=ads-directory@%h', --loglevel=INFO]
@@ -91,12 +102,48 @@ services:
       service: worker-ads-reporting
     image: *release-image
     environment:
+      DATABASE_POOL_SIZE: "2"
+      DATABASE_MAX_OVERFLOW: "1"
       ADS_SYNC_ENABLED: ${ADS_SYNC_ENABLED:-false}
       AUTOMATED_RULES_ENABLED: ${AUTOMATED_RULES_ENABLED:-false}
-      ADS_REPORTING_WORKER_CONCURRENCY: ${ADS_REPORTING_WORKER_CONCURRENCY:-1}
-    command: [celery, -A, app.jobs.celery_app:celery_app, worker, --pool=prefork, -Q, ads-reporting, --concurrency, '${ADS_REPORTING_WORKER_CONCURRENCY:-1}', '--hostname=ads-reporting@%h', --loglevel=INFO]
-    cpus: 0.75
-    mem_limit: 768m
+      ADS_REPORTING_WORKER_CONCURRENCY: ${ADS_REPORTING_WORKER_CONCURRENCY:-4}
+    command: [celery, -A, app.jobs.celery_app:celery_app, worker, --pool=prefork, -Q, ads-reporting, --concurrency, '${ADS_REPORTING_WORKER_CONCURRENCY:-4}', '--hostname=ads-reporting@%h', --loglevel=INFO]
+    cpus: 2
+    mem_limit: 4g
+    stop_grace_period: 120s
+    init: true
+    logging: *production-logging
+  worker-ads-backfill:
+    extends:
+      file: compose.yml
+      service: worker-ads-backfill
+    image: *release-image
+    environment:
+      DATABASE_POOL_SIZE: "2"
+      DATABASE_MAX_OVERFLOW: "1"
+      ADS_SYNC_ENABLED: ${ADS_SYNC_ENABLED:-false}
+      AUTOMATED_RULES_ENABLED: ${AUTOMATED_RULES_ENABLED:-false}
+      ADS_BACKFILL_WORKER_CONCURRENCY: ${ADS_BACKFILL_WORKER_CONCURRENCY:-1}
+    command: [celery, -A, app.jobs.celery_app:celery_app, worker, --pool=prefork, -Q, ads-backfill, --concurrency, '${ADS_BACKFILL_WORKER_CONCURRENCY:-1}', '--hostname=ads-backfill@%h', --loglevel=INFO]
+    cpus: 2
+    mem_limit: 1g
+    stop_grace_period: 120s
+    init: true
+    logging: *production-logging
+  worker-ads-live-directory:
+    extends:
+      file: compose.yml
+      service: worker-ads-live-directory
+    image: *release-image
+    environment:
+      DATABASE_POOL_SIZE: "2"
+      DATABASE_MAX_OVERFLOW: "1"
+      ADS_SYNC_ENABLED: ${ADS_SYNC_ENABLED:-false}
+      AUTOMATED_RULES_ENABLED: ${AUTOMATED_RULES_ENABLED:-false}
+      ADS_LIVE_DIRECTORY_WORKER_CONCURRENCY: ${ADS_LIVE_DIRECTORY_WORKER_CONCURRENCY:-4}
+    command: [celery, -A, app.jobs.celery_app:celery_app, worker, --pool=prefork, -Q, ads-live-directory, --concurrency, '${ADS_LIVE_DIRECTORY_WORKER_CONCURRENCY:-4}', '--hostname=ads-live-directory@%h', --loglevel=INFO]
+    cpus: 2
+    mem_limit: 3g
     stop_grace_period: 120s
     init: true
     logging: *production-logging
@@ -106,6 +153,8 @@ services:
       service: worker-ad-management
     image: *release-image
     environment:
+      DATABASE_POOL_SIZE: "2"
+      DATABASE_MAX_OVERFLOW: "1"
       AD_MANAGEMENT_WORKER_CONCURRENCY: ${AD_MANAGEMENT_WORKER_CONCURRENCY:-1}
     command: [celery, -A, app.jobs.celery_app:celery_app, worker, --pool=prefork, -Q, ad-management, --concurrency, '${AD_MANAGEMENT_WORKER_CONCURRENCY:-1}', '--hostname=ad-management@%h', --loglevel=INFO]
     cpus: 0.75

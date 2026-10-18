@@ -20,7 +20,7 @@ from app.modules.automation_rules.summary import (
     due_slot,
     scan_summaries,
 )
-from tests.modules.automation_rules.test_inputs import NOW, _seed
+from tests.modules.automation_rules.test_inputs import NOW, _seed, advance_reports
 from tests.modules.automation_rules.test_runner import HOOK, make_rule
 
 SUMMARY = {"enabled": True, "timing": "SUMMARY", "summary_times": ["09:00", "18:00"]}
@@ -136,6 +136,7 @@ def test_deliver_summary_merges_runs(session, sync_seed):
     rule = _summary_rule(session, sync_seed)
     first = execute_run(session, rule=rule, slot_at=NOW, now=NOW)
     later = NOW + timedelta(minutes=30)
+    advance_reports(session, sync_seed, later)
     second = execute_run(session, rule=rule, slot_at=later, now=later)
     sent = []
 

@@ -11,12 +11,13 @@
 - API、Dockerfile、Service 均为 80；外部通过共享 Ingress 的 HTTPS 443 访问。
 - namespace 为 `test`，Ingress 为已有的 `test-https`（`alb`）；不创建第二个 Ingress。ACK 拉取 ACR VPC 镜像必须显式引用本项目 `tiktok-ad-automation-registry` Secret，禁止借用其他项目 Secret。
 - `K8S_CONTEXT` 和域名必须显式传入；当前用户指定 `tkada.shortclipflix.com`，也支持公司分配的单层 `*.jetmobo.com` 域名；没有测试服务器 IP/sslip.io 回退值。
-- API、7 个 Worker 和 Beat 使用同一镜像及配置。Worker 初始并发均为 1；Beat 单副本、`Recreate` 更新。
-- API 与 Worker 均有就绪探针；所有角色有 CPU/内存 requests 与 limits。应用合计请求 4.25 核 CPU / 10.5 GiB 内存，上限合计 10.5 核 / 21 GiB；发布任务另请求 100m / 256 MiB。它们是首发预算，尚未经过生产压力测试。
+- API、9 个 Worker 和 Beat 使用同一镜像及配置。资源/实时报表/定向目录并发 4，历史补数及其余 Worker 并发 1；Beat 单副本、`Recreate` 更新。
+- 全部 Celery Worker 显式设置 `DATABASE_POOL_SIZE=2` / `DATABASE_MAX_OVERFLOW=1`；18 个子进程最多 54 池连接。API 保留默认 5+10，Beat 不执行数据库业务；按角色验收实际 Settings 与配置摘要。
+- API 与 Worker 均有就绪探针；所有角色有 CPU/内存 requests 与 limits。应用合计请求 4.75 核 CPU / 12 GiB 内存，上限合计 14.5 核 / 25 GiB；发布任务另请求 100m / 256 MiB。它们是声明预算，新增并发尚未经过生产压力测试。
 - Beat PVC 使用 `alicloud-disk-topology-alltype`，申请 20 GiB；`WaitForFirstConsumer` 将云盘绑定到实际 Pod 的可用区。
 - MCP Secret 使用单文件 `subPath` 挂载，兼容注册文件读取的 `O_NOFOLLOW`。配置摘要写入 Pod 注解，配置变化会重建所有角色；不依赖 Secret 热更新。
 
-### 生产首发资源预算
+### 生产资源预算（2026-10-18 候选）
 
 2026-10-09 用户反馈 2 核 / 2 GiB 测试服不足；只读实测物理内存 1967 MiB、Swap 已用 2004/2047 MiB。此前 850m / 4.25 GiB 仅为启动验证预算，生产按下表提高申请量；不以低负载时的 RSS 或启动成功推断峰值容量。
 
@@ -27,11 +28,13 @@
 | 报表 Worker | 1 | 1 核 / 2 GiB | 2 核 / 4 GiB |
 | 搭建 Worker | 1 | 0.5 核 / 1 GiB | 1 核 / 2 GiB |
 | 结果、控制、目录、广告管理 Worker | 各 1 | 0.25 核 / 1 GiB | 1 核 / 2 GiB |
+| 历史补数 Worker | 1 | 0.25 核 / 512 MiB | 2 核 / 1 GiB |
+| 定向目录 Worker | 1 | 0.25 核 / 1 GiB | 2 核 / 3 GiB |
 | Beat | 1 | 0.25 核 / 512 MiB | 0.5 核 / 1 GiB |
 
-总申请量为 4.25 核 / 10.5 GiB，上限合计 10.5 核 / 21 GiB，均不含外部 PostgreSQL、Redis、集群组件和发布瞬时资源。迁移 Job 另申请 0.1 核 / 256 MiB（上限 1 核 / 1 GiB）；Deployment 滚动更新还会创建临时副本。ACK 的 7 个节点是共享资源，应核对已有工作负载申请量和实际可调度容量；不能把集群总容量视作本项目独占额度。
+总申请量为 4.75 核 / 12 GiB，上限合计 14.5 核 / 25 GiB，均不含外部 PostgreSQL、Redis、集群组件和发布瞬时资源。迁移 Job 另申请 0.1 核 / 256 MiB（上限 1 核 / 1 GiB）；Deployment 滚动更新还会创建临时副本。ACK 的 7 个节点是共享资源，应核对已有工作负载申请量和实际可调度容量；不能把集群总容量视作本项目独占额度。
 
-七 Worker 仍各并发 1。上线先观察真实素材上传、报表同步及两者重叠时的峰值内存、CPU 限流、任务耗时、队列等待和数据库连接。内存持续超过 limit 的 80%、出现 OOM 或 CPU 限流伴随队列积压时，先定位对应角色再调整。完成这一负载验证前，不声明生产容量已验收；不以开启自动投放制造测试负载。
+上述并发及新角色是 2026-10-18 候选合同；线上是否已发布以环境验收为准。上线先观察真实素材上传、报表同步及两者重叠时的峰值内存、CPU 限流、任务耗时、队列等待和数据库连接。内存持续超过 limit 的 80%、出现 OOM 或 CPU 限流伴随队列积压时，先定位对应角色再调整。完成这一负载验证前，不声明生产容量已验收；不以开启自动投放制造测试负载。
 
 ## 部署前要准备的具体资料
 
@@ -66,7 +69,7 @@ uv run python scripts/check-local-deployment.py \
   --image tiktok-ad-automation:deploy-check-amd64
 ```
 
-本地检查创建本轮专用的无外网 Docker 网络、临时依赖和合成配置，直接运行 K8s 清单里的九个应用命令及资源上限。检查实际配置解析、注册文件、额度、前端、登录、API 边界、七个 Worker 就绪、Beat 存活和 API 重启恢复。退出只清理本轮创建的容器、临时匿名卷及网络；不使用 `prune`，不读取现有私有运行配置，不调用真实 TikTok/R2。
+本地检查创建本轮专用的无外网 Docker 网络、临时依赖和合成配置，直接运行 K8s 清单里的十一个应用命令及资源上限。检查实际配置解析、注册文件、额度、前端、登录、API 边界、九个 Worker 就绪、Beat 存活和 API 重启恢复。退出只清理本轮创建的容器、临时匿名卷及网络；不使用 `prune`，不读取现有私有运行配置，不调用真实 TikTok/R2。
 
 本地结果不包含 DNS、TLS、集群网络、真实授权和真实业务验收。全仓历史回归待处理项仍见 `docs/validation/2026-10-09-regression-followups.md`。
 
@@ -122,7 +125,7 @@ bash deploy/k8s/apply.sh
 bash deploy/k8s/patch-public-ingress.sh
 ```
 
-部署脚本再次执行预检，之后更新带项目标签的两个 Secret、静态资源，运行本版本与配置摘要对应的 Job，最后发布九个应用 Deployment 并等待 rollout。Job 名称长度受限，完整 SHA/摘要保存在注解；已有同名 Job 只有归属、SHA、摘要和完成状态全部符合时才能复用。失败时停止，不自动删除旧 Job 或回滚持久状态。
+部署脚本再次执行预检，之后更新带项目标签的两个 Secret、静态资源，运行本版本与配置摘要对应的 Job，最后发布十一个应用 Deployment 并等待 rollout。Job 名称长度受限，完整 SHA/摘要保存在注解；已有同名 Job 只有归属、SHA、摘要和完成状态全部符合时才能复用。失败时停止，不自动删除旧 Job 或回滚持久状态。
 
 Ingress 脚本固定追加 `test/test-https`，核对 Service 的标签、选择器和端口，读取完整共享规则，使用 resourceVersion 乐观锁，只追加一条规则，再完整回读旧规则与新规则。已有 host 会拒绝重复追加；正常升级保留已属于本项目的入口即可，不必重复执行追加脚本。所有 kubectl 命令固定使用显式 context 和 namespace。
 
@@ -136,7 +139,7 @@ curl --fail --show-error "https://$INGRESS_HOST/api/utils/health-check/"
 uv run python scripts/check-bootstrap.py "https://$INGRESS_HOST"
 ```
 
-HTTPS 验收不使用 `-k`，必须验证证书有效。继续检查七个 Worker、唯一 Beat、实际版本及配置一致性、R2 签名上传回读、API/MCP 注册/真实授权/账户发现。真实广告写入按具体授权另验。
+HTTPS 验收不使用 `-k`，必须验证证书有效。继续检查九个 Worker、唯一 Beat、实际版本及配置一致性、R2 签名上传回读、API/MCP 注册/真实授权/账户发现。真实广告写入按具体授权另验。
 
 保存镜像 digest、旧/新 SHA、配置摘要、资源版本、备份证据及验收结果。回退前先确认当前持久状态与旧应用兼容，并按原流程停止调度/排空；使用旧镜像和对应的已核实私有配置，不盲目执行 `rollout undo`（它不会恢复 Secret）。恢复相关内容按既有发布手册处理，本脚本不自动回退。
 

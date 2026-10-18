@@ -55,32 +55,77 @@ def _ctx(obj):
     yield obj
 
 
-def test_low_budget_slows_hot_and_material(
+def test_low_budget_preserves_realtime_and_pauses_cold(
     monkeypatch, committed_sync_seed, redis_client
 ):
     from datetime import timedelta
 
     from app.core.db import engine
+    from app.modules.reporting.jobs import enqueue_job
     from app.modules.reporting.planner import record_calls
-    from app.modules.reporting.store_models import AdSyncBc
+    from app.modules.reporting.store_models import AdSyncBc, ReportSyncJob
+    from tests.modules.reporting.test_jobs import _route
 
     seed, factory = committed_sync_seed
-    now = datetime(2026, 10, 12, 3, tzinfo=UTC)
+    # 规划时钟晚于入队默认时间，且香港/UTC 均在同一本地日。
+    now = datetime.now(UTC).replace(
+        hour=12, minute=0, second=0, microsecond=0
+    ) + timedelta(days=1)
     monkeypatch.setattr(job_tasks.settings, "ADS_SYNC_ENABLED", True)
     monkeypatch.setattr(job_tasks.settings, "TIKTOK_REPORT_DAILY_CALL_BUDGET", 100)
     record_calls(redis_client, now, 75)
     from app.integrations.tiktok.contracts.report_reader import RawReportPage
 
-    class Reader:
-        def bc_spend(self, **_kwargs):
-            return RawReportPage((), 1, 0, 0)
+    calls = []
 
+    class Reader:
+        def bc_spend(self, **kwargs):
+            calls.append(kwargs)
+            return RawReportPage(
+                (
+                    {
+                        "dimensions": {"advertiser_id": "acc-1"},
+                        "metrics": {"spend": "1"},
+                    },
+                ),
+                1,
+                1,
+                1,
+            )
+
+    with factory() as session, session.begin():
+        cold_id = enqueue_job(
+            session,
+            tenant_id=seed.tenant_id,
+            bc_id="bc-a",
+            kind="ad_day",
+            tier="history",
+            advertiser_ids=["acc-1"],
+            start=now.date() - timedelta(days=40),
+            end=now.date() - timedelta(days=40),
+            frozen_route=_route(seed),
+            actor_id=seed.actor_id,
+            due_at=now,
+        )
     monkeypatch.setattr(job_tasks, "_reader_for", lambda **_kwargs: _ctx(Reader()))
     job_tasks.plan_due_runs(database_engine=engine, redis_client=redis_client, now=now)
-    with factory() as s:
-        plan = s.get(AdSyncBc, (seed.tenant_id, "bc-a"))
-        assert plan.next_hot_at == now + timedelta(minutes=60)
-        assert plan.next_material_at == now + timedelta(minutes=120)
+    with factory() as session:
+        plan = session.get(AdSyncBc, (seed.tenant_id, "bc-a"))
+        assert plan.next_hot_at == now + timedelta(minutes=2)
+        assert plan.next_material_at == now + timedelta(minutes=2)
+        assert plan.next_daily_at == now  # 冷规划仍待执行，不能假装已处理。
+        jobs = session.exec(
+            select(ReportSyncJob).where(ReportSyncJob.tenant_id == seed.tenant_id)
+        ).all()
+        cold = [job for job in jobs if job.priority >= 3]
+        assert [(job.id, job.status) for job in cold] == [(cold_id, "QUEUED")]
+        live = [job for job in jobs if job.priority <= 2]
+        assert {job.kind for job in live} == {"ad_day", "material_day"}
+        assert all(
+            job.status == "RUNNING" and job.start_date == job.end_date == now.date()
+            for job in live
+        )
+    assert len(calls) == 1 and calls[0]["start"] == calls[0]["end"] == now.date()
 
 
 def test_bc_permission_failure_falls_back_next_round(
@@ -258,6 +303,7 @@ def test_cleanup_removes_expired_jobs_hours_and_snapshot_rows(session, sync_seed
         "balances": 2,
         "directory_superseded": 0,
         "directory_pages": 0,
+        "material_pages": 0,
     }
     session.expire_all()
     assert session.get(QuerySnapshotRow, (snapshot_id, "old")) is None
@@ -560,10 +606,10 @@ def test_unexpected_failure_in_one_bc_does_not_block_others(
     )
     original = job_tasks._plan_one
 
-    def flaky(database_engine, redis_client, key, *args):
+    def flaky(database_engine, redis_client, key, *args, **kwargs):
         if key[1] == "bc-a":
             raise RuntimeError("synthetic planning failure")
-        return original(database_engine, redis_client, key, *args)
+        return original(database_engine, redis_client, key, *args, **kwargs)
 
     monkeypatch.setattr(job_tasks, "_plan_one", flaky)
     now = datetime(2026, 10, 12, 3, tzinfo=UTC)
@@ -722,14 +768,16 @@ def test_lost_directory_message_is_redispatched_with_new_generation(
         assert original.task_name == "ads.sync_step"
 
 
-def test_report_dispatch_keeps_small_window_and_rechecks_hot_priority(
+def test_cold_dispatch_window_cannot_block_new_current_day_work(
     monkeypatch, committed_sync_seed
 ):
     from datetime import timedelta
+    from zoneinfo import ZoneInfo
 
     from sqlmodel import select
 
     from app.core.db import engine
+    from app.jobs.models import PendingDispatch
     from app.modules.reporting.jobs import enqueue_job
     from app.modules.reporting.store_models import ReportSyncJob
     from tests.modules.reporting.test_jobs import D, _route
@@ -739,7 +787,11 @@ def test_report_dispatch_keeps_small_window_and_rechecks_hot_priority(
     now = datetime.now(UTC)
 
     def enqueue(session, index, tier):
-        day = D - timedelta(days=index)
+        day = (
+            now.astimezone(ZoneInfo("Asia/Hong_Kong")).date()
+            if tier == "hot"
+            else D - timedelta(days=index)
+        )
         return enqueue_job(
             session,
             tenant_id=seed.tenant_id,
@@ -757,7 +809,7 @@ def test_report_dispatch_keeps_small_window_and_rechecks_hot_priority(
     with factory() as session, session.begin():
         for index in range(6):
             enqueue(session, index, "history")
-    assert job_tasks._dispatch_pending(engine, now) == 2
+    assert job_tasks._dispatch_pending(engine, now) == 1
     assert job_tasks._dispatch_pending(engine, now) == 0
     with factory() as session, session.begin():
         running = session.exec(
@@ -766,13 +818,22 @@ def test_report_dispatch_keeps_small_window_and_rechecks_hot_priority(
                 ReportSyncJob.status == "RUNNING",
             )
         ).all()
-        assert len(running) == 2
-        running[0].status = "COMPLETE"
-        running[0].claim_token = running[0].claimed_until = None
+        assert len(running) == 1
+        cold_id = running[0].id
         hot_id = enqueue(session, 20, "hot")
     assert job_tasks._dispatch_pending(engine, now) == 1
     with factory() as session:
         assert session.get(ReportSyncJob, hot_id).status == "RUNNING"
+
+        assert session.get(ReportSyncJob, cold_id).status == "RUNNING"
+        dispatches = session.exec(
+            select(PendingDispatch).where(PendingDispatch.tenant_id == seed.tenant_id)
+        ).all()
+        assert {(item.task_name, item.payload["job_id"]) for item in dispatches} == {
+            ("reporting.backfill_step", str(cold_id)),
+            ("reporting.job_step", str(hot_id)),
+        }
+    assert job_tasks._dispatch_pending(engine, now) == 0
 
 
 def test_report_worker_renews_lease_and_durably_wakes_dispatch(
@@ -859,11 +920,24 @@ def test_report_worker_renews_lease_and_durably_wakes_dispatch(
         assert session.get(ReportSyncJob, next_id).status == "RUNNING"
 
 
+def _lane_job_scope(now, lane, index):
+    from datetime import timedelta
+    from zoneinfo import ZoneInfo
+
+    # 实时槽用真实账户当地今天；三种报表×两账户提供六个不同的合法任务。
+    advertiser = ("acc-1", "acc-2")[index % 2]
+    timezone = "Asia/Hong_Kong" if advertiser == "acc-1" else "UTC"
+    day = now.astimezone(ZoneInfo(timezone)).date()
+    if lane == "backfill":
+        return advertiser, "ad_day", day - timedelta(days=index + 1)
+    return advertiser, ("ad_day", "material_day", "campaign_hour")[index // 2], day
+
+
+@pytest.mark.parametrize("lane", ["live", "backfill"])
 def test_concurrent_report_dispatchers_cannot_overfill_window(
-    monkeypatch, committed_sync_seed
+    monkeypatch, committed_sync_seed, lane
 ):
     from concurrent.futures import ThreadPoolExecutor
-    from datetime import timedelta
 
     from sqlalchemy import func
     from sqlmodel import select
@@ -871,21 +945,26 @@ def test_concurrent_report_dispatchers_cannot_overfill_window(
     from app.core.db import engine
     from app.modules.reporting.jobs import enqueue_job
     from app.modules.reporting.store_models import ReportSyncJob
-    from tests.modules.reporting.test_jobs import D, _route
+    from tests.modules.reporting.test_jobs import _route
 
     seed, factory = committed_sync_seed
     monkeypatch.setattr(job_tasks.settings, "ADS_SYNC_ENABLED", True)
     now = datetime.now(UTC)
+    window = (
+        job_tasks.REPORT_DISPATCH_WINDOW
+        if lane == "live"
+        else job_tasks.BACKFILL_DISPATCH_WINDOW
+    )
     with factory() as session, session.begin():
         for index in range(6):
-            day = D - timedelta(days=index)
+            advertiser, kind, day = _lane_job_scope(now, lane, index)
             enqueue_job(
                 session,
                 tenant_id=seed.tenant_id,
                 bc_id="bc-a",
-                kind="ad_day",
+                kind=kind,
                 tier="hot",
-                advertiser_ids=["acc-1"],
+                advertiser_ids=[advertiser],
                 start=day,
                 end=day,
                 frozen_route=_route(seed),
@@ -896,7 +975,7 @@ def test_concurrent_report_dispatchers_cannot_overfill_window(
         results = list(
             executor.map(lambda _n: job_tasks._dispatch_pending(engine, now), range(2))
         )
-    assert sum(results) == 2
+    assert sum(results) == window
     with factory() as session:
         assert (
             session.exec(
@@ -907,11 +986,12 @@ def test_concurrent_report_dispatchers_cannot_overfill_window(
                     ReportSyncJob.status == "RUNNING",
                 )
             ).one()
-            == 2
+            == window
         )
 
 
-def test_single_slot_refill_round_robins_three_tenants_across_rounds(monkeypatch):
+@pytest.mark.parametrize("lane", ["live", "backfill"])
+def test_single_slot_refill_round_robins_three_tenants_across_rounds(monkeypatch, lane):
     from contextlib import ExitStack
     from datetime import timedelta
 
@@ -923,9 +1003,15 @@ def test_single_slot_refill_round_robins_three_tenants_across_rounds(monkeypatch
     from tests.modules.reporting.sync_conftest import (
         committed_sync_seed as seed_fixture,
     )
-    from tests.modules.reporting.test_jobs import D, _route
+    from tests.modules.reporting.test_jobs import _route
 
     monkeypatch.setattr(job_tasks.settings, "ADS_SYNC_ENABLED", True)
+    # 两槽逐次补一槽，分别验证两条 lane 的跨租户游标而非依赖默认容量。
+    monkeypatch.setattr(
+        job_tasks,
+        "REPORT_DISPATCH_WINDOW" if lane == "live" else "BACKFILL_DISPATCH_WINDOW",
+        2,
+    )
     with ExitStack() as stack:
         seeds = [
             stack.enter_context(contextmanager(seed_fixture.__wrapped__)())
@@ -936,14 +1022,14 @@ def test_single_slot_refill_round_robins_three_tenants_across_rounds(monkeypatch
         with factory() as session, session.begin():
             for rank, (seed, _) in enumerate(seeds):
                 for index in range(6):
-                    day = D - timedelta(days=index)
+                    advertiser, kind, day = _lane_job_scope(now, lane, index)
                     enqueue_job(
                         session,
                         tenant_id=seed.tenant_id,
                         bc_id="bc-a",
-                        kind="ad_day",
+                        kind=kind,
                         tier="hot",
-                        advertiser_ids=["acc-1"],
+                        advertiser_ids=[advertiser],
                         start=day,
                         end=day,
                         frozen_route=_route(seed),

@@ -6346,7 +6346,7 @@ export type Schedule = {
     /**
      * Frequency
      */
-    frequency: '30M' | '1H' | '2H' | '4H' | 'DAILY';
+    frequency: '5M' | '30M' | '1H' | '2H' | '4H' | 'DAILY';
     /**
      * Daily At
      */
@@ -7189,6 +7189,10 @@ export type SyncAccountStatus = {
      */
     timezone: string;
     /**
+     * Local Today
+     */
+    local_today?: string | null;
+    /**
      * Last Success At
      */
     last_success_at?: string | null;
@@ -7200,6 +7204,48 @@ export type SyncAccountStatus = {
      * Failed Dates
      */
     failed_dates?: Array<string>;
+};
+
+/**
+ * SyncHealthPublic
+ */
+export type SyncHealthPublic = {
+    /**
+     * Status
+     */
+    status: 'HEALTHY' | 'DEGRADED' | 'DISABLED';
+    /**
+     * Observed At
+     */
+    observed_at?: string | null;
+    /**
+     * Stale Ad Accounts
+     */
+    stale_ad_accounts?: number;
+    /**
+     * Stale Material Accounts
+     */
+    stale_material_accounts?: number;
+    /**
+     * Missing Directory Ads
+     */
+    missing_directory_ads?: number;
+    /**
+     * Unlinked Material Posts
+     */
+    unlinked_material_posts?: number;
+    /**
+     * Pending Actions
+     */
+    pending_actions?: number;
+    /**
+     * Oldest Data At
+     */
+    oldest_data_at?: string | null;
+    /**
+     * Issues
+     */
+    issues?: Array<string>;
 };
 
 /**
@@ -7269,6 +7315,7 @@ export type SyncStatusPublic = {
      */
     complete_from?: string | null;
     plan: SyncPlanStatus;
+    health?: SyncHealthPublic | null;
 };
 
 /**

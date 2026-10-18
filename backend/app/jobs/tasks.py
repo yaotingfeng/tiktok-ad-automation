@@ -23,6 +23,8 @@ _ALLOWED_QUEUES = frozenset(
         "ads-directory",
         "ads-publish",
         "ads-reporting",
+        "ads-backfill",
+        "ads-live-directory",
         "ad-management",
     }
 )

@@ -69,9 +69,10 @@ test("素材按广告内位置或同一视频跨账户判断", () => {
   expect(actionLevels("VIDEO", "material", "PAUSE")).toEqual(["material"])
 })
 
-test("素材层级最短 1 小时", () => {
-  expect(minFrequency("adgroup", "material")).toBe("1H")
-  expect(minFrequency("adgroup", "adgroup")).toBe("30M")
+test("恢复保持素材最短 1 小时，暂停支持 5 分钟", () => {
+  expect(minFrequency("adgroup", "material", "ENABLE")).toBe("1H")
+  expect(minFrequency("adgroup", "adgroup", "ENABLE")).toBe("30M")
+  expect(minFrequency("material", "material", "PAUSE")).toBe("5M")
 })
 
 test("条件与操作摘要", () => {
@@ -164,11 +165,11 @@ test("表单校验列出中文错误", () => {
   const material = {
     ...ok,
     apply_to: { ...ok.apply_to, level: "material" as const },
-    action: { type: "PAUSE" as const, level: "material" as const },
+    action: { type: "ENABLE" as const, level: "material" as const },
     schedule: { ...ok.schedule, frequency: "30M" as const },
   }
   expect(validateDefinition(material, catalog)).toEqual([
-    "涉及素材的规则最短 1 小时运行一次",
+    "当前操作最短每 1 小时运行一次",
   ])
   const once = {
     ...ok,
@@ -353,4 +354,22 @@ test("状态条件保存枚举并显示中文摘要", () => {
       statusCatalog,
     ),
   ).toEqual(["条件 1 请选择状态"])
+})
+
+test("5 分钟仅允许暂停，切换恢复或调整后校验阻止保存", () => {
+  const def = emptyDefinition()
+  def.conditions[0].values = ["10"]
+  def.schedule.frequency = "5M"
+  expect(validateDefinition(def, catalog)).toEqual([])
+  for (const action of ["ENABLE", "BUDGET", "ROAS"] as const) {
+    def.action.type = action
+    expect(validateDefinition(def, catalog)).toContain(
+      "当前操作最短每 30 分钟运行一次",
+    )
+  }
+  def.action = { type: "ENABLE", level: "material" }
+  def.apply_to.level = "material"
+  expect(validateDefinition(def, catalog)).toContain(
+    "当前操作最短每 1 小时运行一次",
+  )
 })

@@ -36,6 +36,7 @@ celery_app.conf.update(
         # starts, so a recovery message can never hit an unknown task/queue.
         "app.modules.ads.tasks",
         "app.modules.reporting.job_tasks",
+        "app.modules.reporting.health",
         "app.modules.reporting.balance_tasks",
         "app.modules.reporting.export_tasks",
         "app.modules.ad_management.tasks",
@@ -50,6 +51,8 @@ celery_app.conf.update(
         Queue("ads-directory"),
         Queue("ads-publish"),
         Queue("ads-reporting"),
+        Queue("ads-backfill"),
+        Queue("ads-live-directory"),
         Queue("ad-management"),
     ),
     # 消费者按部署角色隔离准备与结果；多队列角色仍公平轮询，不扩大外部额度。
@@ -60,13 +63,15 @@ celery_app.conf.update(
         "jobs.flush_dispatch": {"queue": "control"},
         "jobs.compact_dispatches": {"queue": "control"},
         "reporting.plan_due": {"queue": "control"},
+        "reporting.check_health": {"queue": "control"},
         "reporting.job_step": {"queue": "ads-reporting"},
+        "reporting.backfill_step": {"queue": "ads-backfill"},
         "reporting.plan_balances": {"queue": "control"},
         "reporting.balance_step": {"queue": "ads-directory"},
         "reporting.cleanup_store": {"queue": "ads-reporting"},
         "ads.sync_step": {"queue": "ads-directory"},
         "ads.publish_step": {"queue": "ads-publish"},
-        "ads.targeted_step": {"queue": "ad-management"},
+        "ads.targeted_step": {"queue": "ads-live-directory"},
         "reporting.export": {"queue": "ads-reporting"},
         "ad_management.execute": {"queue": "ad-management"},
         "reporting.cleanup_exports": {"queue": "ads-reporting"},
@@ -188,6 +193,11 @@ celery_app.conf.update(
         "scan-ads-reporting-due": {
             "task": "reporting.plan_due",
             "schedule": 30.0,
+            "options": {"queue": "control"},
+        },
+        "check-sync-health": {
+            "task": "reporting.check_health",
+            "schedule": 60.0,
             "options": {"queue": "control"},
         },
         "cleanup-report-exports": {

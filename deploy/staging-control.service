@@ -12,7 +12,8 @@ WorkingDirectory=/opt/tt-ada-staging/current/backend
 EnvironmentFile=/etc/tt-ada-staging/app.env
 Environment=PYTHONUNBUFFERED=1
 # 保留 prefork 硬期限；业务 outbox、恢复和授权续期由专用进程推进。
-ExecStart=/opt/tt-ada-staging/current/.venv/bin/celery -A app.jobs.celery_app:celery_app worker -Q control --pool prefork --concurrency 1 --loglevel INFO --hostname control-singapore@%%h
+# env 在 EnvironmentFile 载入后覆盖，确保 Worker 池不会被共享 API 默认值放大。
+ExecStart=/usr/bin/env DATABASE_POOL_SIZE=2 DATABASE_MAX_OVERFLOW=1 /opt/tt-ada-staging/current/.venv/bin/celery -A app.jobs.celery_app:celery_app worker -Q control --pool prefork --concurrency 1 --loglevel INFO --hostname control-singapore@%%h
 Restart=on-failure
 RestartSec=5
 TimeoutStopSec=960

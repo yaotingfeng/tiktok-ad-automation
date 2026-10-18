@@ -1,0 +1,30 @@
+[Unit]
+Description=TK-ADA Singapore staging ads-backfill worker
+After=network-online.target postgresql.service redis-server.service
+Wants=network-online.target
+Requires=postgresql.service redis-server.service
+
+[Service]
+Type=simple
+User=tt-ada
+Group=tt-ada
+WorkingDirectory=/opt/tt-ada-staging/current/backend
+EnvironmentFile=/etc/tt-ada-staging/app.env
+Environment=PYTHONUNBUFFERED=1
+# ADS_SYNC_ENABLED and quota policy are loaded from the shared EnvironmentFile.
+# Independent queue capacity keeps current-day reads separate from backfill.
+# env 在 EnvironmentFile 载入后覆盖，确保 Worker 池不会被共享 API 默认值放大。
+ExecStart=/usr/bin/env DATABASE_POOL_SIZE=2 DATABASE_MAX_OVERFLOW=1 /opt/tt-ada-staging/current/.venv/bin/celery -A app.jobs.celery_app:celery_app worker -Q ads-backfill --pool prefork --concurrency 1 --loglevel INFO --hostname ads-backfill-singapore@%%h
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=120
+KillMode=mixed
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/tt-ada-staging
+
+[Install]
+WantedBy=multi-user.target

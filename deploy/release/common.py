@@ -11,7 +11,7 @@ PROJECT = "tiktok-ad-automation"
 CONTEXT = "kubernetes-admin-c19dbd82590a34b9f87cebb8c1a858796"
 PUBLIC = "sg-acr-prod-registry.ap-southeast-1.cr.aliyuncs.com/test/" + PROJECT + ":"
 VPC = "sg-acr-prod-registry-vpc.ap-southeast-1.cr.aliyuncs.com/test/" + PROJECT + ":"
-ROLES = (
+LEGACY_ROLES = (
     "api",
     "worker-resource",
     "worker-results",
@@ -22,7 +22,14 @@ ROLES = (
     "worker-ad-management",
     "beat",
 )
-FLAGS = ("MATERIAL_INGEST_ENABLED", "MATERIAL_CLEANUP_ENABLED", "ADS_SYNC_ENABLED", "AUTOMATED_RULES_ENABLED")
+NEW_ROLES = ("worker-ads-backfill", "worker-ads-live-directory")
+ROLES = (*LEGACY_ROLES, *NEW_ROLES)
+FLAGS = (
+    "MATERIAL_INGEST_ENABLED",
+    "MATERIAL_CLEANUP_ENABLED",
+    "ADS_SYNC_ENABLED",
+    "AUTOMATED_RULES_ENABLED",
+)
 
 
 def mirrored(image):
@@ -110,8 +117,9 @@ class Cluster:
     def deployments(self):
         items = {v["metadata"]["name"]: v for v in self.get("deployments")["items"]}
         require(
-            set(items) == {PROJECT + "-" + r for r in ROLES},
-            "Expected exactly nine project Deployments",
+            set(items)
+            in ({PROJECT + "-" + r for r in roles} for roles in (LEGACY_ROLES, ROLES)),
+            "Expected the complete legacy nine or current eleven project Deployments",
         )
         for value in items.values():
             require(

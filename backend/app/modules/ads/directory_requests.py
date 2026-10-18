@@ -349,7 +349,7 @@ def request_directory(
                 session.add(run)
                 if scope == "targeted":
                     session.flush()
-                    enqueue_directory_step(session, run)
+                    enqueue_directory_step(session, run, initial=True)
                 created += 1
     session.flush()
     return created

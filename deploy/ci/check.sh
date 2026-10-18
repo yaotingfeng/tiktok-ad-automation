@@ -204,7 +204,10 @@ lane_frontend() {
 }
 
 lane_deploy() {
-  if [[ -n $deploy_tools ]]; then node scripts/test-deployment-assets.mjs; fi
+  if [[ -n $deploy_tools ]]; then
+    node scripts/test-deployment-assets.mjs
+    TEST_RELEASE_REDIS_URL="redis://127.0.0.1:$redis_port/42" uv run python scripts/test-broker-migration.py
+  fi
   if [[ -n $release_integration ]]; then
     source deploy/ci/image-build-args.sh
     image_build_args

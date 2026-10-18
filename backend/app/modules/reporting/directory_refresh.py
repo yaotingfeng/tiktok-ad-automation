@@ -1,5 +1,6 @@
 """热报发现的在投对象优先补目录，避免全量历史队列遮蔽自动规则。"""
 
+import json
 from collections import defaultdict
 from datetime import UTC, datetime, timedelta
 
@@ -10,17 +11,38 @@ from app.core.config import settings
 from app.integrations.tiktok.contracts.ads import EntityRef
 from app.modules.ads.directory_requests import request_directory
 from app.modules.ads.sync_models import AdDirectoryRun
+from app.modules.automation_rules.models import AutomationRule
 from app.modules.reporting.store_models import ReportSyncJob
 
 # 每份完整热报最多补 100 条广告；查询仍由现有目录服务按 100 ID 分片。
 MAX_REFRESH_ADS = 100
-DIRECTORY_FRESHNESS = timedelta(hours=1)
+DIRECTORY_FRESHNESS = timedelta(minutes=2)
+GENERAL_DIRECTORY_FRESHNESS = timedelta(minutes=30)
 _AD_TYPES = {
     "UPGRADED_SMART_PLUS": "SMART_PLUS",
     "SMART_PLUS": "LEGACY_SMART_PLUS",
     "MANUAL": "REGULAR",
 }
 _ACTIVE = ("QUEUED", "RUNNING", "ADMISSION_WAIT", "WAITING_REMOTE")
+
+
+def rule_accounts(session, *, tenant_id, bc_id, accounts):
+    """规则覆盖的账户优先刷新状态；普通目录降低重复读取，给财务事实留下配额。"""
+    covered = set()
+    rules = session.exec(
+        select(AutomationRule).where(
+            AutomationRule.tenant_id == tenant_id, col(AutomationRule.enabled).is_(True)
+        )
+    ).all()
+    for rule in rules:
+        scope = rule.definition.get("accounts", {})
+        if scope.get("mode") == "ALL" or (
+            scope.get("mode") == "BC" and bc_id in scope.get("bc_ids", ())
+        ):
+            return set(accounts)
+        if scope.get("mode") == "ACCOUNTS":
+            covered.update(set(scope.get("advertiser_ids", ())) & set(accounts))
+    return covered
 
 
 def refresh_report_directory(
@@ -30,6 +52,9 @@ def refresh_report_directory(
     if not settings.ADS_SYNC_ENABLED or job.kind != "ad_day" or job.priority != 1:
         return 0
     now = now or datetime.now(UTC)
+    strict_accounts = rule_accounts(
+        session, tenant_id=job.tenant_id, bc_id=job.bc_id, accounts=job.advertiser_ids
+    )
     rows = list(
         session.connection()
         .execute(
@@ -41,15 +66,32 @@ def refresh_report_directory(
         LEFT JOIN ad_object c ON c.tenant_id=r.tenant_id AND c.advertiser_id=r.advertiser_id AND c.kind='campaign' AND c.remote_id=r.campaign_id
         WHERE r.tenant_id=:tenant AND r.sync_job_id=:job AND r.advertiser_id=ANY(:accounts) AND r.spend>0
           AND r.stat_date=(CAST(:now AS timestamptz) AT TIME ZONE r.timezone)::date
-          AND (a.remote_id IS NULL OR a.observed_at<:cutoff OR g.remote_id IS NULL OR g.observed_at<:cutoff OR c.remote_id IS NULL OR c.observed_at<:cutoff)
-        ORDER BY r.spend DESC, r.advertiser_id, r.ad_id LIMIT :limit
+          AND (a.remote_id IS NULL OR g.remote_id IS NULL OR c.remote_id IS NULL
+            OR LEAST(a.observed_at,g.observed_at,c.observed_at) < CASE
+              WHEN r.advertiser_id=ANY(:strict_accounts) THEN :cutoff ELSE :general_cutoff END)
+        AND NOT EXISTS (
+            SELECT 1 FROM ad_directory_run d WHERE d.tenant_id=r.tenant_id
+              AND d.bc_id=:bc AND d.actor_id=:actor AND d.frozen_route=CAST(:route AS jsonb)
+              AND d.advertiser_id=r.advertiser_id AND d.kind='ad'
+              AND d.ad_type=CASE r.campaign_automation_type WHEN 'UPGRADED_SMART_PLUS' THEN 'SMART_PLUS'
+                WHEN 'SMART_PLUS' THEN 'LEGACY_SMART_PLUS' WHEN 'MANUAL' THEN 'REGULAR' END
+              AND d.status IN ('QUEUED','RUNNING','ADMISSION_WAIT','WAITING_REMOTE')
+              AND d.query->'ids' ? r.ad_id)
+        ORDER BY (a.remote_id IS NOT NULL AND g.remote_id IS NOT NULL AND c.remote_id IS NOT NULL),
+          LEAST(a.observed_at,g.observed_at,c.observed_at) ASC NULLS FIRST,
+          r.spend DESC, r.advertiser_id, r.ad_id LIMIT :limit
     """),
             {
                 "tenant": job.tenant_id,
                 "job": job.id,
+                "bc": job.bc_id,
+                "actor": job.actor_id,
+                "route": json.dumps(job.frozen_route),
                 "accounts": job.advertiser_ids,
                 "now": now,
                 "cutoff": now - DIRECTORY_FRESHNESS,
+                "general_cutoff": now - GENERAL_DIRECTORY_FRESHNESS,
+                "strict_accounts": sorted(strict_accounts),
                 "limit": MAX_REFRESH_ADS,
             },
         )

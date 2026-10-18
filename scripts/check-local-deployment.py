@@ -214,6 +214,8 @@ def run(image):
                     "--cpus",
                     container["resources"]["limits"]["cpu"],
                 ]
+                for variable in container.get("env", []):
+                    options += ["-e", variable["name"] + "=" + variable["value"]]
                 if role == "beat":
                     options += ["--tmpfs", "/var/run/celery"]
                 name = start(role, image, container["command"], options)
@@ -264,6 +266,12 @@ print('PASS: built frontend, login token, authenticated user, API boundary')
                         role + " readiness",
                         seconds=120,
                     )
+                pool_check = "from app.core.config import settings; " + (
+                    "assert (settings.DATABASE_POOL_SIZE, settings.DATABASE_MAX_OVERFLOW) == (2, 1)"
+                    if role.startswith("worker-")
+                    else "assert (settings.DATABASE_POOL_SIZE, settings.DATABASE_MAX_OVERFLOW) == (5, 10)"
+                )
+                docker("exec", prefix + "-" + role, "python", "-c", pool_check)
             for name in containers:
                 state = json.loads(
                     docker("inspect", "--format", "{{json .State}}", name).stdout
@@ -297,7 +305,7 @@ print('PASS: built frontend, login token, authenticated user, API boundary')
                 flush=True,
             )
             print(
-                "PASS: all nine application roles started using K8s commands; seven Worker probes passed; no external integration exercised",
+                "PASS: all eleven application roles started using K8s commands; nine Worker probes passed; no external integration exercised",
                 flush=True,
             )
         finally:

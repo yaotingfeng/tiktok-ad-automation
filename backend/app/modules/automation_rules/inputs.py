@@ -19,8 +19,8 @@ from app.modules.automation_rules.schemas import AccountScope, RuleDefinition
 from app.modules.automation_rules.statuses import hierarchy_statuses
 from app.modules.reporting.metric_catalog import STORED_KEYS
 
-# 报表热数据 30 分钟、素材 60 分钟同步一次；超过阈值说明同步停滞，宁可跳过也不按旧数据判断。
-FRESHNESS = {"ad_day": timedelta(minutes=90), "material_day": timedelta(minutes=150)}
+# 当前日报表每 2 分钟同步；超过 10 分钟仍跳过判断，并沿用缺数通知。
+FRESHNESS = {"ad_day": timedelta(minutes=10), "material_day": timedelta(minutes=10)}
 _PAST = {"PAST_3_DAYS": 3, "PAST_5_DAYS": 5, "PAST_7_DAYS": 7}
 _LIFETIME_START = date(2000, 1, 1)
 _BUDGET_KEYS = ("budget", "daily_budget", "campaign_daily_budget")

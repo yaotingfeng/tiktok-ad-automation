@@ -1,5 +1,7 @@
 from datetime import UTC, date, datetime, timedelta
 
+import pytest
+from sqlalchemy import text
 from sqlmodel import select
 
 from app.integrations.tiktok.contracts.report_reader import RawReportPage
@@ -108,20 +110,39 @@ def test_screen_uses_bc_report_and_filters_candidates():
     ) == {"acc-1"}
 
 
-def test_hot_plan_jobs_and_utc_noon_rule(session, sync_seed):
-    ensure_bc_plans(session, now=NOW)
+@pytest.mark.parametrize("now", [NOW, NOW.replace(hour=20)])
+def test_hot_plan_uses_current_local_day_and_daily_excludes_it(session, sync_seed, now):
+    from zoneinfo import ZoneInfo
+
+    from app.modules.reporting.planner import plan_material
+
+    # UTC 午前也只读当天；UTC 晚间香港已跨日，不能全账户直接用 UTC 日期。
+    ensure_bc_plans(session, now=now)
     plan = session.get(AdSyncBc, (sync_seed.tenant_id, "bc-a"))
-    plan_hot(session, plan, active=["acc-1", "acc-2"], now=NOW)
+    plan_hot(session, plan, active=["acc-1", "acc-2"], now=now)
+    plan_material(session, plan, active=["acc-1", "acc-2"], now=now)
+    plan_daily(session, plan, active_32d=["acc-1", "acc-2"], now=now)
     jobs = session.exec(
         select(ReportSyncJob).where(ReportSyncJob.tenant_id == sync_seed.tenant_id)
     ).all()
-    ad_jobs = [j for j in jobs if j.kind == "ad_day"]
-    # UTC 12:00 前：香港账户今天 10-12 与昨天 10-11 都要刷；小时报改为按需拉取
-    assert {(j.start_date, j.end_date) for j in ad_jobs} >= {
-        (date(2026, 10, 11), date(2026, 10, 12))
+    today = {
+        "acc-1": now.astimezone(ZoneInfo("Asia/Hong_Kong")).date(),
+        "acc-2": now.date(),
     }
-    assert {j.kind for j in jobs} == {"ad_day"}
-    assert all(j.priority == 1 for j in jobs)
+    live = [job for job in jobs if job.priority <= 2]
+    cold = [job for job in jobs if job.priority >= 3]
+    assert {job.kind for job in live} == {"ad_day", "material_day"}
+    assert {job.kind for job in cold} == {"ad_day", "material_day", "account_day"}
+    for job in live:
+        assert all(
+            job.start_date == job.end_date == today[advertiser]
+            for advertiser in job.advertiser_ids
+        )
+    for job in cold:
+        assert all(
+            job.end_date < today[advertiser] for advertiser in job.advertiser_ids
+        )
+    assert not [job for job in jobs if job.kind == "campaign_hour"]
 
 
 def test_inactive_account_keeps_published_rows_until_daily_refresh(session, sync_seed):
@@ -228,7 +249,7 @@ def test_removed_binding_disables_existing_plan(session, sync_seed):
 
 
 def test_confirmed_zero_spend_accounts_count_as_complete(session, sync_seed):
-    """平台确认零消耗的账户记为已完成 0 行；已有成功状态保留事实，只推进确认时间。"""
+    """完整零筛查更新空桶的 PG 成功时间，已有事实的成功时间必须保留。"""
     from app.modules.reporting.planner import (
         CONFIRMED_EMPTY_KINDS,
         daily_window,
@@ -249,6 +270,7 @@ def test_confirmed_zero_spend_accounts_count_as_complete(session, sync_seed):
     )
     session.add(kept)
     session.flush()
+    before = session.connection().execute(text("SELECT clock_timestamp()")).scalar_one()
     mark_confirmed_empty(
         session, plan, inactive=["acc-1"], window_fn=daily_window(NOW), now=NOW
     )
@@ -268,8 +290,15 @@ def test_confirmed_zero_spend_accounts_count_as_complete(session, sync_seed):
         ).row_count
         == 7
     )
-    # 无消耗时更新时间也要前进，否则页面显示的同步时间会停住。
-    assert all(s.last_success_at == NOW for s in states)
+    after = session.connection().execute(text("SELECT clock_timestamp()")).scalar_one()
+    assert kept.last_success_at == NOW - timedelta(hours=1)
+    empty = [state for state in states if state.row_count == 0]
+    assert len(empty) == len(states) - 1
+    assert all(
+        before <= state.last_success_at <= after
+        and state.updated_at == state.last_success_at
+        for state in empty
+    )
 
 
 def test_removed_member_discovery_does_not_become_sync_actor(session, sync_seed):
@@ -306,3 +335,86 @@ def test_removed_member_discovery_does_not_become_sync_actor(session, sync_seed)
     plan = session.get(AdSyncBc, (sync_seed.tenant_id, "bc-a"))
     assert plan.enabled is True
     assert plan.actor_id == sync_seed.actor_id
+
+
+def test_zero_screen_waits_for_publish_and_does_not_reuse_cached_zero_state(
+    committed_sync_seed,
+):
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Event
+    from time import monotonic, sleep
+    from uuid import uuid4
+
+    from app.modules.reporting.planner import mark_confirmed_empty
+    from app.modules.reporting.publish import AccountMeta, publish_ad_day
+    from app.modules.reporting.store_models import ReportSyncState
+    from tests.modules.reporting.sync_conftest import ad_row
+
+    seed, factory = committed_sync_seed
+    day = NOW.date()
+    common = {
+        "tenant_id": seed.tenant_id,
+        "job_id": uuid4(),
+        "accounts": {"acc-1": AccountMeta("USD", "Asia/Hong_Kong")},
+        "start": day,
+        "end": day,
+    }
+    with factory() as session:
+        ensure_bc_plans(session, now=NOW)
+        publish_ad_day(session, **common, rows=[])
+        session.commit()
+    cached = Event()
+
+    def confirm_zero():
+        with factory() as session:
+            session.connection().execute(
+                text("SET LOCAL application_name = 'test-zero-screen-watermark'")
+            )
+            state = session.get(
+                ReportSyncState, (seed.tenant_id, "acc-1", "ad_day", day)
+            )
+            assert state.row_count == 0
+            cached.set()
+            plan = session.get(AdSyncBc, (seed.tenant_id, "bc-a"))
+            mark_confirmed_empty(
+                session,
+                plan,
+                inactive=["acc-1"],
+                window_fn=lambda _tz: (day, day),
+                now=NOW,
+            )
+            session.commit()
+
+    with factory() as writer, ThreadPoolExecutor(max_workers=1) as pool:
+        publish_ad_day(writer, **common, rows=[ad_row("new", day, spend="20")])
+        published = writer.get(
+            ReportSyncState, (seed.tenant_id, "acc-1", "ad_day", day)
+        ).last_success_at
+        future = pool.submit(confirm_zero)
+        blocked = False
+        try:
+            assert cached.wait(5)
+            deadline = monotonic() + 5
+            while monotonic() < deadline:
+                with factory() as observer:
+                    blocked = (
+                        observer.connection()
+                        .execute(
+                            text("""
+                        SELECT EXISTS(SELECT 1 FROM pg_locks l JOIN pg_stat_activity a ON a.pid=l.pid
+                        WHERE a.application_name='test-zero-screen-watermark'
+                        AND l.locktype='advisory' AND NOT l.granted)
+                    """)
+                        )
+                        .scalar_one()
+                    )
+                if blocked:
+                    break
+                sleep(0.01)
+        finally:
+            writer.commit()
+        assert blocked
+        future.result(timeout=5)
+    with factory() as session:
+        state = session.get(ReportSyncState, (seed.tenant_id, "acc-1", "ad_day", day))
+        assert state.row_count == 1 and state.last_success_at == published

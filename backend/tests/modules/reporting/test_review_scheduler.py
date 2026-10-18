@@ -74,6 +74,7 @@ def test_scan_commits_completed_plan_before_later_timeout(
 
     monkeypatch.setattr(planner, "ensure_bc_plans", ensure)
     deadlines = []
+    opened_at = []
 
     class Reader:
         def bc_spend(self, **kwargs):
@@ -91,6 +92,7 @@ def test_scan_commits_completed_plan_before_later_timeout(
 
     @contextmanager
     def reader_for(*, plan, deadline, **_kwargs):
+        opened_at.append(datetime.now(UTC))
         deadlines.append(deadline)
         if plan.bc_id == "bc-b":
             raise SoftTimeLimitExceeded()
@@ -109,7 +111,12 @@ def test_scan_commits_completed_plan_before_later_timeout(
         assert s.exec(
             select(ReportSyncJob).where(ReportSyncJob.tenant_id == seed.tenant_id)
         ).all()
-    assert len(deadlines) == 2 and deadlines[0] == deadlines[1]
+    # 每个 BC 拿到独立 8 秒读取预算，已提交的前一个计划不能被后续超时回滚。
+    assert len(deadlines) == 2 and deadlines[1] > deadlines[0]
+    assert all(
+        timedelta(seconds=7) < deadline - started <= timedelta(seconds=8)
+        for deadline, started in zip(deadlines, opened_at, strict=True)
+    )
 
 
 def test_account_fallback_resumes_completed_requests_after_deadline(session, sync_seed):

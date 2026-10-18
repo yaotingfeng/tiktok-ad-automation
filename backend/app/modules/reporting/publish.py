@@ -1,18 +1,18 @@
 # backend/app/modules/reporting/publish.py
 """整份替换发布：某个“账户 × 报表 × 日期段”全部分页成功后，在一个事务内
-先删旧行再写新行。平台未返回的行就是当天没有数据，删除即正确结果。
+仅替换尚未被较新请求成功发布的账户日期；平台完整空结果也有发布水位。
 
 汇总规则：任一成员指标为 NULL（平台 '-'）时合计为 NULL，绝不显示部分合计。
 """
 
 from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import UTC, date, datetime, timedelta
+from datetime import date, datetime, timedelta
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import delete, insert, text
-from sqlmodel import Session, col
+from sqlalchemy import delete, insert, or_, text, tuple_
+from sqlmodel import Session, col, select
 
 from app.core.errors import DomainError
 from app.modules.reporting.metrics import (
@@ -40,6 +40,12 @@ class AccountMeta:
     timezone: str
 
 
+def _database_now(session) -> datetime:
+    # 请求与发布水位统一使用 PG 实时时钟；不能混用不同 Worker/容器的墙上时钟。
+    # transaction_timestamp()/now() 会停在事务开始，不能表示本次实际发布完成。
+    return session.connection().execute(text("SELECT clock_timestamp()")).scalar_one()
+
+
 def _days(start: date, end: date) -> list[date]:
     return [start + timedelta(days=i) for i in range((end - start).days + 1)]
 
@@ -61,31 +67,65 @@ def _in_range(day: date, start: date, end: date) -> date:
     return day
 
 
-def _set_state(
-    session,
-    *,
-    tenant_id,
-    advertiser_ids,
-    kind,
-    days,
-    counts: dict[tuple[str, date], int],
-):
-    now = datetime.now(UTC)
-    for advertiser in advertiser_ids:
-        for day in days:
-            state = session.get(ReportSyncState, (tenant_id, advertiser, kind, day))
-            if state is None:
-                state = ReportSyncState(
-                    tenant_id=tenant_id,
-                    advertiser_id=advertiser,
-                    report_kind=kind,
-                    stat_date=day,
-                    status="COMPLETE",
-                )
-                session.add(state)
-            state.status, state.error_code = "COMPLETE", None
-            state.row_count = counts.get((advertiser, day), 0)
-            state.last_success_at = state.updated_at = now
+def _writable_buckets(session, *, tenant_id, accounts, kind, start, end, requested_at):
+    """在账户锁内比较本地发布水位；这不是平台事件或归因水位。
+
+    请求创建之后已经成功发布的日期必须保留，包括完整空结果。事务锁还保护
+    尚不存在的状态行，使直接调用发布入口与 Worker 一样不会发生并发覆盖。
+    """
+    lock_kind = "ad_day" if kind == "account_day" else kind
+    for advertiser in sorted(accounts):
+        session.connection().execute(
+            text("SELECT pg_advisory_xact_lock(hashtextextended(:scope, 0))"),
+            {"scope": f"report:{tenant_id}:{advertiser}:{lock_kind}"},
+        )
+    states = session.exec(
+        select(ReportSyncState)
+        .where(
+            ReportSyncState.tenant_id == tenant_id,
+            col(ReportSyncState.advertiser_id).in_(accounts),
+            ReportSyncState.report_kind == kind,
+            col(ReportSyncState.stat_date).between(start, end),
+        )
+        .execution_options(populate_existing=True)
+    ).all()
+    protected = {
+        (state.advertiser_id, state.stat_date)
+        for state in states
+        if state.last_success_at and state.last_success_at > requested_at
+    }
+    return {
+        (advertiser, day) for advertiser in accounts for day in _days(start, end)
+    } - protected
+
+
+def _bucket_filter(model, buckets):
+    return tuple_(model.advertiser_id, model.stat_date).in_(sorted(buckets))
+
+
+def _bucket_days(buckets):
+    grouped = {}
+    for advertiser, day in sorted(buckets):
+        grouped.setdefault(advertiser, []).append(day)
+    return grouped.items()
+
+
+def _set_state(session, *, tenant_id, kind, buckets, counts):
+    now = _database_now(session)
+    for advertiser, day in sorted(buckets):
+        state = session.get(ReportSyncState, (tenant_id, advertiser, kind, day))
+        if state is None:
+            state = ReportSyncState(
+                tenant_id=tenant_id,
+                advertiser_id=advertiser,
+                report_kind=kind,
+                stat_date=day,
+                status="COMPLETE",
+            )
+            session.add(state)
+        state.status, state.error_code = "COMPLETE", None
+        state.row_count = counts.get((advertiser, day), 0)
+        state.last_success_at = state.updated_at = now
 
 
 def mark_failed(
@@ -97,27 +137,37 @@ def mark_failed(
     start: date,
     end: date,
     error_code: str,
+    requested_at: datetime | None = None,
 ) -> None:
     """失败不删除旧数据：已有完整数据标为 STALE，从未成功的标为 FAILED。"""
-    now = datetime.now(UTC)
-    for advertiser in advertiser_ids:
-        for day in _days(start, end):
-            state = session.get(ReportSyncState, (tenant_id, advertiser, kind, day))
-            if state is None:
-                session.add(
-                    ReportSyncState(
-                        tenant_id=tenant_id,
-                        advertiser_id=advertiser,
-                        report_kind=kind,
-                        stat_date=day,
-                        status="FAILED",
-                        error_code=error_code,
-                        updated_at=now,
-                    )
+    requested_at = requested_at or _database_now(session)
+    buckets = _writable_buckets(
+        session,
+        tenant_id=tenant_id,
+        accounts=advertiser_ids,
+        kind=kind,
+        start=start,
+        end=end,
+        requested_at=requested_at,
+    )
+    now = _database_now(session)
+    for advertiser, day in sorted(buckets):
+        state = session.get(ReportSyncState, (tenant_id, advertiser, kind, day))
+        if state is None:
+            session.add(
+                ReportSyncState(
+                    tenant_id=tenant_id,
+                    advertiser_id=advertiser,
+                    report_kind=kind,
+                    stat_date=day,
+                    status="FAILED",
+                    error_code=error_code,
+                    updated_at=now,
                 )
-            else:
-                state.status = "STALE" if state.last_success_at else "FAILED"
-                state.error_code, state.updated_at = error_code, now
+            )
+        else:
+            state.status = "STALE" if state.last_success_at else "FAILED"
+            state.error_code, state.updated_at = error_code, now
     session.flush()
 
 
@@ -133,8 +183,8 @@ def _rollup_sql() -> str:
         SELECT tenant_id, advertiser_id, stat_date, campaign_id, MAX(campaign_name), {cols},
                MAX(currency), MAX(timezone), MAX(fetched_at), :job_id
         FROM ad_report_day
-        WHERE tenant_id = :tenant_id AND advertiser_id = ANY(:advertisers)
-          AND stat_date BETWEEN :start AND :end
+        WHERE tenant_id = :tenant_id AND advertiser_id = :advertiser
+          AND stat_date = ANY(:days)
         GROUP BY tenant_id, advertiser_id, stat_date, campaign_id
     """
 
@@ -149,8 +199,10 @@ def publish_ad_day(
     end: date,
     rows: Sequence[dict],
     campaign_ids: tuple[str, ...] = (),
+    requested_at: datetime | None = None,
 ) -> int:
-    now, records, counts = datetime.now(UTC), [], {}
+    now, records, counts = _database_now(session), [], {}
+    requested_at = requested_at or now
     for row in rows:
         advertiser = _account(row, accounts)
         dims, metrics = row.get("dimensions") or {}, row.get("metrics") or {}
@@ -185,12 +237,23 @@ def publish_ad_day(
             }
         )
         counts[(advertiser, day)] = counts.get((advertiser, day), 0) + 1
+    # 先验证全部平台行，再筛水位；旧任务中的越权行也必须报错。
+    buckets = _writable_buckets(
+        session,
+        tenant_id=tenant_id,
+        accounts=accounts,
+        kind="ad_day",
+        start=start,
+        end=end,
+        requested_at=requested_at,
+    )
+    if not buckets:
+        return 0
+    records = [r for r in records if (r["advertiser_id"], r["stat_date"]) in buckets]
     ensure_month_partitions_for_range(session, start, end)
-    advertisers = sorted(accounts)
     statement = delete(AdReportDay).where(
         col(AdReportDay.tenant_id) == tenant_id,
-        col(AdReportDay.advertiser_id).in_(advertisers),
-        col(AdReportDay.stat_date).between(start, end),
+        _bucket_filter(AdReportDay, buckets),
     )
     if campaign_ids:
         statement = statement.where(col(AdReportDay.campaign_id).in_(campaign_ids))
@@ -200,31 +263,30 @@ def publish_ad_day(
     session.connection().execute(
         delete(CampaignReportDay).where(
             col(CampaignReportDay.tenant_id) == tenant_id,
-            col(CampaignReportDay.advertiser_id).in_(advertisers),
-            col(CampaignReportDay.stat_date).between(start, end),
+            _bucket_filter(CampaignReportDay, buckets),
         )
     )
-    session.connection().execute(
-        text(_rollup_sql()),
-        {
-            "tenant_id": tenant_id,
-            "advertisers": advertisers,
-            "start": start,
-            "end": end,
-            "job_id": job_id,
-        },
-    )
+    for advertiser, days in _bucket_days(buckets):
+        session.connection().execute(
+            text(_rollup_sql()),
+            {
+                "tenant_id": tenant_id,
+                "advertiser": advertiser,
+                "days": days,
+                "job_id": job_id,
+            },
+        )
+    # 系列分片只替换其范围，不能把部分成功声明成整个账户当天 COMPLETE。
     if not campaign_ids:
         _set_state(
             session,
             tenant_id=tenant_id,
-            advertiser_ids=advertisers,
             kind="ad_day",
-            days=_days(start, end),
+            buckets=buckets,
             counts=counts,
         )
-    _refresh_reconciliation_sums(session, tenant_id, accounts, start, end)
     session.flush()
+    _refresh_reconciliation_sums(session, tenant_id, buckets)
     return len(records)
 
 
@@ -242,12 +304,16 @@ def _publish_simple(
     rows,
     value_parser,
     time_filter,
+    requested_at,
 ) -> int:
-    now, records, counts = datetime.now(UTC), [], {}
+    now, records, counts = _database_now(session), [], {}
+    requested_at = requested_at or now
+    record_days = []
     for row in rows:
         advertiser = _account(row, accounts)
         meta = accounts[advertiser]
         keys, day = key_builder(row, meta)
+        record_days.append((advertiser, day))
         records.append(
             {
                 "tenant_id": tenant_id,
@@ -261,31 +327,38 @@ def _publish_simple(
             }
         )
         counts[(advertiser, day)] = counts.get((advertiser, day), 0) + 1
+    buckets = _writable_buckets(
+        session,
+        tenant_id=tenant_id,
+        accounts=accounts,
+        kind=kind,
+        start=start,
+        end=end,
+        requested_at=requested_at,
+    )
+    if not buckets:
+        return 0
+    records = [
+        r for r, bucket in zip(records, record_days, strict=True) if bucket in buckets
+    ]
     if model is MaterialReportDay:
         ensure_month_partitions_for_range(session, start, end)
-    advertisers = sorted(accounts)
     session.connection().execute(
         delete(model).where(
             model.tenant_id == tenant_id,
-            model.advertiser_id.in_(advertisers),
-            time_filter(model),
+            time_filter(model, buckets),
         )
     )
     if records:
         session.connection().execute(insert(model), records)
-    _set_state(
-        session,
-        tenant_id=tenant_id,
-        advertiser_ids=advertisers,
-        kind=kind,
-        days=_days(start, end),
-        counts=counts,
-    )
+    _set_state(session, tenant_id=tenant_id, kind=kind, buckets=buckets, counts=counts)
     session.flush()
     return len(records)
 
 
-def publish_campaign_hour(session, *, tenant_id, job_id, accounts, day, rows) -> int:
+def publish_campaign_hour(
+    session, *, tenant_id, job_id, accounts, day, rows, requested_at=None
+) -> int:
     def keys(row, meta):
         dims = row.get("dimensions") or {}
         # 先按原始账户本地日期校验，不能把邻日小时写进当天发布窗口。
@@ -300,9 +373,10 @@ def publish_campaign_hour(session, *, tenant_id, job_id, accounts, day, rows) ->
         return {c: parsed[c] for c in METRIC_COLUMNS}
 
     # 各账户“本地这一天”的 UTC 边界不同；按每个账户的时区分别删除。
-    def window(model):
+    def window(model, buckets):
         clauses = []
-        for advertiser, meta in accounts.items():
+        for advertiser, _ in sorted(buckets):
+            meta = accounts[advertiser]
             start_hour = parse_local_hour(f"{day} 00:00:00", meta.timezone)
             end_hour = parse_local_hour(
                 f"{day + timedelta(days=1)} 00:00:00", meta.timezone
@@ -312,8 +386,6 @@ def publish_campaign_hour(session, *, tenant_id, job_id, accounts, day, rows) ->
                 & (model.stat_hour >= start_hour)
                 & (model.stat_hour < end_hour)
             )
-        from sqlalchemy import or_
-
         return or_(*clauses)
 
     return _publish_simple(
@@ -329,11 +401,12 @@ def publish_campaign_hour(session, *, tenant_id, job_id, accounts, day, rows) ->
         rows=rows,
         value_parser=values,
         time_filter=window,
+        requested_at=requested_at,
     )
 
 
 def publish_material_day(
-    session, *, tenant_id, job_id, accounts, start, end, rows
+    session, *, tenant_id, job_id, accounts, start, end, rows, requested_at=None
 ) -> int:
     def keys(row, _meta):
         dims, metrics = row.get("dimensions") or {}, row.get("metrics") or {}
@@ -359,14 +432,16 @@ def publish_material_day(
         end=end,
         rows=rows,
         value_parser=material_metric_values,
-        time_filter=lambda m: m.stat_date.between(start, end),
+        time_filter=_bucket_filter,
+        requested_at=requested_at,
     )
 
 
 def publish_account_reconciliation(
-    session, *, tenant_id, accounts, start, end, rows
-) -> None:
+    session, *, tenant_id, accounts, start, end, rows, requested_at=None
+) -> int:
     """账户报表与同期广告汇总比对，结果只用于页面提示。"""
+    requested_at = requested_at or _database_now(session)
     reported: dict[tuple[str, date], dict[str, Any]] = {}
     for row in rows:
         advertiser = _account(row, accounts)
@@ -382,28 +457,45 @@ def publish_account_reconciliation(
                 metrics.get("native_growth_total_ad_impression_value")
             ),
         }
-    now = datetime.now(UTC)
-    for advertiser in accounts:
-        for day in _days(start, end):
-            rep = reported.get((advertiser, day), {"spend": None, "total": None})
-            session.merge(
-                AccountReconciliationDay(
-                    tenant_id=tenant_id,
-                    advertiser_id=advertiser,
-                    stat_date=day,
-                    account_spend=rep["spend"],
-                    account_revenue_total=rep["total"],
-                    checked_at=now,
-                )
+    buckets = _writable_buckets(
+        session,
+        tenant_id=tenant_id,
+        accounts=accounts,
+        kind="account_day",
+        start=start,
+        end=end,
+        requested_at=requested_at,
+    )
+    now = _database_now(session)
+    for advertiser, day in sorted(buckets):
+        rep = reported.get((advertiser, day), {"spend": None, "total": None})
+        session.merge(
+            AccountReconciliationDay(
+                tenant_id=tenant_id,
+                advertiser_id=advertiser,
+                stat_date=day,
+                account_spend=rep["spend"],
+                account_revenue_total=rep["total"],
+                checked_at=now,
             )
+        )
+    _set_state(
+        session,
+        tenant_id=tenant_id,
+        kind="account_day",
+        buckets=buckets,
+        counts=dict.fromkeys(reported, 1),
+    )
     session.flush()
-    _refresh_reconciliation_sums(session, tenant_id, accounts, start, end)
+    _refresh_reconciliation_sums(session, tenant_id, buckets)
+    return len(buckets)
 
 
-def _refresh_reconciliation_sums(session, tenant_id, accounts, start, end):
+def _refresh_reconciliation_sums(session, tenant_id, buckets):
     # 两种完成顺序均引用当前事实；平台 NULL 仍传播，完整空结果才为零。
-    session.connection().execute(
-        text("""
+    for advertiser, days in _bucket_days(buckets):
+        session.connection().execute(
+            text("""
         UPDATE account_reconciliation_day r SET (ad_sum_spend, ad_sum_revenue_total) = (
             SELECT
               CASE WHEN COUNT(*)=0 THEN CASE WHEN EXISTS (
@@ -418,7 +510,7 @@ def _refresh_reconciliation_sums(session, tenant_id, accounts, start, end):
                 WHEN COUNT(a.revenue_total)=COUNT(*) THEN SUM(a.revenue_total) END
             FROM ad_report_day a WHERE a.tenant_id=r.tenant_id
               AND a.advertiser_id=r.advertiser_id AND a.stat_date=r.stat_date
-        ) WHERE r.tenant_id=:t AND r.advertiser_id=ANY(:a) AND r.stat_date BETWEEN :s AND :e
-    """),
-        {"t": tenant_id, "a": sorted(accounts), "s": start, "e": end},
-    )
+        ) WHERE r.tenant_id=:t AND r.advertiser_id=:a AND r.stat_date=ANY(:days)
+        """),
+            {"t": tenant_id, "a": advertiser, "days": days},
+        )

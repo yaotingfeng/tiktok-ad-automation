@@ -12,7 +12,8 @@ WorkingDirectory=/opt/tt-ada-staging/current/backend
 EnvironmentFile=/etc/tt-ada-staging/app.env
 Environment=PYTHONUNBUFFERED=1
 # 广告创建独立执行，不会被素材共享/封面的网络等待占满。
-ExecStart=/opt/tt-ada-staging/current/.venv/bin/celery -A app.jobs.celery_app:celery_app worker -Q builds --pool prefork --concurrency 1 --loglevel INFO --hostname builds-singapore@%%h
+# env 在 EnvironmentFile 载入后覆盖，确保 Worker 池不会被共享 API 默认值放大。
+ExecStart=/usr/bin/env DATABASE_POOL_SIZE=2 DATABASE_MAX_OVERFLOW=1 /opt/tt-ada-staging/current/.venv/bin/celery -A app.jobs.celery_app:celery_app worker -Q builds --pool prefork --concurrency 1 --loglevel INFO --hostname builds-singapore@%%h
 Restart=on-failure
 RestartSec=5
 TimeoutStopSec=960

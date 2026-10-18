@@ -19,7 +19,7 @@ PUBLIC_IMAGE_PREFIX = (
     "sg-acr-prod-registry.ap-southeast-1.cr.aliyuncs.com/test/" + PROJECT + ":"
 )
 DIRECTORY = Path(__file__).resolve().parent
-ROLES = (
+LEGACY_ROLES = (
     "api",
     "worker-resource",
     "worker-results",
@@ -30,7 +30,14 @@ ROLES = (
     "worker-ad-management",
     "beat",
 )
-FLAGS = ("MATERIAL_INGEST_ENABLED", "MATERIAL_CLEANUP_ENABLED", "ADS_SYNC_ENABLED", "AUTOMATED_RULES_ENABLED")
+NEW_ROLES = ("worker-ads-backfill", "worker-ads-live-directory")
+ROLES = (*LEGACY_ROLES, *NEW_ROLES)
+FLAGS = (
+    "MATERIAL_INGEST_ENABLED",
+    "MATERIAL_CLEANUP_ENABLED",
+    "ADS_SYNC_ENABLED",
+    "AUTOMATED_RULES_ENABLED",
+)
 
 
 def require(condition, message):
@@ -327,6 +334,7 @@ class Deployment:
             )
         )
         retired = self.retired_source(inventory["items"])
+        self.existing_deployments = {}
         for obj in inventory["items"]:
             metadata = obj.get("metadata", {})
             name = metadata.get("name", "")
@@ -339,6 +347,8 @@ class Deployment:
                     f"cross-namespace project collision: {name}",
                 )
                 self.owner(obj)
+                if obj.get("kind") == "Deployment":
+                    self.existing_deployments[name] = obj
             if obj.get("kind") == "Ingress" and (
                 name != "test-https" or metadata.get("namespace") != self.namespace
             ):
@@ -478,6 +488,56 @@ class Deployment:
             payload=json.dumps(secret),
         )
 
+    def guard_role_upgrade(self):
+        existing = getattr(self, "existing_deployments", {})
+        if not existing:
+            return  # 无历史部署的首发由 bootstrap 流程负责。
+        names = set(existing)
+        legacy = {PROJECT + "-" + role for role in LEGACY_ROLES}
+        current = {PROJECT + "-" + role for role in ROLES}
+        require(
+            names in (legacy, current), "Incomplete existing deployment role contract"
+        )
+        if names == current:
+            return
+        require(
+            os.environ.get("RELEASE_HOLD_WORKLOADS") == "1",
+            "Role upgrade requires frozen verified release",
+        )
+        folder = Path(setting("RELEASE_STATE_DIR"))
+        state = json.loads((folder / "state.json").read_text())
+        proof = json.loads((folder / "restore-verified.json").read_text())
+        published = json.loads((folder / "cluster-backup.json").read_text())
+        digest = hashlib.sha256((folder / "manifest.json").read_bytes()).hexdigest()
+        require(
+            state.get("phase") == "migration-started"
+            and state.get("candidate_sha") == self.release
+            and set(state.get("deployments", {})) == legacy
+            and proof.get("manifest_sha256")
+            == published.get("manifest_sha256")
+            == digest
+            and proof.get("candidate_sha") == self.release
+            and proof.get("postgres_matches") is True
+            and "redis" in proof,
+            "Verified published candidate backup required for role upgrade",
+        )
+        lock = self.get("configmap", PROJECT + "-release-lock")
+        require(
+            lock
+            and lock["metadata"]["uid"] == state["lock_uid"]
+            and lock["data"]["token"] == state["token"],
+            "Release lock ownership changed",
+        )
+        require(
+            all(
+                obj["metadata"]["uid"] == state["deployments"][name]["metadata"]["uid"]
+                and obj["spec"]["replicas"] == 0
+                and not obj.get("status", {}).get("replicas", 0)
+                for name, obj in existing.items()
+            ),
+            "Original deployments must remain frozen with matching UIDs",
+        )
+
     def apply(self):
         self.validate_runtime()
         print(
@@ -494,6 +554,7 @@ class Deployment:
         if os.environ.get("PREFLIGHT_ONLY") == "1":
             print("PASS: read-only cluster preflight; no resources written")
             return
+        self.guard_role_upgrade()
         self.apply_secret("runtime", {k: v.encode() for k, v in self.values.items()})
         self.apply_secret("mcp-registration", {"mcp-client.json": self.registration})
         self.kubectl("apply", "-f", "-", payload=self.render("tk-ada.yaml"))

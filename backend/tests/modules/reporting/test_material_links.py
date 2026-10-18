@@ -11,7 +11,6 @@ from app.modules.reporting.ad_materials import (
     freeze_ad_material_selection,
     list_ad_materials,
 )
-from app.modules.reporting.jobs import _read_all
 from app.modules.reporting.material_links import refresh_material_links
 from app.modules.reporting.store_models import MaterialLinkScan, MaterialPostLink
 from app.modules.reporting.trend import build_trend
@@ -64,15 +63,21 @@ def refresh(session, seed, pages, ad_posts=None):
             len(posts),
         )
 
-    refresh_material_links(
-        session,
-        tenant_id=seed.tenant_id,
-        advertiser_id="acc-1",
-        read_overview=read,
-        read_ad_posts=read_ad_posts,
-        read_all=_read_all,
-        now=NOW,
-    )
+    progress = {}
+    for _ in range(1000):
+        complete = refresh_material_links(
+            session,
+            tenant_id=seed.tenant_id,
+            advertiser_id="acc-1",
+            read_overview=read,
+            read_ad_posts=read_ad_posts,
+            now=NOW,
+            progress=progress,
+        )
+        if complete:
+            break
+    else:
+        raise AssertionError("关联扫描未结束")
     return calls
 
 
@@ -386,19 +391,39 @@ def test_material_trend_by_video_sums_its_posts(session, sync_seed):
 
 
 def test_locate_posts_splits_only_batches_with_targets():
-    from app.modules.reporting.material_links import _locate_posts
+    from app.modules.reporting.material_links import _locate_post_step
 
     owners = {"p1": "ad-3", "p2": "ad-6"}
     queried = []
 
-    def posts_of(ads):
+    def posts_of(ads, _first, _last, page):
         queried.append(ads)
-        return {p for p, ad in owners.items() if ad in ads} | {"noise"}
+        posts = {p for p, ad in owners.items() if ad in ads} | {"noise"}
+        return RawReportPage(
+            tuple({"dimensions": {"main_material_id": p}} for p in posts),
+            page,
+            1,
+            len(posts),
+        )
 
-    ads = [f"ad-{i}" for i in range(8)]
-    assert _locate_posts(ads, {"p1", "p2"}, posts_of) == owners
-    # 8 个广告、2 个目标：整批 1 次 + 首层左半 1 次 + 每个目标往下每层 1 次，共 6 次。
-    assert len(queried) == 6
+    result = {}
+    for mid in owners:
+        state = {
+            "mid": mid,
+            "candidates": [f"ad-{i}" for i in range(8)],
+            "next_batch": 0,
+            "search_stack": [],
+        }
+        for _ in range(10):
+            complete, owner = _locate_post_step(
+                state, read_ad_posts=posts_of, first=D, last=D
+            )
+            if complete:
+                result[mid] = owner
+                break
+    assert result == owners
+    # 单帖独立续步，每个目标只有整批和三层左半查询；已确认右半无需再查。
+    assert len(queried) == 8
 
 
 def test_new_directory_retries_cached_unresolved_posts(session, sync_seed):

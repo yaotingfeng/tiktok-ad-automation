@@ -1,5 +1,5 @@
 import { CircleAlert, CircleCheck, LoaderCircle } from "lucide-react"
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import type { SyncAccountStatus, SyncStatusPublic } from "@/client"
 import { Button } from "@/components/ui/button"
 import {
@@ -28,17 +28,17 @@ function accountTime(account: SyncAccountStatus) {
   })
 }
 
-/** 汇总全 BC 的“数据更新到”时间：账户时区一致时按账户本地时间，否则按浏览器时间。 */
-function latestUpdate(accounts: SyncAccountStatus[]): string | null {
+/** 范围覆盖由最旧账户决定；混时区时明确统一显示为浏览器本地时间。 */
+function oldestUpdate(accounts: SyncAccountStatus[]): string | null {
   const synced = accounts.filter((account) => account.last_success_at)
   if (!synced.length) return null
-  const latest = synced.reduce((a, b) =>
-    a.last_success_at! > b.last_success_at! ? a : b,
+  const oldest = synced.reduce((a, b) =>
+    Date.parse(a.last_success_at!) < Date.parse(b.last_success_at!) ? a : b,
   )
   const timezones = new Set(synced.map((account) => account.timezone))
   return timezones.size === 1
-    ? `数据更新到 ${accountTime(latest)}（账户本地）`
-    : `数据更新到 ${new Date(latest.last_success_at!).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", hour12: false })}`
+    ? `最旧有效数据更新到 ${accountTime(oldest)}（账户本地）`
+    : `最旧有效数据更新到 ${new Date(oldest.last_success_at!).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", hour12: false })}（浏览器本地，账户时区不同）`
 }
 
 /**
@@ -47,20 +47,45 @@ function latestUpdate(accounts: SyncAccountStatus[]): string | null {
  */
 export function ReportStatusBar({
   status,
+  selectedAdvertiserIds,
+  startDate,
   coverage,
   notice,
   onLoadLatest,
 }: {
   status?: SyncStatusPublic
+  selectedAdvertiserIds?: string[]
+  startDate?: string
   coverage?: Record<string, unknown>
   notice: string | null
-  /** 后台定时同步发布了新数据时提供；为避免打断勾选与预览，由用户点击后再加载。 */
+  /** 正在操作时保留快照，用户仍可主动加载后台发布的新数据。 */
   onLoadLatest?: () => void
 }) {
   const [open, setOpen] = useState(false)
-  const accounts = status?.accounts ?? []
-  const pending = accounts.filter((account) => !account.last_success_at)
-  const incomplete = accounts.filter(
+  const [now, setNow] = useState(Date.now)
+  useEffect(() => {
+    // 同步停滞时接口内容可能不变，时效提示仍须随时间更新，卸载后停止计时。
+    const timer = window.setInterval(() => setNow(Date.now()), 30_000)
+    return () => window.clearInterval(timer)
+  }, [])
+  const accounts = (status?.accounts ?? []).filter(
+    (account) =>
+      !selectedAdvertiserIds?.length ||
+      selectedAdvertiserIds.includes(account.advertiser_id),
+  )
+  // 页面日期是各账户的本地日；尚未进入查询起日的账户不计作缺数或失败。
+  const future = accounts.filter(
+    (account) =>
+      startDate && account.local_today && account.local_today < startDate,
+  )
+  const applicable = accounts.filter((account) => !future.includes(account))
+  const pending = applicable.filter((account) => !account.last_success_at)
+  const stale = applicable.filter(
+    (account) =>
+      account.last_success_at &&
+      now - Date.parse(account.last_success_at) > 5 * 60_000,
+  )
+  const incomplete = applicable.filter(
     (account) =>
       (account.incomplete_dates ?? []).length > 0 ||
       (account.failed_dates ?? []).length > 0,
@@ -78,27 +103,50 @@ export function ReportStatusBar({
   } else if (reason === "api_binding_required") {
     tone = "error"
     headline = "该 BC 未接入 API，无法同步报表"
-  } else if (status && accounts.length && pending.length === accounts.length) {
+  } else if (
+    status &&
+    applicable.length &&
+    pending.length === applicable.length
+  ) {
     tone = "pending"
     headline = "首次同步进行中，完成后自动显示数据"
   } else {
-    headline = (status && latestUpdate(accounts)) ?? "正在读取同步状态"
+    headline =
+      status && accounts.length && !applicable.length
+        ? `${future.length} 个账户当地尚未到所选日期`
+        : ((status && oldestUpdate(applicable)) ?? "正在读取同步状态")
   }
 
-  const extras: { text: string; tone: Tone }[] = []
+  const extras: { text: string; tone: Tone }[] = [
+    { text: "查询日期按各账户本地日", tone: "ok" },
+  ]
+  if (stale.length)
+    extras.push({ text: `${stale.length} 个账户数据超过 5 分钟`, tone: "warn" })
+  if (future.length && applicable.length)
+    extras.push({
+      text: `${future.length} 个账户当地尚未到所选日期`,
+      tone: "ok",
+    })
+  if (status?.health?.status === "DEGRADED")
+    extras.push({ text: "该 BC 实时同步存在延迟或关联缺口", tone: "error" })
   // 历史回填只覆盖到开户日之后的部分区间：告诉用户从哪天起数据完整，
   // 选择更早的日期时就能理解缺口来自回填范围，而不是同步出错。
   if (status?.complete_from)
     extras.push({ text: `完整数据自 ${status.complete_from} 起`, tone: "ok" })
-  if (pending.length && pending.length < accounts.length)
+  if (pending.length && pending.length < applicable.length)
     extras.push({ text: `${pending.length} 个账户同步中`, tone: "pending" })
   if (incomplete.length)
     extras.push({ text: `${incomplete.length} 个账户有日期缺失`, tone: "warn" })
   if (status?.plan.enabled && status.plan.slowed)
-    extras.push({ text: "数据更新放缓", tone: "warn" })
-  if (coverageStatus === "FAILED")
+    extras.push({ text: "历史补数暂缓", tone: "warn" })
+  // 未来本地日保持空事实/部分汇总；若账户状态没有真正缺口，不把这种部分覆盖说成同步失败。
+  const futureOnlyGap =
+    future.length > 0 && !incomplete.length && !pending.length
+  if (applicable.length && !futureOnlyGap && coverageStatus === "FAILED")
     extras.push({ text: "部分数据读取失败，请刷新重试", tone: "error" })
   else if (
+    applicable.length &&
+    !(futureOnlyGap && coverageStatus === "INCOMPLETE") &&
     !incomplete.length &&
     !pending.length &&
     ["INCOMPLETE", "PENDING", "QUEUED", "RUNNING", "WAITING_REMOTE"].includes(
@@ -109,7 +157,8 @@ export function ReportStatusBar({
   // 刷新按钮的回执与主结论相同时不重复显示。
   if (notice && notice !== headline) extras.push({ text: notice, tone: "ok" })
 
-  if (tone === "ok" && extras.some((item) => item.tone === "warn"))
+  if (extras.some((item) => item.tone === "error")) tone = "error"
+  else if (tone === "ok" && extras.some((item) => item.tone === "warn"))
     tone = "warn"
   const Icon =
     tone === "pending"
@@ -160,7 +209,8 @@ export function ReportStatusBar({
           <SheetHeader>
             <SheetTitle>账户同步明细</SheetTitle>
             <SheetDescription>
-              共 {accounts.length} 个账户，时间为账户本地时间。
+              共 {accounts.length}{" "}
+              个账户，查询日期及明细时间均为各账户本地时间。
             </SheetDescription>
           </SheetHeader>
           <ul className="divide-y px-4 text-xs">
@@ -179,7 +229,12 @@ export function ReportStatusBar({
                         : "同步中"}
                     </span>
                   </div>
-                  {missing.length > 0 && (
+                  {future.includes(account) && (
+                    <p className="text-muted-foreground">
+                      账户当地今天为 {account.local_today}，尚未到查询日期
+                    </p>
+                  )}
+                  {!future.includes(account) && missing.length > 0 && (
                     <p className="text-amber-600">
                       以下日期数据不完整：{missing.join("、")}
                     </p>

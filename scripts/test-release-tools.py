@@ -4,6 +4,7 @@ import copy
 import importlib.util
 import json
 import os
+import re
 import sys
 import tempfile
 import unittest
@@ -12,8 +13,8 @@ from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "deploy/release"))
-from common import CONTEXT, PROJECT, ROLES, VPC, Cluster, write
-from release import Release, drained, manifest_items
+from common import CONTEXT, LEGACY_ROLES, NEW_ROLES, PROJECT, ROLES, VPC, Cluster, write
+from release import WORKERS, Release, drained, manifest_items, role_environment
 
 
 class ReleaseTests(unittest.TestCase):
@@ -47,6 +48,273 @@ class ReleaseTests(unittest.TestCase):
             "backup_dir": "/backup/.pending-fixture",
             "database_bytes": 6 * 2**30,
         }
+
+    def test_every_deployment_surface_injects_bounded_worker_pools(self):
+        workloads = (ROOT / "deploy/k8s/tk-ada-workloads.yaml").read_text().split("---")
+        found = set()
+        for block in workloads:
+            role = re.search(r"role: (worker-[a-z-]+)", block)
+            if role:
+                found.add(role.group(1))
+                self.assertRegex(block, r'name: DATABASE_POOL_SIZE\n +value: "2"')
+                self.assertRegex(block, r'name: DATABASE_MAX_OVERFLOW\n +value: "1"')
+        self.assertEqual(found, set(WORKERS))
+        for filename in ("compose.yml", "compose.production.yml"):
+            content = (ROOT / filename).read_text()
+            blocks = re.split(r"(?m)^  (?=worker(?:[-a-z]*):)", content)[1:]
+            self.assertTrue(blocks)
+            for block in blocks:
+                block = re.split(r"(?m)^  [a-z][a-z-]*:", block, maxsplit=1)[0]
+                self.assertIn('DATABASE_POOL_SIZE: "2"', block)
+                self.assertIn('DATABASE_MAX_OVERFLOW: "1"', block)
+        services = list((ROOT / "deploy").glob("staging-*.service"))
+        workers = [p for p in services if " worker " in p.read_text()]
+        self.assertEqual(len(workers), len(WORKERS))
+        for path in workers:
+            self.assertIn(
+                "ExecStart=/usr/bin/env DATABASE_POOL_SIZE=2 DATABASE_MAX_OVERFLOW=1 ",
+                path.read_text(),
+            )
+
+    def test_role_database_pool_hash_inputs_and_settings_enforce_all_workers(self):
+        shared = {
+            "DATABASE_POOL_SIZE": "5",
+            "DATABASE_MAX_OVERFLOW": "10",
+            "unchanged": "fixture",
+        }
+        for role in ROLES:
+            with self.subTest(role=role):
+                environment = role_environment(shared, role, True)
+                expected = (
+                    {"DATABASE_POOL_SIZE": 2, "DATABASE_MAX_OVERFLOW": 1}
+                    if role in WORKERS
+                    else {"DATABASE_POOL_SIZE": 5, "DATABASE_MAX_OVERFLOW": 10}
+                )
+                self.assertEqual({k: int(environment[k]) for k in expected}, expected)
+                self.assertEqual(environment["unchanged"], "fixture")
+                pod = {"metadata": {"name": role, "labels": {"role": role}}}
+                with patch.object(
+                    self.release.cluster,
+                    "k",
+                    return_value=json.dumps(expected).encode(),
+                ):
+                    self.release.verify_database_pool(pod, environment)
+                wrong = dict(expected, DATABASE_POOL_SIZE=99)
+                with (
+                    patch.object(
+                        self.release.cluster,
+                        "k",
+                        return_value=json.dumps(wrong).encode(),
+                    ),
+                    self.assertRaisesRegex(RuntimeError, "database pool differs"),
+                ):
+                    self.release.verify_database_pool(pod, environment)
+        self.assertEqual(shared["DATABASE_POOL_SIZE"], "5")
+        self.assertEqual(
+            role_environment(shared, "worker-ads-reporting", False), shared
+        )
+
+    def use_legacy(self):
+        self.deployments = {
+            k: v
+            for k, v in self.deployments.items()
+            if k.removeprefix(PROJECT + "-") in LEGACY_ROLES
+        }
+        self.release.state["deployments"] = copy.deepcopy(self.deployments)
+
+    def test_inventory_accepts_only_complete_old_or_new_contract(self):
+        for roles in (
+            LEGACY_ROLES,
+            ROLES,
+            LEGACY_ROLES[:-1],
+            (*LEGACY_ROLES, NEW_ROLES[0]),
+        ):
+            items = [
+                dict(
+                    copy.deepcopy(self.deployments[PROJECT + "-" + role]),
+                    metadata={"name": PROJECT + "-" + role, "labels": {"app": PROJECT}},
+                )
+                for role in roles
+            ]
+            with patch.object(
+                self.release.cluster, "get", return_value={"items": items}
+            ):
+                if roles in (LEGACY_ROLES, ROLES):
+                    self.assertEqual(
+                        len(self.release.cluster.deployments()), len(roles)
+                    )
+                else:
+                    with self.assertRaisesRegex(RuntimeError, "complete legacy"):
+                        self.release.cluster.deployments()
+
+    def test_first_upgrade_freezes_only_the_seven_existing_workers(self):
+        self.use_legacy()
+        pods = [
+            {"metadata": {"name": role, "labels": {"role": role}}}
+            for role in LEGACY_ROLES
+            if role in self.release.original_workers
+        ]
+        with (
+            patch.object(self.release, "assert_lock"),
+            patch.object(self.release, "validate_deployments"),
+            patch.object(self.release, "helper"),
+            patch.object(self.release, "wait_pods"),
+            patch.object(self.release, "wait_drained") as drain,
+            patch.object(self.release, "probe", return_value={"unacked": 0}),
+            patch.object(self.release.cluster, "app_pods", return_value=pods),
+            patch.object(self.release.cluster, "scale") as scale,
+        ):
+            self.release.pause()
+        self.assertEqual(len(drain.call_args.args[0]), 7)
+        self.assertEqual(
+            {call.args[0] for call in scale.call_args_list}, set(self.deployments)
+        )
+        self.assertEqual(self.release.state["phase"], "frozen")
+
+    def test_first_upgrade_recovery_never_scales_absent_new_workers(self):
+        self.use_legacy()
+        with (
+            patch.object(self.release, "assert_lock"),
+            patch.object(
+                self.release, "validate_deployments", return_value=self.deployments
+            ),
+            patch.object(self.release, "config_unchanged"),
+            patch.object(self.release, "remove_helper"),
+            patch.object(self.release, "accept"),
+            patch.object(self.release, "unlock"),
+            patch("release.cleanup_completed"),
+            patch.object(self.release.cluster, "k"),
+            patch.object(self.release.cluster, "scale") as scale,
+        ):
+            self.release.resume("a" * 40)
+        self.assertEqual(
+            {call.args[0] for call in scale.call_args_list}, set(self.deployments)
+        )
+
+    def test_candidate_missing_new_roles_cannot_resume(self):
+        self.use_legacy()
+        current = copy.deepcopy(self.deployments)
+        for obj in current.values():
+            obj["spec"]["template"]["spec"]["containers"][0]["image"] = VPC + "b" * 40
+        with (
+            patch.object(self.release, "assert_lock"),
+            patch.object(self.release, "validate_deployments", return_value=current),
+            patch.object(self.release.cluster, "scale") as scale,
+            self.assertRaisesRegex(RuntimeError, "role set"),
+        ):
+            self.release.resume("b" * 40)
+        scale.assert_not_called()
+
+    def test_added_roles_block_old_template_recovery(self):
+        current = copy.deepcopy(self.deployments)
+        self.use_legacy()
+        with (
+            patch.object(self.release.cluster, "deployments", return_value=current),
+            self.assertRaisesRegex(RuntimeError, "role set"),
+        ):
+            self.release.validate_deployments(original=True)
+
+    def test_broker_migration_failure_blocks_automatic_old_recovery(self):
+        for phase in ("broker-migration-started", "broker-migrated"):
+            self.release.state["phase"] = phase
+            with (
+                patch.object(self.release, "load"),
+                self.assertRaisesRegex(RuntimeError, "forbidden"),
+            ):
+                self.release.recover()
+
+    def test_broker_migration_requires_verified_candidate_and_sets_boundary_first(self):
+        from common import digest
+
+        write(self.release.folder / "manifest.json", {"fixture": True})
+        proof = {
+            "postgres_matches": True,
+            "redis": {},
+            "manifest_sha256": digest(self.release.folder / "manifest.json"),
+            "candidate_sha": "b" * 40,
+        }
+        write(self.release.folder / "restore-verified.json", proof)
+        self.release.state.update(phase="backup-verified", candidate_sha="b" * 40)
+
+        def migrate(*args):
+            self.assertEqual(self.release.state["phase"], "broker-migration-started")
+            return {"moved": 1750, "verified": True}
+
+        with patch.object(self.release, "probe", side_effect=migrate):
+            self.release.migrate_targeted_queue()
+        self.assertEqual(self.release.state["phase"], "broker-migrated")
+        self.assertEqual(
+            json.loads((self.release.folder / "broker-migration.json").read_text()),
+            {"moved": 1750, "verified": True},
+        )
+        self.release.state["phase"] = "backup-verified"
+        proof["candidate_sha"] = "c" * 40
+        write(self.release.folder / "restore-verified.json", proof)
+        with (
+            patch.object(self.release, "probe") as probe,
+            self.assertRaisesRegex(RuntimeError, "Verified"),
+        ):
+            self.release.migrate_targeted_queue()
+        probe.assert_not_called()
+
+    def test_new_roles_require_frozen_published_verified_backup(self):
+        from common import digest
+
+        spec = importlib.util.spec_from_file_location(
+            "role_operations", ROOT / "deploy/k8s/operations.py"
+        )
+        operations = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(operations)
+        self.use_legacy()
+        for value in self.deployments.values():
+            value["spec"]["replicas"] = 0
+        write(self.release.folder / "manifest.json", {"fixture": True})
+        checksum = digest(self.release.folder / "manifest.json")
+        state = dict(
+            self.release.state, phase="migration-started", candidate_sha="b" * 40
+        )
+        proof = {
+            "manifest_sha256": checksum,
+            "candidate_sha": "b" * 40,
+            "postgres_matches": True,
+            "redis": {},
+        }
+        write(self.release.folder / "state.json", state)
+        write(self.release.folder / "restore-verified.json", proof)
+        write(
+            self.release.folder / "cluster-backup.json", {"manifest_sha256": checksum}
+        )
+        with patch.dict(
+            os.environ,
+            INGRESS_HOST="tkada.shortclipflix.com",
+            RELEASE_HOLD_WORKLOADS="1",
+            RELEASE_STATE_DIR=str(self.release.folder),
+        ):
+            obj = operations.Deployment()
+            obj.release = "b" * 40
+            obj.existing_deployments = self.deployments
+            with patch.object(
+                obj,
+                "get",
+                return_value={
+                    "metadata": {"uid": "lock"},
+                    "data": {"token": "fixture"},
+                },
+            ):
+                obj.guard_role_upgrade()
+                with (
+                    patch.dict(os.environ, RELEASE_HOLD_WORKLOADS="0"),
+                    self.assertRaisesRegex(ValueError, "frozen"),
+                ):
+                    obj.guard_role_upgrade()
+                self.deployments[PROJECT + "-api"]["spec"]["replicas"] = 1
+                with self.assertRaisesRegex(ValueError, "remain frozen"):
+                    obj.guard_role_upgrade()
+                self.deployments[PROJECT + "-api"]["spec"]["replicas"] = 0
+                proof["manifest_sha256"] = "bad"
+                write(self.release.folder / "restore-verified.json", proof)
+                with self.assertRaisesRegex(ValueError, "published candidate backup"):
+                    obj.guard_role_upgrade()
 
     def test_kubectl_manifest_stream_and_list_are_equivalent(self):
         items = [
@@ -202,10 +470,10 @@ class ReleaseTests(unittest.TestCase):
         ):
             self.release.resume("b" * 40)
         beat = calls.index(("scale", PROJECT + "-beat"))
-        self.assertEqual([c for c in calls[:beat] if c[0] == "scale"].__len__(), 8)
-        self.assertEqual([c for c in calls[:beat] if c[0] == "wait"].__len__(), 8)
-        # 前八个先全部扩容，再统一等待就绪。
-        self.assertTrue(all(c[0] == "scale" for c in calls[:8]))
+        self.assertEqual([c for c in calls[:beat] if c[0] == "scale"].__len__(), 10)
+        self.assertEqual([c for c in calls[:beat] if c[0] == "wait"].__len__(), 10)
+        # 前十个先全部扩容，再统一等待就绪。
+        self.assertTrue(all(c[0] == "scale" for c in calls[:10]))
 
     def test_missing_worker_never_counts_as_drained(self):
         self.assertFalse(
@@ -413,6 +681,7 @@ class ReleaseTests(unittest.TestCase):
             patch.object(self.release, "assert_lock"),
             patch.object(self.release, "config_unchanged"),
             patch.object(self.release.cluster, "app_pods", return_value=[]),
+            patch.object(self.release, "migrate_targeted_queue"),
             patch("release.run", side_effect=RuntimeError("migration failed")),
             patch.object(self.release, "resume") as resume,
         ):
@@ -455,7 +724,7 @@ class ReleaseTests(unittest.TestCase):
                 obj.apply()
                 payloads = [c.kwargs.get("payload", "") for c in command.call_args_list]
                 workloads = next(p for p in payloads if "kind: Deployment" in p)
-                self.assertEqual(workloads.count("  replicas: 0"), 9)
+                self.assertEqual(workloads.count("  replicas: 0"), 11)
                 self.assertNotIn("  replicas: 1", workloads)
                 self.assertFalse(
                     any(c.args[0] == "rollout" for c in command.call_args_list)
