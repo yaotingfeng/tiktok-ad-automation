@@ -492,15 +492,17 @@ def _defer_failed_plan(
         if plan is None:
             return
         plan.disabled_reason = "plan_failed"
-        _defer_plan(plan, now + timedelta(minutes=5))
+        retry_at = now + timedelta(minutes=5)
+        _defer_plan(plan, retry_at)
+        plan.next_material_at = max(plan.next_material_at, retry_at)
 
 
 def _defer_plan(plan, retry_at):
-    # 所有已到期档位一起尊重读取/额度退避，不能被其他到期字段绕过。
+    # 账户筛选、历史和目录一起退避；素材使用已知活跃账户独立投递，
+    # 不能因上游筛选退避而整轮漏投。
     for field in (
         "next_hot_at",
         "next_daily_at",
-        "next_material_at",
         "next_directory_at",
     ):
         setattr(plan, field, max(getattr(plan, field), retry_at))
@@ -528,6 +530,9 @@ def _plan_one(
         accounts = planner.owned_accounts(session, plan)
         if not accounts:
             return
+        material_due_at = (
+            plan.next_material_at if plan.next_material_at <= now else None
+        )
         counted = None
         try:
             if plan.next_hot_at <= now or (
@@ -576,11 +581,6 @@ def _plan_one(
                             now=now,
                         )
                         plan.next_daily_at = planner._next_daily(now)
-            if plan.next_material_at <= now:
-                planner.plan_material(
-                    session, plan, active=plan.last_active_advertiser_ids, now=now
-                )
-                plan.next_material_at = _advance(plan.next_material_at, now, material)
             # 授权后的历史回补立即规划一次，不等到每日回刷；未知开户时间稍后重查。
             if allow_backfill:
                 planner.plan_history(session, plan, now=now)
@@ -666,6 +666,13 @@ def _plan_one(
         finally:
             if counted is not None:
                 planner.record_calls(redis_client, now, counted.count)
+        # 已处理的筛选退避不阻挡素材：沿用已知活跃集合，完整周期投递，
+        # 不再只靠健康检查每两分钟补 50 个账户。新账户仍等筛选确认，不猜测归属。
+        if plan.enabled and material_due_at is not None:
+            planner.plan_material(
+                session, plan, active=plan.last_active_advertiser_ids, now=now
+            )
+            plan.next_material_at = _advance(material_due_at, now, material)
 
 
 def _dispatch_report_jobs(

@@ -1796,3 +1796,67 @@ def test_duplicate_full_creative_scan_finishes_newest_exact_scope_first(
     # 只调整执行顺序，旧任务和分页未伪报成功、未删除。
     session.refresh(older)
     assert older.status == "RUNNING" and older.published_version is None
+
+
+@pytest.mark.parametrize("failure_stage", ["open", "hot", "daily"])
+def test_screening_deferral_cannot_skip_due_material_plan(
+    monkeypatch, committed_sync_seed, redis_client, failure_stage
+):
+    """已有活跃账户的素材投递不依赖本轮账户/历史筛选成功。"""
+    from datetime import timedelta
+
+    from app.core.db import engine
+    from app.integrations.tiktok.contracts.report_reader import RawReportPage
+    from app.integrations.tiktok.sdk import AccountAdmissionDeferred
+    from app.modules.reporting import planner
+    from app.modules.reporting.store_models import AdSyncBc, ReportSyncJob
+
+    seed, factory = committed_sync_seed
+    now = datetime.now(UTC)
+    with factory() as s, s.begin():
+        planner.ensure_bc_plans(s, now=now)
+        plan = s.get(AdSyncBc, (seed.tenant_id, "bc-a"))
+        plan.last_active_advertiser_ids = ["acc-1", "acc-2"]
+        plan.next_directory_at = now + timedelta(hours=1)
+
+    class Reader:
+        def bc_spend(self, *, start, end, **_kwargs):
+            if failure_stage == "hot" or failure_stage == "daily" and start < end:
+                raise AccountAdmissionDeferred(300000)
+            return RawReportPage(
+                tuple(
+                    {"dimensions": {"advertiser_id": a}, "metrics": {"spend": "1"}}
+                    for a in ("acc-1", "acc-2")
+                ),
+                1,
+                1,
+                2,
+            )
+
+    @contextmanager
+    def reader(**_kwargs):
+        if failure_stage == "open":
+            raise AccountAdmissionDeferred(300000)
+        yield Reader()
+
+    monkeypatch.setattr(job_tasks, "_reader_for", reader)
+    job_tasks._plan_one(
+        engine,
+        redis_client,
+        (seed.tenant_id, "bc-a"),
+        now,
+        now + timedelta(seconds=20),
+        planner.HOT_INTERVAL,
+        planner.MATERIAL_INTERVAL,
+    )
+    with factory() as s:
+        jobs = s.exec(
+            select(ReportSyncJob).where(
+                ReportSyncJob.tenant_id == seed.tenant_id,
+                ReportSyncJob.kind == "material_day",
+            )
+        ).all()
+        assert {tuple(j.advertiser_ids) for j in jobs} == {("acc-1",), ("acc-2",)}
+        plan = s.get(AdSyncBc, (seed.tenant_id, "bc-a"))
+        assert plan.next_material_at == now + planner.MATERIAL_INTERVAL
+        assert plan.next_daily_at >= now + timedelta(minutes=5)
