@@ -163,3 +163,25 @@ def test_mcp_requires_its_own_complete_tool_observation(
             pytest.fail("unobserved tools admitted")
     assert error.value.code == "gateway_tool_observation_required"
     assert gateway_wire["wire"].calls == []
+
+
+@pytest.mark.parametrize("gateway_case", ["OFFICIAL_API"], indirect=True)
+def test_api_does_not_repeat_refresh_only_permission_reads(
+    database_engine, redis_client, gateway_case, gateway_wire, monkeypatch
+):
+    """API 不刷新凭据；打开一次、请求准入前后各一次即可核验原冻结路由。"""
+    import importlib
+
+    module = importlib.import_module("app.integrations.tiktok.gateway")
+    original = module.verify_route
+    checks = []
+
+    def observed(*args, **kwargs):
+        checks.append(kwargs.get("advertiser_id"))
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(module, "verify_route", observed)
+    with gateway(database_engine, redis_client, gateway_case) as client:
+        read_vbo(client, gateway_case)
+    assert len(business_calls(gateway_wire, "OFFICIAL_API")) == 1
+    assert len(checks) == 3

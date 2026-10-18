@@ -461,3 +461,59 @@ def test_physical_counter_excludes_local_admission_and_validation(monkeypatch):
     with pytest.raises(AccountAdmissionDeferred):
         reader.ad_day(**args)
     assert reader.count == 1
+
+
+def test_batch_permission_check_runs_once_after_admission(monkeypatch):
+    """额度拒绝不遍历整批账户；准入后仍在物理发送前核验全体权限。"""
+    from contextlib import contextmanager
+    from datetime import UTC, datetime, timedelta
+    from types import SimpleNamespace
+
+    from business_api_client import ApiClient, ReportingApi
+
+    from app.integrations.tiktok.gateway import _sdk_report_send
+    from app.integrations.tiktok.sdk import AccountAdmissionDeferred
+
+    client = ApiClient()
+    client.default_headers["Access-Token"] = "synthetic-only"
+    events = []
+    blocked = [True]
+
+    @contextmanager
+    def scope(*_args):
+        events.append("admission")
+        if blocked[0]:
+            raise AccountAdmissionDeferred(1000)
+        yield
+
+    def check(*_args):
+        events.append("permissions")
+
+    def send(*_args, **_kwargs):
+        events.append("http")
+        return client.deserialize(
+            SimpleNamespace(data=b'{"code":0,"data":{}}'), "InlineResponse200"
+        )
+
+    monkeypatch.setattr(ReportingApi, "report_integrated_get", send)
+    reader = SdkReportReader(
+        send=_sdk_report_send(
+            client,
+            scope,
+            datetime.now(UTC) + timedelta(seconds=60),
+            request_check=check,
+        )
+    )
+    args = {
+        "advertiser_ids": ("a", "b"),
+        "start": date(2026, 10, 5),
+        "end": date(2026, 10, 5),
+        "page": 1,
+    }
+    with pytest.raises(AccountAdmissionDeferred):
+        reader.ad_day(**args)
+    assert events == ["admission"]
+    events.clear()
+    blocked[0] = False
+    reader.ad_day(**args)
+    assert events == ["admission", "permissions", "http"]

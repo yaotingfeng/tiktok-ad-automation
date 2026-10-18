@@ -807,7 +807,10 @@ def execute_job(
                 )
                 result = "COMPLETE"
         except AccountAdmissionDeferred as deferred:
-            session.rollback()
+            # 素材页已经逐页验证并暂存；额度退避不是数据错误，保留本步读完的页。
+            # 其它报表没有分页暂存，仍回滚未完整发布的结果。
+            if job.kind != "material_day":
+                session.rollback()
             job = session.get(ReportSyncJob, job_id, with_for_update=True)
             if job is None or job.claim_token != claim_token or job.status != "RUNNING":
                 return "FAILED"

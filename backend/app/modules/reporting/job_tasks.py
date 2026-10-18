@@ -75,9 +75,9 @@ DIRECTORY_DISPATCH_BATCH = 1000
 # 发布仍单槽；超出调用准入的步骤由准入层延后，不会突破平台调用额度。
 DIRECTORY_DISPATCH_WINDOW = 32
 # 事实与关联独立限制在途任务；这是领取上限，不代表共享 Worker 中的专属执行槽。
-# 12 个 prefork 配两批有界在途名额，以候补吸收 outbox 交付空档；名额不等于执行并发。
-# 候补仍受领取后 240 秒租约约束；排队过期须重新领取，不能由旧消息直接续租。
-REPORT_DISPATCH_WINDOW = 24
+# 广告与素材各共享每秒 3 次的接口额度；只提前保留一小批候补，避免 24 个
+# 在途任务在未发请求前反复争抢准入。Worker 数量与平台额度不变。
+REPORT_DISPATCH_WINDOW = 6
 LINK_DISPATCH_WINDOW = 1
 BACKFILL_DISPATCH_WINDOW = 1
 # 目录消息发布后超过此时长仍未被领取，视为丢失并重新入队。
@@ -889,7 +889,7 @@ def _supersede_stalled_directory_runs(now):
     return (
         update(AdDirectoryRun)
         .where(
-            col(AdDirectoryRun.status).in_(["QUEUED", "RUNNING"]),
+            col(AdDirectoryRun.status).in_(["QUEUED", "RUNNING", "WAITING_REMOTE"]),
             col(AdDirectoryRun.published_version).is_(None),
             col(AdDirectoryRun.claimed_until).is_(None)
             | (col(AdDirectoryRun.claimed_until) <= now),

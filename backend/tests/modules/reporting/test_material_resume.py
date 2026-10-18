@@ -141,11 +141,19 @@ def test_later_failure_preserves_prior_step_and_only_replays_current_step(
     reader = Pages(count=8, failure=(7, failure))
     assert run(factory, job, reader) == "WAITING"
     assert run(factory, claim(factory, job.id), reader) == "WAITING"
-    assert [page.page for page in pages(factory, job.id)] == [1, 2, 3, 4, 5]
+    assert [page.page for page in pages(factory, job.id)] == (
+        [1, 2, 3, 4, 5, 6]
+        if isinstance(failure, AccountAdmissionDeferred)
+        else [1, 2, 3, 4, 5]
+    )
     assert facts(factory, seed.tenant_id) == []
     reader.failure = None
     assert run(factory, claim(factory, job.id), reader) == "COMPLETE"
-    assert reader.calls == [1, 2, 3, 4, 5, 6, 7, 6, 7, 8]
+    assert reader.calls == (
+        [1, 2, 3, 4, 5, 6, 7, 7, 8]
+        if isinstance(failure, AccountAdmissionDeferred)
+        else [1, 2, 3, 4, 5, 6, 7, 6, 7, 8]
+    )
     assert len(facts(factory, seed.tenant_id)) == 8
     with factory() as session:
         job = session.get(ReportSyncJob, job.id)

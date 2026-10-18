@@ -391,7 +391,10 @@ def test_cleanup_removes_only_finished_directory_staging_pages(
         assert session.get(AdDirectoryRun, runs[name]) is not None
 
 
-def test_superseded_stalled_directory_runs_are_closed_and_cleaned(session, sync_seed):
+@pytest.mark.parametrize("stalled_status", ["QUEUED", "RUNNING", "WAITING_REMOTE"])
+def test_superseded_stalled_directory_runs_are_closed_and_cleaned(
+    session, sync_seed, stalled_status
+):
     """同层级已有更新运行发布后，较早的未完成运行标记为 STALE 并清理暂存页；
     其他广告类型、租约有效、尚无更新发布的运行保持不动。"""
     from datetime import timedelta
@@ -440,7 +443,7 @@ def test_superseded_stalled_directory_runs_are_closed_and_cleaned(session, sync_
         session.flush()
         return run.id
 
-    stalled = make("1", "RUNNING")
+    stalled = make("1", stalled_status)
     leased = make("2", "RUNNING", lease=now + timedelta(minutes=5))
     other_type = make("3", "QUEUED", ad_type="NORMAL")
     make("4", "COMPLETE", version=1, at=now - timedelta(minutes=10))

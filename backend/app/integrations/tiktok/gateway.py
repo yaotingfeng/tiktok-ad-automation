@@ -252,12 +252,16 @@ def open_tiktok_gateway(
         raise DomainError(
             "group_isolation_scope_mismatch", "冻结隔离路由或补充合同不匹配"
         )
-    # 打开前与每个物理发送前都检查原 route；整个工厂从不重新读取 BC 默认。
-    with bounded_session(database_engine, task_deadline=task_deadline) as session:
-        verify_route(
-            session, context=context, route=route, advertiser_id=None, capability="read"
-        )
+    # API 不刷新凭据，直接在下方读取凭据的事务核验；MCP 刷新前后均核验原路由。
     if route.channel == "OFFICIAL_MCP":
+        with bounded_session(database_engine, task_deadline=task_deadline) as session:
+            verify_route(
+                session,
+                context=context,
+                route=route,
+                advertiser_id=None,
+                capability="read",
+            )
         ensure_mcp_credentials(
             database_engine=database_engine,
             redis_client=redis_client,
@@ -369,17 +373,19 @@ def open_tiktok_gateway(
                 raise DomainError(
                     "group_isolation_operation_forbidden", "隔离会话只允许停用原组"
                 )
-        with bounded_session(database_engine, task_deadline=task_deadline) as session:
-            verify_route(
-                session,
-                context=context,
-                route=route,
-                advertiser_id=advertiser_id,
-                capability=capability,
-                operation=management_operation,
-                entity_kind=entity_kind,
-            )
         if route.channel == "OFFICIAL_MCP":
+            with bounded_session(
+                database_engine, task_deadline=task_deadline
+            ) as session:
+                verify_route(
+                    session,
+                    context=context,
+                    route=route,
+                    advertiser_id=advertiser_id,
+                    capability=capability,
+                    operation=management_operation,
+                    entity_kind=entity_kind,
+                )
             ensure_mcp_credentials(
                 database_engine=database_engine,
                 redis_client=redis_client,
@@ -666,8 +672,6 @@ def _sdk_report_send(client, request_scope, deadline, *, request_check=None):
     token = client.default_headers["Access-Token"]
 
     def send(operation, advertiser_id, arguments):
-        if request_check is not None:
-            request_check(operation, arguments)
         if operation not in {
             "reports.integrated",
             "reports.bc",

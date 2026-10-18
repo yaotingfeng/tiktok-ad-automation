@@ -2794,3 +2794,11 @@
 - 只读PG连接102/200、tkada48/Lock等待0，资源与25次共享准入采样留证；单次平台响应失败已由原机制结束STALE。发布与业务证据见docs/validation/2026-10-18-directory-admission-recovery.md及私有`.runtime/remaining-sync-20261018/`。本节审计仅本地提交，不再推送触发重复发布。
 
 - 追加19:41:23样本：原骏伯0/0、目录658；大池过期回升247/230、目录5093。发布已成功，跨BC稳态容量仍未解决；补充只读Redis/执行中任务/PG活动快照，不据此再猜测放宽端点并发，未执行第二批发布。后续排查从`.runtime/remaining-sync-20261018/active-reporting-fast.json`、`pg-activity.json`、`report-capacity.jsonl`、`admission-sample.json`续接。
+
+## 2026-10-18：同步积压简单修复（待生产验收）
+
+- 生产最近五分钟1751次报表执行中1230次WAITING，素材1129次；随后观察99个素材退避状态均为admission_deferred。没有把小样本权限耗时称为唯一根因。
+- API删除不涉及凭据刷新的重复路由核验，MCP刷新前后核验保留；批量报表仅在准入后、发送前逐账户核验。候选只读首屏探针5账户SELECT268→86（不同响应，不把时间当严格AB）。没有修改生产文件或发布事实。
+- 素材额度退避保留本步验证通过的暂存页，继续未读页；数据错误仍回滚、全部分页齐备才发布。实时事实候补24→6，既有Worker12与平台额度、四开关不变。
+- 原superseded清理纳入WAITING_REMOTE；已有更新发布且旧租约无效才清理。预览约1449个完全同范围旧素材运行可由新轮替代，发布备份后再处理，不删除正式事实或清Redis。
+- 三项新增/调整回归先红后绿；网关、素材续传、报表任务首轮109通过；新增旧WAITING_REMOTE清理三参数通过（修复前该参数失败）。相关Ruff、ty check app、diff检查、K8s及发布工具测试通过。扩大领域回归在运行，CI仍须完成标准门禁、备份、隔离恢复和生产发布。详细范围见docs/validation/2026-10-18-sync-simple-recovery.md。
