@@ -1798,11 +1798,11 @@ def test_duplicate_full_creative_scan_finishes_newest_exact_scope_first(
     assert older.status == "RUNNING" and older.published_version is None
 
 
-@pytest.mark.parametrize("failure_stage", ["open", "hot", "daily"])
-def test_screening_deferral_cannot_skip_due_material_plan(
+@pytest.mark.parametrize("failure_stage", ["open", "hot", "daily", "backoff"])
+def test_screening_deferral_cannot_skip_due_live_reports(
     monkeypatch, committed_sync_seed, redis_client, failure_stage
 ):
-    """已有活跃账户的素材投递不依赖本轮账户/历史筛选成功。"""
+    """已知活跃账户的广告和素材刷新独立于账户发现与历史筛选。"""
     from datetime import timedelta
 
     from app.core.db import engine
@@ -1818,6 +1818,8 @@ def test_screening_deferral_cannot_skip_due_material_plan(
         plan = s.get(AdSyncBc, (seed.tenant_id, "bc-a"))
         plan.last_active_advertiser_ids = ["acc-1", "acc-2"]
         plan.next_directory_at = now + timedelta(hours=1)
+        if failure_stage == "backoff":
+            plan.next_hot_at = plan.next_daily_at = now + timedelta(minutes=5)
 
     class Reader:
         def bc_spend(self, *, start, end, **_kwargs):
@@ -1835,6 +1837,7 @@ def test_screening_deferral_cannot_skip_due_material_plan(
 
     @contextmanager
     def reader(**_kwargs):
+        assert failure_stage != "backoff", "账户筛选仍应遵守退避时间"
         if failure_stage == "open":
             raise AccountAdmissionDeferred(300000)
         yield Reader()
@@ -1857,6 +1860,14 @@ def test_screening_deferral_cannot_skip_due_material_plan(
             )
         ).all()
         assert {tuple(j.advertiser_ids) for j in jobs} == {("acc-1",), ("acc-2",)}
+        ads = s.exec(
+            select(ReportSyncJob).where(
+                ReportSyncJob.tenant_id == seed.tenant_id,
+                ReportSyncJob.kind == "ad_day",
+                ReportSyncJob.priority == 1,
+            )
+        ).all()
+        assert {a for j in ads for a in j.advertiser_ids} == {"acc-1", "acc-2"}
         plan = s.get(AdSyncBc, (seed.tenant_id, "bc-a"))
         assert plan.next_material_at == now + planner.MATERIAL_INTERVAL
         assert plan.next_daily_at >= now + timedelta(minutes=5)

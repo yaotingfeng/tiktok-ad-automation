@@ -534,6 +534,7 @@ def _plan_one(
             plan.next_material_at if plan.next_material_at <= now else None
         )
         counted = None
+        hot_planned = False
         try:
             if plan.next_hot_at <= now or (
                 allow_backfill and plan.next_daily_at <= now
@@ -561,6 +562,7 @@ def _plan_one(
                             )
                         )
                         planner.plan_hot(session, plan, active=active, now=now)
+                        hot_planned = True
                         planner.mark_confirmed_empty(
                             session,
                             plan,
@@ -666,9 +668,14 @@ def _plan_one(
         finally:
             if counted is not None:
                 planner.record_calls(redis_client, now, counted.count)
-        # 已处理的筛选退避不阻挡素材：沿用已知活跃集合，完整周期投递，
-        # 不再只靠健康检查每两分钟补 50 个账户。新账户仍等筛选确认，不猜测归属。
+        # 已知活跃账户的两类实时事实共用两分钟刷新周期；账户发现/历史筛选
+        # 仍按原时间退避，不能阻挡已有账户刷新，也不能只靠每轮 50 个健康补拉。
+        # 筛选本轮成功时已规划热报，不重复创建；新账户仍等筛选确认，不猜测归属。
         if plan.enabled and material_due_at is not None:
+            if not hot_planned:
+                planner.plan_hot(
+                    session, plan, active=plan.last_active_advertiser_ids, now=now
+                )
             planner.plan_material(
                 session, plan, active=plan.last_active_advertiser_ids, now=now
             )
