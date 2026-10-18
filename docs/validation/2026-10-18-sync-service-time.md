@@ -76,3 +76,18 @@ known_reporting_accounts在owned范围、有效账户时区的当前日，以广
 候选将报表直接补位限定报表；目录SQL按各lane空槽筛每tenant候选，再恢复原tenant逐轮次序及持久游标，保留原共享锁、SKIP LOCKED、失效消息恢复、1000硬上限、独立目录唤醒。混合/单lane容量3回归先红、报表不扫目录扩展回归先红；新增双tenant小batch及非空cursor检查。无新队列/迁移/开关、并发或调用配额调整。
 
 候选最终真PG/Redis完整领域816 passed/62.52s，Ruff/app ty、diff检查通过，独立审查无阻断；旧8并发部署合同已同步实际12并发。未重新改变部署资源或SDK策略。本地回归不替代下一版生产服务时间/不同账户覆盖验收。
+
+
+## 00957499 减少单步骤目录工作已发布
+
+准确候选009574993e18de87154bb0975312f2a56d3f50d2已推公司main并标准构建exit0，13:28原release complete；Jenkins#35完整CI人为中止、ABORTED。11角色独立同版Ready、四开关true、原策略哈希不变、Worker池2+1/API与Beat5+10、HTTPS200，实测reporting12/Control2/实时目录4；事实24/关联1/历史1，CPU/内存合同不变，无新迁移。临时容器/auth/tool.env已清理。
+
+发布token98c9a0eb631549885296344a2f41d8a9，PG豁免6e2fdc8e109d3f2c4e83b7540066493088feabac68680511c304929ad934bfe5、快照247cefc2e7abe9b17ec05799a0f276f5d42d5a4ecf82078165c7e8aac39cdaad，Redis20键、broker移动0且verified；postgres_dump=false/isolated_restore_verified=false，保留#28已验证全备。
+
+13:34:46原Junbo63活跃广告/素材均完整5分钟内、P95约115/101秒；大池570广告全覆盖/P95112秒，素材438鲜、132过期，P95654秒（仍含旧积压）。13:34:57同原Junbo170账户18日官方SDK2434.56USD、本地2435.10，采样差0.54USD；164源行均owned，无外部正消耗。用户2800的源范围未确认，不能据此否定。原13:30三条止损自然COMPLETE/0命中，未改阈值。关联导致两账户部分素材跳过，限定2账户独立只读诊断亦未发现被该缺口拦住的原规则命中；不将1507条跳过等同1507条在花费的广告漏停。已准备广告级应急暂停15条原生预览，未获明确范围确认前不执行新增广告级操作。
+
+## 按账户覆盖修正事实类型分配候选
+
+009自然五分钟样本大池广告308个job已覆盖570账户多轮，而素材438job仅覆盖438账户；广告每job最多5账户，素材每job1账户，按job数量平衡类型在途存在单位失配。候选改为有效RUNNING的实际账户权重和，加本kind本候选之前的exclusive前缀权重；单候选自身不预先惩罚大batch。空scope至少权重1防零负载，按实际1–5不写死5；campaign_hour同单位无特例。tenant持久轮转、kind内FIFO、due准入、过期claim和24个job窗口全部保留，单kind仍可借满，不新增冷读门控/表/迁移/队列/开关或平台额度。
+
+独立私有PG新增12例，原SQL8红、错误inclusive前缀专项1红，相关77与完整reporting360绿，Ruff/ty通过。根应用后真实PG/Redis完整领域828 passed/63.27s、Ruff/app ty/diff通过，独立只读审查无阻断。账户负载均衡不等于吞吐相等，发布后仍按实际新鲜度、不同账户完成量和排队到发布验收。

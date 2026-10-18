@@ -218,12 +218,19 @@ def claim_jobs(
         "created_at, priority, id" if lane == "live" else "priority, due_at, id"
     )
     partition = "j.tenant_id, j.kind" if lane == "live" else "j.tenant_id"
-    rank_column = "kind_rn" if lane == "live" else "rn"
+    rank_column = "kind_prefix" if lane == "live" else "rn"
+    rank_expression = (
+        f"COALESCE(SUM(GREATEST(1, jsonb_array_length(j.advertiser_ids))) OVER "
+        f"(PARTITION BY {partition} ORDER BY {local_order} "
+        "ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING), 0)"
+        if lane == "live"
+        else f"ROW_NUMBER() OVER (PARTITION BY {partition} ORDER BY {local_order})"
+    )
     ranking = f"""
         candidates AS (
             SELECT j.id, j.tenant_id, j.kind, {priority} AS priority,
                    j.created_at, j.due_at, c.last_dispatched_at,
-                   ROW_NUMBER() OVER (PARTITION BY {partition} ORDER BY {local_order}) AS {rank_column}
+                   {rank_expression} AS {rank_column}
             FROM report_sync_job j
             LEFT JOIN report_dispatch_cursor c ON c.tenant_id = j.tenant_id
             WHERE (j.status IN ('QUEUED','WAITING') AND j.due_at <= :now
@@ -232,11 +239,13 @@ def claim_jobs(
               {lane_filter})
     """
     if lane == "live":
-        # 同租户按有效在途数量补足较空的类型；kind_rn 把本批尚未落库的分配也算入。
-        # 单槽续补不会固定选择旧广告，批量领取也不会一口气排完广告再轮到素材。
+        # 广告可批量读多个账户，素材只能单账户；类型负载按账户覆盖而非任务数均衡。
+        # 前缀只计本候选之前的分配：先选负载较空的类型，再承担本批账户，避免
+        # 单槽时大批次因自身成本较高永远排在单账户任务之后。总窗口仍按任务计数。
         ranking += f""",
         inflight AS (
-            SELECT j.tenant_id, j.kind, count(*) AS running
+            SELECT j.tenant_id, j.kind,
+                   SUM(GREATEST(1, jsonb_array_length(j.advertiser_ids))) AS running
             FROM report_sync_job j
             WHERE j.status = 'RUNNING' AND j.claimed_until > :now
               AND {lane_predicate(lane="live", alias="j")}
@@ -244,7 +253,7 @@ def claim_jobs(
         ranked AS (
             SELECT c.*, ROW_NUMBER() OVER (
                 PARTITION BY c.tenant_id
-                ORDER BY COALESCE(i.running, 0) + c.kind_rn,
+                ORDER BY COALESCE(i.running, 0) + c.kind_prefix,
                          c.created_at, c.priority, c.id) AS rn
             FROM candidates c LEFT JOIN inflight i
               ON i.tenant_id = c.tenant_id AND i.kind = c.kind)

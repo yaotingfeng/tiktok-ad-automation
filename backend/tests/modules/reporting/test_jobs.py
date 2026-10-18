@@ -780,10 +780,16 @@ def test_admission_retry_keeps_original_fact_place_but_obeys_not_before(
     ] == [old]
 
 
-def _live_kind_backlog(session, seed, now, kinds=("ad_day", "material_day")):
+def _live_kind_backlog(
+    session, seed, now, kinds=("ad_day", "material_day"), widths=None
+):
     from app.modules.accounts.models import AdvertiserAccount, BCAccountAccess
 
-    accounts = [f"kind-account-{index}" for index in range(8)]
+    widths = widths or {kind: [1] * 8 for kind in kinds}
+    accounts = [
+        f"kind-account-{index}"
+        for index in range(max(sum(widths[kind]) for kind in kinds))
+    ]
     for advertiser in accounts:
         session.add(
             AdvertiserAccount(
@@ -812,14 +818,17 @@ def _live_kind_backlog(session, seed, now, kinds=("ad_day", "material_day")):
     result = {}
     for rank, kind in enumerate(kinds):
         result[kind] = []
-        for index, advertiser in enumerate(accounts):
+        offset = 0
+        for index, width in enumerate(widths[kind]):
+            batch = accounts[offset : offset + width]
+            offset += width
             job_id = enqueue_job(
                 session,
                 tenant_id=seed.tenant_id,
                 bc_id="bc-a",
                 kind=kind,
                 tier="hot",
-                advertiser_ids=[advertiser],
+                advertiser_ids=batch,
                 start=now.date(),
                 end=now.date(),
                 frozen_route=_route(seed),
@@ -898,3 +907,185 @@ def test_expired_fact_claims_do_not_count_as_kind_inflight(session, sync_seed):
     assert all(
         job.claim_token != old_claim and job.claimed_until > now for job in claimed
     )
+
+
+@pytest.mark.parametrize("batch_size", [2, 5])
+def test_live_kind_weight_balances_accounts_instead_of_batch_counts(
+    session, sync_seed, batch_size
+):
+    now = datetime.now(UTC)
+    ids = _live_kind_backlog(
+        session,
+        sync_seed,
+        now,
+        widths={"ad_day": [batch_size] * 8, "material_day": [1] * (batch_size * 8)},
+    )
+    claimed = claim_jobs(session, now=now, limit=(batch_size + 1) * 2, lane="live")
+    assert [job.id for job in claimed if job.kind == "ad_day"] == ids["ad_day"][:2]
+    assert [job.id for job in claimed if job.kind == "material_day"] == ids[
+        "material_day"
+    ][: batch_size * 2]
+    assert sum(
+        len(job.advertiser_ids) for job in claimed if job.kind == "ad_day"
+    ) == sum(len(job.advertiser_ids) for job in claimed if job.kind == "material_day")
+
+
+def test_live_kind_weight_single_slot_does_not_penalize_large_first_batch(
+    session, sync_seed
+):
+    now = datetime.now(UTC)
+    ids = _live_kind_backlog(
+        session,
+        sync_seed,
+        now,
+        widths={"ad_day": [5, 5], "material_day": [1] * 10},
+    )
+    # 没有在途时比较零起点，旧广告批必须先服务；inclusive prefix会总选成本1的素材。
+    first = claim_jobs(session, now=now, limit=1, lane="live")
+    assert [job.id for job in first] == ids["ad_day"][:1]
+    first[0].status, first[0].claim_token, first[0].claimed_until = (
+        "COMPLETE",
+        None,
+        None,
+    )
+    session.flush()
+    assert [
+        job.id for job in claim_jobs(session, now=now, limit=1, lane="live")
+    ] == ids["ad_day"][1:2]
+
+
+def test_live_kind_weight_single_refill_uses_running_accounts_not_jobs(
+    session, sync_seed
+):
+    now = datetime.now(UTC)
+    ids = _live_kind_backlog(
+        session,
+        sync_seed,
+        now,
+        widths={"ad_day": [5] * 4, "material_day": [1] * 12},
+    )
+    first = claim_jobs(session, now=now, limit=6, lane="live")
+    assert [job.kind for job in first] == ["ad_day"] + ["material_day"] * 5
+    for index in range(5):
+        done = session.get(ReportSyncJob, ids["material_day"][index])
+        done.status, done.claim_token, done.claimed_until = "COMPLETE", None, None
+        session.flush()
+        assert [
+            job.id for job in claim_jobs(session, now=now, limit=1, lane="live")
+        ] == ids["material_day"][index + 5 : index + 6]
+    done = session.get(ReportSyncJob, ids["ad_day"][0])
+    done.status, done.claim_token, done.claimed_until = "COMPLETE", None, None
+    session.flush()
+    assert [
+        job.id for job in claim_jobs(session, now=now, limit=1, lane="live")
+    ] == ids["ad_day"][1:2]
+
+
+def test_live_kind_weight_variable_scopes_use_exclusive_prefix_and_fifo(
+    session, sync_seed
+):
+    now = datetime.now(UTC)
+    ids = _live_kind_backlog(
+        session,
+        sync_seed,
+        now,
+        widths={"ad_day": [2, 5, 1], "material_day": [1] * 10},
+    )
+    # 广告虚拟起点为0/2/7，不能固定权重5，也不能把第二批5计入自己的排序成本。
+    claimed = claim_jobs(session, now=now, limit=10, lane="live")
+    expected = [
+        ids["ad_day"][0],
+        *ids["material_day"][:2],
+        ids["ad_day"][1],
+        *ids["material_day"][2:7],
+        ids["ad_day"][2],
+    ]
+    assert [job.id for job in claimed] == expected
+
+
+@pytest.mark.parametrize("missing_lease", [False, True])
+def test_live_kind_weight_expired_large_claims_do_not_inflate_load(
+    session, sync_seed, missing_lease
+):
+    from uuid import uuid4
+
+    now = datetime.now(UTC)
+    ids = _live_kind_backlog(
+        session,
+        sync_seed,
+        now,
+        widths={"ad_day": [5] * 4, "material_day": [1] * 12},
+    )
+    old_token = uuid4()
+    for job_id in ids["ad_day"]:
+        job = session.get(ReportSyncJob, job_id)
+        job.status, job.claim_token = "RUNNING", old_token
+        job.claimed_until = None if missing_lease else now - timedelta(seconds=1)
+    session.flush()
+    claimed = claim_jobs(session, now=now, limit=6, lane="live")
+    assert [job.id for job in claimed] == [ids["ad_day"][0], *ids["material_day"][:5]]
+    assert all(
+        job.claim_token != old_token and job.claimed_until > now for job in claimed
+    )
+
+
+def test_live_kind_weight_preserves_tenant_rotation(session):
+    from tests.modules.reporting.sync_conftest import sync_seed as seed_fixture
+
+    now = datetime.now(UTC)
+    seeds = [seed_fixture.__wrapped__(session), seed_fixture.__wrapped__(session)]
+    ids = [
+        _live_kind_backlog(
+            session, seed, now, widths={"ad_day": [5] * 4, "material_day": [1] * 20}
+        )
+        for seed in seeds
+    ]
+    claimed = claim_jobs(session, now=now, limit=12, lane="live")
+    for seed, backlog in zip(seeds, ids, strict=True):
+        tenant_jobs = [job for job in claimed if job.tenant_id == seed.tenant_id]
+        assert len(tenant_jobs) == 6
+        assert [job.id for job in tenant_jobs] == [
+            backlog["ad_day"][0],
+            *backlog["material_day"][:5],
+        ]
+
+
+@pytest.mark.parametrize("kind", ["ad_day", "campaign_hour"])
+def test_live_kind_weight_single_batched_kind_borrows_whole_job_window(
+    session, sync_seed, kind
+):
+    now = datetime.now(UTC)
+    ids = _live_kind_backlog(
+        session, sync_seed, now, kinds=(kind,), widths={kind: [5] * 8}
+    )
+    assert [
+        job.id for job in claim_jobs(session, now=now, limit=8, lane="live")
+    ] == ids[kind]
+
+
+def test_live_kind_weight_hourly_batches_share_account_units(session, sync_seed):
+    now = datetime.now(UTC)
+    ids = _live_kind_backlog(
+        session,
+        sync_seed,
+        now,
+        kinds=("campaign_hour", "material_day"),
+        widths={"campaign_hour": [5] * 4, "material_day": [1] * 12},
+    )
+    assert [job.id for job in claim_jobs(session, now=now, limit=6, lane="live")] == [
+        ids["campaign_hour"][0],
+        *ids["material_day"][:5],
+    ]
+
+
+def test_live_kind_weight_legacy_empty_scope_still_has_positive_cost(
+    session, sync_seed
+):
+    now = datetime.now(UTC)
+    ids = _live_kind_backlog(session, sync_seed, now)
+    # 正常hot enqueue拒绝空scope；遗留行没有DB数组非空约束，不能获得零成本。
+    for job_id in ids["ad_day"]:
+        session.get(ReportSyncJob, job_id).advertiser_ids = []
+    session.flush()
+    claimed = claim_jobs(session, now=now, limit=6, lane="live")
+    assert [job.kind for job in claimed] == ["ad_day", "material_day"] * 3
