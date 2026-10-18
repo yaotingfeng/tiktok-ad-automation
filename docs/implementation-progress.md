@@ -2760,3 +2760,7 @@
 ## 发布辅助 Pod 调度失败：报表 Worker 排除 Beat 可用区
 
 #42/#45 停服后失败：发布辅助 Pod 必须挂 Beat 盘与备份盘（均固定 ap-southeast-1b），该区只有一台节点；上次 recover 时报表 Worker（申请2CPU/4Gi）被随机调度到这台节点，辅助 Pod 报 Insufficient cpu 无法调度，release 在 helper-created 失败（Worker 未停，仅 API/Beat 停约11分钟，recover 恢复）。给报表 Worker 加 nodeAffinity `topology.kubernetes.io/zone NotIn [ap-southeast-1b]`；线上先缩0→补丁→扩1（避免滚动双开超PG连接预算），已落到 1c 节点。K8s16对象、部署资产4组通过。
+
+## 发布备份：PG 导出/恢复改为容器内后台运行
+
+#37/#45后/#48 停写后在 frozen 阶段失败，备份盘只写出 postgres.dir/toc.dat。同参数在集群内 Pod 直接运行 pg_dump 连续4次成功（101–182秒）；发布端从公司 Jenkins（国内）经单个 `kubectl exec` 会话持续数分钟运行 pg_dump，而到新加坡 ACK API 的连接今日频繁 EOF，会话断开即终止远端进程。新增 `backup.detached`：脚本经 stdin 写入容器 0700 临时目录、首行自删（不留含凭据脚本），setsid 脱离会话运行，结束原子写退出码；发布端每3秒短连接轮询，单次轮询失败可容忍约2分钟，总超时1小时，失败时带日志尾部报错。PG 导出与隔离恢复两步改用此路径，其余短命令不变。本地 postgres:18 容器验证参数传递、模拟轮询断线、失败退出码与临时目录清理；部署资产4组通过，真实 PG/Redis 发布集成由 CI 发布工具线执行。

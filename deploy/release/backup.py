@@ -88,6 +88,49 @@ def sh(pod, container, script, *args, data=None):
     return pod(container, "sh", "-c", script, "sh", *args, data=data)
 
 
+# 后台任务：脚本经 stdin 写入容器私有临时目录，setsid 脱离 exec 会话运行，结束时原子写退出码。
+_DETACH = """umask 077
+d=$(mktemp -d /tmp/tkada-job.XXXXXX)
+cat > "$d/run.sh"
+setsid sh -c 'd=$1; shift; sh "$d/run.sh" "$@" > "$d/log" 2>&1; echo $? > "$d/rc.tmp"; mv "$d/rc.tmp" "$d/rc"' sh "$d" "$@" </dev/null >/dev/null 2>&1 &
+echo "$d"
+"""
+_POLL = 'if [ -e "$1/rc" ]; then cat "$1/rc"; else echo running; fi'
+DETACHED_POLL_SECONDS = 3
+DETACHED_TIMEOUT_SECONDS = 3600
+# 轮询连接本身也可能断，连续失败超过此次数（约 2 分钟）才判定失败。
+DETACHED_POLL_FAILURES = 40
+
+
+def detached(pod, container, script, *args):
+    """在容器内后台运行数分钟级脚本，再用短连接轮询退出码。
+
+    发布端（公司 Jenkins，国内）到新加坡集群 API 的长时间 exec 会话会间歇断开，断开时远端
+    进程随会话被终止：PG 导出只写出 toc.dat 就失败，造成停写后发布中止。脚本首行须删除自身，
+    以免含连接凭据的脚本留在容器内。
+    """
+    job = pod(container, "sh", "-c", _DETACH, "sh", *args, data=script.encode())
+    job = job.strip().splitlines()[-1]
+    require(job.startswith("/tmp/tkada-job."), "Detached job did not start")
+    deadline = time.monotonic() + DETACHED_TIMEOUT_SECONDS
+    failures = 0
+    while True:
+        time.sleep(DETACHED_POLL_SECONDS)
+        try:
+            status = pod(container, "sh", "-c", _POLL, "sh", job).strip()
+        except RuntimeError:
+            failures += 1
+            require(failures <= DETACHED_POLL_FAILURES, "Detached job status unreachable")
+            continue
+        failures = 0
+        if status != "running":
+            break
+        require(time.monotonic() < deadline, "Detached job timed out")
+    log = pod(container, "sh", "-c", 'tail -c 4000 "$1/log"; rm -rf "$1"', "sh", job)
+    require(status == "0", f"Detached job failed ({status}): {log[-2000:]}")
+    return log
+
+
 # PostgreSQL 用目录格式并行导出，备份里唯一的目录项；其余都是普通文件。
 PG_DUMP = "postgres.dir"
 PG_DUMP_JOBS = 4
@@ -168,19 +211,17 @@ def snapshot(release):
         "export " + key + "=" + shlex.quote(value)
         for key, value in pg_environment(release.values).items()
     )
-    pod(
+    detached(
+        pod,
         "postgres",
-        "sh",
-        "-s",
-        data=(
-            exports
-            # 目录格式按表并行导出（ad_object 等数个 GB 级大表），lz4 压缩；
-            # 同一快照下多连接一致导出，只读。
-            + f"\npg_dump -Fd --jobs={PG_DUMP_JOBS} --compress=lz4"
-            + " --no-owner --no-acl --schema=public -f "
-            + shlex.quote(target + "/" + PG_DUMP)
-            + "\n"
-        ).encode(),
+        'rm -f "$0"\nset -e\n'
+        + exports
+        # 目录格式按表并行导出（ad_object 等数个 GB 级大表），lz4 压缩；
+        # 同一快照下多连接一致导出，只读。
+        + f"\npg_dump -Fd --jobs={PG_DUMP_JOBS} --compress=lz4"
+        + " --no-owner --no-acl --schema=public -f "
+        + shlex.quote(target + "/" + PG_DUMP)
+        + "\n",
     )
     for filename, directory, excludes in [
         ("runtime-app.tar.gz", "/app", ["--exclude=.venv", "--exclude=__pycache__"]),
@@ -260,7 +301,8 @@ def verify_archives(pod, folder, directory):
     require(result["ok"], "Backup verification failed: " + str(result["error"]))
 
 
-RESTORE_SCRIPT = f"""set -e
+RESTORE_SCRIPT = f"""rm -f "$0"
+set -e
 pg_restore --list "$1" | grep -v ' SCHEMA - public ' > /tmp/restore.toc
 # 多进程并行恢复数据与索引（单事务与并行互斥）；中途失败即退出，临时库随 Pod 删除。
 pg_restore --use-list=/tmp/restore.toc --exit-on-error --jobs=4 \\
@@ -304,7 +346,7 @@ def restore_verify(pod, folder, directory, candidate_sha=None, candidate="candid
         "-c",
         'CREATE EXTENSION pg_trgm; CREATE EXTENSION "uuid-ossp";',
     )
-    sh(pod, "verify-pg", RESTORE_SCRIPT, directory + "/" + PG_DUMP)
+    detached(pod, "verify-pg", RESTORE_SCRIPT, directory + "/" + PG_DUMP)
     fingerprint = json.loads(guarded(pod, "app", PROBE.read_text(), "fingerprint"))
     require(
         fingerprint == json.loads((folder / "source-fingerprint.json").read_text()),
