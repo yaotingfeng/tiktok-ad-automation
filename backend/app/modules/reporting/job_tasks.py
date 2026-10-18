@@ -43,6 +43,7 @@ from app.modules.ads.directory_requests import (
 )
 from app.modules.ads.sync_models import AdDirectoryPage, AdDirectoryRun
 from app.modules.reporting import planner, publish
+from app.modules.reporting.directory_refresh import rule_accounts
 from app.modules.reporting.jobs import (
     LEASE,
     _CountingReader,
@@ -670,15 +671,22 @@ def _plan_one(
                 planner.record_calls(redis_client, now, counted.count)
         # 已知活跃账户的两类实时事实共用两分钟刷新周期；账户发现/历史筛选
         # 仍按原时间退避，不能阻挡已有账户刷新，也不能只靠每轮 50 个健康补拉。
-        # 筛选本轮成功时已规划热报，不重复创建；新账户仍等筛选确认，不猜测归属。
+        # 筛选本轮成功时已规划热报，不重复创建；额外规则账户也仅取本 BC 已确认归属。
         if plan.enabled and material_due_at is not None:
-            if not hot_planned:
-                planner.plan_hot(
-                    session, plan, active=plan.last_active_advertiser_ids, now=now
+            # 规则覆盖但暂时无消耗的账户也必须真实刷新；筛选退避时不能把它们
+            # 排除在刷新集合之外，更不能用旧筛选结果持续伪造当日零报表。
+            refresh_accounts = sorted(
+                set(plan.last_active_advertiser_ids)
+                | rule_accounts(
+                    session,
+                    tenant_id=plan.tenant_id,
+                    bc_id=plan.bc_id,
+                    accounts=accounts,
                 )
-            planner.plan_material(
-                session, plan, active=plan.last_active_advertiser_ids, now=now
             )
+            if not hot_planned:
+                planner.plan_hot(session, plan, active=refresh_accounts, now=now)
+            planner.plan_material(session, plan, active=refresh_accounts, now=now)
             plan.next_material_at = _advance(material_due_at, now, material)
 
 

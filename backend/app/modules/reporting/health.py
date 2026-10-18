@@ -39,22 +39,22 @@ MAX_REPAIR_ACCOUNTS = 50
 
 def measure_health(session, plan, *, now, accounts=None):
     owned = owned_accounts(session, plan) if accounts is None else accounts
+    strict_accounts = rule_accounts(
+        session, tenant_id=plan.tenant_id, bc_id=plan.bc_id, accounts=owned
+    )
     params = {
         "t": plan.tenant_id,
         "bc": plan.bc_id,
         "ids": owned,
         "active": sorted(
             set(plan.last_active_advertiser_ids)
+            | strict_accounts
             | known_reporting_accounts(session, plan, accounts=owned, now=now)
         ),
         "now": now,
         "cutoff": now - SLO,
         "general_cutoff": now - GENERAL_DIRECTORY_FRESHNESS,
-        "strict_accounts": sorted(
-            rule_accounts(
-                session, tenant_id=plan.tenant_id, bc_id=plan.bc_id, accounts=owned
-            )
-        ),
+        "strict_accounts": sorted(strict_accounts),
         "action_cutoff": now - timedelta(minutes=2),
     }
     rows = (

@@ -1871,3 +1871,61 @@ def test_screening_deferral_cannot_skip_due_live_reports(
         plan = s.get(AdSyncBc, (seed.tenant_id, "bc-a"))
         assert plan.next_material_at == now + planner.MATERIAL_INTERVAL
         assert plan.next_daily_at >= now + timedelta(minutes=5)
+
+
+@pytest.mark.parametrize(
+    "rule_bc,enabled", [("bc-a", True), ("bc-b", True), ("bc-a", False)]
+)
+def test_screening_backoff_keeps_exact_enabled_rule_accounts_fresh(
+    monkeypatch, committed_sync_seed, redis_client, rule_bc, enabled
+):
+    from datetime import timedelta
+
+    from app.core.db import engine
+    from app.modules.automation_rules.models import AutomationRule
+    from app.modules.reporting import planner
+    from app.modules.reporting.store_models import AdSyncBc, ReportSyncJob
+
+    seed, factory = committed_sync_seed
+    now = datetime.now(UTC)
+    with factory() as s, s.begin():
+        planner.ensure_bc_plans(s, now=now)
+        plan = s.get(AdSyncBc, (seed.tenant_id, "bc-a"))
+        plan.last_active_advertiser_ids = ["acc-1"]
+        plan.next_hot_at = plan.next_daily_at = plan.next_directory_at = (
+            now + timedelta(minutes=5)
+        )
+        s.add(
+            AutomationRule(
+                tenant_id=seed.tenant_id,
+                name="规则空账户仍须真实刷新",
+                created_by=seed.actor_id,
+                updated_by=seed.actor_id,
+                enabled=enabled,
+                definition={"accounts": {"mode": "BC", "bc_ids": [rule_bc]}},
+            )
+        )
+
+    def unexpected_reader(**_kwargs):
+        raise AssertionError("仍须尊重账户发现的退避")
+
+    monkeypatch.setattr(job_tasks, "_reader_for", unexpected_reader)
+    job_tasks._plan_one(
+        engine,
+        redis_client,
+        (seed.tenant_id, "bc-a"),
+        now,
+        now + timedelta(seconds=20),
+        planner.HOT_INTERVAL,
+        planner.MATERIAL_INTERVAL,
+        allow_backfill=False,
+    )
+    with factory() as s:
+        jobs = s.exec(
+            select(ReportSyncJob).where(ReportSyncJob.tenant_id == seed.tenant_id)
+        ).all()
+        expected = {"acc-1", "acc-2"} if enabled and rule_bc == "bc-a" else {"acc-1"}
+        for kind in ("ad_day", "material_day"):
+            assert {
+                a for j in jobs if j.kind == kind for a in j.advertiser_ids
+            } == expected

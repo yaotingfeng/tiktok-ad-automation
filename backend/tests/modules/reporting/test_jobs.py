@@ -1089,3 +1089,37 @@ def test_live_kind_weight_legacy_empty_scope_still_has_positive_cost(
     session.flush()
     claimed = claim_jobs(session, now=now, limit=6, lane="live")
     assert [job.kind for job in claimed] == ["ad_day", "material_day"] * 3
+
+
+def test_current_local_day_links_precede_old_hot_links_without_dropping_history(
+    session, sync_seed
+):
+    from zoneinfo import ZoneInfo
+
+    now = datetime.now(UTC)
+    today = now.astimezone(ZoneInfo("Asia/Hong_Kong")).date()
+    common = {
+        "tenant_id": sync_seed.tenant_id,
+        "bc_id": "bc-a",
+        "kind": "material_links",
+        "tier": "material",
+        "advertiser_ids": ["acc-1"],
+        "frozen_route": _route(sync_seed),
+        "actor_id": sync_seed.actor_id,
+        "due_at": now,
+    }
+    old = enqueue_job(
+        session,
+        start=today - timedelta(days=1),
+        end=today - timedelta(days=1),
+        **common,
+    )
+    current = enqueue_job(session, start=today, end=today, **common)
+    session.get(ReportSyncJob, old).created_at = now - timedelta(hours=1)
+    session.get(ReportSyncJob, old).due_at = now - timedelta(hours=1)
+    session.flush()
+    claimed = claim_jobs(session, now=now, limit=1, lane="links")
+    assert [j.id for j in claimed] == [current]
+    claimed[0].status = "COMPLETE"
+    session.flush()
+    assert [j.id for j in claim_jobs(session, now=now, limit=1, lane="links")] == [old]

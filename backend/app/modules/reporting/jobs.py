@@ -209,6 +209,10 @@ def claim_jobs(
         if lane == "backfill"
         else "j.priority"
     )
+    if lane == "links":
+        # 昨天遗留的热关联不能继续以热优先级阻挡今天；保留任务和游标，
+        # 自动按已有每日修正优先级在空余名额推进，日期按账户本地时区判断。
+        priority = f"CASE WHEN {current_day_predicate('j')} THEN j.priority ELSE GREATEST(j.priority, 3) END"
     local_order = (
         f"j.created_at, {priority}, j.id"
         if lane == "live"
