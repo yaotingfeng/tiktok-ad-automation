@@ -72,7 +72,9 @@ DIRECTORY_DISPATCH_BATCH = 1000
 # 全量目录只提前投递少量运行，历史初始请求不再持续填满 broker。
 DIRECTORY_DISPATCH_WINDOW = 4
 # 事实与关联独立限制在途任务；这是领取上限，不代表共享 Worker 中的专属执行槽。
-REPORT_DISPATCH_WINDOW = 8
+# 12 个 prefork 配两批有界在途名额，以候补吸收 outbox 交付空档；名额不等于执行并发。
+# 候补仍受领取后 240 秒租约约束；排队过期须重新领取，不能由旧消息直接续租。
+REPORT_DISPATCH_WINDOW = 24
 LINK_DISPATCH_WINDOW = 1
 BACKFILL_DISPATCH_WINDOW = 1
 # 目录消息发布后超过此时长仍未被领取，视为丢失并重新入队。

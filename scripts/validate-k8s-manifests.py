@@ -58,7 +58,7 @@ for workload in workloads:
     else:
         assert "readinessProbe" in container
 expected_workers = {
-    "worker-ads-reporting": ("ads-reporting", 8, "2Gi", "4Gi"),
+    "worker-ads-reporting": ("ads-reporting", 12, "4Gi", "6Gi"),
     "worker-ads-backfill": ("ads-backfill", 1, "512Mi", "1Gi"),
     "worker-ads-live-directory": ("ads-live-directory", 4, "1Gi", "3Gi"),
     "worker-ads-directory": ("ads-directory,ads-publish", 1, "1Gi", "2Gi"),
@@ -79,6 +79,9 @@ for workload in workloads:
     )
     assert container["resources"]["requests"]["memory"] == request
     assert container["resources"]["limits"]["memory"] == limit
+    if role == "worker-ads-reporting":
+        assert container["resources"]["requests"]["cpu"] == "2"
+        assert container["resources"]["limits"]["cpu"] == "4"
 for name in ("compose.yml", "compose.production.yml"):
     services = yaml.safe_load((root.parents[1] / name).read_text())["services"]
     for role, service in services.items():
@@ -88,7 +91,7 @@ for name in ("compose.yml", "compose.production.yml"):
     for role, queue, concurrency in (
         ("worker-ads-backfill", "ads-backfill", 1),
         ("worker-ads-live-directory", "ads-live-directory", 4),
-        ("worker-ads-reporting", "ads-reporting", 8),
+        ("worker-ads-reporting", "ads-reporting", 12),
     ):
         command = services[role]["command"]
         assert command[command.index("-Q") + 1] == queue
@@ -96,6 +99,10 @@ for name in ("compose.yml", "compose.production.yml"):
         assert command[command.index("--concurrency") + 1].endswith(
             ":-" + str(concurrency) + "}"
         )
+    if name == "compose.production.yml":
+        assert services["worker-ads-reporting"]["cpus"] == 4
+        assert services["worker-ads-reporting"]["mem_limit"] == "6g"
+assert "--concurrency 12" in (root.parent / "staging-ads-reporting.service").read_text()
 for path in root.parent.glob("staging-*.service"):
     content = path.read_text()
     if " worker " in content:

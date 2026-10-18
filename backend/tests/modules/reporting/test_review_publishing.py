@@ -138,7 +138,7 @@ def test_reconciliation_tracks_latest_ad_publication(session, sync_seed, account
     )
 
 
-def test_overlapping_tiers_defer_before_reading_and_respect_request_watermarks(
+def test_overlapping_tiers_defer_before_reading_then_publish_new_observation(
     committed_sync_seed,
 ):
     seed, factory = committed_sync_seed
@@ -196,16 +196,16 @@ def test_overlapping_tiers_defer_before_reading_and_respect_request_watermarks(
         )
         == "COMPLETE"
     )
-    # 第二个请求排队期间已有完整成功，读取完成也不能覆盖该水位。
+    # 第二个请求取得账户锁后才首次读取，虽排队更早，实际观测仍比前次发布新。
     with factory() as s:
         assert s.exec(
             select(AdReportDay).where(AdReportDay.tenant_id == seed.tenant_id)
-        ).one().spend == Decimal("10")
+        ).one().spend == Decimal("20")
         assert (
             s.get(
                 ReportSyncState, (seed.tenant_id, "acc-1", "ad_day", D)
             ).last_success_at
-            == first_success
+            > first_success
         )
     third = _enqueue_and_claim(factory, seed)
     assert (

@@ -312,7 +312,7 @@ def _read_all(read: Callable[[int], RawReportPage]) -> list[dict]:
 
 
 def request_time(job: ReportSyncJob) -> datetime:
-    """截断拆分继承原请求的水位，创建子任务不产生更晚的业务观察意图。"""
+    """保留原规划意图供审计、范围身份和失败保护；不代表实际读取时间。"""
     return (
         datetime.fromisoformat(job.progress["requested_at"])
         if job.progress.get("requested_at")
@@ -467,6 +467,27 @@ def _run_material(session, job, reader, accounts):
     ).all()
     if stored_pages != list(range(1, page)):
         raise DomainError("report_response_invalid", "素材暂存分页不连续")
+    if page > 1 and progress.get("observed_at") is None:
+        # 旧版本暂存没有首页观测证据，不能以当前时间冒充旧页的新鲜度。
+        # 只重建私有快照；正式事实保留到新快照完整读取并通过发布水位校验。
+        session.connection().execute(
+            delete(ReportSyncPage).where(col(ReportSyncPage.job_id) == job.id)
+        )
+        progress = {"scope": scope, "next_page": 1}
+        page = 1
+    if page == 1:
+        # 已持有账户事务锁；从头读取的每个 attempt 都以实际首页开始为水位。
+        observed_at = publish._database_now(session)
+    else:
+        try:
+            saved_observation = progress["observed_at"]
+            if not isinstance(saved_observation, str):
+                raise ValueError("invalid observation type")
+            observed_at = datetime.fromisoformat(saved_observation)
+            if observed_at.utcoffset() is None:
+                raise ValueError("missing timezone")
+        except (KeyError, TypeError, ValueError) as error:
+            raise DomainError("report_query_invalid", "素材首页观测时间无效") from error
     for _ in range(MATERIAL_PAGES_PER_STEP):
         result = reader.material_day(
             advertiser_id=job.advertiser_ids[0],
@@ -507,6 +528,8 @@ def _run_material(session, job, reader, accounts):
             "next_page": page + 1,
             "total_page": result.total_page,
             "total_number": result.total_number,
+            # 续页与限流重试不能刷新首页时间，否则旧页会覆盖期间完成的热刷。
+            "observed_at": observed_at.isoformat(),
         }
         job.progress = job.progress | {"material_paging": progress}
         session.flush()
@@ -532,7 +555,7 @@ def _run_material(session, job, reader, accounts):
                 start=job.start_date,
                 end=job.end_date,
                 rows=rows,
-                requested_at=request_time(job),
+                requested_at=observed_at,
             )
             if material_links.needs_material_links(
                 session,
@@ -580,6 +603,8 @@ def _run(session, job: ReportSyncJob, reader: _CountingReader) -> int | None:
     accounts = _accounts(session, job.tenant_id, advertisers)
     s, e, t, j = job.start_date, job.end_date, job.tenant_id, job.id
     if job.kind == "ad_day":
+        # 队列创建不是平台观测；本轮完整重读在账户锁内取得新的 PG 时间。
+        observed_at = publish._database_now(session)
         try:
             if job.error_code == "report_timeout" and job.attempts:
                 raise DomainError("report_truncation_risk", "超时后缩小读取范围")
@@ -609,12 +634,13 @@ def _run(session, job: ReportSyncJob, reader: _CountingReader) -> int | None:
             end=e,
             rows=rows,
             campaign_ids=tuple(job.campaign_ids),
-            requested_at=request_time(job),
+            requested_at=observed_at,
         )
         # 完整报表与补目录 outbox 同事务提交，新投放对象不等全量历史扫描。
         refresh_report_directory(session, job)
         return count
     if job.kind == "campaign_hour":
+        observed_at = publish._database_now(session)
         rows = _read_all(
             lambda p: reader.campaign_hour(advertiser_ids=advertisers, day=s, page=p)
         )
@@ -625,7 +651,7 @@ def _run(session, job: ReportSyncJob, reader: _CountingReader) -> int | None:
             accounts=accounts,
             day=s,
             rows=rows,
-            requested_at=request_time(job),
+            requested_at=observed_at,
         )
     if job.kind == "material_day":
         return _run_material(session, job, reader, accounts)
@@ -651,6 +677,7 @@ def _run(session, job: ReportSyncJob, reader: _CountingReader) -> int | None:
         flag_modified(job, "progress")
         return None if not complete else 0
     if job.kind == "account_day":
+        observed_at = publish._database_now(session)
         rows = _read_all(
             lambda p: reader.account_day(
                 advertiser_ids=advertisers, start=s, end=e, page=p
@@ -663,7 +690,7 @@ def _run(session, job: ReportSyncJob, reader: _CountingReader) -> int | None:
             start=s,
             end=e,
             rows=rows,
-            requested_at=request_time(job),
+            requested_at=observed_at,
         )
     raise DomainError("report_job_kind_invalid", "未知报表任务类型")
 

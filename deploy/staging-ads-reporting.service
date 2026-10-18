@@ -12,9 +12,9 @@ WorkingDirectory=/opt/tt-ada-staging/current/backend
 EnvironmentFile=/etc/tt-ada-staging/app.env
 Environment=PYTHONUNBUFFERED=1
 # ADS_SYNC_ENABLED and quota policy are loaded from the shared EnvironmentFile.
-# Current-day reporting has four bounded prefork slots.
+# 报表与规则共享 12 个 prefork；事实候补有界为两批，平台准入额度保持独立约束。
 # env 在 EnvironmentFile 载入后覆盖，确保 Worker 池不会被共享 API 默认值放大。
-ExecStart=/usr/bin/env DATABASE_POOL_SIZE=2 DATABASE_MAX_OVERFLOW=1 /opt/tt-ada-staging/current/.venv/bin/celery -A app.jobs.celery_app:celery_app worker -Q ads-reporting --pool prefork --concurrency 8 --loglevel INFO --hostname ads-reporting-singapore@%%h
+ExecStart=/usr/bin/env DATABASE_POOL_SIZE=2 DATABASE_MAX_OVERFLOW=1 /opt/tt-ada-staging/current/.venv/bin/celery -A app.jobs.celery_app:celery_app worker -Q ads-reporting --pool prefork --concurrency 12 --loglevel INFO --hostname ads-reporting-singapore@%%h
 Restart=on-failure
 RestartSec=5
 TimeoutStopSec=120

@@ -674,11 +674,11 @@ def test_old_cross_day_hot_job_cannot_deduplicate_or_occupy_current_day_lane(
     assert [job.id for job in old] == [old_id]
 
 
-@pytest.mark.parametrize("old_rows", [[], [ad_row("a1", D, spend="1")]])
-def test_split_child_preserves_hot_publish_after_parent_was_requested(
-    committed_sync_seed, old_rows
+@pytest.mark.parametrize("fresh_rows", [[], [ad_row("a1", D, spend="1")]])
+def test_split_child_preserves_intent_but_publishes_its_new_observation(
+    committed_sync_seed, fresh_rows
 ):
-    """父请求等待时新热刷先完成，稍后生成的子任务也必须沿用父请求水位。"""
+    """子任务保留父规划意图，但独立首读的低值或空结果属于新的完整观测。"""
     from uuid import uuid4
 
     from app.modules.reporting.publish import AccountMeta, publish_ad_day
@@ -720,17 +720,21 @@ def test_split_child_preserves_hot_publish_after_parent_was_requested(
             factory,
             job_id=child.id,
             claim_token=child.claim_token,
-            reader=FakeReader(pages={(("acc-1",), (), 1): old_rows}),
+            reader=FakeReader(pages={(("acc-1",), (), 1): fresh_rows}),
         )
         == "COMPLETE"
     )
     with factory() as session:
-        assert session.get(AdReportDay, (seed.tenant_id, "acc-1", D, "a1")).spend == 20
+        fact = session.get(AdReportDay, (seed.tenant_id, "acc-1", D, "a1"))
+        if fresh_rows:
+            assert fact.spend == 1
+        else:
+            assert fact is None
         assert (
             session.get(
                 ReportSyncState, (seed.tenant_id, "acc-1", "ad_day", D)
             ).last_success_at
-            == successful_at
+            > successful_at
         )
 
 

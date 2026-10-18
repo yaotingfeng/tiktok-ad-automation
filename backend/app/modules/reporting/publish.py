@@ -1,6 +1,6 @@
 # backend/app/modules/reporting/publish.py
 """整份替换发布：某个“账户 × 报表 × 日期段”全部分页成功后，在一个事务内
-仅替换尚未被较新请求成功发布的账户日期；平台完整空结果也有发布水位。
+仅替换实际读取开始后尚未再次成功发布的账户日期；平台完整空结果也有发布水位。
 
 汇总规则：任一成员指标为 NULL（平台 '-'）时合计为 NULL，绝不显示部分合计。
 """
@@ -41,7 +41,7 @@ class AccountMeta:
 
 
 def _database_now(session) -> datetime:
-    # 请求与发布水位统一使用 PG 实时时钟；不能混用不同 Worker/容器的墙上时钟。
+    # 读取与发布水位统一使用 PG 实时时钟；不能混用不同 Worker/容器的墙上时钟。
     # transaction_timestamp()/now() 会停在事务开始，不能表示本次实际发布完成。
     return session.connection().execute(text("SELECT clock_timestamp()")).scalar_one()
 
@@ -70,8 +70,9 @@ def _in_range(day: date, start: date, end: date) -> date:
 def _writable_buckets(session, *, tenant_id, accounts, kind, start, end, requested_at):
     """在账户锁内比较本地发布水位；这不是平台事件或归因水位。
 
-    请求创建之后已经成功发布的日期必须保留，包括完整空结果。事务锁还保护
-    尚不存在的状态行，使直接调用发布入口与 Worker 一样不会发生并发覆盖。
+    发布入口的 requested_at 表示完整快照的首次实际读取开始，而非排队创建时间；
+    素材续页沿用首页时间。该时间之后已经成功发布的日期必须保留，包括完整空结果。
+    失败标记仍可传更保守的原意图时间。事务锁也保护尚不存在的状态行。
     """
     lock_kind = "ad_day" if kind == "account_day" else kind
     for advertiser in sorted(accounts):

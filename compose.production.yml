@@ -106,10 +106,10 @@ services:
       DATABASE_MAX_OVERFLOW: "1"
       ADS_SYNC_ENABLED: ${ADS_SYNC_ENABLED:-false}
       AUTOMATED_RULES_ENABLED: ${AUTOMATED_RULES_ENABLED:-false}
-      ADS_REPORTING_WORKER_CONCURRENCY: ${ADS_REPORTING_WORKER_CONCURRENCY:-8}
-    command: [celery, -A, app.jobs.celery_app:celery_app, worker, --pool=prefork, -Q, ads-reporting, --concurrency, '${ADS_REPORTING_WORKER_CONCURRENCY:-8}', '--hostname=ads-reporting@%h', --loglevel=INFO]
-    cpus: 2
-    mem_limit: 4g
+      ADS_REPORTING_WORKER_CONCURRENCY: ${ADS_REPORTING_WORKER_CONCURRENCY:-12}
+    command: [celery, -A, app.jobs.celery_app:celery_app, worker, --pool=prefork, -Q, ads-reporting, --concurrency, '${ADS_REPORTING_WORKER_CONCURRENCY:-12}', '--hostname=ads-reporting@%h', --loglevel=INFO]
+    cpus: 4
+    mem_limit: 6g
     stop_grace_period: 120s
     init: true
     logging: *production-logging

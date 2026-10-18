@@ -90,7 +90,9 @@ python3 deploy/local.py deploy
 
 ### 2026-10-18 首次 9→11 与 broker 迁移
 
-新增 `worker-ads-backfill`（队列 `ads-backfill`，prefork 1，申请 512Mi/上限 1Gi）与 `worker-ads-live-directory`（`ads-live-directory`，prefork 4，申请 1Gi/上限 3Gi），实时 `worker-ads-reporting` 调至 prefork 8（四个实时领取槽之外为本地规则评估留并行余量）。全量目录 `ads-directory,ads-publish` 与广告管理仍各单槽。四开关及所有平台配额原值保留。全部 Worker 显式注入 `DATABASE_POOL_SIZE=2` / `DATABASE_MAX_OVERFLOW=1`，API 保留共享配置默认 5/10；验收按角色核对环境摘要及实际 Settings 池值，二十二个业务子进程池上限合计 66 连接。
+新增 `worker-ads-backfill`（队列 `ads-backfill`，prefork 1，申请512Mi/上限1Gi）与 `worker-ads-live-directory`（prefork 4，申请1Gi/上限3Gi）。2026-10-18吞吐修复把共享实时 `worker-ads-reporting` 调至prefork12、CPU申请2/上限4、内存申请4Gi/上限6Gi，事实在途候补24、关联1、历史事实1；候补不是专属执行槽。Control2，其余并发不变。四开关及所有平台配额原值保留。全部Worker显式注入 `DATABASE_POOL_SIZE=2` / `DATABASE_MAX_OVERFLOW=1`，API保留5/10。
+
+27个Worker子进程池上限81，9个父进程预留27，API15，事故期间其它连接实测54，合计177/200；54是快照而非硬上限，发布后仍核对实际连接。必须沿原发布流程冻结旧Worker后启动新Worker；不能临时滚动双开reporting（额外39，预算会到216/200）。十一角色总request 5.75CPU/14Gi、limit16.5CPU/27Gi。原reporting节点释放旧Pod后CPU余量1.935，不足新2CPU；另三个节点可用CPU2.735–3.235、内存6.5–7.8Gi，允许调度迁移，不固定原节点。
 
 停写、正常排空、备份及隔离恢复、备份发布全部成功后，`migrate-targeted` 专门探针只筛选 `ad-management` 及 Kombu 优先级键内 `headers.task == ads.targeted_step` 的消息。Celery `body`、ID、参数及其余 header 不变；仅将 delivery routing_key（及存在时的同名 header）改为 `ads-live-directory`，保证 reject/requeue 不返回写队列。源队列未命中消息保留原字节与顺序；目标已有消息先消费，迁入消息内部仍按原 FIFO，各优先级相互独立。异常优先级键、非标准 exchange/routing、未确认消息、过期队列、类型异常或并发修改都阻断。
 
