@@ -6,7 +6,7 @@ from uuid import uuid4
 
 import pytest
 from sqlalchemy import event, text
-from sqlmodel import select
+from sqlmodel import col, select
 
 from app.core.config import settings
 from app.core.errors import DomainError
@@ -459,6 +459,15 @@ def test_staged_terminal_page_publishes_without_another_provider_call(
     )
     session.refresh(run)
     assert run.published_version == version
+    wakeups = session.exec(
+        select(PendingDispatch).where(
+            PendingDispatch.tenant_id == run.tenant_id,
+            PendingDispatch.task_key == f"directory-refill:{run.id}:1",
+        )
+    ).all()
+    assert len(wakeups) == 1
+    assert wakeups[0].task_name == "reporting.plan_due"
+    assert wakeups[0].payload == {"dispatch_only": True}
 
 
 def test_directory_version_allocation_does_not_scan_business_tables(session):
@@ -643,3 +652,51 @@ def test_publish_only_rejects_missing_terminal_without_gateway(
             publish_only=True,
         )
     assert caught.value.code == "directory_incomplete"
+
+
+@pytest.mark.parametrize("wrong_generation", [False, True])
+def test_rejected_publish_does_not_wake_dispatch(
+    session, directory_seed, monkeypatch, wrong_generation
+):
+    _authority(session, directory_seed)
+    monkeypatch.setattr(settings, "ADS_SYNC_ENABLED", True)
+    run = _run(session, directory_seed)
+    stage_directory_page(
+        session,
+        run_id=run.id,
+        page=_page(
+            directory_seed,
+            complete=wrong_generation,
+            next_page=None if wrong_generation else 2,
+        ),
+        claim_generation=1,
+    )
+    with pytest.raises(DomainError):
+        publish_directory(
+            session, run_id=run.id, claim_generation=2 if wrong_generation else 1
+        )
+    assert not session.exec(
+        select(PendingDispatch).where(
+            col(PendingDispatch.task_key).startswith(f"directory-refill:{run.id}:")
+        )
+    ).all()
+
+
+def test_publish_rollback_also_rolls_back_refill(session, directory_seed, monkeypatch):
+    _authority(session, directory_seed)
+    monkeypatch.setattr(settings, "ADS_SYNC_ENABLED", True)
+    run = _run(session, directory_seed)
+    stage_directory_page(
+        session, run_id=run.id, page=_page(directory_seed), claim_generation=1
+    )
+    with pytest.raises(RuntimeError, match="rollback"):
+        with session.begin_nested():
+            publish_directory(session, run_id=run.id, claim_generation=1)
+            raise RuntimeError("rollback")
+    session.refresh(run)
+    assert run.published_version is None
+    assert not session.exec(
+        select(PendingDispatch).where(
+            PendingDispatch.task_key == f"directory-refill:{run.id}:1"
+        )
+    ).all()

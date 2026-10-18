@@ -894,8 +894,8 @@ def plan_due(*, tenant_id=None, actor_id=None, payload=None):
                 planner.calls_today(redis, now)
                 <= settings.TIKTOK_REPORT_DAILY_CALL_BUDGET * 0.7
             )
-        with Session(engine) as session, session.begin():
-            return _dispatch_report_jobs(session, now, allow_backfill=allow_backfill)
+        # 报表与目录共用轻量补位信号；只领取本地持久任务，不重做外部筛选。
+        return _dispatch_pending(engine, now, allow_backfill=allow_backfill)
     with Redis.from_url(settings.REDIS_URL) as redis:
         return plan_due_runs(database_engine=engine, redis_client=redis)
 

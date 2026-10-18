@@ -23,6 +23,7 @@ from app.integrations.tiktok.contracts.ads import DirectoryPage, EntityRef
 from app.integrations.tiktok.contracts.context import FrozenTikTokRoute
 from app.modules.accounts.routing import verify_route
 from app.modules.ads.directory import append_campaign_name_projections
+from app.modules.ads.directory_dispatch import enqueue_directory_refill
 from app.modules.ads.directory_requests import request_directory
 from app.modules.ads.models import AdMaterialReference, AdObject
 from app.modules.ads.sync_models import AdDirectoryPage, AdDirectoryRun
@@ -637,4 +638,6 @@ def publish_directory(session: Session, *, run_id: UUID, claim_generation: int) 
             page.published_version = version
             session.add(page)
         session.flush()
+        # 仅首次成功发布进入这里；重复消息、旧代数和回滚均不会留下额外唤醒。
+        enqueue_directory_refill(session, run)
     return version

@@ -5,6 +5,7 @@ from datetime import UTC, datetime, timedelta
 from sqlalchemy import func, text
 from sqlmodel import col, select
 
+from app.core.config import settings
 from app.core.context import TenantContext
 from app.jobs.outbox import enqueue_after_commit
 from app.jobs.tasks import register_dispatch_task
@@ -15,6 +16,7 @@ PUBLISH_TASK_NAME = "ads.publish_step"
 register_dispatch_task(TASK_NAME, "ads-directory")
 register_dispatch_task(PUBLISH_TASK_NAME, "ads-publish")
 register_dispatch_task(TARGETED_TASK_NAME, "ads-live-directory")
+register_dispatch_task("reporting.plan_due", "control")
 TARGETED_DISPATCH_WINDOW = 8
 
 
@@ -93,4 +95,17 @@ def enqueue_directory_step(session, run, *, publish_only=False, initial=False) -
         else (PUBLISH_TASK_NAME if publish_only else TASK_NAME),
         task_key=directory_step_key(run),
         payload={"run_id": str(run.id), "claim_generation": run.claim_generation},
+    )
+
+
+def enqueue_directory_refill(session, run) -> None:
+    """首次发布同事务唤醒有界派发，空槽无需再等下一个三十秒扫描。"""
+    if not settings.ADS_SYNC_ENABLED:
+        return
+    enqueue_after_commit(
+        session,
+        context=TenantContext(run.tenant_id, run.actor_id, "operator"),
+        task_name="reporting.plan_due",
+        task_key=f"directory-refill:{run.id}:{run.claim_generation}",
+        payload={"dispatch_only": True},
     )
