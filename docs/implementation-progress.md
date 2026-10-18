@@ -2756,3 +2756,7 @@
 ## Jenkins CI/CD 残留容器清理（2026-10-18）
 
 已核对本项目无在执行构建，清理公司 Jenkins 宿主 63 个合成测试容器（58 运行、5 退出，最老38小时）、5 个具名测试卷、6 个无端点测试网络；回读 tkada-* 容器0，Jenkins/Nginx及其他项目构建容器保留。根因是经宿主 Docker socket 启动的测试容器不随工具容器退出，ABORTED 后内部 EXIT/finally 清理未完成且外层缺兜底。新增构建 owner 标签与外层 EXIT/post always 定向回收，先停工具再删本批测试资源。真实 Docker 归属隔离/强制退出/重复清理等3项、发布资产76项、Ruff/编译/shell/差异检查通过。修复本地提交，未推送，Jenkins 尚未使用新逻辑；不触发应用发布。详见 [清理与验证记录](validation/2026-10-18-jenkins-container-cleanup.md)。
+
+## 发布辅助 Pod 调度失败：报表 Worker 排除 Beat 可用区
+
+#42/#45 停服后失败：发布辅助 Pod 必须挂 Beat 盘与备份盘（均固定 ap-southeast-1b），该区只有一台节点；上次 recover 时报表 Worker（申请2CPU/4Gi）被随机调度到这台节点，辅助 Pod 报 Insufficient cpu 无法调度，release 在 helper-created 失败（Worker 未停，仅 API/Beat 停约11分钟，recover 恢复）。给报表 Worker 加 nodeAffinity `topology.kubernetes.io/zone NotIn [ap-southeast-1b]`；线上先缩0→补丁→扩1（避免滚动双开超PG连接预算），已落到 1c 节点。K8s16对象、部署资产4组通过。

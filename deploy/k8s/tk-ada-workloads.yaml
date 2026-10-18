@@ -427,6 +427,14 @@ spec:
         - name: tiktok-ad-automation-registry
       automountServiceAccountToken: false
       terminationGracePeriodSeconds: 120
+      # Beat 盘与备份盘固定在 ap-southeast-1b，且该区只有一台节点；发布辅助 Pod 必须挂这两块盘。
+      # 报表 Worker 申请 2 CPU，落到该节点会挤占辅助 Pod 而使发布在停服后失败，故排除该区。
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - {key: topology.kubernetes.io/zone, operator: NotIn, values: [ap-southeast-1b]}
       containers:
         - name: worker-ads-reporting
           image: __APP_IMAGE__
