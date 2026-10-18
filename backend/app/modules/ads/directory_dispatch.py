@@ -17,7 +17,10 @@ register_dispatch_task(TASK_NAME, "ads-directory")
 register_dispatch_task(PUBLISH_TASK_NAME, "ads-publish")
 register_dispatch_task(TARGETED_TASK_NAME, "ads-live-directory")
 register_dispatch_task("reporting.plan_due", "control")
-TARGETED_DISPATCH_WINDOW = 8
+# 定向回读（在投广告及父链的状态刷新）同时在途上限。单步约 1 秒，实时目录 Worker 10 进程；
+# 窗口 8 实测每 10 分钟仅完成约 230 个而新建约 330 个，排队超过 2 小时，目录 30 分钟新鲜度无法达成。
+# 放到 32 让 Worker 持续有活；对 TikTok 的实际调用仍由调用准入策略限流。
+TARGETED_DISPATCH_WINDOW = 32
 
 
 def targeted_capacity(session, now=None) -> int:
@@ -82,10 +85,12 @@ def directory_step_key(run) -> str:
     return f"{prefix}:{run.id}:{run.claim_generation}:page:{run.next_page}"
 
 
-def enqueue_directory_step(session, run, *, publish_only=False, initial=False) -> None:
+def enqueue_directory_step(
+    session, run, *, publish_only=False, initial=False, available_at=None
+) -> None:
     if initial and is_targeted(run) and not targeted_capacity(session):
         return
-    enqueue_after_commit(
+    dispatch_id = enqueue_after_commit(
         session,
         context=TenantContext(
             tenant_id=run.tenant_id, actor_id=run.actor_id, role="operator"
@@ -96,6 +101,13 @@ def enqueue_directory_step(session, run, *, publish_only=False, initial=False) -
         task_key=directory_step_key(run),
         payload={"run_id": str(run.id), "claim_generation": run.claim_generation},
     )
+    if available_at is not None:
+        from app.jobs.models import PendingDispatch
+
+        dispatch = session.get(PendingDispatch, dispatch_id)
+        # 等待额度的续步仍走原 outbox；到期前不能发布，避免忙循环和空占租约。
+        dispatch.available_at = available_at
+        session.add(dispatch)
 
 
 def enqueue_directory_refill(session, run) -> None:

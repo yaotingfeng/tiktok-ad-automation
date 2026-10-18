@@ -766,3 +766,166 @@ def test_superseded_directory_task_finishes_without_poisoning_window(
         )
         == 1
     )
+
+
+@pytest.mark.parametrize("targeted", [False, True])
+@pytest.mark.parametrize("retry_ms", [50, 2500])
+def test_directory_admission_wait_releases_lease_and_persists_due_successor(
+    session, directory_seed, monkeypatch, targeted, retry_ms
+):
+    from types import SimpleNamespace
+
+    from app.integrations.tiktok.sdk import AccountAdmissionDeferred
+    from app.modules.ads import tasks
+
+    _authority(session, directory_seed)
+    monkeypatch.setattr(settings, "ADS_SYNC_ENABLED", True)
+    run = _run(session, directory_seed)
+    if targeted:
+        run.query = {**run.query, "ids": ["campaign-1"]}
+    run.next_page = 2
+    stage_directory_page(
+        session,
+        run_id=run.id,
+        page=_page(directory_seed, complete=False, next_page=2),
+        claim_generation=1,
+    )
+    session.flush()
+
+    class Reader:
+        def read_page(self, query):
+            assert query.page == 2
+            raise AccountAdmissionDeferred(retry_ms)
+
+    @contextmanager
+    def gateway(**_kwargs):
+        yield SimpleNamespace(ads=Reader())
+
+    monkeypatch.setattr(tasks, "open_tiktok_gateway", gateway)
+    before = datetime.now(UTC)
+    assert (
+        tasks.run_directory_step(
+            database_engine=session.connection(),
+            redis_client=None,
+            context=directory_seed.context,
+            run_id=run.id,
+            claim_generation=1,
+        )
+        == "WAIT"
+    )
+    session.refresh(run)
+    assert run.claim_token is None and run.claimed_until is None
+    assert run.claim_generation == 2 and run.next_page == 2
+    assert run.status == "WAITING_REMOTE" and run.error_code == "admission_deferred"
+    assert run.next_attempt_at >= before + timedelta(milliseconds=max(1000, retry_ms))
+    assert run.published_version is None and run.observed_at is None
+    assert session.get(AdDirectoryPage, (run.id, 1)) is not None
+    dispatch = session.exec(
+        select(PendingDispatch).where(
+            PendingDispatch.task_key
+            == f"{'ads.targeted_step' if targeted else 'ads.sync_step'}:{run.id}:2:page:2"
+        )
+    ).one()
+    assert dispatch.available_at == run.next_attempt_at
+    assert dispatch.payload == {"run_id": str(run.id), "claim_generation": 2}
+    # 旧消息不能再次读远端，也不能取消新代数的恢复消息。
+    assert (
+        tasks.run_directory_step(
+            database_engine=session.connection(),
+            redis_client=None,
+            context=directory_seed.context,
+            run_id=run.id,
+            claim_generation=1,
+        )
+        == "FAILED"
+    )
+
+
+def test_admission_wait_cannot_release_a_replaced_directory_claim(
+    session, directory_seed, monkeypatch
+):
+    from types import SimpleNamespace
+
+    from app.integrations.tiktok.sdk import AccountAdmissionDeferred
+    from app.modules.ads import tasks
+
+    _authority(session, directory_seed)
+    monkeypatch.setattr(settings, "ADS_SYNC_ENABLED", True)
+    run = _run(session, directory_seed)
+    new_token = uuid4()
+
+    class Reader:
+        def read_page(self, query):
+            session.refresh(run)
+            run.claim_generation = 2
+            run.claim_token = new_token
+            run.claimed_until = datetime.now(UTC) + timedelta(minutes=2)
+            session.flush()
+            raise AccountAdmissionDeferred(1000)
+
+    @contextmanager
+    def gateway(**_kwargs):
+        yield SimpleNamespace(ads=Reader())
+
+    monkeypatch.setattr(tasks, "open_tiktok_gateway", gateway)
+    assert (
+        tasks.run_directory_step(
+            database_engine=session.connection(),
+            redis_client=None,
+            context=directory_seed.context,
+            run_id=run.id,
+            claim_generation=1,
+        )
+        == "WAIT"
+    )
+    session.refresh(run)
+    assert run.claim_generation == 2 and run.claim_token == new_token
+    assert run.claimed_until > datetime.now(UTC)
+    assert session.exec(select(PendingDispatch)).all() == []
+
+
+def test_directory_recovers_after_admission_wait_from_the_same_page(
+    session, directory_seed, monkeypatch
+):
+    from types import SimpleNamespace
+
+    from app.modules.ads import tasks
+
+    _authority(session, directory_seed)
+    monkeypatch.setattr(settings, "ADS_SYNC_ENABLED", True)
+    run = _run(session, directory_seed)
+    run.status = "WAITING_REMOTE"
+    run.error_code = "admission_deferred"
+    run.claim_generation = 2
+    run.next_page = 2
+    stage_directory_page(
+        session,
+        run_id=run.id,
+        page=_page(directory_seed, complete=False, next_page=2),
+        claim_generation=2,
+    )
+    session.flush()
+
+    class Reader:
+        def read_page(self, query):
+            assert query.page == 2
+            return _page(directory_seed, page=2)
+
+    @contextmanager
+    def gateway(**_kwargs):
+        yield SimpleNamespace(ads=Reader())
+
+    monkeypatch.setattr(tasks, "open_tiktok_gateway", gateway)
+    args = {
+        "database_engine": session.connection(),
+        "redis_client": None,
+        "context": directory_seed.context,
+        "run_id": run.id,
+        "claim_generation": 2,
+    }
+    assert tasks.run_directory_step(**args) == "CONTINUE"
+    session.refresh(run)
+    assert run.next_page == 3 and run.error_code is None
+    assert tasks.run_directory_step(**args) == "READY"
+    session.refresh(run)
+    assert run.status == "COMPLETE" and run.published_version is not None

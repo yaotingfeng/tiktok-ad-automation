@@ -18,6 +18,7 @@ from app.core.db import engine
 from app.core.errors import DomainError
 from app.integrations.tiktok.contracts.ads import DirectoryQuery
 from app.integrations.tiktok.gateway import open_tiktok_gateway
+from app.integrations.tiktok.sdk import AccountAdmissionDeferred
 from app.jobs.celery_app import celery_app
 from app.jobs.outbox import validate_dispatch_payload
 from app.modules.accounts.routing import verify_route
@@ -138,6 +139,7 @@ def run_directory_step(
         if run.claimed_until is not None and run.claimed_until > now:
             return "WAIT"
         run.claim_token = uuid4()
+        claim_token = run.claim_token
         run.claimed_until = now + timedelta(seconds=_LEASE_SECONDS)
         route = _route(run.frozen_route)
         verify_route(
@@ -183,14 +185,38 @@ def run_directory_step(
         session.commit()
 
     deadline = datetime.now(UTC) + timedelta(seconds=45)
-    with open_tiktok_gateway(
-        database_engine=database_engine,
-        redis_client=redis_client,
-        context=context,
-        route=route,
-        task_deadline=deadline,
-    ) as gateway:
-        page = gateway.ads.read_page(query)
+    try:
+        with open_tiktok_gateway(
+            database_engine=database_engine,
+            redis_client=redis_client,
+            context=context,
+            route=route,
+            task_deadline=deadline,
+        ) as gateway:
+            page = gateway.ads.read_page(query)
+    except AccountAdmissionDeferred as error:
+        with _directory_session(database_engine) as session:
+            current = session.get(AdDirectoryRun, run_id, with_for_update=True)
+            if (
+                current is None
+                or current.claim_generation != claim_generation
+                or current.claim_token != claim_token
+            ):
+                return "WAIT"
+            # 本地准入未获额度不是读取失败，不能留下 90 秒死租约；换代隔离旧消息，
+            # 保留已暂存分页，按返回的等待时间持久安排同页续步，不扩大窗口或平台配额。
+            current.status = "WAITING_REMOTE"
+            current.error_code = error.code
+            current.next_attempt_at = datetime.now(UTC) + timedelta(
+                milliseconds=max(1000, error.retry_after_ms)
+            )
+            current.claim_generation += 1
+            current.claim_token = current.claimed_until = None
+            enqueue_directory_step(
+                session, current, available_at=current.next_attempt_at
+            )
+            session.commit()
+        return "WAIT"
     with _directory_session(database_engine) as session:
         stage_directory_page(
             session,
@@ -209,6 +235,7 @@ def run_directory_step(
         assert next_page is not None  # 上方已经拒绝非末页缺失游标。
         current.next_page = next_page
         current.status = "RUNNING"
+        current.error_code = None
         current.next_attempt_at = datetime.now(UTC)
         current.claim_token = current.claimed_until = None
         # 续步与页同事务提交，统一扫描器的幂等键，消息丢失仍可换代恢复。

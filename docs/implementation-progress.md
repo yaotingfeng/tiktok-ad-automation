@@ -2773,3 +2773,10 @@
 ## 发布备份根因更正：并行 pg_dump 经读写分离代理偶发失败
 
 #53（82d71142）detached 版本仍在 frozen 失败，备份盘同样只有 toc.dat；而 detached 任务目录只在读到退出码后删除，说明 pg_dump 自行非零退出，不是 exec 断开所致（前一节归因不成立；setsid 子进程实测可在 exec 结束后存活，detached 保留无害）。辅助 Pod 同款 1Gi 上限复测成功、oom_kill 0，排除内存。源库经 PolarDB `rwlb` 读写分离代理访问；`--jobs>1` 时子连接须导入主连接快照并以 NOWAIT 申请表锁，被分到其他节点或遇排他锁请求即报错退出——符合“写出 toc.dat 后失败、偶发”的全部现象。改为单连接导出 `PG_DUMP_JOBS=1`（同库实测 292 秒，并行 101–187 秒），恢复仍在回环临时库 4 进程并行。真实 PG/Redis 发布集成、部署资产4组通过。私有日志原始报错未取得，此归因仍待日志确认。
+
+## 2026-10-18：目录额度等待恢复与重复素材扫描排序
+
+- 生产只读发现此前“对象目录只余几个”遗漏约3,200条定向任务；`AccountAdmissionDeferred` 在目录执行器中未处理，拒绝后遗留90秒租约，反复拖慢定向/全量。按原领取代数与token回收租约、隔离旧消息，经原outbox按准入等待时间安排同页续跑，成功后清除等待错误，保留分页/冻结范围/观测证据。
+- 大池2,635条未完成素材扫描仅782个独立冻结查询分区；同范围先推进最新素材扫描，真实成功后由既有superseded机制处理旧轮，不删除任务或拼接分页，不跨租户/BC/执行人/授权合并。生产只读选择谓词约21ms。无迁移、新开关、并发或额度变化。
+- 真实PG/Redis组合：`python3 .runtime/sync-rule-health-20261018/service-time-test-runner.py tests/modules/ads tests/modules/reporting tests/jobs tests/modules/automation_rules -q` 最终834 passed、3 skipped；目录执行/派发组合73 passed。额度四参数和同范围最新优先回归先红后绿，另测旧消息、换代竞态、同页恢复发布、不同路由隔离。Ruff、全app ty、编译、部署资产4组和diff检查通过。
+- 19:00原三PAUSE规则自然零命中且NOT_REQUIRED；真实STALE_REPORT仍提醒，未增加屏蔽。修复本地提交，尚未推送/发布，线上缺口仍待标准发布及自然周期验收。记录见 docs/validation/2026-10-18-directory-admission-recovery.md，私有只读/测试证据在`.runtime/remaining-sync-20261018/`。

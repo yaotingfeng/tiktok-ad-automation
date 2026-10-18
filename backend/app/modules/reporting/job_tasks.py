@@ -305,6 +305,23 @@ def _dispatch_directories(session, now):
     # 素材目录每次十余页，系列/组/广告目录只有一两页且决定止损父链与目录新鲜度；
     # 全量 lane 内对象目录优先，素材目录用剩余名额，避免旧素材积压饿死对象目录。
     creative_last = case((col(AdDirectoryRun.kind) == "creative", 1), else_=0)
+    newer_scan = aliased(AdDirectoryRun)
+    # 历史素材全量扫描曾重复堆积。同一冻结授权和完整查询仅先推进最新一轮，
+    # 它成功发布后再由原 superseded 机制淘汰旧轮；不合并分页、不把旧轮记为成功。
+    newer_creative_pending = (
+        select(newer_scan.id)
+        .where(
+            newer_scan.tenant_id == AdDirectoryRun.tenant_id,
+            newer_scan.advertiser_id == AdDirectoryRun.advertiser_id,
+            newer_scan.bc_id == AdDirectoryRun.bc_id,
+            newer_scan.actor_id == AdDirectoryRun.actor_id,
+            newer_scan.frozen_route == AdDirectoryRun.frozen_route,
+            newer_scan.partition_key == AdDirectoryRun.partition_key,
+            col(newer_scan.request_sequence) > col(AdDirectoryRun.request_sequence),
+            col(newer_scan.status).in_(["QUEUED", "RUNNING", "WAITING_REMOTE"]),
+        )
+        .exists()
+    )
     lane_ranked = (
         select(
             AdDirectoryRun.id,
@@ -323,6 +340,7 @@ def _dispatch_directories(session, now):
             (targeted & (targeted_available > 0)) | (~targeted & (available > 0)),
             col(AdDirectoryRun.status).in_(["QUEUED", "RUNNING", "WAITING_REMOTE"]),
             AdDirectoryRun.channel == "OFFICIAL_API",
+            ~(~targeted & (AdDirectoryRun.kind == "creative") & newer_creative_pending),
             col(AdDirectoryRun.next_attempt_at).is_(None)
             | (col(AdDirectoryRun.next_attempt_at) <= now),
             # 租约过期的运行会进入新代数、生成新投递标识，仍需入队。

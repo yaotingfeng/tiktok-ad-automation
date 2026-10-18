@@ -1731,3 +1731,65 @@ def test_bounded_directory_candidates_preserve_tenant_turns(monkeypatch, batch):
             rows = s.exec(select(PendingDispatch)).all()
             assert len(rows) == 2
             assert {r.tenant_id for r in rows} == {seed.tenant_id for seed, _ in seeds}
+
+
+@pytest.mark.parametrize("different_route", [False, True])
+def test_duplicate_full_creative_scan_finishes_newest_exact_scope_first(
+    session, sync_seed, monkeypatch, different_route
+):
+    from datetime import timedelta
+    from uuid import UUID, uuid4
+
+    from app.jobs.models import PendingDispatch
+    from app.modules.ads.directory_requests import request_directory
+    from app.modules.ads.sync_models import AdDirectoryRun
+    from tests.modules.ads.test_directory_requests import _route
+
+    monkeypatch.setattr(job_tasks.settings, "ADS_SYNC_ENABLED", True)
+    monkeypatch.setattr(job_tasks, "DIRECTORY_DISPATCH_WINDOW", 1)
+    request_directory(
+        session,
+        tenant_id=sync_seed.tenant_id,
+        bc_id="bc-a",
+        frozen_route=_route(sync_seed),
+        actor_id=sync_seed.actor_id,
+        advertiser_ids=["acc-1"],
+        scope="directory",
+        ad_types={"acc-1": {"SMART_PLUS": ["creative"]}},
+    )
+    older = session.exec(
+        select(AdDirectoryRun).where(AdDirectoryRun.tenant_id == sync_seed.tenant_id)
+    ).one()
+    older.status = "RUNNING"
+    older.claimed_until = datetime.now(UTC) - timedelta(minutes=2)
+    older.created_at = datetime.now(UTC) - timedelta(days=2)
+    session.flush()
+    newer = AdDirectoryRun(
+        **{
+            **older.model_dump(exclude={"id", "request_sequence", "request_id"}),
+            "id": uuid4(),
+            "request_id": uuid4(),
+            "status": "QUEUED",
+            "claimed_until": None,
+            "created_at": datetime.now(UTC),
+            "frozen_route": {**older.frozen_route, "binding_revision": 99}
+            if different_route
+            else older.frozen_route,
+        }
+    )
+    session.add(newer)
+    session.flush()
+    assert newer.request_sequence > older.request_sequence
+    assert job_tasks._dispatch_directories(session, datetime.now(UTC)) == 1
+    dispatch = session.exec(
+        select(PendingDispatch).where(
+            PendingDispatch.task_name == "ads.sync_step",
+            PendingDispatch.tenant_id == sync_seed.tenant_id,
+        )
+    ).one()
+    assert UUID(dispatch.payload["run_id"]) == (
+        older.id if different_route else newer.id
+    )
+    # 只调整执行顺序，旧任务和分页未伪报成功、未删除。
+    session.refresh(older)
+    assert older.status == "RUNNING" and older.published_version is None
