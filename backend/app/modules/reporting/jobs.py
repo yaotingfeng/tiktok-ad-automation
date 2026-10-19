@@ -10,6 +10,7 @@ import hashlib
 import json
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
+from random import randint
 from uuid import UUID, uuid4
 
 from sqlalchemy import delete, func, text
@@ -876,14 +877,25 @@ class _CountingReader:
     def __init__(self, reader):
         self.reader = reader
         self.count = 0
+        self.successful_queries: set[str] = set()
+        self.failed_query: str | None = None
 
     def __getattr__(self, name) -> Callable[..., RawReportPage]:
         read = getattr(self.reader, name)
 
         def counted(**kwargs):
             before = getattr(self.reader, "request_count", None)
+            # 以完整查询和页码隔离试探预算，不能由别的成功请求冲掉同一坏页的退避。
+            query = hashlib.sha256(
+                json.dumps([name, kwargs], sort_keys=True, default=str).encode()
+            ).hexdigest()
             try:
-                return read(**kwargs)
+                result = read(**kwargs)
+                self.successful_queries.add(query)
+                return result
+            except AccountAdmissionDeferred:
+                self.failed_query = query
+                raise
             finally:
                 after = getattr(self.reader, "request_count", None)
                 # 官方读取器提供物理发送计数；纯内存测试读取器每次调用即一次合成响应。
@@ -894,6 +906,39 @@ class _CountingReader:
                 )
 
         return counted
+
+
+def _clear_completed_throttle(job: ReportSyncJob, counted: _CountingReader) -> None:
+    prior = job.progress.get("provider_throttle", {})
+    if prior.get("query") in counted.successful_queries:
+        job.progress = {
+            key: value
+            for key, value in job.progress.items()
+            if key != "provider_throttle"
+        }
+
+
+def _admission_delay(
+    job: ReportSyncJob, counted: _CountingReader, deferred: AccountAdmissionDeferred
+) -> int:
+    _clear_completed_throttle(job, counted)
+    if deferred.admission_source != "provider" or deferred.admission_reason not in {
+        "40100",
+        "http_429",
+    }:
+        return max(1000, deferred.retry_after_ms)
+    prior = job.progress.get("provider_throttle", {})
+    attempts = min(
+        6,
+        (prior.get("attempts", 0) if prior.get("query") == counted.failed_query else 0)
+        + 1,
+    )
+    job.progress = job.progress | {
+        "provider_throttle": {"query": counted.failed_query, "attempts": attempts}
+    }
+    # 只对未知类别最多短试探五次；持续拒绝转长冷却，保留任务/分页，绝不无限快重试。
+    delays = (5_000, 10_000, 20_000, 40_000, 60_000, 300_000)
+    return delays[attempts - 1] + randint(0, 1000)
 
 
 def execute_job(
@@ -928,6 +973,7 @@ def execute_job(
                 if not acquired:
                     raise AccountAdmissionDeferred(5000)
             more = _run(session, job, counted) is None
+            _clear_completed_throttle(job, counted)
             if (
                 job.kind == "material_links"
                 and not more
@@ -973,17 +1019,17 @@ def execute_job(
             if job is None or job.claim_token != claim_token or job.status != "RUNNING":
                 return "FAILED"
             job.status, job.error_code = "WAITING", "admission_deferred"
+            delay = _admission_delay(job, counted, deferred)
+            now = datetime.now(UTC)
             job.progress = job.progress | {
                 "last_admission": {
                     "source": deferred.admission_source,
                     "reason": deferred.admission_reason,
-                    "retry_after_ms": deferred.retry_after_ms,
-                    "at": datetime.now(UTC).isoformat(),
+                    "retry_after_ms": delay,
+                    "at": now.isoformat(),
                 }
             }
-            job.due_at = datetime.now(UTC) + timedelta(
-                milliseconds=max(1000, deferred.retry_after_ms)
-            )
+            job.due_at = now + timedelta(milliseconds=delay)
             result = "WAITING"
         except DomainError as error:
             session.rollback()

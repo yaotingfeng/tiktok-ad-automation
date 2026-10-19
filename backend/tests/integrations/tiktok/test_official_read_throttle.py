@@ -44,14 +44,14 @@ def _raise(error: Exception):
     ("headers", "expected_ms"),
     [
         ({"Retry-After": "7"}, 7_000),
-        # 平台未给出或给出无效等待时使用默认值；超大值被限制，避免任务长期挂起。
+        # 平台未给出或给出无效等待时使用默认值；有效长等待不能被本地截短。
         ({}, 5_000),
         ({"Retry-After": "soon"}, 5_000),
-        ({"Retry-After": "3600"}, 60_000),
+        ({"Retry-After": "3600"}, 3_600_000),
         ({"Retry-After": "0"}, 1_000),
     ],
 )
-def test_throttled_read_is_deferred_with_bounded_retry_after(headers, expected_ms):
+def test_throttled_read_is_deferred_with_provider_retry_after(headers, expected_ms):
     with pytest.raises(AccountAdmissionDeferred) as caught:
         _requests().invoke(
             "accounts.bc_asset_get", None, _raise(_http_error(429, headers))
@@ -60,7 +60,9 @@ def test_throttled_read_is_deferred_with_bounded_retry_after(headers, expected_m
     assert caught.value.retryable is True
     assert caught.value.retry_after_ms == expected_ms
     assert caught.value.admission_source == "provider"
-    assert caught.value.admission_reason == "http_429"
+    assert caught.value.admission_reason == (
+        "http_429" if headers.get("Retry-After") in (None, "soon") else "retry_after"
+    )
 
 
 @pytest.mark.parametrize("status", [400, 401, 403, 500, 503])
@@ -116,3 +118,51 @@ def test_business_code_40100_defers_instead_of_failing(message):
             <= caught.value.retry_after_ms
             <= int((target - before).total_seconds() * 1000)
         )
+
+
+@pytest.mark.parametrize(
+    "message,headers,reason,expected",
+    [
+        ("Too many requests", {}, "40100", 300_000),
+        ("Too many requests", {"Retry-After": "7"}, "retry_after", 7000),
+        ("Too many requests", {"Retry-After": "3600"}, "retry_after", 3_600_000),
+        ("Too many requests", {"Retry-After": "invalid"}, "40100", 300_000),
+        ("QPS exceeded", {"Retry-After": "7"}, "qps", 7000),
+        ("QPM exceeded", {"Retry-After": "7"}, "qpm", 300_000),
+    ],
+)
+def test_business_throttle_obeys_retry_after_without_inventing_quota_class(
+    message, headers, reason, expected
+):
+    import json
+
+    requests = _requests()
+    response = SimpleNamespace(
+        data=json.dumps({"code": 40100, "message": message, "data": {}}),
+        getheaders=lambda: headers,
+    )
+    with pytest.raises(AccountAdmissionDeferred) as caught:
+        requests.invoke(
+            "reports.integrated",
+            "adv",
+            lambda _: requests.client.deserialize(response, "object"),
+        )
+    assert caught.value.admission_source == "provider"
+    assert caught.value.admission_reason == reason
+    assert caught.value.retry_after_ms == expected
+
+
+def test_retry_after_http_date_is_respected_for_429():
+    from email.utils import format_datetime
+
+    target = (datetime.now(UTC) + timedelta(minutes=10)).replace(microsecond=0)
+    with pytest.raises(AccountAdmissionDeferred) as caught:
+        _requests().invoke(
+            "reports.integrated",
+            "adv",
+            _raise(
+                _http_error(429, {"Retry-After": format_datetime(target, usegmt=True)})
+            ),
+        )
+    assert 590_000 < caught.value.retry_after_ms <= 600_000
+    assert caught.value.admission_reason == "retry_after"

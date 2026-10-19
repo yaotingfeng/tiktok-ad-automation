@@ -4,6 +4,7 @@ import json
 from collections.abc import Callable, Iterator
 from contextlib import AbstractContextManager, contextmanager
 from datetime import UTC, datetime, timedelta
+from email.utils import parsedate_to_datetime
 from typing import Any
 
 import business_api_client as sdk
@@ -64,28 +65,32 @@ def _strict_sdk_envelope(
         ):
             raise DomainError("tiktok_response_error", "TikTok 返回不支持的数据结构")
         if raw["code"] == 40100:
-            # 平台应用级限流：请求未被执行。QPM 需等 5 分钟，QPD 需等到次日
-            # UTC 0 点；统一走额度延后，不能计为读取失败。
+            # 明确的配额类别保留平台要求；未知类别不冒充 QPM。
             message = str(raw.get("message") or "").lower()
+            getheaders = getattr(response, "getheaders", None)
+            headers = (
+                getheaders()
+                if callable(getheaders)
+                else getattr(response, "headers", None)
+            )
+            retry_after = _provider_retry_after_ms(headers)
             if "qpd" in message or "per day" in message:
                 now = datetime.now(UTC)
                 tomorrow = (now + timedelta(days=1)).replace(
                     hour=0, minute=0, second=5, microsecond=0
                 )
-                raise AccountAdmissionDeferred(
-                    int((tomorrow - now).total_seconds() * 1000),
-                    source="provider",
-                    reason="qpd",
-                )
-            if "qps" in message or "per second" in message:
-                raise AccountAdmissionDeferred(1_000, source="provider", reason="qps")
-            # 无法识别类别时保留保守等待，但不能把它记作本地额度不足。
+                delay, reason = int((tomorrow - now).total_seconds() * 1000), "qpd"
+            elif "qpm" in message or "per minute" in message:
+                delay, reason = 300_000, "qpm"
+            elif "qps" in message or "per second" in message:
+                delay, reason = 1_000, "qps"
+            elif retry_after is not None:
+                delay, reason = retry_after, "retry_after"
+            else:
+                # 非报表调用方保持保守等待；报表任务有持久化、有界的短重试预算。
+                delay, reason = 300_000, "40100"
             raise AccountAdmissionDeferred(
-                300_000,
-                source="provider",
-                reason="qpm"
-                if "qpm" in message or "per minute" in message
-                else "40100",
+                max(delay, retry_after or 0), source="provider", reason=reason
             )
         if (
             exact is not None
@@ -116,20 +121,29 @@ def _strict_sdk_envelope(
             client.deserialize = instance_original
 
 
-# 平台未给出 Retry-After 时的默认等待；上限避免异常大的头部长期挂起任务。
+# 平台未给出 Retry-After 时的初始等待。
 _THROTTLE_DEFAULT_MS = 5_000
-_THROTTLE_MAX_MS = 60_000
 
 
-def _throttle_retry_ms(headers: object) -> int:
-    """按平台 Retry-After 秒数换算等待时长；缺失或无效时使用默认值。"""
+def _provider_retry_after_ms(headers: object) -> int | None:
+    """有效的平台等待指令优先；同时接受秒数和 HTTP 日期，不擅自缩短。"""
     getter = getattr(headers, "get", None)
-    value = getter("Retry-After") if callable(getter) else None
+    value = (
+        (getter("Retry-After") or getter("retry-after")) if callable(getter) else None
+    )
+    if value is None:
+        return None
     try:
         seconds = int(str(value).strip())
+        if seconds < 0:
+            return None
+        return max(1_000, seconds * 1_000)
     except ValueError:
-        return _THROTTLE_DEFAULT_MS
-    return min(_THROTTLE_MAX_MS, max(1_000, seconds * 1_000))
+        try:
+            target = parsedate_to_datetime(str(value))
+            return max(1_000, int((target - datetime.now(UTC)).total_seconds() * 1000))
+        except ValueError, TypeError, OverflowError:
+            return None
 
 
 class OfficialReadRequests:
@@ -160,10 +174,13 @@ class OfficialReadRequests:
                 # 只读 GET 被平台限流时请求未被执行，必须释放 Worker 并进入既有的
                 # 额度延后/退避重试路径；不能当作终态错误让任务直接失败。
                 if error.status == 429:
+                    retry_after = _provider_retry_after_ms(error.headers)
                     raise AccountAdmissionDeferred(
-                        _throttle_retry_ms(error.headers),
+                        retry_after
+                        if retry_after is not None
+                        else _THROTTLE_DEFAULT_MS,
                         source="provider",
-                        reason="http_429",
+                        reason="retry_after" if retry_after is not None else "http_429",
                     ) from None
                 raise DomainError(
                     "tiktok_response_error", "TikTok 请求未成功"
