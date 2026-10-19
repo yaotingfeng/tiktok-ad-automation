@@ -1177,3 +1177,60 @@ def test_duplicate_delivery_sends_once_while_first_provider_call_is_in_flight(
         assert calls == [True]
     finally:
         _cleanup(task_id)
+
+
+def test_unknown_sibling_does_not_prevent_known_unsent_retry(
+    c5_env, redis_client, monkeypatch
+):
+    context, task_id, item_id = _committed_item(c5_env)
+    with Session(engine) as session:
+        item = session.get(ManagementTaskItem, item_id)
+        sibling = ManagementTaskItem(**item.model_dump(exclude={"id"}))
+        sibling.execution_result = "NOT_SENT"
+        item.execution_result = "UNKNOWN"
+        session.add_all([item, sibling])
+        session.flush()
+        session.add(
+            ManagementRequestAttempt(
+                tenant_id=context.tenant_id, task_item_id=item.id, outcome="UNKNOWN"
+            )
+        )
+        session.add(
+            ManagementRequestAttempt(
+                tenant_id=context.tenant_id,
+                task_item_id=sibling.id,
+                outcome="NOT_SENT",
+                retryable=True,
+            )
+        )
+        from app.modules.ad_management.execution import _update_task
+
+        _update_task(session, task_id, context.tenant_id)
+        session.commit()
+        assert session.get(ManagementTask, task_id).status == "RUNNING"
+        sibling_id = sibling.id
+    sent = []
+    monkeypatch.setattr(
+        "app.modules.ad_management.execution._redis", lambda: redis_client
+    )
+    monkeypatch.setattr(settings, "ADS_SYNC_ENABLED", False)
+    monkeypatch.setattr(
+        "app.modules.ad_management.execution.open_tiktok_gateway",
+        lambda **_: _Gateway(
+            lambda _self, command: (
+                sent.append(command),
+                ManagementReceipt("ACCEPTED", "synthetic-retry", False),
+            )[1]
+        ),
+    )
+    result = execute_management_task(
+        tenant_id=str(context.tenant_id),
+        actor_id=str(context.actor_id),
+        payload={"task_id": str(task_id), "generation": 1},
+    )
+    assert result == "NEEDS_REVIEW" and len(sent) == 1
+    with Session(engine) as session:
+        assert session.get(ManagementTaskItem, item_id).execution_result == "UNKNOWN"
+        assert (
+            session.get(ManagementTaskItem, sibling_id).execution_result == "ACCEPTED"
+        )

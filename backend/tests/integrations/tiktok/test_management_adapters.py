@@ -14,7 +14,11 @@ from app.integrations.tiktok.adapters.sdk_management import (
     _payload,
 )
 from app.integrations.tiktok.contracts.ads import EntityRef
-from app.integrations.tiktok.contracts.common import CallEvidence, McpBusinessResponse
+from app.integrations.tiktok.contracts.common import (
+    CallEvidence,
+    McpBusinessResponse,
+    RemoteCallError,
+)
 from app.integrations.tiktok.contracts.management import ManagementCommand
 
 
@@ -100,7 +104,7 @@ def test_sdk_material_status_uses_ad_reference_and_capability_gate(monkeypatch):
             "management_permission_unverified", "management permission unverified"
         )
 
-    with pytest.raises(DomainError, match="management permission"):
+    with pytest.raises(RemoteCallError) as denied:
         SdkManagementOperations(
             FakeClient(),
             request_scope=scope,
@@ -108,6 +112,8 @@ def test_sdk_material_status_uses_ad_reference_and_capability_gate(monkeypatch):
             capability_check=deny,
             deadline=datetime.now(UTC) + timedelta(seconds=30),
         ).apply(command)
+    assert denied.value.effect == "NOT_SENT"
+    assert denied.value.code == "management_permission_unverified"
     assert len(calls) == 1
 
 
@@ -135,7 +141,7 @@ def test_conflicting_frozen_and_desired_types_are_zero_send_on_both_channels():
     def check(advertiser: str, operation: str, kind: str) -> None:
         callback_calls.append((advertiser, operation, kind))
 
-    with pytest.raises(DomainError, match="广告类型标识冲突"):
+    with pytest.raises(RemoteCallError) as denied:
         SdkManagementOperations(
             object(),
             request_scope=scope,
@@ -143,6 +149,8 @@ def test_conflicting_frozen_and_desired_types_are_zero_send_on_both_channels():
             capability_check=check,
             deadline=datetime.now(UTC) + timedelta(seconds=30),
         ).apply(command)
+    assert denied.value.effect == "NOT_SENT"
+    assert denied.value.code == "management_contract_unsupported"
     assert callback_calls == [("adv-1", "update_budget", "adgroup")]
     assert scope_calls == []
 

@@ -31,6 +31,7 @@ from app.integrations.tiktok.contracts.management import (
 )
 from app.integrations.tiktok.gateway import open_tiktok_gateway
 from app.integrations.tiktok.object_coordination import MutationLease, claim_mutation
+from app.jobs.models import PendingDispatch
 from app.jobs.outbox import enqueue_after_commit
 from app.modules.accounts.routing import verify_route
 from app.modules.ad_management.models import (
@@ -236,6 +237,9 @@ def _can_run(
             item.claim_token = None
             item.claimed_until = None
         return False
+    if latest is not None and latest.retryable and latest.response.get("retry_at"):
+        if datetime.fromisoformat(latest.response["retry_at"]) > _now():
+            return False
     return True
 
 
@@ -364,15 +368,15 @@ def _update_task(session: Session, task_id: UUID, tenant_id: UUID) -> None:
     )
     task.counts = counts
     statuses = {row.execution_result for row in rows}
-    if "UNKNOWN" in statuses:
-        task.status = "NEEDS_REVIEW"
-    elif "PENDING" in statuses or any(
+    if "PENDING" in statuses or any(
         row.execution_result == "NOT_SENT"
         and (attempts := _attempts(session, row))
         and attempts[-1].retryable
         for row in rows
     ):
         task.status = "RUNNING"
+    elif "UNKNOWN" in statuses:
+        task.status = "NEEDS_REVIEW"
     elif statuses and statuses <= {"ACCEPTED", "NO_CHANGE"}:
         task.status = "SUCCEEDED"
     elif statuses:
@@ -397,14 +401,21 @@ def _payload(command: ManagementCommand) -> dict[str, Any]:
 
 def _evidence(receipt: ManagementReceipt) -> dict[str, Any]:
     evidence = receipt.evidence
-    if evidence is None:
-        return {}
-    return {
-        "request_id": evidence.request_id,
-        "mcp_request_id": evidence.mcp_request_id,
-        "remote_task_id": evidence.remote_task_id,
-        "remote_code": evidence.remote_code,
-    }
+    result: dict[str, Any] = (
+        {}
+        if evidence is None
+        else {
+            "request_id": evidence.request_id,
+            "mcp_request_id": evidence.mcp_request_id,
+            "remote_task_id": evidence.remote_task_id,
+            "remote_code": evidence.remote_code,
+        }
+    )
+    if receipt.reason:
+        result["reason"] = receipt.reason
+    if receipt.retry_after_ms is not None:
+        result["retry_after_ms"] = receipt.retry_after_ms
+    return result
 
 
 def _persist_outcome(
@@ -436,16 +447,19 @@ def _persist_outcome(
             return False
         # Provider acceptance is only written by the current fenced owner.  A
         # stale owner leaves the durable attempt untouched for explicit review.
-        lease.fence()
-        verify_route(
-            session,
-            context=context,
-            route=route,
-            advertiser_id=_ref(item.ref).advertiser_id,
-            capability="ads_manage",
-            operation=(item.capability or {}).get("operation"),
-            entity_kind=(item.capability or {}).get("entity_kind"),
-        )
+        # 明确未发送的回执只需数据库领取围栏；权限撤回或 Redis 失效本身
+        # 就可能是拦截原因，不能因无法再次通过该门禁而改成 UNKNOWN。
+        if outcome != "NOT_SENT":
+            lease.fence()
+            verify_route(
+                session,
+                context=context,
+                route=route,
+                advertiser_id=_ref(item.ref).advertiser_id,
+                capability="ads_manage",
+                operation=(item.capability or {}).get("operation"),
+                entity_kind=(item.capability or {}).get("entity_kind"),
+            )
         attempt = session.exec(
             select(ManagementRequestAttempt)
             .where(
@@ -461,6 +475,28 @@ def _persist_outcome(
             return False
         attempt.outcome = outcome
         attempt.request_id = request_id
+        retryable = retryable and outcome == "NOT_SENT" and attempt_no < 3
+        if retryable:
+            delay = max(
+                5 * 2 ** (attempt_no - 1), (response.get("retry_after_ms") or 0) / 1000
+            )
+            retry_at = _now() + timedelta(seconds=delay)
+            response = {**response, "retry_at": retry_at.isoformat()}
+            task = session.get(ManagementTask, item.task_id)
+            assert task is not None
+            dispatch_id = enqueue_after_commit(
+                session,
+                context=TenantContext(task.tenant_id, task.actor_id, "operator"),
+                task_name="ad_management.execute",
+                task_key=f"ad-management-retry:{item.id}:{attempt_no}",
+                payload={"task_id": str(task.id), "generation": generation},
+            )
+            dispatch = session.get(PendingDispatch, dispatch_id)
+            assert dispatch is not None
+            dispatch.available_at = retry_at
+            session.add(dispatch)
+        elif outcome == "NOT_SENT" and attempt_no >= 3:
+            response = {**response, "retry_exhausted": True}
         attempt.retryable = retryable
         attempt.response = response
         session.add(attempt)
@@ -473,7 +509,13 @@ def _persist_outcome(
                 response=response,
             )
         )
-        item.execution_result = outcome
+        item.execution_result = (
+            "CONFLICT"
+            if outcome == "NOT_SENT"
+            and response.get("reason") == "management_original_changed"
+            else outcome
+        )
+        item.reason = response.get("reason")
         item.delivery_status = "DELIVERED" if outcome == "ACCEPTED" else outcome
         item.observation_state = (
             "ACCEPTED"
@@ -784,6 +826,7 @@ def execute_item(database_engine: Engine, item_id: UUID) -> None:
                     retryable=False,
                 )
             )
+            item.execution_result = "PENDING"
             item.delivery_status = "ATTEMPT_RECORDED"
             session.add_all([item, task])
             session.flush()
@@ -873,8 +916,11 @@ def execute_item(database_engine: Engine, item_id: UUID) -> None:
             receipt = ManagementReceipt(
                 outcome,
                 error.evidence.request_id or error.evidence.mcp_request_id,
-                outcome == "NOT_SENT" and error.code in TRANSIENT_NOT_SENT,
+                outcome == "NOT_SENT"
+                and error.code in (TRANSIENT_NOT_SENT | {"admission_deferred"}),
                 error.evidence,
+                reason=error.code,
+                retry_after_ms=error.retry_after_ms,
             )
         except DomainError as error:
             outcome = "UNKNOWN" if provider_called else "NOT_SENT"
@@ -882,10 +928,18 @@ def execute_item(database_engine: Engine, item_id: UUID) -> None:
                 outcome,
                 None,
                 outcome == "NOT_SENT" and error.code in TRANSIENT_NOT_SENT,
+                reason=error.code,
             )
         except Exception:
             outcome = "UNKNOWN" if provider_called else "NOT_SENT"
-            receipt = ManagementReceipt(outcome, None, False)
+            receipt = ManagementReceipt(
+                outcome,
+                None,
+                False,
+                reason="management_result_unknown"
+                if provider_called
+                else "management_preflight_failed",
+            )
 
         # The attempt number is looked up from SQL after the provider call.  It is
         # never inferred from Redis generation, preserving retries after restart.

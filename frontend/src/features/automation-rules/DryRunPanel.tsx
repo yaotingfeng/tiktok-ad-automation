@@ -36,6 +36,7 @@ export const OUTCOME_LABELS: Record<string, string> = {
   SKIPPED_PARENT_STATUS: "上级未开启，已跳过",
   SKIPPED_DAILY_LIMIT: "超出每日涨幅（历史）",
   SUBMITTED: "已提交",
+  SKIPPED_PENDING: "等待前次操作",
   CONFLICT: "规则冲突",
   FAILED: "失败",
 }

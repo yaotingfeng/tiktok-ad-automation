@@ -1312,3 +1312,128 @@ def test_merge_target_unions_material_uses_from_several_hits():
     _merge_target(targets, second)
     _merge_target(targets, second)
     assert targets["material:a:p1"]["material_uses"] == [{"u": 1}, {"u": 2}]
+
+
+@pytest.mark.parametrize("prior_result", ["PENDING", "UNKNOWN", "ACCEPTED"])
+def test_unsettled_action_blocks_next_rule_run(session, env, prior_result):
+    from app.modules.ad_management.models import (
+        ManagementRequestAttempt,
+        ManagementTaskItem,
+    )
+
+    def run_rule():
+        from uuid import uuid4
+
+        rule, run = _rule_run(
+            session,
+            env,
+            name=str(uuid4()),
+            action=PAUSE,
+            targets=[_target("acc-x", "bc-x")],
+        )
+        return execute_hits(
+            session,
+            run=run,
+            rule=rule,
+            selected_keys=None,
+            now=NOW,
+            actor_id=env.actor_id,
+            require_manage=True,
+        )
+
+    first = run_rule()
+    item = session.exec(
+        select(ManagementTaskItem).where(ManagementTaskItem.tenant_id == env.tenant_id)
+    ).one()
+    item.execution_result = prior_result
+    if prior_result != "PENDING":
+        session.add(
+            ManagementRequestAttempt(
+                tenant_id=env.tenant_id,
+                task_item_id=item.id,
+                outcome=prior_result,
+                request_at=datetime.now(UTC),
+            )
+        )
+    session.flush()
+    second = run_rule()
+    assert first["submitted"] == 1
+    assert second["submitted"] == 0
+    assert second["skipped_pending"] == 1
+    assert (
+        len(
+            session.exec(
+                select(ManagementTask).where(ManagementTask.tenant_id == env.tenant_id)
+            ).all()
+        )
+        == 1
+    )
+
+
+def test_material_pending_guard_scopes_exact_usage_and_releases_after_observation(
+    session, env
+):
+    from app.modules.ad_management.models import (
+        ManagementRequestAttempt,
+        ManagementTaskItem,
+    )
+    from app.modules.automation_rules.pending import pending_targets
+
+    connection = session.exec(
+        select(TikTokConnection).where(TikTokConnection.tenant_id == env.tenant_id)
+    ).first()
+    target = _smart_material(session, env, connection)
+    rule, run = _rule_run(
+        session, env, action={"type": "PAUSE", "level": "material"}, targets=[target]
+    )
+    execute_hits(
+        session,
+        run=run,
+        rule=rule,
+        selected_keys=None,
+        now=NOW,
+        actor_id=env.actor_id,
+        require_manage=True,
+    )
+    item = session.exec(
+        select(ManagementTaskItem).where(ManagementTaskItem.tenant_id == env.tenant_id)
+    ).one()
+
+    def blocked(value=target, operation="set_material_status", tenant=env.tenant_id):
+        return pending_targets(session, tenant, {value["key"]: value}, operation)
+
+    assert blocked() == {target["key"]}
+    other_use = {
+        **target,
+        "material_uses": [
+            {**target["material_uses"][0], "ad_material_id": "other-use"}
+        ],
+    }
+    assert blocked(other_use) == set()
+    assert blocked({**target, "bc_id": "other-bc"}) == set()
+    assert blocked(operation="update_budget") == set()
+    from uuid import uuid4
+
+    assert blocked(tenant=uuid4()) == set()
+    item.execution_result = "ACCEPTED"
+    request_at = datetime.now(UTC)
+    session.add(
+        ManagementRequestAttempt(
+            tenant_id=env.tenant_id,
+            task_item_id=item.id,
+            outcome="ACCEPTED",
+            request_at=request_at,
+        )
+    )
+    session.flush()
+    assert blocked() == {target["key"]}
+    obj = session.exec(
+        select(AdObject).where(
+            AdObject.tenant_id == env.tenant_id,
+            AdObject.kind == "ad",
+            AdObject.remote_id == "x1",
+        )
+    ).one()
+    obj.observed_at = request_at + timedelta(seconds=1)
+    session.flush()
+    assert blocked() == set()

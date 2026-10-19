@@ -11,9 +11,6 @@ from decimal import Decimal
 from typing import Any
 
 import business_api_client as sdk  # type: ignore[import-untyped]
-from business_api_client.rest import ApiException
-from business_api_client.tiktok_business.tiktok_exceptions import TiktokSDKError
-from urllib3.exceptions import HTTPError
 
 from app.core.errors import DomainError
 from app.integrations.tiktok.adapters.build_results import safe_identifier
@@ -199,56 +196,60 @@ class SdkManagementOperations:
             )
 
     def apply(self, command: ManagementCommand) -> ManagementReceipt:
-        if not isinstance(command, ManagementCommand):
-            raise TypeError("management command required")
-        operation = f"management.{command.operation}"
-        if operation not in {f"management.{name}" for name in MANAGEMENT_OPERATIONS}:
-            raise DomainError("management_operation_invalid", "管理操作无效")
-        check = self._check
-        management_scope = self._management_scope
-        assert check is not None and management_scope is not None
-        check(command.ref.advertiser_id, command.operation, command.ref.kind)
-        smart_plus = _smart_plus(command)
-        payload = _payload(command, smart_plus=smart_plus)
-        methods: dict[str, Any]
-        if command.field == "material_status":
-            methods = {
-                "smart": sdk.AdApi(self._client).smart_plus_ad_material_status_update
-            }
-            method = methods["smart"]
-        elif command.field == "status":
-            if smart_plus:
-                method = {
-                    "campaign": sdk.CampaignCreationApi(
-                        self._client
-                    ).smart_plus_campaign_status_update,
-                    "adgroup": sdk.AdgroupApi(
-                        self._client
-                    ).smart_plus_adgroup_status_update,
-                    "ad": sdk.AdApi(self._client).smart_plus_ad_status_update,
-                }[command.ref.kind]
-            else:
-                method = {
-                    "campaign": sdk.CampaignCreationApi(
-                        self._client
-                    ).campaign_status_update,
-                    "adgroup": sdk.AdgroupApi(self._client).adgroup_status_update,
-                    "ad": sdk.AdApi(self._client).ad_status_update,
-                }[command.ref.kind]
-        elif smart_plus:
-            method = (
-                sdk.CampaignCreationApi(self._client).smart_plus_campaign_update
-                if command.ref.kind == "campaign"
-                else sdk.AdgroupApi(self._client).smart_plus_adgroup_update
-            )
-        else:
-            method = (
-                sdk.CampaignCreationApi(self._client).campaign_update
-                if command.ref.kind == "campaign"
-                else sdk.AdgroupApi(self._client).adgroup_update
-            )
         sent = False
         try:
+            if not isinstance(command, ManagementCommand):
+                raise TypeError("management command required")
+            operation = f"management.{command.operation}"
+            if operation not in {
+                f"management.{name}" for name in MANAGEMENT_OPERATIONS
+            }:
+                raise DomainError("management_operation_invalid", "管理操作无效")
+            check = self._check
+            management_scope = self._management_scope
+            assert check is not None and management_scope is not None
+            check(command.ref.advertiser_id, command.operation, command.ref.kind)
+            smart_plus = _smart_plus(command)
+            payload = _payload(command, smart_plus=smart_plus)
+            methods: dict[str, Any]
+            if command.field == "material_status":
+                methods = {
+                    "smart": sdk.AdApi(
+                        self._client
+                    ).smart_plus_ad_material_status_update
+                }
+                method = methods["smart"]
+            elif command.field == "status":
+                if smart_plus:
+                    method = {
+                        "campaign": sdk.CampaignCreationApi(
+                            self._client
+                        ).smart_plus_campaign_status_update,
+                        "adgroup": sdk.AdgroupApi(
+                            self._client
+                        ).smart_plus_adgroup_status_update,
+                        "ad": sdk.AdApi(self._client).smart_plus_ad_status_update,
+                    }[command.ref.kind]
+                else:
+                    method = {
+                        "campaign": sdk.CampaignCreationApi(
+                            self._client
+                        ).campaign_status_update,
+                        "adgroup": sdk.AdgroupApi(self._client).adgroup_status_update,
+                        "ad": sdk.AdApi(self._client).ad_status_update,
+                    }[command.ref.kind]
+            elif smart_plus:
+                method = (
+                    sdk.CampaignCreationApi(self._client).smart_plus_campaign_update
+                    if command.ref.kind == "campaign"
+                    else sdk.AdgroupApi(self._client).smart_plus_adgroup_update
+                )
+            else:
+                method = (
+                    sdk.CampaignCreationApi(self._client).campaign_update
+                    if command.ref.kind == "campaign"
+                    else sdk.AdgroupApi(self._client).adgroup_update
+                )
             remaining(self._deadline)
             scope = management_scope(
                 command.ref.advertiser_id,
@@ -260,32 +261,38 @@ class SdkManagementOperations:
                 budget = remaining(self._deadline)
                 if self._before_send is not None:
                     self._before_send()
+                access_token = self._client.default_headers["Access-Token"]
                 sent = True
                 method(
-                    self._client.default_headers["Access-Token"],
+                    access_token,
                     body=payload,
                     async_req=True,
                     _request_timeout=(min(5.0, budget), min(30.0, budget)),
                 ).get()
                 raw = json.loads(self._client.last_response.data)
                 return _receipt(raw)
-        except RemoteCallError:
-            raise
-        except (
-            ApiException,
-            TiktokSDKError,
-            HTTPError,
-            TimeoutError,
-            ValueError,
-            TypeError,
-        ):
-            if sent:
-                raise RemoteCallError(
-                    "management_result_unknown",
-                    effect="UNKNOWN",
-                    evidence=CallEvidence(),
-                ) from None
-            return ManagementReceipt("NOT_SENT", None, True)
+        except Exception as error:
+            # 只有到达 SDK 方法调用边界才可能产生远端效果。准入/授权/原值校验
+            # 都在此之前；异常文案不落库，仅传递应用错误码与明确的发送阶段。
+            if (
+                isinstance(error, RemoteCallError)
+                and sent
+                and error.effect == "UNKNOWN"
+            ):
+                raise
+            code = (
+                "management_result_unknown"
+                if sent
+                else error.code
+                if isinstance(error, DomainError)
+                else "management_preflight_failed"
+            )
+            raise RemoteCallError(
+                code,
+                effect="UNKNOWN" if sent else "NOT_SENT",
+                evidence=CallEvidence(),
+                retry_after_ms=getattr(error, "retry_after_ms", None),
+            ) from None
 
 
 # Naming follows the API/MCP adapter pair used by the existing build adapters.

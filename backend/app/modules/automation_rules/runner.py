@@ -228,7 +228,11 @@ def _same_issues_as_last_sent(
 
 
 def queue_notification(
-    session: Session, *, run: AutomationRuleRun, context: TenantContext
+    session: Session,
+    *,
+    run: AutomationRuleRun,
+    context: TenantContext,
+    phase: str | None = None,
 ) -> None:
     run.notify_status = "PENDING"
     enqueue_after_commit(
@@ -236,13 +240,17 @@ def queue_notification(
         context=context,
         task_name=SEND_TASK,
         # 同一次运行可能先后发送待确认与执行结果两张卡片，按状态区分任务标识。
-        task_key=f"automation-feishu:{run.id}:{run.execution_status}",
+        task_key=f"automation-feishu:{run.id}:{phase or run.execution_status}",
         payload={"run_id": str(run.id)},
     )
 
 
 def notify_execution(
-    session: Session, *, run: AutomationRuleRun, rule: AutomationRule
+    session: Session,
+    *,
+    run: AutomationRuleRun,
+    rule: AutomationRule,
+    phase: str | None = None,
 ) -> None:
     """执行完成后按运行时的规则快照决定是否发执行结果卡片；汇总模式并入汇总。"""
     notification = RuleDefinition.model_validate(run.definition).notification
@@ -253,12 +261,17 @@ def notify_execution(
             session,
             run=run,
             context=TenantContext(rule.tenant_id, rule.updated_by, "operator"),
+            phase=phase,
         )
     session.flush()
 
 
 def failed_summary(summary: dict[str, Any]) -> bool:
-    return any(summary.get(k) for k in ("failed", "failed_bcs", "error"))
+    results = summary.get("results", {})
+    return any(summary.get(k) for k in ("failed", "failed_bcs", "error")) or any(
+        results.get(k)
+        for k in ("unknown", "rejected", "not_sent", "conflict", "cancelled")
+    )
 
 
 def execution_brief(summary: dict[str, Any], action: str) -> str:
@@ -272,6 +285,21 @@ def execution_brief(summary: dict[str, Any], action: str) -> str:
         parts.append(EXECUTION_ERRORS.get(summary["error"], "执行异常"))
     if summary.get("submitted"):
         parts.append(f"{action}已提交 {summary['submitted']}")
+    results = summary.get("results", {})
+    for key, label in (
+        ("accepted", "平台已受理"),
+        ("pending", "等待执行/重试"),
+        ("unknown", "结果未知"),
+        ("rejected", "平台拒绝"),
+        ("not_sent", "未发送"),
+        ("conflict", "发送前冲突"),
+        ("cancelled", "已取消"),
+        ("no_change", "无需变更"),
+    ):
+        if results.get(key):
+            parts.append(f"{label} {results[key]}")
+    if summary.get("skipped_pending"):
+        parts.append(f"等待前次操作 {summary['skipped_pending']}")
     if summary.get("conflicts"):
         parts.append(f"冲突 {summary['conflicts']}")
     skipped = sum(
@@ -332,15 +360,26 @@ def build_run_card(
         if confirmation_id is not None:
             link = f"{base}/automation-rules?tab=confirmations&confirmation={confirmation_id}"
             button = "去确认"
-    elif status in ("SUBMITTED", "PARTIAL", "FAILED", "SKIPPED"):
+    elif status in (
+        "SUBMITTED",
+        "PARTIAL",
+        "FAILED",
+        "SKIPPED",
+        "ACCEPTED",
+        "NEEDS_REVIEW",
+    ):
         failed = status == "FAILED" or failed_summary(run.execution_summary)
         title = caption
         template = (
             "red"
             if failed
-            else {"SUBMITTED": "green", "PARTIAL": "orange", "SKIPPED": "grey"}.get(
-                status, "red"
-            )
+            else {
+                "SUBMITTED": "blue",
+                "ACCEPTED": "green",
+                "NEEDS_REVIEW": "red",
+                "PARTIAL": "orange",
+                "SKIPPED": "grey",
+            }.get(status, "red")
         )
         content = execution_brief(run.execution_summary, action)
         if status == "FAILED" and not failed_summary(run.execution_summary):

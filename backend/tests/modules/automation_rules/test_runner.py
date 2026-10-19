@@ -274,7 +274,7 @@ def test_execution_result_card(session, sync_seed):
     run.execution_summary["failed"] = 0
     card = build_run_card(rule, run, confirmation_id=None)
     assert card["card"]["header"]["title"]["content"] == "r"
-    assert card["card"]["header"]["template"] == "green"
+    assert card["card"]["header"]["template"] == "blue"
     assert _button(card)["url"].endswith(f"tab=runs&run={run.id}")
     run.execution_status = "FAILED"
     card = build_run_card(rule, run, confirmation_id=None)

@@ -23,6 +23,7 @@ from app.modules.automation_rules.models import (
 )
 from app.modules.automation_rules.runner import (
     execution_brief,
+    failed_summary,
     notification_worthy,
 )
 from app.modules.automation_rules.schemas import RuleDefinition
@@ -37,6 +38,7 @@ register_dispatch_task(SUMMARY_TASK, "control")
 _COUNTS = (
     "submitted",
     "skipped_frequency",
+    "skipped_pending",
     "skipped_parent_status",
     "conflicts",
     "no_change",
@@ -122,19 +124,19 @@ def build_summary_card(
 ) -> dict[str, Any]:
     totals: Counter[str] = Counter()
     failed = False
+    results: Counter[str] = Counter()
     for run in runs:
+        results.update(run.execution_summary.get("results", {}))
         for key in _COUNTS:
             totals[key] += int(run.execution_summary.get(key, 0) or 0)
         failed = (
             failed
-            or run.execution_status == "FAILED"
-            or any(
-                run.execution_summary.get(k) for k in ("error", "failed_bcs", "failed")
-            )
+            or run.execution_status in {"FAILED", "NEEDS_REVIEW"}
+            or failed_summary(run.execution_summary)
         )
     content = f"运行 {len(runs)} 次，命中合计 {sum(r.hit_count for r in runs)} 次"
     if any(totals.values()) or failed:
-        execution: dict[str, Any] = dict(totals)
+        execution: dict[str, Any] = {**totals, "results": dict(results)}
         if failed:
             execution["error"] = "execution_error"
         # 时段内规则可能改过操作，不能用当前操作名给历史提交贴错标签。

@@ -40,6 +40,7 @@ from app.modules.automation_rules.models import (
     AutomationRuleHit,
     AutomationRuleRun,
 )
+from app.modules.automation_rules.pending import pending_targets
 from app.modules.automation_rules.schemas import RuleDefinition
 from app.modules.automation_rules.statuses import blocked_material_recoveries
 from app.modules.reporting.query_models import FrozenSelectionRecord
@@ -66,6 +67,7 @@ def _summary() -> dict[str, Any]:
     return {
         "submitted": 0,
         "skipped_frequency": 0,
+        "skipped_pending": 0,
         "skipped_parent_status": 0,
         "conflicts": 0,
         "no_change": 0,
@@ -288,6 +290,18 @@ def execute_hits(
             summary["skipped_frequency"] += 1
             continue
         runnable[target_key] = target
+    operation = {
+        "PAUSE": "set_status",
+        "ENABLE": "set_status",
+        "BUDGET": "update_budget",
+        "ROAS": "update_roas",
+    }[action.type]
+    if action.level == "material" and action.type in {"PAUSE", "ENABLE"}:
+        operation = "set_material_status"
+    for target_key in pending_targets(session, rule.tenant_id, runnable, operation):
+        runnable.pop(target_key)
+        outcome[target_key] = "SKIPPED_PENDING"
+        summary["skipped_pending"] += 1
     for bc_id, bc_targets in group_by_bc(runnable.values()).items():
         # 保存点回滚时，本 BC 已计入的计数与结果一并撤销，整个 BC 记为失败。
         counts = {
@@ -357,6 +371,7 @@ _PRIORITY = [
     "UNSUPPORTED",
     "SKIPPED_FREQUENCY",
     "SKIPPED_PARENT_STATUS",
+    "SKIPPED_PENDING",
     "SUBMITTED",
     "CONFLICT",
     "FAILED",

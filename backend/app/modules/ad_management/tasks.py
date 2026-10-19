@@ -42,6 +42,8 @@ def execute_management_task(
         actor = UUID(actor_id)
     except (TypeError, ValueError, AttributeError) as exc:
         raise DomainError("dispatch_payload_invalid", "管理任务操作者无效") from exc
+    from app.modules.automation_rules.results import refresh_execution_results
+
     task_id, _dispatch_generation = _payload(payload)
     with Session(engine) as session:
         task = session.exec(
@@ -66,6 +68,8 @@ def execute_management_task(
             in {"SUCCEEDED", "PARTIAL", "FAILED", "CANCELLED", "NEEDS_REVIEW"}
             and refresh_pending is None
         ):
+            refresh_execution_results(session, task_id, tenant)
+            session.commit()
             return task.status
         task.status = "RUNNING"
         session.add(task)
@@ -93,6 +97,8 @@ def execute_management_task(
             return "FAILED"
         # 与单项回写共用汇总规则：不可重试的未发送项必须结束任务。
         _update_task(session, task_id, tenant)
+        session.flush()
+        refresh_execution_results(session, task_id, tenant)
         session.commit()
         return task.status
 

@@ -366,7 +366,7 @@ class RunFilters:
     drama: str | None = None
 
 
-_EXECUTED = ("SUBMITTED", "PARTIAL", "FAILED", "SKIPPED")
+_EXECUTED = ("SUBMITTED", "PARTIAL", "FAILED", "SKIPPED", "ACCEPTED", "NEEDS_REVIEW")
 
 
 def _run_conditions(
@@ -514,7 +514,14 @@ def overview(
             AutomationRuleRun.tenant_id == context.tenant_id,
             col(AutomationRuleRun.started_at) >= since,
             col(AutomationRuleRun.execution_status).in_(
-                ["SUBMITTED", "PARTIAL", "FAILED", "SKIPPED"]
+                [
+                    "SUBMITTED",
+                    "PARTIAL",
+                    "FAILED",
+                    "SKIPPED",
+                    "ACCEPTED",
+                    "NEEDS_REVIEW",
+                ]
             ),
         )
     ).all()

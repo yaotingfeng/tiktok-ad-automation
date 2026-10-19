@@ -68,6 +68,8 @@ const EXECUTION_LABELS: Record<string, string> = {
   QUEUED: "已排队",
   CONFIRMED: "已确认，执行中",
   PARTIAL: "部分完成",
+  ACCEPTED: "平台已受理",
+  NEEDS_REVIEW: "结果未知，待核对",
   SKIPPED: "未执行（已跳过）",
   FAILED: "执行失败",
   DISMISSED: "已忽略",
@@ -81,6 +83,8 @@ const EXECUTION_ERRORS: Record<string, string> = {
 }
 
 type Summary = {
+  results?: Record<string, number>
+  skipped_pending?: number
   submitted?: number
   skipped_daily_limit?: number
   skipped_frequency?: number
@@ -115,9 +119,14 @@ function ExecutionSummary({
   if (run.execution_status === "AWAITING_CONFIRMATION")
     return <p className="text-sm">命中结果等待确认，请在「待确认」中处理。</p>
   if (
-    !["SUBMITTED", "PARTIAL", "FAILED", "SKIPPED"].includes(
-      run.execution_status,
-    )
+    ![
+      "SUBMITTED",
+      "PARTIAL",
+      "FAILED",
+      "SKIPPED",
+      "ACCEPTED",
+      "NEEDS_REVIEW",
+    ].includes(run.execution_status)
   )
     return null
   return (
@@ -129,9 +138,23 @@ function ExecutionSummary({
         {summary.skipped_daily_limit
           ? `、历史每日涨幅跳过 ${summary.skipped_daily_limit}`
           : ""}
+        {summary.skipped_pending
+          ? `、等待前次操作 ${summary.skipped_pending}`
+          : ""}
         {summary.unsupported ? `、不支持 ${summary.unsupported}` : ""}
         {summary.failed ? `、失败 ${summary.failed}` : ""}
       </p>
+      {summary.results && (
+        <p>
+          平台已受理 {summary.results.accepted ?? 0}；等待执行/重试{" "}
+          {summary.results.pending ?? 0}； 结果未知{" "}
+          {summary.results.unknown ?? 0}；平台拒绝{" "}
+          {summary.results.rejected ?? 0}； 未发送{" "}
+          {summary.results.not_sent ?? 0}；发送前冲突{" "}
+          {summary.results.conflict ?? 0}。
+          受理结果以管理任务回执为准，平台实际状态需等待目录刷新。
+        </p>
+      )}
       {(summary.unsupported_details ?? []).length > 0 && (
         <p className="break-all text-muted-foreground">
           不支持操作（如普通广告的素材不能单独启停）：

@@ -118,6 +118,8 @@ class ManagementReceipt:
     request_id: str | None
     retryable: bool
     evidence: CallEvidence | None = None
+    reason: str | None = None
+    retry_after_ms: int | None = None
 
     def __post_init__(self) -> None:
         if self.outcome not in {"ACCEPTED", "REJECTED", "NOT_SENT", "UNKNOWN"}:
