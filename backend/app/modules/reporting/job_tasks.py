@@ -79,10 +79,11 @@ DIRECTORY_DISPATCH_WINDOW = 8
 # 12 个执行进程保留两批有界候补，吸收 outbox 投递空档；
 # 实际 SDK 并发和调用次数始终由共享准入额度约束。
 REPORT_DISPATCH_WINDOW = 24
-# 当前与历史关联各保底半个窗口，空闲份额可借用；不增加 Worker 或平台额度。
+# 当地今天关联独立于实时事实；历史关联使用下面的后台窗口。
 LINK_DISPATCH_WINDOW = 4
-# 后台已有3个执行槽，历史事实不能仍由旧单槽窗口人为串行化。
-BACKFILL_DISPATCH_WINDOW = 3
+# 后台3个执行进程同样保留两批有界候补，避免每步等待outbox投递而空转。
+# 历史事实/关联各保底一半，闲置份额可借；实际执行并发及平台配额不变。
+BACKFILL_DISPATCH_WINDOW = 6
 # 目录消息发布后超过此时长仍未被领取，视为丢失并重新入队。
 DIRECTORY_MESSAGE_LOST_AFTER = timedelta(hours=6)
 TARGETED_MESSAGE_LOST_AFTER = timedelta(minutes=2)

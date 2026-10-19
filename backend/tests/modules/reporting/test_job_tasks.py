@@ -810,9 +810,9 @@ def test_cold_dispatch_window_cannot_block_new_current_day_work(
         )
 
     with factory() as session, session.begin():
-        for index in range(6):
+        for index in range(12):
             enqueue(session, index, "history")
-    assert job_tasks._dispatch_pending(engine, now) == 3
+    assert job_tasks._dispatch_pending(engine, now) == 6
     assert job_tasks._dispatch_pending(engine, now) == 0
     with factory() as session, session.begin():
         running = session.exec(
@@ -821,7 +821,7 @@ def test_cold_dispatch_window_cannot_block_new_current_day_work(
                 ReportSyncJob.status == "RUNNING",
             )
         ).all()
-        assert len(running) == 3
+        assert len(running) == 6
         cold_ids = {item.id for item in running}
         hot_id = enqueue(session, 20, "hot")
     assert job_tasks._dispatch_pending(engine, now) == 1
