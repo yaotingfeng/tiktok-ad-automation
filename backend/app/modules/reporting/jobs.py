@@ -999,6 +999,14 @@ def execute_job(
 
 def _handle_error(session, job: ReportSyncJob, error: DomainError) -> str:
     job.error_code = error.code
+    if error.code == "report_snapshot_changed" and job.kind == "material_links":
+        # 重建当前旧帖查询并消耗既有有限重试预算；不能在不断变化的分页上无限续步。
+        # 已证实的关联和完整概览保留，未完成集合绝不成为负缓存。
+        job.progress = {
+            key: value
+            for key, value in job.progress.items()
+            if key not in {"locate_post", "locate_queries"}
+        }
     if error.code == "report_snapshot_changed" and job.kind in BASIC_KINDS | {
         "material_day"
     }:

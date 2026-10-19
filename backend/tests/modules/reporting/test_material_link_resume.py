@@ -79,7 +79,7 @@ class SlowReader:
     def material_ad_posts(self, *, advertiser_id, ad_ids, start, end, page):
         assert advertiser_id == "acc-1" and start == end == D
         self.tick((tuple(ad_ids), page))
-        mid = "old-post" if page == 2 and "ad199" in ad_ids else "unrelated"
+        mid = "old-post" if page == 2 and "ad199" in ad_ids else f"unrelated-{page}"
         return RawReportPage(({"dimensions": {"main_material_id": mid}},), page, 2, 2)
 
 

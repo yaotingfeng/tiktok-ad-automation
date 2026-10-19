@@ -29,6 +29,7 @@ from sqlmodel import Session
 
 from app.core.errors import DomainError
 from app.integrations.tiktok.contracts.report_reader import RawReportPage
+from app.modules.reporting.link_queries import QueryMembershipReader
 from app.modules.reporting.store_models import MaterialLinkScan
 
 # 主素材（帖子）→ 视频；同一主素材对应多条广告（非 Spark 共用）时取最小视频 ID，
@@ -391,7 +392,7 @@ AD_FILTER_LIMIT = 200
 def _locate_post_step(state, *, read_ad_posts, first, last):
     """单帖二分路径与当前查询页持久化；每步最多一次平台读取。
 
-    已确认包含目标的右半无需读取。栈仅保留尚未定位的路径，避免把每次完整
+    右半可继续缩小候选，但最终单广告必须正向读取。栈仅保留尚未定位的路径，避免把每次完整
     二分查找塞进一个期限；跨 200 广告批次、分页也分别提交后再继续。
     """
     stack = state["search_stack"]
@@ -411,7 +412,7 @@ def _locate_post_step(state, *, read_ad_posts, first, last):
         state["next_batch"] += len(batch)
     node = stack[-1]
     ads = node["ads"]
-    query_ads = ads[: len(ads) // 2] if node["confirmed"] else ads
+    query_ads = ads[: len(ads) // 2] if node["confirmed"] and len(ads) > 1 else ads
     query = state.get("query", {"page": 1, "found": False})
     result = read_ad_posts(tuple(query_ads), first, last, query["page"])
     if result.total_number >= 20_000:
@@ -433,8 +434,7 @@ def _locate_post_step(state, *, read_ad_posts, first, last):
     signature = [result.total_page, result.total_number]
     if query.get("signature", signature) != signature:
         # 翻页期间集合改变时只重读当前子集；不能把不完整的缺失推导为右半命中。
-        state.pop("query", None)
-        return False, None
+        raise DomainError("report_snapshot_changed", "定位查询分页总数变化")
     query["signature"] = signature
     query["found"] = query["found"] or any(
         str((row.get("dimensions") or {}).get("main_material_id") or "") == state["mid"]
@@ -445,6 +445,15 @@ def _locate_post_step(state, *, read_ad_posts, first, last):
         state["query"] = query
         return False, None
     state.pop("query", None)
+    if len(ads) == 1:
+        if query["found"]:
+            stack.pop()
+            return True, ads[0]
+        if node["confirmed"]:
+            # 父集合命中过，两个子集却都没有：这是快照矛盾，不能签发六小时否定。
+            raise DomainError("report_snapshot_changed", "定位查询的父子集合不一致")
+        stack.pop()
+        return not stack and state["next_batch"] >= len(state["candidates"]), None
     if node["confirmed"]:
         node["ads"] = query_ads if query["found"] else ads[len(ads) // 2 :]
     elif query["found"]:
@@ -452,7 +461,7 @@ def _locate_post_step(state, *, read_ad_posts, first, last):
     else:
         stack.pop()
         return not stack and state["next_batch"] >= len(state["candidates"]), None
-    if len(node["ads"]) == 1:
+    if len(node["ads"]) == 1 and query["found"] and len(query_ads) == 1:
         return True, node["ads"][0]
     return False, None
 
@@ -636,8 +645,15 @@ def refresh_material_links(
                 }
                 progress["locate_post"] = current
 
+            query_reader = QueryMembershipReader(
+                read_ad_posts,
+                progress.setdefault("locate_queries", {}),
+                targets=stale,
+                now=now,
+            )
+
             def read_and_share(ads, first_day, last_day, page_number):
-                result = read_ad_posts(ads, first_day, last_day, page_number)
+                result = query_reader(ads, first_day, last_day, page_number)
                 if len(ads) == 1:
                     # 单广告响应已经证明整页帖子的归属，不再为每个帖子重复读取相同报表。
                     mids = {
@@ -735,5 +751,6 @@ def refresh_material_links(
             },
         )
     _resolve_videos(session, tenant_id, advertiser_id)
+    progress.pop("locate_queries", None)
     session.flush()
     return True

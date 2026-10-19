@@ -513,8 +513,9 @@ def test_locate_posts_splits_only_batches_with_targets():
                 result[mid] = owner
                 break
     assert result == owners
-    # 单帖独立续步，每个目标只有整批和三层左半查询；已确认右半无需再查。
-    assert len(queried) == 8
+    # 推断得到的右侧单广告补一次直接验证；左侧单广告命中本身就是证据。
+    assert len(queried) == 9
+    assert ("ad-3",) in queried and ("ad-6",) in queried
 
 
 def test_preferred_candidate_does_not_expand_into_report_candidates():
@@ -565,7 +566,13 @@ def test_truncated_candidate_batch_splits_and_preserves_unsearched_half():
         if complete:
             break
     assert complete and owner == "owner"
-    assert calls == [("a", "b", "c", "owner"), ("a", "b"), ("c", "owner"), ("c",)]
+    assert calls == [
+        ("a", "b", "c", "owner"),
+        ("a", "b"),
+        ("c", "owner"),
+        ("c",),
+        ("owner",),
+    ]
 
 
 def test_new_directory_retries_cached_unresolved_posts(session, sync_seed):
