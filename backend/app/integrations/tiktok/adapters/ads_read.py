@@ -376,7 +376,12 @@ class AdsReadAdapter:
                 if not complete:
                     missing = "CREATIVE_ASSOCIATION_INCOMPLETE"
             except DomainError as error:
-                if error.code not in OPTIONAL_READ_FAILURES:
+                # 主目录已经读取成功，素材补读没额度时保留该页并明确标记素材不完整，
+                # 避免丢掉成功结果后反复消耗主请求额度；主请求及授权错误仍直接退出。
+                if (
+                    error.code not in OPTIONAL_READ_FAILURES
+                    and error.code != "admission_deferred"
+                ):
                     raise
                 materials_complete = False
                 missing = error.code

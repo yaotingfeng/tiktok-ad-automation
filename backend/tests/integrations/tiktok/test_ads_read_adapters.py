@@ -887,3 +887,35 @@ def test_balance_batch_reads_one_bounded_page_and_resumes_at_requested_page(
     assert len(calls) == 2
     args = dict(calls[-1][2]["fields"])
     assert args["page"] == 3 and args["page_size"] == 100
+
+
+@pytest.mark.parametrize("gateway_case", ["OFFICIAL_API"], indirect=True)
+def test_optional_material_quota_keeps_successful_directory_page(
+    database_engine, redis_client, gateway_case, gateway_wire, monkeypatch, policy
+):
+    """真实 Redis 只放行主请求；补读没额度不能撤销已成功目录，主请求仍受准入保护。"""
+    from app.core.config import settings
+    from app.integrations.tiktok.sdk import AccountAdmissionDeferred
+
+    limited = policy.model_copy(update={"app_calls_per_window": 1, "window_ms": 60_000})
+    monkeypatch.setattr(
+        settings, "TIKTOK_CALL_POLICIES", {"base": limited.model_dump()}
+    )
+    ad = {
+        "advertiser_id": gateway_case[2],
+        "smart_plus_ad_id": "smart-1",
+        "adgroup_id": "group-1",
+        "operation_status": "ENABLE",
+        "creative_list": [],
+    }
+    replies(gateway_wire, "OFFICIAL_API", {"smart_plus_ad_get": [page([ad])]})
+    with gateway(database_engine, redis_client, gateway_case) as client:
+        result = client.ads.read_page(query(gateway_case, ad_type="SMART_PLUS"))
+        assert result.complete and not result.materials_complete
+        assert result.items[0].ref.remote_id == "smart-1"
+        assert result.items[0].operation_status == "ENABLE"
+        assert result.material_missing_reason == "admission_deferred"
+        # 主请求额度不足仍应直接退避，不能变成虚假的目录成功。
+        with pytest.raises(AccountAdmissionDeferred):
+            client.ads.read_page(query(gateway_case, ad_type="SMART_PLUS"))
+    assert len(business_calls(gateway_wire, "OFFICIAL_API")) == 1
