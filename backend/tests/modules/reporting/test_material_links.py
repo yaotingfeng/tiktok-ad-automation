@@ -45,7 +45,7 @@ def overview(*pairs):
     )
 
 
-def refresh(session, seed, pages, ad_posts=None):
+def refresh(session, seed, pages, ad_posts=None, progress=None):
     calls = []
 
     def read(page):
@@ -63,7 +63,7 @@ def refresh(session, seed, pages, ad_posts=None):
             len(posts),
         )
 
-    progress = {}
+    progress = {} if progress is None else progress
     for _ in range(1000):
         complete = refresh_material_links(
             session,
@@ -144,8 +144,9 @@ def test_replaced_post_located_by_ad_and_video_resolved_by_name(session, sync_se
 
 
 @pytest.mark.parametrize("has_name_candidate", [False, True])
+@pytest.mark.parametrize("legacy_cursor", ["none", "checked", "locate"])
 def test_missing_post_search_includes_same_period_report_ads(
-    session, sync_seed, has_name_candidate
+    session, sync_seed, has_name_candidate, legacy_cursor
 ):
     from datetime import timedelta
     from uuid import uuid4
@@ -179,7 +180,28 @@ def test_missing_post_search_includes_same_period_report_ads(
             )
         )
     session.flush()
-    calls = refresh(session, sync_seed, overview(), ad_posts={"b-owner": ["old-post"]})
+    # 0038在途工作可能已按旧的仅同名候选标记检查过；不能为它签发新范围的负证据。
+    progress = {}
+    if legacy_cursor != "none":
+        progress["overview_complete"] = True
+    if legacy_cursor == "checked":
+        progress["checked_ids"] = ["old-post"]
+    if legacy_cursor == "locate":
+        progress["locate_post"] = {
+            "mid": "old-post",
+            "candidates": [],
+            "next_batch": 0,
+            "search_stack": [],
+        }
+    calls = refresh(
+        session,
+        sync_seed,
+        overview(),
+        ad_posts={"b-owner": ["old-post"]},
+        progress=progress,
+    )
+    if legacy_cursor != "none":
+        assert 1 not in calls
     assert ("old-post", "b-owner", None) in links(session, sync_seed)
     queried = {ad for call in calls if isinstance(call, tuple) for ad in call[1]}
     assert queried == ({"a-wrong", "b-owner"} if has_name_candidate else {"b-owner"})
@@ -188,6 +210,28 @@ def test_missing_post_search_includes_same_period_report_ads(
         select(MaterialPostLink).where(MaterialPostLink.main_material_id == "old-post")
     ).one()
     assert row.platform_material_id is None
+
+
+def test_current_evidence_continuation_keeps_completed_negative_search(
+    session, sync_seed
+):
+    publish(session, sync_seed, "acc-1", [material_row("p1", "5", "same.mp4")])
+    use(session, sync_seed, adv="acc-1", ad="a1", video="v1", ad_material="m1")
+    session.exec(update(AdMaterialReference).values(name="same.mp4"))
+    progress = {}
+    assert not refresh_material_links(
+        session,
+        tenant_id=sync_seed.tenant_id,
+        advertiser_id="acc-1",
+        read_overview=lambda _page: overview(),
+        read_ad_posts=lambda *_args: pytest.fail("概览阶段不应读取广告帖子"),
+        now=NOW,
+        progress=progress,
+    )
+    # 当前版本已完整核查的帖子续步不应被升级清理逻辑重查。
+    progress["checked_ids"] = ["p1"]
+    assert refresh(session, sync_seed, overview(), progress=progress) == []
+    assert progress["checked_ids"] == ["p1"]
 
 
 def test_ad_detail_materials_are_scoped_to_the_ad(session, sync_seed):
