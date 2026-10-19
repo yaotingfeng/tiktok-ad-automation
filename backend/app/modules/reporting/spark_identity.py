@@ -6,6 +6,24 @@ from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import text
 
+# 只包含有效身份和VID；忽略名称/状态/排序，避免普通刷新反复唤醒。SQL别名a为广告对象。
+IDENTITY_SIGNATURE_SQL = """(
+  SELECT md5(COALESCE(jsonb_agg(DISTINCT value ORDER BY value),'[]'::jsonb)::text)
+  FROM (
+    SELECT jsonb_build_array(
+      creative->'creative_info'->>'identity_type',
+      creative->'creative_info'->>'identity_id',
+      creative->'creative_info'->>'identity_authorized_bc_id',
+      creative->'creative_info'->'video_info'->>'video_id') AS value
+    FROM jsonb_array_elements(CASE
+      WHEN jsonb_typeof(a.configuration->'creative_list')='array'
+      THEN a.configuration->'creative_list' ELSE '[]'::jsonb END) creative
+    WHERE NULLIF(creative->'creative_info'->>'identity_type','') IS NOT NULL
+      AND NULLIF(creative->'creative_info'->>'identity_id','') IS NOT NULL
+      AND NULLIF(creative->'creative_info'->'video_info'->>'video_id','') IS NOT NULL
+  ) evidence
+)"""
+
 
 def _scope(configuration):
     identities, videos = set(), set()
@@ -38,7 +56,7 @@ def pending_spark_links(session, job):
     return (
         session.connection()
         .execute(
-            text("""
+            text(f"""
         WITH missing AS MATERIALIZED (
           SELECT l.main_material_id,l.ad_remote_id FROM material_post_link l
           WHERE l.tenant_id=:t AND l.advertiser_id=:a
@@ -49,22 +67,7 @@ def pending_spark_links(session, job):
               AND d.advertiser_id=l.advertiser_id AND d.main_material_id=l.main_material_id
               AND d.main_material_type='VIDEO_SPARK_ADS' AND d.stat_date BETWEEN :start AND :end)),
         scopes AS MATERIALIZED (
-          SELECT owners.ad_remote_id, (
-            SELECT md5(COALESCE(jsonb_agg(DISTINCT value ORDER BY value),'[]'::jsonb)::text)
-            FROM (
-              SELECT jsonb_build_array(
-                creative->'creative_info'->>'identity_type',
-                creative->'creative_info'->>'identity_id',
-                creative->'creative_info'->>'identity_authorized_bc_id',
-                creative->'creative_info'->'video_info'->>'video_id') AS value
-              FROM jsonb_array_elements(CASE
-                WHEN jsonb_typeof(a.configuration->'creative_list')='array'
-                THEN a.configuration->'creative_list' ELSE '[]'::jsonb END) creative
-              WHERE NULLIF(creative->'creative_info'->>'identity_type','') IS NOT NULL
-                AND NULLIF(creative->'creative_info'->>'identity_id','') IS NOT NULL
-                AND NULLIF(creative->'creative_info'->'video_info'->>'video_id','') IS NOT NULL
-            ) evidence
-          ) AS identity_signature
+          SELECT owners.ad_remote_id, {IDENTITY_SIGNATURE_SQL} AS identity_signature
           FROM (SELECT DISTINCT ad_remote_id FROM missing) owners
           LEFT JOIN ad_object a ON a.tenant_id=:t AND a.advertiser_id=:a
             AND a.kind='ad' AND a.remote_id=owners.ad_remote_id)

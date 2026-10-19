@@ -30,6 +30,7 @@ from sqlmodel import Session
 from app.core.errors import DomainError
 from app.integrations.tiktok.contracts.report_reader import RawReportPage
 from app.modules.reporting.link_queries import QueryMembershipReader
+from app.modules.reporting.spark_identity import IDENTITY_SIGNATURE_SQL
 from app.modules.reporting.store_models import MaterialLinkScan
 
 # 主素材（帖子）→ 视频；同一主素材对应多条广告（非 Spark 共用）时取最小视频 ID，
@@ -166,7 +167,7 @@ def directory_signature(session, job):
     return (
         session.connection()
         .execute(
-            text("""
+            text(f"""
         WITH missing AS MATERIALIZED (
           SELECT DISTINCT d.main_material_id, d.main_material_name, d.stat_date
           FROM material_report_day d
@@ -202,6 +203,15 @@ def directory_signature(session, job):
         evidence AS (
           SELECT jsonb_build_array(ad_remote_id, ad_material_id, platform_material_id, name)::text AS value
           FROM candidates
+          UNION
+          SELECT jsonb_build_array('spark_identity', owners.ad_remote_id,
+            {IDENTITY_SIGNATURE_SQL})::text
+          FROM (SELECT DISTINCT l.ad_remote_id FROM material_post_link l
+                JOIN missing m ON m.main_material_id=l.main_material_id
+                WHERE l.tenant_id=:t AND l.advertiser_id=:a
+                  AND l.main_material_type='VIDEO_SPARK_ADS') owners
+          LEFT JOIN ad_object a ON a.tenant_id=:t AND a.advertiser_id=:a
+            AND a.kind='ad' AND a.remote_id=owners.ad_remote_id
           UNION
           SELECT jsonb_build_array('report_post', main_material_id, main_material_name, stat_date)::text
           FROM missing
