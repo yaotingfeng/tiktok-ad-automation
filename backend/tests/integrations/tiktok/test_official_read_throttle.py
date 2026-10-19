@@ -59,6 +59,8 @@ def test_throttled_read_is_deferred_with_bounded_retry_after(headers, expected_m
     assert caught.value.code == "admission_deferred"
     assert caught.value.retryable is True
     assert caught.value.retry_after_ms == expected_ms
+    assert caught.value.admission_source == "provider"
+    assert caught.value.admission_reason == "http_429"
 
 
 @pytest.mark.parametrize("status", [400, 401, 403, 500, 503])
@@ -70,7 +72,13 @@ def test_other_http_failures_remain_terminal_response_errors(status):
 
 
 @pytest.mark.parametrize(
-    "message", ["Too many requests (QPM)", "QPD exceeded", "Requests PER DAY exceeded"]
+    "message",
+    [
+        "Too many requests (QPM)",
+        "QPD exceeded",
+        "Requests PER DAY exceeded",
+        "QPS exceeded",
+    ],
 )
 def test_business_code_40100_defers_instead_of_failing(message):
     import json
@@ -93,7 +101,10 @@ def test_business_code_40100_defers_instead_of_failing(message):
             exact_numbers=True,
         )
     after = datetime.now(UTC)
-    if "QPM" in message:
+    assert caught.value.admission_source == "provider"
+    if "QPS" in message:
+        assert caught.value.retry_after_ms == 1000
+    elif "QPM" in message:
         assert caught.value.retry_after_ms == 300_000
     else:
         # 跨日额度在次日 UTC 零点后留五秒余量，不能误用每分钟的五分钟等待。

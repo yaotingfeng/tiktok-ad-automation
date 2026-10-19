@@ -117,6 +117,9 @@ class AdDirectoryRun(SyncRunFields, table=True):
     __table_args__ = (
         *run_constraints("ad_directory_run"),
         CheckConstraint(
+            "workload IN ('live','background')", name="ck_ad_directory_workload"
+        ),
+        CheckConstraint(
             "kind IN ('campaign','adgroup','ad','creative')",
             name="ck_ad_directory_run_kind",
         ),
@@ -127,6 +130,7 @@ class AdDirectoryRun(SyncRunFields, table=True):
             BigInteger, Identity(always=True), nullable=False, unique=True
         ),
     )
+    workload: str = Field(default="live", max_length=16)
     kind: str = Field(max_length=16)
     ad_type: str = Field(max_length=64)
 

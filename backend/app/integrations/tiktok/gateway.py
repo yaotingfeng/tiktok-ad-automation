@@ -80,7 +80,7 @@ from app.integrations.tiktok.response_capture import (
     capture_sdk_response,
 )
 from app.integrations.tiktok.sdk import official_client
-from app.jobs.admission import admission_policy
+from app.jobs.admission import Workload, admission_policy
 from app.modules.accounts.connection_models import (
     ConnectionAuthorization,
     ConnectionToolObservation,
@@ -240,6 +240,7 @@ def open_tiktok_gateway(
     context: TenantContext,
     route: FrozenTikTokRoute,
     task_deadline: datetime,
+    workload: Workload = "live",
     before_request: Callable[[], None] | None = None,
     response_observer: ResponseObserver | None = None,
     group_isolation: FrozenGroupIsolation | None = None,
@@ -435,7 +436,12 @@ def open_tiktok_gateway(
     @contextmanager
     def admit(advertiser_id: str | None, operation: str) -> Iterator[None]:
         _capability(advertiser_id, operation)
-        policy = admission_policy(operation)
+        policy_operation = (
+            "reports.integrated"
+            if route.channel == "OFFICIAL_API" and operation == "reports.bc"
+            else operation
+        )
+        policy = admission_policy(policy_operation, channel=route.channel)
         remaining_ms = (task_deadline - datetime.now(UTC)).total_seconds() * 1000
         if remaining_ms <= 0 or policy.lease_ms <= remaining_ms + 1000:
             raise DomainError(
@@ -454,6 +460,7 @@ def open_tiktok_gateway(
                 operation=operation,
                 scope=scope,
                 policy=policy,
+                workload=workload,
             ):
                 yield
 

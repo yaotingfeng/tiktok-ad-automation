@@ -157,6 +157,7 @@ def enqueue_link_jobs(
             if expanded or changed:
                 root.due_at = min(root.due_at, due_at or now)
                 root.error_code = None
+                root.progress = root.progress | {"dependency_attempts": -1}
             session.flush()
             continue
         job_id = uuid4()
@@ -277,6 +278,7 @@ def wake_link_dependencies(session, *, now, limit=50, deadline=None):
             break
         if dependency_changed(session, job):
             job.due_at, job.error_code = now, None
+            job.progress = job.progress | {"dependency_attempts": -1}
             count += 1
         job.progress = job.progress | {"dependency_probed_at": now.isoformat()}
     session.flush()

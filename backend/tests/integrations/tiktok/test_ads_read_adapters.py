@@ -901,6 +901,27 @@ def test_optional_material_quota_keeps_successful_directory_page(
     monkeypatch.setattr(
         settings, "TIKTOK_CALL_POLICIES", {"base": limited.model_dump()}
     )
+    # SDK 物理端点独立计速率：显式占用补读端点，不能再用主请求耗尽所有接口。
+    from uuid import uuid4
+
+    from app.integrations.tiktok.admission import SDK_READ_RATE_GROUPS
+    from app.jobs.admission import admit_call, release_call
+
+    scope = dict(  # noqa: C408
+        app_scope=settings.TIKTOK_APP_ID,
+        endpoint="ads.get_ads",
+        tenant_id=gateway_case[0].tenant_id,
+        advertiser_id=gateway_case[2],
+    )
+    lease = uuid4()
+    assert admit_call(
+        redis_client,
+        **scope,
+        lease_id=lease,
+        policy=limited,
+        rate_group=SDK_READ_RATE_GROUPS["ads.get_ads"],
+    ).granted
+    release_call(redis_client, **scope, lease_id=lease)
     ad = {
         "advertiser_id": gateway_case[2],
         "smart_plus_ad_id": "smart-1",

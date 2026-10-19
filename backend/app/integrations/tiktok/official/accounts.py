@@ -73,9 +73,20 @@ def _strict_sdk_envelope(
                     hour=0, minute=0, second=5, microsecond=0
                 )
                 raise AccountAdmissionDeferred(
-                    int((tomorrow - now).total_seconds() * 1000)
+                    int((tomorrow - now).total_seconds() * 1000),
+                    source="provider",
+                    reason="qpd",
                 )
-            raise AccountAdmissionDeferred(300_000)
+            if "qps" in message or "per second" in message:
+                raise AccountAdmissionDeferred(1_000, source="provider", reason="qps")
+            # 无法识别类别时保留保守等待，但不能把它记作本地额度不足。
+            raise AccountAdmissionDeferred(
+                300_000,
+                source="provider",
+                reason="qpm"
+                if "qpm" in message or "per minute" in message
+                else "40100",
+            )
         if (
             exact is not None
             and raw["code"] != 0
@@ -150,7 +161,9 @@ class OfficialReadRequests:
                 # 额度延后/退避重试路径；不能当作终态错误让任务直接失败。
                 if error.status == 429:
                     raise AccountAdmissionDeferred(
-                        _throttle_retry_ms(error.headers)
+                        _throttle_retry_ms(error.headers),
+                        source="provider",
+                        reason="http_429",
                     ) from None
                 raise DomainError(
                     "tiktok_response_error", "TikTok 请求未成功"

@@ -65,7 +65,7 @@ def test_each_actual_call_uses_app_scope_and_fresh_lease(context, monkeypatch, p
     assert all(call["app_scope"] == settings.TIKTOK_APP_ID for call in arguments)
     assert arguments[0]["lease_id"] != arguments[1]["lease_id"]
     assert [call.kwargs for call in release.call_args_list] == [
-        {key: value for key, value in call.items() if key != "policy"}
+        {key: value for key, value in call.items() if key not in {"policy", "workload"}}
         for call in arguments
     ]
 

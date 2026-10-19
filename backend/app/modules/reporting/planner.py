@@ -720,3 +720,9 @@ def record_calls(redis, now: datetime, count: int) -> None:
 
 def calls_today(redis, now: datetime) -> int:
     return int(redis.get(_calls_key(now)) or 0)
+
+
+def backfill_allowed(redis, now: datetime) -> bool:
+    """只有运维显式设置的本地成本预算会暂停历史；不能冒充平台接口日额度。"""
+    budget = settings.TIKTOK_REPORT_DAILY_CALL_BUDGET
+    return budget == 0 or calls_today(redis, now) <= budget * 0.7

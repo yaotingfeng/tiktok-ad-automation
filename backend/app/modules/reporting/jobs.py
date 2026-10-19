@@ -1,7 +1,7 @@
 """报表同步任务：一次请求（含全部分页）一行。
 
 - 领取按租户轮转、按优先级与到期时间排序，大租户不能挤占小租户。
-- 广告完整读取后整份发布；素材按有界分页暂存和续传，完整后才原子发布。
+- 各报表逐页断点，额度让出不重读旧页；完整一致后才原子发布。
 - 额度/限流延后不计重试次数；读取错误最多 5 次指数退避；合同错误立即失败。
 - 广告综合报表 2 万行触顶先拆账户/系列；素材拆分报表按分页证据续读，大跨日范围拆日期。
 """
@@ -21,6 +21,7 @@ from app.integrations.tiktok.contracts.report_reader import RawReportPage, Repor
 from app.integrations.tiktok.sdk import AccountAdmissionDeferred
 from app.modules.accounts.models import AdvertiserAccount
 from app.modules.reporting import material_links, publish
+from app.modules.reporting.checkpoints import BASIC_KINDS, CheckpointReader
 from app.modules.reporting.directory_refresh import (
     refresh_report_directory,
     request_link_directory,
@@ -713,13 +714,19 @@ def _material_link_overview_ads(session, job):
     return tuple(job.progress["overview_ad_ids"])
 
 
-def _run(session, job: ReportSyncJob, reader: _CountingReader) -> int | None:
+def _run(
+    session, job: ReportSyncJob, reader: _CountingReader | CheckpointReader
+) -> int | None:
     advertisers = tuple(job.advertiser_ids)
     accounts = _accounts(session, job.tenant_id, advertisers)
     s, e, t, j = job.start_date, job.end_date, job.tenant_id, job.id
+    if job.kind in BASIC_KINDS:
+        reader = CheckpointReader(
+            session, job, reader, scope=_material_scope(job), row_limit=TRUNCATION_ROWS
+        )
+        observed_at = reader.observed_at
     if job.kind == "ad_day":
         # 队列创建不是平台观测；本轮完整重读在账户锁内取得新的 PG 时间。
-        observed_at = publish._database_now(session)
         try:
             if job.error_code == "report_timeout" and job.attempts:
                 raise DomainError("report_truncation_risk", "超时后缩小读取范围")
@@ -755,7 +762,6 @@ def _run(session, job: ReportSyncJob, reader: _CountingReader) -> int | None:
         refresh_report_directory(session, job)
         return count
     if job.kind == "campaign_hour":
-        observed_at = publish._database_now(session)
         rows = _read_all(
             lambda p: reader.campaign_hour(advertiser_ids=advertisers, day=s, page=p)
         )
@@ -786,6 +792,7 @@ def _run(session, job: ReportSyncJob, reader: _CountingReader) -> int | None:
             start=s,
             end=e,
             progress=job.progress,
+            overview_ad_ids=overview_ads,
         )
         # 本页已证实的广告身份立即补目录，不能被后续概览分页或旧帖二分搜索挡住。
         # 补读与本页关联同事务提交；复用有界、含删除对象且按冻结路由去重的原请求。
@@ -796,7 +803,6 @@ def _run(session, job: ReportSyncJob, reader: _CountingReader) -> int | None:
         flag_modified(job, "progress")
         return None if not complete else 0
     if job.kind == "account_day":
-        observed_at = publish._database_now(session)
         rows = _read_all(
             lambda p: reader.account_day(
                 advertiser_ids=advertisers, start=s, end=e, page=p
@@ -925,15 +931,39 @@ def execute_job(
                     datetime.now(UTC),
                 )
                 result = "COMPLETE"
+                if job.kind in BASIC_KINDS and "basic_paging" in job.progress:
+                    # 财务事实已原子发布，暂存正文立即回收；保留观测/页数审计，避免热刷堆盘。
+                    checkpoint = job.progress["basic_paging"]
+                    job.progress = {
+                        k: v for k, v in job.progress.items() if k != "basic_paging"
+                    } | {
+                        "basic_snapshot": {
+                            "observed_at": checkpoint["observed_at"],
+                            "pages": len(checkpoint["pages"]),
+                            "scope": checkpoint["scope"],
+                        }
+                    }
+                    session.connection().execute(
+                        delete(ReportSyncPage).where(
+                            col(ReportSyncPage.job_id) == job.id
+                        )
+                    )
         except AccountAdmissionDeferred as deferred:
-            # 素材页已经逐页验证并暂存；额度退避不是数据错误，保留本步读完的页。
-            # 其它报表没有分页暂存，仍回滚未完整发布的结果。
-            if job.kind != "material_day":
+            # 完整的私有页可以保留；额度退避不能迫使多页报表反复从首页开始。
+            if job.kind not in BASIC_KINDS | {"material_day"}:
                 session.rollback()
             job = session.get(ReportSyncJob, job_id, with_for_update=True)
             if job is None or job.claim_token != claim_token or job.status != "RUNNING":
                 return "FAILED"
             job.status, job.error_code = "WAITING", "admission_deferred"
+            job.progress = job.progress | {
+                "last_admission": {
+                    "source": deferred.admission_source,
+                    "reason": deferred.admission_reason,
+                    "retry_after_ms": deferred.retry_after_ms,
+                    "at": datetime.now(UTC).isoformat(),
+                }
+            }
             job.due_at = datetime.now(UTC) + timedelta(
                 milliseconds=max(1000, deferred.retry_after_ms)
             )
@@ -952,14 +982,16 @@ def execute_job(
 
 def _handle_error(session, job: ReportSyncJob, error: DomainError) -> str:
     job.error_code = error.code
-    if error.code == "report_snapshot_changed" and job.kind == "material_day":
+    if error.code == "report_snapshot_changed" and job.kind in BASIC_KINDS | {
+        "material_day"
+    }:
         session.connection().execute(
             delete(ReportSyncPage).where(col(ReportSyncPage.job_id) == job.id)
         )
         job.progress = {
             key: value
             for key, value in job.progress.items()
-            if key != "material_paging"
+            if key not in {"material_paging", "basic_paging"}
         }
     if error.code == "report_truncation_risk":
         if _split(session, job):

@@ -12,6 +12,7 @@ from app.integrations.tiktok.contracts.ads import EntityRef
 from app.modules.ads.directory_requests import request_directory
 from app.modules.ads.sync_models import AdDirectoryRun
 from app.modules.automation_rules.models import AutomationRule
+from app.modules.reporting.lanes import report_workload
 from app.modules.reporting.store_models import ReportSyncJob
 
 # 每份完整热报最多补 100 条广告；查询仍由现有目录服务按 100 ID 分片。
@@ -82,6 +83,7 @@ def refresh_report_directory(
               AND d.advertiser_id=r.advertiser_id AND d.kind=target.kind
               AND d.ad_type=CASE r.campaign_automation_type WHEN 'UPGRADED_SMART_PLUS' THEN 'SMART_PLUS'
                 WHEN 'SMART_PLUS' THEN 'LEGACY_SMART_PLUS' WHEN 'MANUAL' THEN 'REGULAR' END
+              AND d.workload='live'
               AND d.status IN ('QUEUED','RUNNING','ADMISSION_WAIT','WAITING_REMOTE')
               AND d.query->'ids' ? target.remote_id))
         ORDER BY (a.remote_id IS NOT NULL AND g.remote_id IS NOT NULL AND c.remote_id IS NOT NULL),
@@ -117,6 +119,7 @@ def refresh_report_directory(
             AdDirectoryRun.bc_id == job.bc_id,
             AdDirectoryRun.actor_id == job.actor_id,
             AdDirectoryRun.frozen_route == job.frozen_route,
+            AdDirectoryRun.workload == "live",
             col(AdDirectoryRun.advertiser_id).in_(job.advertiser_ids),
             col(AdDirectoryRun.status).in_(_ACTIVE),
         )
@@ -179,6 +182,7 @@ def request_link_directory(
     """已确认广告但缺视频时补读含删除对象的目录，不依赖本地广告本体先存在。"""
     if not settings.ADS_SYNC_ENABLED:
         return 0
+    workload = report_workload(session, job, now=now)
     rows = (
         session.connection()
         .execute(
@@ -198,12 +202,14 @@ def request_link_directory(
           AND NOT EXISTS (SELECT 1 FROM ad_directory_run r
             WHERE r.tenant_id=:t AND r.bc_id=:bc AND r.actor_id=:actor
               AND r.frozen_route=CAST(:route AS jsonb) AND r.advertiser_id=:adv
+              AND (:workload='background' OR r.workload='live')
               AND r.kind='ad' AND r.ad_type=COALESCE(a.ad_type, 'SMART_PLUS')
               AND r.query->'ids' ? l.ad_remote_id AND r.query->>'include_deleted'='true'
               AND (r.status IN ('QUEUED','RUNNING','ADMISSION_WAIT','WAITING_REMOTE') OR r.created_at>=:cutoff))
         ORDER BY l.ad_remote_id, ad_type LIMIT :limit
     """),
             {
+                "workload": workload,
                 "t": job.tenant_id,
                 "adv": job.advertiser_ids[0],
                 "start": job.start_date,
@@ -231,6 +237,7 @@ def request_link_directory(
             advertiser_ids=job.advertiser_ids,
             scope="targeted",
             include_deleted=True,
+            workload=workload,
             refs=tuple(
                 EntityRef(job.tenant_id, job.advertiser_ids[0], "ad", r.ad_remote_id)
                 for r in rows

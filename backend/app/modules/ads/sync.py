@@ -541,7 +541,8 @@ def _queue_missing_parents(
         missing.difference_update(
             (pending_run.kind, remote_id)
             for pending_run in pending
-            if not include_deleted or pending_run.query.get("include_deleted")
+            if (run.workload == "background" or pending_run.workload == "live")
+            and (not include_deleted or pending_run.query.get("include_deleted"))
             for remote_id in pending_run.query.get("ids", ())
         )
         if not missing:
@@ -557,6 +558,7 @@ def _queue_missing_parents(
             advertiser_ids=[run.advertiser_id],
             scope="targeted",
             include_deleted=include_deleted,
+            workload=run.workload,
             ad_types={run.advertiser_id: {run.ad_type: {kind for kind, _ in missing}}},
             refs=[
                 EntityRef(run.tenant_id, run.advertiser_id, cast(Any, kind), remote_id)

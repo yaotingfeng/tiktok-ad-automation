@@ -42,7 +42,7 @@ from app.modules.reporting.filters import authorized_grants
 from app.modules.reporting.metric_catalog import METRIC_CATALOG, table_label
 from app.modules.reporting.models import AccountBalanceObservation
 from app.modules.reporting.planner import (
-    calls_today,
+    backfill_allowed,
     ensure_bc_plans,
     local_today,
     owned_accounts,
@@ -796,10 +796,7 @@ def _sync_slowed() -> bool | None:
         with Redis.from_url(
             settings.REDIS_URL, socket_connect_timeout=1, socket_timeout=1
         ) as redis:
-            return (
-                calls_today(redis, datetime.now(UTC))
-                > settings.TIKTOK_REPORT_DAILY_CALL_BUDGET * 0.7
-            )
+            return not backfill_allowed(redis, datetime.now(UTC))
     except RedisError:
         # 额度状态不可读不能伪装成正常，也不阻断已发布数据的本地查询。
         return None

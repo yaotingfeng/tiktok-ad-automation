@@ -98,7 +98,7 @@ def test_refresh_links_only_when_new_posts_appear(session, sync_seed):
     assert refresh(session, sync_seed, page) == [1]
     assert links(session, sync_seed) == {("p1", "a1", "m1"), ("p2", "a1", "m2")}
     # 已删除广告的帖子查不到：记为未对照，之后不再因它整账户重扫。
-    scan = session.get(MaterialLinkScan, (sync_seed.tenant_id, "acc-1"))
+    scan = session.get(MaterialLinkScan, (sync_seed.tenant_id, "acc-1", "unscoped"))
     assert scan.unresolved_ids == ["p9"]
     assert refresh(session, sync_seed, page) == []
     # 出现新的未对照帖子才重扫。

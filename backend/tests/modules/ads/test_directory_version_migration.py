@@ -4,7 +4,7 @@ from datetime import UTC, datetime
 from uuid import uuid4
 
 from alembic import command
-from sqlalchemy import text
+from sqlalchemy import MetaData, Table, insert, text
 from sqlmodel import Session
 
 from app.modules.ads.models import AdMaterialReference, AdObject
@@ -50,21 +50,26 @@ def test_publish_sequence_starts_above_all_legacy_versions(monkeypatch):
                 "binding_revision": 0,
                 "adapter_contract_revision": "official-api-v1",
             }
-            session.add(
-                AdDirectoryRun(
-                    tenant_id=seed.tenant_id,
-                    advertiser_id="acc-1",
-                    bc_id="bc-a",
-                    actor_id=seed.actor_id,
-                    connection_id=seed.connection.id,
-                    frozen_route=route,
-                    partition_key=uuid4().hex * 2,
-                    query={},
-                    kind="campaign",
-                    ad_type="REGULAR",
-                    status="COMPLETE",
-                    published_version=1000,
-                )
+            legacy_run = AdDirectoryRun(
+                tenant_id=seed.tenant_id,
+                advertiser_id="acc-1",
+                bc_id="bc-a",
+                actor_id=seed.actor_id,
+                connection_id=seed.connection.id,
+                frozen_route=route,
+                partition_key=uuid4().hex * 2,
+                query={},
+                kind="campaign",
+                ad_type="REGULAR",
+                status="COMPLETE",
+                published_version=1000,
+            )
+            table = Table(
+                "ad_directory_run", MetaData(), autoload_with=session.connection()
+            )
+            session.execute(
+                insert(table),
+                legacy_run.model_dump(exclude={"workload", "request_sequence"}),
             )
         command.upgrade(config, "0034_directory_publish_version")
         with engine.begin() as connection:

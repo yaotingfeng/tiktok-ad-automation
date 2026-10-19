@@ -144,3 +144,7 @@ bash deploy/ci/check.sh
 ```
 
 集成测试用合成数据，覆盖 PG18、Redis7→8重新编码、损坏拒绝、真实 Celery 排空及本地归档。线上发布结果和待验项见 `docs/validation/2026-10-10-local-release.md`。
+
+### 0038→0039 同步读取参数迁移
+
+此次生产配额修正随完整升级应用：原配置必须先备份并实际恢复验证，旧实例停止后才在migration-started阶段生成候选运行参数。仅接受已核对的0038策略哈希及691200预算，添加OFFICIAL_API限定读取覆盖10次/秒、6在途，预算改0；MCP/写入及其它配置保持。旧runtime.env在原归档及runtime-before.env保留。候选Secret与候选值逐项核对，旧版恢复仍禁止跨越migration-started；0039之后不再自动覆盖运维参数。不得在发布前手工给旧进程注入0，它不满足旧Settings约束。

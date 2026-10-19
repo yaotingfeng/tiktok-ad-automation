@@ -33,7 +33,7 @@ from app.modules.ads.directory_dispatch import (
     TARGETED_TASK_NAME,
     directory_step_key,
     enqueue_directory_step,
-    is_targeted,
+    is_live_directory,
     targeted_capacity,
 )
 from app.modules.ads.directory_requests import (
@@ -53,7 +53,11 @@ from app.modules.reporting.jobs import (
     execute_job,
     request_time,
 )
-from app.modules.reporting.lanes import current_day_predicate, lane_condition
+from app.modules.reporting.lanes import (
+    current_day_predicate,
+    lane_condition,
+    report_workload,
+)
 from app.modules.reporting.metrics import parse_decimal
 from app.modules.reporting.partitions import ensure_month_partitions
 from app.modules.reporting.query_models import QuerySnapshot
@@ -70,11 +74,8 @@ logger = logging.getLogger(__name__)
 
 # 每次派发最多入队的目录运行数；其余留给后续轮次，保证规划耗时有界。
 DIRECTORY_DISPATCH_BATCH = 1000
-# 全量目录只提前投递有界数量的运行，历史初始请求不再持续填满 broker。
-# 抓取由单槽目录 Worker 与 10 并发实时目录 Worker 共同消费；单步约 2 秒而投递往返更长，
-# 窗口 12 实测仅约 50 步/分钟、Worker 大半空闲，放到 32 让 11 个消费者持续有活。
-# 发布仍单槽；超出调用准入的步骤由准入层延后，不会突破平台调用额度。
-DIRECTORY_DISPATCH_WINDOW = 32
+# 历史定向与全量目录共用后台窗口；只在独立后台消费者执行，不占实时目录槽。
+DIRECTORY_DISPATCH_WINDOW = 8
 # 事实与关联独立限制在途任务；这是领取上限，不代表共享 Worker 中的专属执行槽。
 # 12 个执行进程保留两批有界候补，吸收 outbox 投递空档；
 # 实际 SDK 并发和调用次数始终由共享准入额度约束。
@@ -98,13 +99,14 @@ def _context(row):
 
 
 @contextmanager
-def _reader_for(*, database_engine, redis_client, plan, deadline):
+def _reader_for(*, database_engine, redis_client, plan, deadline, workload="live"):
     with open_tiktok_gateway(
         database_engine=database_engine,
         redis_client=redis_client,
         context=_context(plan),
         route=FrozenTikTokRoute.model_validate(plan.frozen_route),
         task_deadline=deadline,
+        workload=workload,
     ) as gateway:
         yield gateway.report_reader
 
@@ -231,7 +233,7 @@ def _message_lost(session: Session, row: AdDirectoryRun, now: datetime) -> bool:
     ).first()
     threshold = (
         TARGETED_MESSAGE_LOST_AFTER
-        if is_targeted(row)
+        if is_live_directory(row)
         else DIRECTORY_MESSAGE_LOST_AFTER
     )
     return published is not None and published < now - threshold
@@ -240,11 +242,14 @@ def _message_lost(session: Session, row: AdDirectoryRun, now: datetime) -> bool:
 def _dispatch_directories(session, now):
     # 本代数、本页的投递记录已存在（无论是否已发布）就不再重复入队：积压时
     # 若每轮重写全部运行，规划会长时间占住 control 唯一并发，使投递发布被饿死。
-    targeted = (
-        func.coalesce(func.jsonb_array_length(AdDirectoryRun.query["ids"]), 0) > 0
-    ) | (
-        func.coalesce(func.jsonb_array_length(AdDirectoryRun.query["parent_ids"]), 0)
-        > 0
+    targeted = (col(AdDirectoryRun.workload) == "live") & (
+        (func.coalesce(func.jsonb_array_length(AdDirectoryRun.query["ids"]), 0) > 0)
+        | (
+            func.coalesce(
+                func.jsonb_array_length(AdDirectoryRun.query["parent_ids"]), 0
+            )
+            > 0
+        )
     )
     current_key = func.concat(
         case((targeted, TARGETED_TASK_NAME + ":"), else_="ads.sync_step:"),
@@ -406,7 +411,7 @@ def _dispatch_directories(session, now):
     count = 0
     served = set()
     for row in rows:
-        if is_targeted(row):
+        if is_live_directory(row):
             if targeted_available <= 0:
                 continue
             targeted_available -= 1
@@ -442,10 +447,7 @@ def plan_due_runs(*, database_engine, redis_client, now=None):
     if not settings.ADS_SYNC_ENABLED:
         return 0
     now = now or datetime.now(UTC)
-    allow_backfill = (
-        planner.calls_today(redis_client, now)
-        <= settings.TIKTOK_REPORT_DAILY_CALL_BUDGET * 0.7
-    )
+    allow_backfill = planner.backfill_allowed(redis_client, now)
     deadline = datetime.now(UTC) + timedelta(seconds=10)
     # 额度紧张优先让出历史补数，不静默把止损数据降成小时级。
     hot, material = planner.HOT_INTERVAL, planner.MATERIAL_INTERVAL
@@ -828,10 +830,7 @@ def _report_refill_after(database_engine, redis_client, job):
         if settings.ADS_SYNC_ENABLED:
             try:
                 now = datetime.now(UTC)
-                allow_backfill = (
-                    planner.calls_today(redis_client, now)
-                    <= settings.TIKTOK_REPORT_DAILY_CALL_BUDGET * 0.7
-                )
+                allow_backfill = planner.backfill_allowed(redis_client, now)
                 # 当前步骤提交后直接执行有锁本地领取；新消息仍写正常 outbox，
                 # 去掉先发 control 唤醒再领取的双跳，不在读取 Worker 内发送 broker。
                 # 仅补报表槽；目录保留自身完成唤醒和Control调度，不能每个事实步骤
@@ -902,6 +901,7 @@ def run_job_step(*, database_engine, redis_client, job_id, claim_token):
             _failed(session, job, error.code)
             session.commit()
             return "FAILED"
+        workload = report_workload(session, job, now=now)
         before = job.request_count
         # 排队等待不侵占实际读取期限，避免刚开始执行就被扫描器换代。
         job.claimed_until = now + LEASE
@@ -917,6 +917,7 @@ def run_job_step(*, database_engine, redis_client, job_id, claim_token):
                 redis_client=redis_client,
                 plan=job,
                 deadline=now + timedelta(seconds=170),
+                workload=workload,
             ) as reader:
                 if reader is None:
                     raise DomainError("api_binding_required", "报表需要 API 绑定")
@@ -1070,10 +1071,7 @@ def plan_due(*, tenant_id=None, actor_id=None, payload=None):
             return 0
         now = datetime.now(UTC)
         with Redis.from_url(settings.REDIS_URL) as redis:
-            allow_backfill = (
-                planner.calls_today(redis, now)
-                <= settings.TIKTOK_REPORT_DAILY_CALL_BUDGET * 0.7
-            )
+            allow_backfill = planner.backfill_allowed(redis, now)
         # 报表与目录共用轻量补位信号；只领取本地持久任务，不重做外部筛选。
         return _dispatch_pending(engine, now, allow_backfill=allow_backfill)
     with Redis.from_url(settings.REDIS_URL) as redis:

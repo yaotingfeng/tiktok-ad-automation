@@ -49,6 +49,105 @@ class ReleaseTests(unittest.TestCase):
             "database_bytes": 6 * 2**30,
         }
 
+    def approved_sync_values(self):
+        policy = {
+            "base": {
+                "app_max_inflight": 12,
+                "endpoint_max_inflight": 3,
+                "tenant_max_inflight": 10,
+                "advertiser_max_inflight": 4,
+                "app_calls_per_window": 10,
+                "endpoint_calls_per_window": 3,
+                "window_ms": 1000,
+                "lease_ms": 960000,
+            },
+            "endpoints": {
+                "ads.get_ads": {"endpoint_max_inflight": 6},
+                "reports.material_breakdown": {"endpoint_calls_per_window": 5},
+            },
+        }
+        return {
+            "TIKTOK_CALL_POLICIES": json.dumps(policy),
+            "TIKTOK_REPORT_DAILY_CALL_BUDGET": "691200",
+            "ADS_SYNC_ENABLED": "true",
+        }
+
+    def test_sync_runtime_transition_is_scoped_and_preserves_other_policies(self):
+        from runtime_migrations import sync_runtime_values
+
+        old = self.approved_sync_values()
+        new = sync_runtime_values(old, ["0038_sync_work_indexes"])
+        self.assertEqual(old["TIKTOK_REPORT_DAILY_CALL_BUDGET"], "691200")
+        self.assertEqual(new["TIKTOK_REPORT_DAILY_CALL_BUDGET"], "0")
+        before = json.loads(old["TIKTOK_CALL_POLICIES"])
+        after = json.loads(new["TIKTOK_CALL_POLICIES"])
+        self.assertEqual(before["base"], after["base"])
+        self.assertTrue(before["endpoints"].items() <= after["endpoints"].items())
+        self.assertEqual(
+            after["endpoints"]["OFFICIAL_API:reports.integrated"],
+            {"endpoint_calls_per_window": 10, "endpoint_max_inflight": 6},
+        )
+        self.assertIs(sync_runtime_values(new, ["0039_sync_service_class"]), new)
+        with self.assertRaisesRegex(RuntimeError, "budget differs"):
+            sync_runtime_values(
+                old | {"TIKTOK_REPORT_DAILY_CALL_BUDGET": "100"},
+                ["0038_sync_work_indexes"],
+            )
+        before["base"]["app_calls_per_window"] = 20
+        with self.assertRaisesRegex(RuntimeError, "policy differs"):
+            sync_runtime_values(
+                old | {"TIKTOK_CALL_POLICIES": json.dumps(before)},
+                ["0038_sync_work_indexes"],
+            )
+
+    def test_runtime_migration_preserves_archived_source_and_checks_candidate(self):
+        import base64
+
+        values = self.approved_sync_values()
+        release = self.release
+        release.values = values.copy()
+        original = "".join(k + "=" + v + "\n" for k, v in values.items())
+        write(release.folder / "runtime.env", original.encode())
+        write(
+            release.folder / "source-fingerprint.json",
+            {"migration_heads": ["0038_sync_work_indexes"]},
+        )
+        olddata = {k: base64.b64encode(v.encode()).decode() for k, v in values.items()}
+        write(
+            release.folder / "cluster-before.json",
+            {
+                "secrets": {
+                    "runtime": {"data": olddata},
+                    "mcp-registration": {"data": {"registration": "fixture"}},
+                }
+            },
+        )
+        with self.assertRaisesRegex(RuntimeError, "frozen verified"):
+            release.migrate_runtime_values()
+        release.state["phase"] = "migration-started"
+        release.migrate_runtime_values()
+        self.assertEqual((release.folder / "runtime-before.env").read_text(), original)
+        self.assertEqual(release.values["TIKTOK_REPORT_DAILY_CALL_BUDGET"], "0")
+        candidate = {
+            k: base64.b64encode(v.encode()).decode() for k, v in release.values.items()
+        }
+
+        def get(kind, name):
+            return {
+                "data": candidate
+                if name.endswith("-runtime")
+                else {"registration": "fixture"}
+            }
+
+        with patch.object(release.cluster, "get", side_effect=get):
+            with self.assertRaisesRegex(RuntimeError, "configuration changed"):
+                release.config_unchanged()
+            release.state["candidate_applied"] = True
+            release.config_unchanged()
+            candidate["ADS_SYNC_ENABLED"] = base64.b64encode(b"false").decode()
+            with self.assertRaisesRegex(RuntimeError, "configuration changed"):
+                release.config_unchanged()
+
     def test_every_deployment_surface_injects_bounded_worker_pools(self):
         workloads = (ROOT / "deploy/k8s/tk-ada-workloads.yaml").read_text().split("---")
         found = set()
@@ -717,6 +816,7 @@ class ReleaseTests(unittest.TestCase):
             patch.object(self.release, "config_unchanged"),
             patch.object(self.release.cluster, "app_pods", return_value=[]),
             patch.object(self.release, "migrate_targeted_queue"),
+            patch.object(self.release, "migrate_runtime_values"),
             patch("release.run", side_effect=RuntimeError("migration failed")),
             patch.object(self.release, "resume") as resume,
         ):

@@ -69,6 +69,7 @@ def targeted_capacity(session, now=None) -> int:
         .select_from(AdDirectoryRun)
         .where(
             targeted,
+            AdDirectoryRun.workload == "live",
             col(AdDirectoryRun.status).in_(["QUEUED", "RUNNING", "WAITING_REMOTE"]),
             enqueued | (col(AdDirectoryRun.claimed_until) > now),
         )
@@ -80,15 +81,19 @@ def is_targeted(run) -> bool:
     return bool(run.query.get("ids") or run.query.get("parent_ids"))
 
 
+def is_live_directory(run) -> bool:
+    return is_targeted(run) and run.workload == "live"
+
+
 def directory_step_key(run) -> str:
-    prefix = TARGETED_TASK_NAME if is_targeted(run) else TASK_NAME
+    prefix = TARGETED_TASK_NAME if is_live_directory(run) else TASK_NAME
     return f"{prefix}:{run.id}:{run.claim_generation}:page:{run.next_page}"
 
 
 def enqueue_directory_step(
     session, run, *, publish_only=False, initial=False, available_at=None
 ) -> None:
-    if initial and is_targeted(run) and not targeted_capacity(session):
+    if initial and (not is_live_directory(run) or not targeted_capacity(session)):
         return
     dispatch_id = enqueue_after_commit(
         session,
@@ -96,7 +101,7 @@ def enqueue_directory_step(
             tenant_id=run.tenant_id, actor_id=run.actor_id, role="operator"
         ),
         task_name=TARGETED_TASK_NAME
-        if is_targeted(run)
+        if is_live_directory(run)
         else (PUBLISH_TASK_NAME if publish_only else TASK_NAME),
         task_key=directory_step_key(run),
         payload={"run_id": str(run.id), "claim_generation": run.claim_generation},

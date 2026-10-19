@@ -368,7 +368,7 @@ spec:
           resources:
             requests: {cpu: "250m", memory: 1Gi}
             limits: {cpu: "1", memory: 2Gi}
-          command: [celery, -A, "app.jobs.celery_app:celery_app", worker, -Q, "ads-directory,ads-publish", --pool, prefork, --concurrency, "1", --loglevel=INFO, --hostname, "ads-directory@%h"]
+          command: [celery, -A, "app.jobs.celery_app:celery_app", worker, -Q, ads-publish, --pool, prefork, --concurrency, "1", --loglevel=INFO, --hostname, "ads-directory@%h"]
           readinessProbe:
             exec:
               command: [python, -c, "import socket; from app.jobs.celery_app import celery_app; r=celery_app.control.ping(destination=['ads-directory@'+socket.gethostname()], timeout=5); raise SystemExit(0 if r else 1)"]
@@ -634,9 +634,9 @@ spec:
           image: __APP_IMAGE__
           imagePullPolicy: IfNotPresent
           resources:
-            requests: {cpu: "250m", memory: 512Mi}
-            limits: {cpu: "2", memory: 1Gi}
-          command: [celery, -A, "app.jobs.celery_app:celery_app", worker, -Q, ads-backfill, --pool, prefork, --concurrency, "1", --loglevel=INFO, --hostname, "ads-backfill@%h"]
+            requests: {cpu: "250m", memory: 1Gi}
+            limits: {cpu: "2", memory: 2Gi}
+          command: [celery, -A, "app.jobs.celery_app:celery_app", worker, -Q, "ads-backfill,ads-directory", --pool, prefork, --concurrency, "3", --loglevel=INFO, --hostname, "ads-backfill@%h"]
           readinessProbe:
             exec:
               command: [python, -c, "import socket; from app.jobs.celery_app import celery_app; r=celery_app.control.ping(destination=['ads-backfill@'+socket.gethostname()], timeout=5); raise SystemExit(0 if r else 1)"]
@@ -700,10 +700,10 @@ spec:
           image: __APP_IMAGE__
           imagePullPolicy: IfNotPresent
           resources:
-            requests: {cpu: "500m", memory: 2Gi}
-            limits: {cpu: "3", memory: 4Gi}
-          # 同时消费全量目录抓取（ads-directory）；本地发布仍只由单槽目录 Worker 的 ads-publish 执行。
-          command: [celery, -A, "app.jobs.celery_app:celery_app", worker, -Q, "ads-live-directory,ads-directory", --pool, prefork, --concurrency, "10", --loglevel=INFO, --hostname, "ads-live-directory@%h"]
+            requests: {cpu: "500m", memory: 1536Mi}
+            limits: {cpu: "3", memory: 3Gi}
+          # 实时消费者不再抓取后台全量/历史依赖；发布仍由单槽 ads-publish 执行。
+          command: [celery, -A, "app.jobs.celery_app:celery_app", worker, -Q, ads-live-directory, --pool, prefork, --concurrency, "8", --loglevel=INFO, --hostname, "ads-live-directory@%h"]
           readinessProbe:
             exec:
               command: [python, -c, "import socket; from app.jobs.celery_app import celery_app; r=celery_app.control.ping(destination=['ads-live-directory@'+socket.gethostname()], timeout=5); raise SystemExit(0 if r else 1)"]

@@ -13,6 +13,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from hashlib import sha256
 from pathlib import Path
+from typing import Any, Literal, cast
 from uuid import UUID, uuid4
 
 from billiard.exceptions import SoftTimeLimitExceeded  # type: ignore[import-untyped]
@@ -33,10 +34,14 @@ _ENDPOINT_OVERRIDES = frozenset(
 )
 
 
+Workload = Literal["live", "background"]
+
+
 @dataclass(frozen=True)
 class Admission:
     granted: bool
     retry_after_ms: int
+    reason: str | None = None
 
 
 class AdmissionPolicy(BaseModel):
@@ -52,7 +57,7 @@ class AdmissionPolicy(BaseModel):
     lease_ms: int = Field(gt=0)
 
 
-def admission_policy(endpoint: str) -> AdmissionPolicy:
+def admission_policy(endpoint: str, *, channel: str | None = None) -> AdmissionPolicy:
     config = settings.TIKTOK_CALL_POLICIES
     if config == {}:
         raise DomainError("admission_unconfigured", "请配置应用调用额度")
@@ -78,7 +83,13 @@ def admission_policy(endpoint: str) -> AdmissionPolicy:
                 raise ValueError("Endpoint cannot override shared quotas")
             AdmissionPolicy.model_validate({**base, **override})
         AdmissionPolicy.model_validate(base)
-        return AdmissionPolicy.model_validate({**base, **endpoints.get(endpoint, {})})
+        return AdmissionPolicy.model_validate(
+            {
+                **base,
+                **endpoints.get(endpoint, {}),
+                **(endpoints.get(f"{channel}:{endpoint}", {}) if channel else {}),
+            }
+        )
     except (ValidationError, TypeError, ValueError) as error:
         raise DomainError("admission_policy_invalid", "调用额度配置无效") from error
 
@@ -88,6 +99,7 @@ def admission_keys(
     endpoint: str,
     tenant_id: UUID,
     advertiser_id: str,
+    rate_group: str | None = None,
 ) -> list[str]:
     """共享桶使用相同 Redis hash tag，确保 Lua 原子准入。"""
     digest = sha256(app_scope.encode()).hexdigest()
@@ -102,6 +114,8 @@ def admission_keys(
         f"{base}:tenant:{tenant_id}:active",
         f"{base}:advertiser:{account_key}:active",
     ]
+    if rate_group is not None:
+        keys[0] = f"{base}:provider:{sha256(rate_group.encode()).hexdigest()}:rate"
     return keys
 
 
@@ -114,8 +128,15 @@ def admit_call(
     advertiser_id: str,
     lease_id: UUID,
     policy: AdmissionPolicy,
+    workload: Workload = "live",
+    rate_group: str | None = None,
 ) -> Admission:
-    keys = admission_keys(app_scope, endpoint, tenant_id, advertiser_id)
+    keys = admission_keys(app_scope, endpoint, tenant_id, advertiser_id, rate_group)
+    if workload not in ("live", "background"):
+        raise DomainError("admission_workload_invalid", "调用服务分类无效")
+    # 分类桶只观察用量，不额外预留闲置配额。真实总额由共享桶原子约束。
+    keys += [f"{key}:{workload}" for key in keys]
+    keys.append(keys[1] + ":metrics")
     args = [
         str(lease_id),
         policy.window_ms,
@@ -126,14 +147,29 @@ def admit_call(
         policy.endpoint_max_inflight,
         policy.tenant_max_inflight,
         policy.advertiser_max_inflight,
+        workload,
     ]
     try:
-        granted, delay = redis_client.eval(_ADMISSION_SCRIPT, len(keys), *keys, *args)
+        granted, delay, reason = redis_client.eval(
+            _ADMISSION_SCRIPT, len(keys), *keys, *args
+        )
     except RedisError as error:
         raise DomainError(
             "admission_unavailable", "调用配额服务暂不可用", True
         ) from error
-    return Admission(bool(granted), int(delay))
+    return Admission(
+        bool(granted),
+        int(delay),
+        (
+            None,
+            "rate_budget",
+            "endpoint_rate",
+            "app_inflight",
+            "endpoint_inflight",
+            "tenant_inflight",
+            "advertiser_inflight",
+        )[int(reason)],
+    )
 
 
 def release_call(
@@ -148,6 +184,7 @@ def release_call(
     """Release inflight leases only. RedisError is handled separately by caller."""
     # 只释放并发租约，不返还已经消耗的请求次数。
     keys = admission_keys(app_scope, endpoint, tenant_id, advertiser_id)[2:6]
+    keys += [f"{key}:{kind}" for kind in ("live", "background") for key in keys]
     redis_client.eval(_RELEASE_SCRIPT, len(keys), *keys, str(lease_id))
 
 
@@ -161,6 +198,8 @@ def admitted_scope(
     advertiser_id: str,
     policy: AdmissionPolicy,
     denied_error: Callable[[int], Exception],
+    workload: Workload = "live",
+    rate_group: str | None = None,
     admit: Callable[..., Admission] = admit_call,
     release: Callable[..., None] = release_call,
 ) -> Iterator[None]:
@@ -173,14 +212,32 @@ def admitted_scope(
         "advertiser_id": advertiser_id,
         "lease_id": lease_id,
     }
-    admission = admit(redis_client, **scope, policy=policy)
+    options = {"rate_group": rate_group} if rate_group is not None else {}
+    admission = admit(
+        redis_client, **scope, policy=policy, workload=workload, **options
+    )
     if not admission.granted:
-        raise denied_error(admission.retry_after_ms)
+        error = denied_error(admission.retry_after_ms)
+        cast(Any, error).admission_reason = admission.reason
+        raise error
     interrupted = False
     try:
         yield
     except SystemExit, KeyboardInterrupt, SoftTimeLimitExceeded:
         interrupted = True
+        raise
+    except Exception as error:
+        if getattr(error, "admission_source", None) == "provider":
+            # 平台拒绝发生在真实发送之后，与本地未发送的拒绝分开观测。
+            try:
+                key = (
+                    admission_keys(app_scope, endpoint, tenant_id, advertiser_id)[1]
+                    + ":metrics"
+                )
+                redis_client.hincrby(key, f"provider_denied:{workload}", 1)
+                redis_client.expire(key, 172800)
+            except RedisError, DomainError:
+                logging.getLogger(__name__).warning("admission_metric_failed")
         raise
     finally:
         # 进程终止不证明远端调用结束，保留原租约至过期；正常释放也不解除业务 UNKNOWN 围栏。

@@ -14,7 +14,7 @@ Environment=PYTHONUNBUFFERED=1
 # ADS_SYNC_ENABLED and quota policy are loaded from the shared EnvironmentFile.
 # Independent queue capacity keeps current-day reads separate from backfill.
 # env 在 EnvironmentFile 载入后覆盖，确保 Worker 池不会被共享 API 默认值放大。
-ExecStart=/usr/bin/env DATABASE_POOL_SIZE=2 DATABASE_MAX_OVERFLOW=1 /opt/tt-ada-staging/current/.venv/bin/celery -A app.jobs.celery_app:celery_app worker -Q ads-live-directory,ads-directory --pool prefork --concurrency 10 --loglevel INFO --hostname ads-live-directory-singapore@%%h
+ExecStart=/usr/bin/env DATABASE_POOL_SIZE=2 DATABASE_MAX_OVERFLOW=1 /opt/tt-ada-staging/current/.venv/bin/celery -A app.jobs.celery_app:celery_app worker -Q ads-live-directory --pool prefork --concurrency 8 --loglevel INFO --hostname ads-live-directory-singapore@%%h
 Restart=on-failure
 RestartSec=5
 TimeoutStopSec=120

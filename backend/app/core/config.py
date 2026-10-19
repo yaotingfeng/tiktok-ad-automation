@@ -82,7 +82,7 @@ class Settings(BaseSettings):
     # 自动规则的周期判断与飞书发送默认关闭；规则配置与试运行不受影响。
     AUTOMATED_RULES_ENABLED: bool = False
     # 应用级报表每日调用预算，用于额度余量计算和降频。
-    TIKTOK_REPORT_DAILY_CALL_BUDGET: int = Field(default=691_200, gt=0)
+    TIKTOK_REPORT_DAILY_CALL_BUDGET: int = Field(default=0, ge=0)
     ADS_DIRECTORY_WORKER_CONCURRENCY: int = Field(default=1, ge=1, le=32)
     ADS_REPORTING_WORKER_CONCURRENCY: int = Field(default=1, ge=1, le=32)
     AD_MANAGEMENT_WORKER_CONCURRENCY: int = Field(default=1, ge=1, le=1)

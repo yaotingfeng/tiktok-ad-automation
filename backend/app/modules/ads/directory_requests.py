@@ -247,6 +247,7 @@ def request_directory(
     refs=(),
     ad_types: Mapping[str, Mapping[str, Collection[str]]] | None = None,
     include_deleted: bool = False,
+    workload: str | None = None,
 ) -> int:
     """ad_types 为空表示请求全部类型全部层级；周期调度传入 directory_ad_types 的裁剪结果。
 
@@ -256,6 +257,9 @@ def request_directory(
     """
     if not settings.ADS_SYNC_ENABLED or frozen_route.get("channel") != "OFFICIAL_API":
         return 0
+    workload = workload or ("live" if scope == "targeted" else "background")
+    if workload not in ("live", "background"):
+        raise DomainError("directory_request_invalid", "目录服务分类无效")
     route = FrozenTikTokRoute.model_validate(frozen_route)
     advertiser_ids = tuple(sorted(set(advertiser_ids)))
     if (
@@ -380,6 +384,7 @@ def request_directory(
                     channel=route.channel,
                     frozen_route=frozen_route,
                     request_id=request_id,
+                    workload=workload,
                     partition_key=partition,
                     query=query,
                     status="QUEUED",

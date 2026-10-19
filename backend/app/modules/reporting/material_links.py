@@ -94,6 +94,8 @@ def needs_material_links(
 # 扫描结束与映射完整是两件事；依赖不齐保留一条等待工作，不能完成后每轮重造。
 DEPENDENCY_ERRORS = {"material_directory_pending", "material_identity_unavailable"}
 DEPENDENCY_RECHECK = timedelta(minutes=10)
+DEPENDENCY_MAX_RECHECK = timedelta(hours=6)
+NEGATIVE_SCAN_TTL = timedelta(hours=6)
 
 
 def missing_video_ids(session, *, tenant_id, advertiser_id, start, end):
@@ -168,7 +170,11 @@ def directory_signature(session, job):
             AND u.name=names.main_material_name),
         evidence AS (
           SELECT jsonb_build_array(ad_remote_id, ad_material_id, platform_material_id, name)::text AS value
-          FROM candidates)
+          FROM candidates
+          UNION
+          SELECT jsonb_build_array('report_ad', ad_id)::text FROM ad_report_day
+          WHERE tenant_id=:t AND advertiser_id=:a AND stat_date BETWEEN :start AND :end
+            AND campaign_automation_type='UPGRADED_SMART_PLUS')
         SELECT md5(COALESCE(string_agg(value, ',' ORDER BY value), '')) FROM evidence
     """),
             {
@@ -205,7 +211,31 @@ def wait_for_dependencies(session, job, *, now):
     from app.modules.reporting.directory_refresh import request_link_directory
 
     request_link_directory(session, job, now=now)
-    job.due_at = now + DEPENDENCY_RECHECK
+    signature = directory_signature(session, job)
+    unchanged = (
+        set(job.progress.get("waiting_ids", [])) == missing
+        and job.progress.get("dependency_signature") == signature
+    )
+    attempts = (
+        min(6, int(job.progress.get("dependency_attempts", 0)) + 1) if unchanged else 0
+    )
+    job.due_at = now + min(DEPENDENCY_MAX_RECHECK, DEPENDENCY_RECHECK * (2**attempts))
+    # 退避不能跨过已有负证据的主动复核期限（累计退避可能超过六小时）。
+    scan = session.get(
+        MaterialLinkScan,
+        (
+            job.tenant_id,
+            job.advertiser_ids[0],
+            _scan_scope(
+                job.start_date, job.end_date, job.progress.get("overview_ad_ids", ())
+            ),
+        ),
+    )
+    if unlinked and scan is not None and scan.scanned_at + NEGATIVE_SCAN_TTL > now:
+        job.due_at = min(job.due_at, scan.scanned_at + NEGATIVE_SCAN_TTL)
+    if unlinked and scan is not None and scan.evidence_signature is None:
+        # 扫描过程中已有新证据到达；下一步立即重选范围，不能把新证据纳入长退避。
+        job.due_at = now
     # 到期重读时重新确定查询范围；此前验证的映射已经持久化，不回滚。
     job.progress = {
         key: value
@@ -214,7 +244,8 @@ def wait_for_dependencies(session, job, *, now):
     } | {
         "waiting_ids": sorted(missing),
         "dependency_checked_at": now.isoformat(),
-        "dependency_signature": directory_signature(session, job),
+        "dependency_signature": signature,
+        "dependency_attempts": attempts,
     }
     return True
 
@@ -419,6 +450,54 @@ def _resolve_videos(session: Session, tenant_id: UUID, advertiser_id: str) -> No
     )
 
 
+def _scan_scope(start=None, end=None, overview_ad_ids=()):
+    if start is None and end is None and not overview_ad_ids:
+        return "unscoped"
+    return hashlib.md5(
+        json.dumps([str(start), str(end), sorted(overview_ad_ids)]).encode()
+    ).hexdigest()
+
+
+def _scan_signature(
+    session, tenant_id, advertiser_id, ids, start=None, end=None, overview_ad_ids=()
+):
+    """真实候选身份摘要；普通目录观察时间变化不是新证据。"""
+    return (
+        session.connection()
+        .execute(
+            text("""
+        WITH names AS (
+          SELECT DISTINCT main_material_name AS name FROM material_report_day
+          WHERE tenant_id=:t AND advertiser_id=:a AND main_material_id=ANY(:ids)
+            AND main_material_name IS NOT NULL), evidence AS (
+          SELECT DISTINCT jsonb_build_array(u.ad_remote_id,u.ad_material_id,
+              u.platform_material_id,u.name)::text AS value
+          FROM names n JOIN ad_material_reference u ON u.tenant_id=:t AND u.advertiser_id=:a
+            AND u.complete AND md5(u.name)=md5(n.name) AND u.name=n.name
+          UNION
+          SELECT jsonb_build_array('report_ad', ad_id)::text FROM ad_report_day
+          WHERE tenant_id=:t AND advertiser_id=:a
+            AND (CAST(:start AS date) IS NULL OR stat_date>=:start)
+            AND (CAST(:end AS date) IS NULL OR stat_date<=:end)
+            AND campaign_automation_type='UPGRADED_SMART_PLUS'
+          UNION SELECT CAST(:query_scope AS text))
+        SELECT md5(COALESCE(string_agg(value, ',' ORDER BY value), '')) FROM evidence
+    """),
+            {
+                "t": tenant_id,
+                "a": advertiser_id,
+                "ids": sorted(ids),
+                "start": start,
+                "end": end,
+                "query_scope": json.dumps(
+                    [str(start), str(end), sorted(overview_ad_ids)]
+                ),
+            },
+        )
+        .scalar_one()
+    )
+
+
 def refresh_material_links(
     session: Session,
     *,
@@ -430,6 +509,7 @@ def refresh_material_links(
     start: date | None = None,
     end: date | None = None,
     progress: dict[str, Any] | None = None,
+    overview_ad_ids: tuple[str, ...] = (),
 ) -> bool:
     """推进有界关联扫描；返回是否完成，调用方把游标、已解析关联一起提交。
 
@@ -438,36 +518,29 @@ def refresh_material_links(
     """
     progress = progress if progress is not None else {}
     unlinked = _unlinked(session, tenant_id, advertiser_id, start=start, end=end)
-    scan = session.get(MaterialLinkScan, (tenant_id, advertiser_id))
-    cached = scan is not None and set(unlinked) <= set(scan.unresolved_ids)
+    scope = _scan_scope(start, end, overview_ad_ids)
+    scan = session.get(MaterialLinkScan, (tenant_id, advertiser_id, scope))
+    cached = (
+        scan is not None
+        and set(unlinked) <= set(scan.unresolved_ids)
+        and scan.scanned_at > now - NEGATIVE_SCAN_TTL
+    )
     if cached and unlinked:
-        names = sorted({meta[0] for meta in unlinked.values() if meta[0]})
-        changed = (
-            session.connection()
-            .execute(
-                text("""
-            SELECT EXISTS (
-                SELECT 1 FROM ad_material_reference u JOIN ad_object a
-                ON a.tenant_id=u.tenant_id AND a.advertiser_id=u.advertiser_id
-                  AND a.kind='ad' AND a.remote_id=u.ad_remote_id
-                WHERE u.tenant_id=:t AND u.advertiser_id=:a AND u.complete
-                  AND md5(u.name)=ANY(:name_hashes) AND u.name=ANY(:names) AND a.observed_at>:scanned)
-        """),
-                {
-                    "t": tenant_id,
-                    "a": advertiser_id,
-                    "names": names,
-                    "name_hashes": [
-                        hashlib.md5(name.encode()).hexdigest() for name in names
-                    ],
-                    "scanned": scan.scanned_at,
-                },
-            )
-            .scalar_one()
+        cached = scan.evidence_signature == _scan_signature(
+            session,
+            tenant_id,
+            advertiser_id,
+            scan.unresolved_ids,
+            start,
+            end,
+            overview_ad_ids,
         )
-        # 无新候选仍定期复核：目录或平台概览可能在最初读取后才变得完整。
-        cached = not changed and scan.scanned_at >= now - timedelta(minutes=10)
     if unlinked and not cached:
+        if "scan_evidence_ids" not in progress:
+            progress["scan_evidence_ids"] = sorted(unlinked)
+            progress["scan_evidence_signature"] = _scan_signature(
+                session, tenant_id, advertiser_id, unlinked, start, end, overview_ad_ids
+            )
         if not progress.get("overview_complete"):
             page = read_overview(int(progress.get("next_page", 1)))
             _upsert_links(
@@ -568,12 +641,46 @@ def refresh_material_links(
         )
         if scan is None:
             scan = MaterialLinkScan(
-                tenant_id=tenant_id, advertiser_id=advertiser_id, scanned_at=now
+                tenant_id=tenant_id,
+                advertiser_id=advertiser_id,
+                scanned_at=now,
+                query_scope=scope,
             )
         # 时间戳只属于本次已完整扫描的集合；不可用新窗口给旧窗口负证据无限续期。
         scan.unresolved_ids = sorted(unresolved)
         scan.scanned_at = now
+        evidence_ids = progress.get("scan_evidence_ids", [])
+        unchanged = unresolved <= set(evidence_ids) and progress.get(
+            "scan_evidence_signature"
+        ) == _scan_signature(
+            session, tenant_id, advertiser_id, evidence_ids, start, end, overview_ad_ids
+        )
+        scan.evidence_signature = (
+            _scan_signature(
+                session,
+                tenant_id,
+                advertiser_id,
+                unresolved,
+                start,
+                end,
+                overview_ad_ids,
+            )
+            if unchanged
+            else None
+        )
         session.add(scan)
+        # 各查询范围独立缓存；仅回收已经失效的负证据，不触碰事实或缺失记录。
+        session.connection().execute(
+            text(
+                "DELETE FROM material_link_scan WHERE tenant_id=:t AND advertiser_id=:a AND query_scope<>:s AND scanned_at<:expiry"
+            ),
+            {
+                "t": tenant_id,
+                "a": advertiser_id,
+                "s": scope,
+                "expiry": now - NEGATIVE_SCAN_TTL,
+            },
+        )
     _resolve_videos(session, tenant_id, advertiser_id)
     session.flush()
     return True

@@ -32,9 +32,13 @@ SDK_SCOPE_INTERRUPTS = (SystemExit, KeyboardInterrupt, SoftTimeLimitExceeded)
 
 
 class AccountAdmissionDeferred(DomainError):
-    def __init__(self, retry_after_ms: int):
+    def __init__(
+        self, retry_after_ms: int, *, source: str = "local", reason: str | None = None
+    ):
         super().__init__("admission_deferred", "调用额度暂不可用", retryable=True)
         self.retry_after_ms = retry_after_ms
+        self.admission_source = source
+        self.admission_reason = reason
 
 
 def checked_data(response: object) -> dict[str, Any]:

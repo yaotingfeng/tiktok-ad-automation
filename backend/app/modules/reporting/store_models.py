@@ -143,15 +143,17 @@ class MaterialPostLink(SQLModel, table=True):
 
 
 class MaterialLinkScan(SQLModel, table=True):
-    """每个账户最近一次对照扫描；新帖子、新目录候选或十分钟复核时重扫。
+    """每个账户最近一次对照扫描；身份证据变化或六小时复核时重扫。
 
     概览接口按帖子 ID 筛选不生效，每次只能拉全账户；已删除广告的帖子永远查不到，
     记下它们以免每次热刷新都重复整账户扫描。
     """
 
     __tablename__ = "material_link_scan"
+    evidence_signature: str | None = Field(default=None, max_length=32)
     tenant_id: UUID = Field(primary_key=True)
     advertiser_id: str = Field(primary_key=True, max_length=128)
+    query_scope: str = Field(default="unscoped", primary_key=True, max_length=32)
     scanned_at: datetime = Field(sa_type=AwareDateTime)
     unresolved_ids: list[str] = Field(
         default_factory=list, sa_column=Column(JSONB, nullable=False)
@@ -280,7 +282,7 @@ class ReportSyncJob(SQLModel, table=True):
 
 
 class ReportSyncPage(SQLModel, table=True):
-    """素材完整发布前的私有分页证据；任务删除时级联清理，页面查询不读暂存。"""
+    """报表完整发布前的私有分页证据；page为任务内槽号，基本报表另存查询页映射。"""
 
     __tablename__ = "report_sync_page"
     __table_args__ = (

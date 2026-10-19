@@ -43,6 +43,7 @@ from common import (
     write,
 )
 from routine import needs_full_backup, recent_backup, snapshot_release
+from runtime_migrations import sync_runtime_values
 
 LOCK = PROJECT + "-release-lock"
 WORKERS = {
@@ -702,11 +703,42 @@ class Release:
     def config_unchanged(self):
         before = json.loads((self.folder / "cluster-before.json").read_text())
         for suffix in ("runtime", "mcp-registration"):
+            expected = before["secrets"][suffix]["data"]
+            if (
+                suffix == "runtime"
+                and self.state.get("candidate_applied")
+                and self.state.get("runtime_migrated")
+            ):
+                expected = {
+                    k: base64.b64encode(v.encode()).decode()
+                    for k, v in self.values.items()
+                }
             require(
-                self.cluster.get("secret", PROJECT + "-" + suffix)["data"]
-                == before["secrets"][suffix]["data"],
+                self.cluster.get("secret", PROJECT + "-" + suffix)["data"] == expected,
                 "Runtime configuration changed during release",
             )
+
+    def migrate_runtime_values(self):
+        # 仅完整备份已验证、旧消费者为零且进入禁止旧版恢复的阶段后调用。
+        require(
+            self.state["phase"] == "migration-started",
+            "Runtime migration requires frozen verified release",
+        )
+        source = json.loads((self.folder / "source-fingerprint.json").read_text())
+        candidate = sync_runtime_values(self.values, source["migration_heads"])
+        if candidate == self.values:
+            return
+        write(
+            self.folder / "runtime-before.env",
+            (self.folder / "runtime.env").read_bytes(),
+        )
+        write(
+            self.folder / "runtime.env",
+            "".join(k + "=" + v + "\n" for k, v in candidate.items()).encode(),
+        )
+        self.values = candidate
+        self.state["runtime_migrated"] = True
+        self.save("migration-started")
 
     def scale_roles(self, roles, replicas):
         # 角色已由调用方核实，同一阶段互不依赖；只并发请求，不增加运行副本或Worker并发。
@@ -1062,6 +1094,7 @@ class Release:
             require(not self.cluster.app_pods(), "Application restarted during backup")
             self.migrate_targeted_queue()
             self.save("migration-started")
+            self.migrate_runtime_values()
             run(
                 ["bash", str(ROOT / "deploy/k8s/apply.sh")],
                 env=dict(

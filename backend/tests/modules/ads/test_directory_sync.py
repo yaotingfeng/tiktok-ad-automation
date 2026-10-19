@@ -210,12 +210,20 @@ def test_publish_requires_terminal_page_and_projects_name(session, directory_see
     "include_deleted,pending_change,expected",
     [(False, None, 1), (True, None, 1), (True, "live_only", 2), (True, "route", 2)],
 )
+@pytest.mark.parametrize("workload", ["live", "background"])
 def test_missing_parent_queues_only_same_type_parent_and_coalesces_follow_up(
-    session, directory_seed, monkeypatch, include_deleted, pending_change, expected
+    session,
+    directory_seed,
+    monkeypatch,
+    include_deleted,
+    pending_change,
+    expected,
+    workload,
 ):
     monkeypatch.setattr(settings, "ADS_SYNC_ENABLED", True)
     _authority(session, directory_seed)
     run = _run(session, directory_seed, kind="ad", ad_type="SMART_PLUS")
+    run.workload = workload
     run.query = run.query | {"include_deleted": include_deleted}
     parent = EntityRef(
         directory_seed.context.tenant_id, "account-a", "adgroup", "missing-group"
@@ -249,6 +257,7 @@ def test_missing_parent_queues_only_same_type_parent_and_coalesces_follow_up(
     assert targets[0].kind == "adgroup" and targets[0].ad_type == "SMART_PLUS"
     assert targets[0].query["ids"] == ["missing-group"]
     assert targets[0].query["parent_ids"] == []
+    assert targets[0].workload == workload
     assert targets[0].query["include_deleted"] is include_deleted
     assert all(t.frozen_route == run.frozen_route for t in targets)
     if pending_change == "live_only":
@@ -257,6 +266,7 @@ def test_missing_parent_queues_only_same_type_parent_and_coalesces_follow_up(
         targets[0].frozen_route = targets[0].frozen_route | {"binding_revision": 1}
     session.flush()
     second = _run(session, directory_seed, kind="ad", ad_type="SMART_PLUS")
+    second.workload = workload
     second.query = second.query | {"include_deleted": include_deleted}
     next_entity = replace(
         entity, ref=EntityRef(run.tenant_id, "account-a", "ad", "second-ad")
@@ -523,8 +533,9 @@ def test_directory_version_allocation_does_not_scan_business_tables(session):
 
 
 @pytest.mark.parametrize("targeted", [False, True])
+@pytest.mark.parametrize("workload", ["live", "background"])
 def test_terminal_fetch_commits_page_and_durable_publish_successor(
-    session, directory_seed, monkeypatch, targeted
+    session, directory_seed, monkeypatch, targeted, workload
 ):
     from types import SimpleNamespace
 
@@ -533,6 +544,8 @@ def test_terminal_fetch_commits_page_and_durable_publish_successor(
     _authority(session, directory_seed)
     monkeypatch.setattr(settings, "ADS_SYNC_ENABLED", True)
     run = _run(session, directory_seed)
+    run.workload = workload
+    session.flush()
     if targeted:
         run.query = {**run.query, "ids": ["campaign-1"], "include_deleted": False}
         session.flush()
@@ -545,6 +558,7 @@ def test_terminal_fetch_commits_page_and_durable_publish_successor(
 
     @contextmanager
     def gateway(**_kwargs):
+        assert _kwargs["workload"] == workload
         yield SimpleNamespace(ads=Reader())
 
     monkeypatch.setattr(tasks, "open_tiktok_gateway", gateway)
@@ -565,11 +579,11 @@ def test_terminal_fetch_commits_page_and_durable_publish_successor(
     dispatch = session.exec(
         select(PendingDispatch).where(
             PendingDispatch.task_key
-            == f"{'ads.targeted_step' if targeted else 'ads.sync_step'}:{run.id}:1:page:2"
+            == f"{'ads.targeted_step' if targeted and workload == 'live' else 'ads.sync_step'}:{run.id}:1:page:2"
         )
     ).one()
     assert dispatch.task_name == (
-        "ads.targeted_step" if targeted else "ads.publish_step"
+        "ads.targeted_step" if targeted and workload == "live" else "ads.publish_step"
     )
     assert dispatch.payload == {"run_id": str(run.id), "claim_generation": 1}
 

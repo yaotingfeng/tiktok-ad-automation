@@ -531,3 +531,136 @@ def test_material_overview_rejects_invalid_ad_filter_before_send(ids):
     with pytest.raises(DomainError, match="筛选"):
         reader.material_ad_links(advertiser_id="a", page=1, ad_ids=ids)
     assert rec.calls == []
+
+
+@pytest.mark.parametrize("gateway_case", ["OFFICIAL_API"], indirect=True)
+@pytest.mark.parametrize("workload", ["live", "background"])
+def test_report_service_class_reaches_each_physical_sdk_call(
+    database_engine, redis_client, gateway_case, gateway_wire, workload
+):
+    from datetime import UTC, datetime, timedelta
+
+    from app.core.config import settings
+    from app.integrations.tiktok.gateway import open_tiktok_gateway
+    from app.jobs.admission import admission_keys
+
+    context, route, advertiser = gateway_case
+    gateway_wire["sdk_data"]["data"] = PAGE
+    with open_tiktok_gateway(
+        database_engine=database_engine,
+        redis_client=redis_client,
+        context=context,
+        route=route,
+        workload=workload,
+        task_deadline=datetime.now(UTC) + timedelta(seconds=20),
+    ) as client:
+        client.report_reader.ad_day(
+            advertiser_ids=(advertiser,),
+            start=date(2026, 10, 5),
+            end=date(2026, 10, 5),
+            page=1,
+        )
+    keys = admission_keys(
+        settings.TIKTOK_APP_ID,
+        "reports.integrated",
+        context.tenant_id,
+        advertiser,
+        "GET /open_api/v1.3/report/integrated/get/",
+    )
+    assert redis_client.zcard(keys[0] + ":" + workload) == 1
+    assert redis_client.zcard(keys[1] + ":" + workload) == 1
+    assert redis_client.zcard(keys[2] + ":" + workload) == 0
+    assert len(gateway_wire["sdk_calls"]) == 1
+
+
+@pytest.mark.parametrize("gateway_case", ["OFFICIAL_API"], indirect=True)
+def test_physical_report_aliases_share_quota_other_endpoints_remain_available(
+    database_engine, redis_client, gateway_case, gateway_wire, monkeypatch
+):
+    from datetime import UTC, datetime, timedelta
+
+    from app.core.config import settings
+    from app.integrations.tiktok.gateway import open_tiktok_gateway
+    from app.integrations.tiktok.sdk import AccountAdmissionDeferred
+
+    context, route, advertiser = gateway_case
+    config = settings.TIKTOK_CALL_POLICIES
+    monkeypatch.setattr(
+        settings,
+        "TIKTOK_CALL_POLICIES",
+        config
+        | {
+            "base": config["base"]
+            | {
+                "app_calls_per_window": 1,
+                "endpoint_calls_per_window": 1,
+                "window_ms": 10000,
+            }
+        },
+    )
+    gateway_wire["sdk_data"]["data"] = PAGE
+    with open_tiktok_gateway(
+        database_engine=database_engine,
+        redis_client=redis_client,
+        context=context,
+        route=route,
+        task_deadline=datetime.now(UTC) + timedelta(seconds=20),
+    ) as client:
+        reader = client.report_reader
+        reader.ad_day(
+            advertiser_ids=(advertiser,),
+            start=date(2026, 10, 5),
+            end=date(2026, 10, 5),
+            page=1,
+        )
+        with pytest.raises(AccountAdmissionDeferred) as caught:
+            reader.bc_spend(
+                bc_id=route.bc_id,
+                start=date(2026, 10, 5),
+                end=date(2026, 10, 5),
+                page=1,
+            )
+        assert caught.value.admission_source == "local"
+        reader.material_ad_links(advertiser_id=advertiser, page=1)
+    assert len(gateway_wire["sdk_calls"]) == 2
+
+
+def test_api_read_policy_override_cannot_raise_mcp_policy(monkeypatch):
+    from app.core.config import settings
+    from app.jobs.admission import admission_policy
+
+    base = dict(  # noqa: C408
+        app_max_inflight=12,
+        endpoint_max_inflight=3,
+        tenant_max_inflight=10,
+        advertiser_max_inflight=4,
+        app_calls_per_window=10,
+        endpoint_calls_per_window=3,
+        window_ms=1000,
+        lease_ms=960000,
+    )
+    monkeypatch.setattr(
+        settings,
+        "TIKTOK_CALL_POLICIES",
+        {
+            "base": base,
+            "endpoints": {
+                "OFFICIAL_API:reports.integrated": {
+                    "endpoint_calls_per_window": 10,
+                    "endpoint_max_inflight": 6,
+                }
+            },
+        },
+    )
+    assert (
+        admission_policy(
+            "reports.integrated", channel="OFFICIAL_API"
+        ).endpoint_calls_per_window
+        == 10
+    )
+    assert (
+        admission_policy(
+            "reports.integrated", channel="OFFICIAL_MCP"
+        ).endpoint_calls_per_window
+        == 3
+    )

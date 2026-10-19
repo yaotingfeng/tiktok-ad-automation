@@ -59,9 +59,9 @@ for workload in workloads:
         assert "readinessProbe" in container
 expected_workers = {
     "worker-ads-reporting": ("ads-reporting", 12, "4Gi", "6Gi"),
-    "worker-ads-backfill": ("ads-backfill", 1, "512Mi", "1Gi"),
-    "worker-ads-live-directory": ("ads-live-directory,ads-directory", 10, "2Gi", "4Gi"),
-    "worker-ads-directory": ("ads-directory,ads-publish", 1, "1Gi", "2Gi"),
+    "worker-ads-backfill": ("ads-backfill,ads-directory", 3, "1Gi", "2Gi"),
+    "worker-ads-live-directory": ("ads-live-directory", 8, "1536Mi", "3Gi"),
+    "worker-ads-directory": ("ads-publish", 1, "1Gi", "2Gi"),
     "worker-ad-management": ("ad-management", 1, "1Gi", "2Gi"),
 }
 for workload in workloads:
@@ -89,8 +89,8 @@ for name in ("compose.yml", "compose.production.yml"):
             assert service["environment"]["DATABASE_POOL_SIZE"] == "2"
             assert service["environment"]["DATABASE_MAX_OVERFLOW"] == "1"
     for role, queue, concurrency in (
-        ("worker-ads-backfill", "ads-backfill", 1),
-        ("worker-ads-live-directory", "ads-live-directory,ads-directory", 10),
+        ("worker-ads-backfill", "ads-backfill,ads-directory", 3),
+        ("worker-ads-live-directory", "ads-live-directory", 8),
         ("worker-ads-reporting", "ads-reporting", 12),
     ):
         command = services[role]["command"]

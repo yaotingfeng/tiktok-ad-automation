@@ -17,7 +17,10 @@ def test_ads_reporting_tasks_have_dedicated_queues_and_standard_beat_gate():
     assert dispatch_queue("ads.sync_step") == "ads-directory"
     assert dispatch_queue("ads.publish_step") == "ads-publish"
     assert dispatch_queue("ads.targeted_step") == "ads-live-directory"
-    assert celery_app.conf.task_routes["ads.targeted_step"]["queue"] == "ads-live-directory"
+    assert (
+        celery_app.conf.task_routes["ads.targeted_step"]["queue"]
+        == "ads-live-directory"
+    )
     assert "ads-publish" in _QUEUES
     assert dispatch_queue("reporting.job_step") == "ads-reporting"
     assert celery_app.conf.task_routes["reporting.plan_due"]["queue"] == "control"
@@ -44,9 +47,9 @@ def test_worker_templates_keep_one_slot_and_shared_switch_injection():
     directory_service = (root / "deploy/staging-ads-directory.service").read_text()
     reporting_service = (root / "deploy/staging-ads-reporting.service").read_text()
     assert "ADS_SYNC_ENABLED" in compose
-    assert '-Q, "ads-directory,ads-publish"' in compose
+    assert "-Q, ads-publish" in compose
     assert "-Q, ads-reporting" in compose
-    assert '-Q, "ads-directory,ads-publish"' in production
+    assert "-Q, ads-publish" in production
     assert "-Q, ads-reporting" in production
     assert "--concurrency" in compose
     assert "--concurrency" in production

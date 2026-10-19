@@ -37,3 +37,20 @@ def lane_predicate(*, lane: str, alias: str = "report_sync_job") -> str:
 def lane_condition(*, lane: str, now: datetime):
     condition = text(lane_predicate(lane=lane))
     return condition if lane == "links" else condition.bindparams(lane_now=now)
+
+
+def report_workload(session, job, *, now):
+    """实际执行时按账户当地日分类；午夜后旧热任务不会永久占用实时配额。"""
+    if job.kind != "material_links" and job.priority > 2:
+        return "background"
+    current = (
+        session.connection()
+        .execute(
+            text(
+                f"SELECT {current_day_predicate()} FROM report_sync_job WHERE id=:job"
+            ),
+            {"job": job.id, "lane_now": now},
+        )
+        .scalar_one()
+    )
+    return "live" if current else "background"

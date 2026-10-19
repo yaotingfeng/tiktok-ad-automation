@@ -9,7 +9,7 @@ from redis import Redis
 from app.core.errors import DomainError
 from app.integrations.tiktok.contracts.context import ChannelKind, FrozenTikTokRoute
 from app.integrations.tiktok.sdk import AccountAdmissionDeferred
-from app.jobs.admission import AdmissionPolicy, admitted_scope
+from app.jobs.admission import AdmissionPolicy, Workload, admitted_scope
 
 PROTOCOL_OPERATIONS = frozenset(
     f"protocol.{name}"
@@ -34,6 +34,22 @@ ACCOUNT_DIRECTORY_OPERATIONS = frozenset(
         "accounts.get_advertisers",
     }
 )
+
+
+# 官方 SDK 已核对的读取端点。配额归属于应用+物理接口，不能按 BC/令牌拆分；
+# 写入接口和 MCP 服务的独立合同不从读取文档推断额度。
+SDK_READ_RATE_GROUPS = {
+    "reports.integrated": "GET /open_api/v1.3/report/integrated/get/",
+    "reports.bc": "GET /open_api/v1.3/report/integrated/get/",
+    "reports.material_overview": "GET /open_api/v1.3/smart_plus/material_report/overview/",
+    "reports.material_breakdown": "GET /open_api/v1.3/smart_plus/material_report/breakdown/",
+    "ads.get_campaigns": "GET /open_api/v1.3/campaign/get/",
+    "build.get_regular_adgroups": "GET /open_api/v1.3/adgroup/get/",
+    "ads.get_ads": "GET /open_api/v1.3/ad/get/",
+    "build.get_campaigns": "GET /open_api/v1.3/smart_plus/campaign/get/",
+    "build.get_adgroups": "GET /open_api/v1.3/smart_plus/adgroup/get/",
+    "build.get_ads": "GET /open_api/v1.3/smart_plus/ad/get/",
+}
 
 
 def quota_scope(
@@ -65,6 +81,7 @@ def admit_tiktok_call(
     operation: str,
     scope: str,
     policy: AdmissionPolicy,
+    workload: Workload = "live",
 ) -> Iterator[None]:
     if advertiser_id is not None and (
         not isinstance(advertiser_id, str) or not advertiser_id.strip()
@@ -78,14 +95,24 @@ def admit_tiktok_call(
         | {"finance.get_advertiser_balances", "reports.bc"}
     ):
         raise DomainError("account_required", "该操作必须指定广告账户")
+    canonical = (
+        "reports.integrated"
+        if route.channel == "OFFICIAL_API" and operation == "reports.bc"
+        else operation
+    )
+    rate_group = (
+        SDK_READ_RATE_GROUPS.get(operation) if route.channel == "OFFICIAL_API" else None
+    )
     with admitted_scope(
         redis_client,
         app_scope=scope,
-        endpoint=operation,
+        endpoint=canonical,
         tenant_id=route.tenant_id,
         advertiser_id=advertiser_id if advertiser_id is not None else "",
         policy=policy,
         denied_error=AccountAdmissionDeferred,
+        workload=workload,
+        rate_group=rate_group,
     ):
         yield
 

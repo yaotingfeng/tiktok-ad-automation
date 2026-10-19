@@ -1981,3 +1981,14 @@ def test_screening_backoff_keeps_exact_enabled_rule_accounts_fresh(
             == metrics["stale_material_accounts"]
             == (len(expected) if screen_state == "backoff" else 1)
         )
+
+
+def test_default_does_not_suspend_history_using_aggregate_endpoint_calls(
+    redis_client, monkeypatch
+):
+    from app.modules.reporting.planner import backfill_allowed, record_calls
+
+    monkeypatch.setattr(job_tasks.settings, "TIKTOK_REPORT_DAILY_CALL_BUDGET", 0)
+    now = datetime.now(UTC)
+    record_calls(redis_client, now, 900000)
+    assert backfill_allowed(redis_client, now)

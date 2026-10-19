@@ -28,7 +28,7 @@ from app.modules.ads.directory_dispatch import (
     TASK_NAME,
     enqueue_directory_refill,
     enqueue_directory_step,
-    is_targeted,
+    is_live_directory,
 )
 from app.modules.ads.sync import (
     directory_run_superseded,
@@ -182,6 +182,7 @@ def run_directory_step(
         query_data["ids"] = tuple(query_data.get("ids", ()))
         query_data["parent_ids"] = tuple(query_data.get("parent_ids", ()))
         query = DirectoryQuery(**query_data)
+        workload = "background" if run.workload == "background" else "live"
         session.commit()
 
     deadline = datetime.now(UTC) + timedelta(seconds=45)
@@ -192,6 +193,7 @@ def run_directory_step(
             context=context,
             route=route,
             task_deadline=deadline,
+            workload=workload,
         ) as gateway:
             page = gateway.ads.read_page(query)
     except AccountAdmissionDeferred as error:
@@ -257,7 +259,11 @@ def targeted_step(*, tenant_id: str, actor_id: str, payload: dict[str, Any]) -> 
     with Session(engine) as session:
         run = session.get(AdDirectoryRun, run_id)
         # 独立入口只接收有界 ID 查询；不能借回读通道搬运全量目录。
-        if run is None or run.tenant_id != context.tenant_id or not is_targeted(run):
+        if (
+            run is None
+            or run.tenant_id != context.tenant_id
+            or not is_live_directory(run)
+        ):
             raise DomainError("directory_request_invalid", "定向回读缺少对象范围")
     with Redis.from_url(settings.REDIS_URL) as redis_client:
         return run_directory_step(

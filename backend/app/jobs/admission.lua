@@ -1,46 +1,38 @@
 local stamp = redis.call('TIME')
 local now = tonumber(stamp[1]) * 1000 + math.floor(tonumber(stamp[2]) / 1000)
-local member = ARGV[1]
-local window = tonumber(ARGV[2])
-local lease = tonumber(ARGV[3])
-local wait = 0
-local key_count = #KEYS
-for i = 1, key_count do
-    local cutoff = now
-    if i <= 2 then
-        cutoff = now - window
+local member, window, lease = ARGV[1], tonumber(ARGV[2]), tonumber(ARGV[3])
+local wait, reason = 0, 0
+for i = 1, 6 do
+    local rate = i <= 2
+    local cutoff = rate and now - window or now
+    for _, n in ipairs({i, i + 6}) do
+        redis.call('ZREMRANGEBYSCORE', KEYS[n], '-inf', cutoff)
     end
-    redis.call('ZREMRANGEBYSCORE', KEYS[i], '-inf', cutoff)
     local capacity = tonumber(ARGV[i + 3])
-    local current = redis.call('ZSCORE', KEYS[i], member)
-    if current then
-        local remaining = tonumber(current) - now
-        if i <= 2 then remaining = remaining + window end
-        wait = math.max(wait, remaining)
-    end
-    if redis.call('ZCARD', KEYS[i]) >= capacity then
+    if redis.call('ZSCORE', KEYS[i], member) or redis.call('ZCARD', KEYS[i]) >= capacity then
         local first = redis.call('ZRANGE', KEYS[i], 0, 0, 'WITHSCORES')
         local remaining = tonumber(first[2]) - now
-        if i <= 2 then
-            remaining = remaining + window
-        else
-            -- 并发租约是崩溃兜底期限，不是最早可用时间；正常调用可提前释放。
-            -- 仅短间隔重新原子准入，不提前删租约、不占额度、不在Worker内睡眠。
-            remaining = math.min(remaining, 1000)
-        end
-        wait = math.max(wait, remaining)
+        if rate then remaining = remaining + window else remaining = math.min(remaining, 1000) end
+        if remaining >= wait then wait, reason = math.max(1, remaining), i end
     end
 end
-if wait > 0 then return {0, math.ceil(wait)} end
-for i = 1, key_count do
-    local score = now + lease
-    local ttl = lease + 1000
-    if i <= 2 then score = now; ttl = window + 1000 end
-    redis.call('ZADD', KEYS[i], score, member)
-    if i > 2 then
-        local latest = redis.call('ZRANGE', KEYS[i], -1, -1, 'WITHSCORES')
-        ttl = math.ceil(tonumber(latest[2]) - now + 1000)
-    end
-    redis.call('PEXPIRE', KEYS[i], ttl)
+-- 服务分类仅记录实际使用量，不能因另一类曾经请求过就闲置仍可用的容量。
+local metric = KEYS[13]
+if wait > 0 then
+    redis.call('HINCRBY', metric, 'local_denied:' .. tostring(reason) .. ':' .. ARGV[10], 1)
+    redis.call('EXPIRE', metric, 172800)
+    return {0, math.ceil(wait), reason}
 end
-return {1, 0}
+redis.call('HINCRBY', metric, 'granted:' .. ARGV[10], 1)
+redis.call('EXPIRE', metric, 172800)
+for i = 1, 6 do
+    local rate = i <= 2
+    local score = rate and now or now + lease
+    for _, n in ipairs({i, i + 6}) do
+        redis.call('ZADD', KEYS[n], score, member)
+        local latest = redis.call('ZRANGE', KEYS[n], -1, -1, 'WITHSCORES')
+        local ttl = rate and window + 1000 or math.ceil(tonumber(latest[2]) - now + 1000)
+        redis.call('PEXPIRE', KEYS[n], ttl)
+    end
+end
+return {1, 0, 0}
