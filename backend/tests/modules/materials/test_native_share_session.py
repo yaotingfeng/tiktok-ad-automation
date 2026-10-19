@@ -294,6 +294,8 @@ def test_native_session_keeps_bounded_read_deadline_before_arm(
 def test_new_owner_after_share_admission_stops_exact_physical_send(
     share_case, share_wire, gateway_case, redis_client, database_engine, monkeypatch
 ):
+    from app.jobs.admission import _ADMISSION_SCRIPT
+
     wire, _ = share_wire
     prepared = queue(share_case, share_case["target"])
     original = Redis.eval
@@ -312,7 +314,12 @@ def test_new_owner_after_share_admission_stops_exact_physical_send(
 
     def eval_boundary(client, script, numkeys, *args):
         result = original(client, script, numkeys, *args)
-        if numkeys == 6 and args[1] == keys[1] and result[0] == 1:
+        # 以真实准入脚本及共享桶识别发送边界，观测键增加不应让所有权栅栏测试失效。
+        if (
+            script == _ADMISSION_SCRIPT
+            and list(args[: len(keys)]) == keys
+            and result[0] == 1
+        ):
             with Session(database_engine) as db, db.begin():
                 operation = db.get(MaterialAssetOperation, operation_id)
                 assert operation.remote_response["send_armed"]
