@@ -6,6 +6,7 @@ from collections import Counter, defaultdict
 from dataclasses import replace
 from datetime import datetime
 from decimal import Decimal
+from itertools import groupby
 from uuid import UUID
 
 from sqlalchemy import text
@@ -58,20 +59,12 @@ def load_material_entities(
 ) -> dict[str, Entity]:
     if not accounts:
         return {}
-    rows = session.exec(
-        select(AdMaterialReference).where(
-            AdMaterialReference.tenant_id == tenant_id,
-            col(AdMaterialReference.advertiser_id).in_(list(accounts)),
-            col(AdMaterialReference.complete).is_(True),
-        )
-    ).all()
     links = session.exec(
         select(MaterialPostLink).where(
             MaterialPostLink.tenant_id == tenant_id,
             col(MaterialPostLink.advertiser_id).in_(list(accounts)),
         )
     ).all()
-    by_ad = defaultdict(list)
     by_video = defaultdict(list)
     owners = defaultdict(set)
     unresolved_ads = set()
@@ -85,19 +78,31 @@ def load_material_entities(
             by_video[
                 link.advertiser_id, link.ad_remote_id, link.platform_material_id
             ].append(link)
-    for row in rows:
-        by_ad[row.advertiser_id, row.ad_remote_id].append(row)
     unlinked_accounts = unlinked_report_accounts(
         session, tenant_id, accounts, definition, now
     )
+    # 按广告顺序分批读取，当前广告选完身份后释放历史ORM行；不要把整个租户
+    # 数万条素材及旧身份同时装进 by_ad。完整广告组仍交给共用选择器判定歧义。
+    rows = session.exec(
+        select(AdMaterialReference)
+        .where(
+            AdMaterialReference.tenant_id == tenant_id,
+            col(AdMaterialReference.advertiser_id).in_(list(accounts)),
+            col(AdMaterialReference.complete).is_(True),
+        )
+        .order_by(AdMaterialReference.advertiser_id, AdMaterialReference.ad_remote_id)
+        .execution_options(yield_per=256)
+    )
     entities = {}
-    for (adv, ad_id), candidates in sorted(by_ad.items()):
+    for (adv, ad_id), candidates in groupby(
+        rows, key=lambda row: (row.advertiser_id, row.ad_remote_id)
+    ):
         ad = ads.get(f"ad:{adv}:{ad_id}")
         if ad is None:
             continue
         info = accounts[adv]
         parents_enabled = _parents_enabled(ad, ads)
-        for use in latest_ad_materials(candidates):
+        for use in latest_ad_materials(list(candidates)):
             refs = by_video[adv, ad_id, use.platform_material_id]
             issue = None
             if not use.ad_material_id or use.operation_status is None:

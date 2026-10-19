@@ -159,6 +159,22 @@ def measure_health(session, plan, *, now, accounts=None):
 
 def _rescue_queued_actions(session, plan, *, now):
     """只重投原本已授权且仍排队的任务正文；业务执行器继续负责幂等、权限和发送栅栏。"""
+    params = {
+        "t": plan.tenant_id,
+        "bc": plan.bc_id,
+        "cutoff": now - timedelta(minutes=2),
+    }
+    # 空业务队列先按租户/BC状态索引返回，避免规划器先全扫数百万历史投递；
+    # 存在候选时仍从原消息取最新正文和操作者，保留恢复身份与幂等规则。
+    pending = session.execute(
+        text("""
+        SELECT EXISTS(SELECT 1 FROM management_task
+          WHERE tenant_id=:t AND bc_id=:bc AND status='QUEUED' AND created_at<:cutoff)
+    """),
+        params,
+    ).scalar_one()
+    if not pending:
+        return 0
     rows = session.execute(
         text("""
         SELECT DISTINCT ON (m.id) p.actor_id,p.task_name,p.payload,m.id
@@ -167,7 +183,7 @@ def _rescue_queued_actions(session, plan, *, now):
         WHERE m.tenant_id=:t AND m.bc_id=:bc AND m.status='QUEUED' AND m.created_at<:cutoff
         ORDER BY m.id,p.available_at DESC LIMIT 50
     """),
-        {"t": plan.tenant_id, "bc": plan.bc_id, "cutoff": now - timedelta(minutes=2)},
+        params,
     ).mappings()
     count = 0
     for row in rows:

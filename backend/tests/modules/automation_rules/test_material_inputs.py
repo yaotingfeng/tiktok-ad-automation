@@ -636,3 +636,62 @@ def test_status_parent_lookup_stays_inside_material_account(session, sync_seed):
     _, found = result(session, sync_seed, recovery_rule())
     assert len(found.hits) == 1
     assert found.hits[0].targets[0].advertiser_id == "acc-1"
+
+
+def test_material_inputs_bound_temporary_memory_across_advertisements(
+    session, sync_seed
+):
+    import tracemalloc
+    from dataclasses import replace
+
+    from sqlalchemy import insert
+
+    from app.modules.automation_rules.inputs import AccountInfo, _objects
+    from app.modules.automation_rules.material_inputs import load_material_entities
+
+    setup(session, sync_seed)
+    accounts = {
+        "acc-1": AccountInfo("acc-1", "bc-a", "Asia/Hong_Kong", "USD", "账户一")
+    }
+    ads = _objects(session, sync_seed.tenant_id, accounts, NOW)
+    for number in range(50):
+        remote = f"history-ad-{number}"
+        ads[f"ad:acc-1:{remote}"] = replace(
+            ads["ad:acc-1:a1"], key=f"ad:acc-1:{remote}", remote_id=remote
+        )
+    # 同一视频的历史身份必须保留，但每个广告只有最近版本可作为执行身份。
+    session.connection().execute(
+        insert(AdMaterialReference),
+        [
+            {
+                "tenant_id": sync_seed.tenant_id,
+                "advertiser_id": "acc-1",
+                "ad_remote_id": f"history-ad-{number}",
+                "platform_material_id": "video",
+                "ad_material_id": f"identity-{version}",
+                "material_type": "VIDEO",
+                "name": "素材",
+                "complete": True,
+                "published_version": version,
+                "operation_status": "ENABLE",
+                "creative_ids": [],
+            }
+            for number in range(50)
+            for version in range(100)
+            if version > 0
+        ],
+    )
+    tracemalloc.start()
+    try:
+        entities = load_material_entities(session, sync_seed.tenant_id, accounts, ads)
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+    assert len(entities) == 50
+    assert {
+        use["ad_material_id"]
+        for entity in entities.values()
+        for use in entity.material_uses
+    } == {"identity-99"}
+    # 输入输出只有50个当前身份，不能同时持有全部4950条历史ORM对象。
+    assert peak < 6 * 1024 * 1024

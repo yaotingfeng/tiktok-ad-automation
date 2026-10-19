@@ -274,12 +274,18 @@ def _objects(
     now: datetime,
 ) -> dict[str, Entity]:
     advertisers = list(accounts)
+    # 规则只需创建时间、预算和出价；目录完整创意正文可达数百 MB，
+    # 在数据库内投影所需键，避免多条规则并行时重复解码无用配置挤爆报表 Worker。
+    config_fields = ", ".join(
+        f"'{key}', configuration->'{key}'"
+        for key in ("create_time", *_BUDGET_KEYS, *_ROAS_KEYS)
+    )
     rows = (
         session.connection()
         .execute(
             text(
                 "SELECT advertiser_id, kind, remote_id, parent_remote_id, name, "
-                "operation_status, configuration FROM ad_object "
+                f"operation_status, jsonb_build_object({config_fields}) AS configuration FROM ad_object "
                 "WHERE tenant_id = :t AND advertiser_id = ANY(:advs) "
                 "AND kind IN ('campaign','adgroup','ad')"
             ),

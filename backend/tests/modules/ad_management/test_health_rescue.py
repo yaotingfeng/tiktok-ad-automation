@@ -75,3 +75,29 @@ def test_health_rescue_preserves_payload_actor_terminal_and_bc_scope(
     assert messages[0].payload == {"task_id": str(tasks[0].id)}
     assert messages[0].actor_id == context.actor_id
     assert [task.status for task in tasks] == ["QUEUED", "QUEUED", "SUCCEEDED"]
+
+
+def test_no_queued_actions_does_not_scan_historical_dispatches(session, management_env):
+    from sqlalchemy import event
+
+    context, bc, *_ = management_env
+    statements = []
+    connection = session.connection()
+
+    def capture(_connection, _cursor, statement, _parameters, _context, _many):
+        statements.append(statement)
+
+    event.listen(connection, "before_cursor_execute", capture)
+    try:
+        assert (
+            _rescue_queued_actions(
+                session,
+                SimpleNamespace(tenant_id=context.tenant_id, bc_id=bc.bc_id),
+                now=datetime.now(UTC),
+            )
+            == 0
+        )
+    finally:
+        event.remove(connection, "before_cursor_execute", capture)
+    # 空业务队列无需访问历史消息；历史总量不能拖慢分钟级健康检测。
+    assert not any("pending_dispatch" in statement for statement in statements)

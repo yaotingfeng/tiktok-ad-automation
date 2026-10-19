@@ -319,3 +319,38 @@ def advance_reports(session, seed, now, advertiser_ids=("acc-1", "acc-2")):
         state = session.get(ReportSyncState, (seed.tenant_id, adv, "ad_day", TODAY))
         state.last_success_at = now
     session.flush()
+
+
+def test_rule_objects_do_not_decode_unused_large_configuration(session, sync_seed):
+    import tracemalloc
+
+    from sqlmodel import select
+
+    _seed(session, sync_seed)
+    ad = session.exec(
+        select(AdObject).where(
+            AdObject.tenant_id == sync_seed.tenant_id,
+            AdObject.advertiser_id == "acc-1",
+            AdObject.remote_id == "a1",
+        )
+    ).one()
+    ad.configuration = {"unused_creative_payload": "x" * (4 * 1024 * 1024)}
+    session.add(ad)
+    session.flush()
+    accounts = expand_accounts(
+        session, tenant_id=sync_seed.tenant_id, scope=AccountScope(mode="ALL")
+    )
+    tracemalloc.start()
+    try:
+        objects = _objects(session, sync_seed.tenant_id, accounts, NOW)
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+    assert objects["ad:acc-1:a1"].parent_key == "adgroup:acc-1:g1"
+    assert objects["adgroup:acc-1:g1"].attributes["budget"] == Decimal("20")
+    assert objects["adgroup:acc-1:g1"].attributes["roas_bid"] == Decimal("1.2")
+    assert objects["campaign:acc-1:c1"].attributes["days_since_creation"] == Decimal(
+        "13"
+    )
+    # 返回实体规模不变时，无关创意正文不应造成数 MB Python JSON 分配。
+    assert peak < 2 * 1024 * 1024
