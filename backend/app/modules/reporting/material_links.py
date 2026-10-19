@@ -137,7 +137,7 @@ def directory_signature(session, job):
         .execute(
             text("""
         WITH missing AS MATERIALIZED (
-          SELECT DISTINCT d.main_material_id, d.main_material_name
+          SELECT DISTINCT d.main_material_id, d.main_material_name, d.stat_date
           FROM material_report_day d
           WHERE d.tenant_id=:t AND d.advertiser_id=:a AND d.stat_date BETWEEN :start AND :end
             AND NOT EXISTS (SELECT 1 FROM material_post_link l
@@ -172,7 +172,10 @@ def directory_signature(session, job):
           SELECT jsonb_build_array(ad_remote_id, ad_material_id, platform_material_id, name)::text AS value
           FROM candidates
           UNION
-          SELECT jsonb_build_array('report_ad', ad_id)::text FROM ad_report_day
+          SELECT jsonb_build_array('report_post', main_material_id, main_material_name, stat_date)::text
+          FROM missing
+          UNION
+          SELECT jsonb_build_array('report_ad', ad_id, stat_date)::text FROM ad_report_day
           WHERE tenant_id=:t AND advertiser_id=:a AND stat_date BETWEEN :start AND :end
             AND campaign_automation_type='UPGRADED_SMART_PLUS')
         SELECT md5(COALESCE(string_agg(value, ',' ORDER BY value), '')) FROM evidence
@@ -345,28 +348,40 @@ def _upsert_links(session: Session, values: list[dict[str, Any]]) -> None:
 
 
 def _candidate_ads(
-    session: Session, tenant_id: UUID, advertiser_id: str, names: set[str]
-) -> list[str]:
-    """同账户里用到这些文件名的广告：旧帖子只可能属于这些广告。"""
-    if not names:
-        return []
+    session: Session,
+    tenant_id: UUID,
+    advertiser_id: str,
+    names: set[str],
+    first: date,
+    last: date,
+) -> tuple[list[str], int]:
+    """同名目录优先，但旧素材删除/改名后仍须核查同日期有报表事实的广告。"""
     rows = session.connection().execute(
         text("""
-        SELECT DISTINCT ad_remote_id FROM ad_material_reference
-        WHERE tenant_id = :t AND advertiser_id = :a AND complete
-          AND md5(name) = ANY(:name_hashes) AND name = ANY(:names)
-        ORDER BY ad_remote_id
+        WITH candidates AS (
+          SELECT ad_remote_id, 0 AS priority FROM ad_material_reference
+          WHERE tenant_id = :t AND advertiser_id = :a AND complete
+            AND md5(name) = ANY(:name_hashes) AND name = ANY(:names)
+          UNION ALL
+          SELECT ad_id, 1 FROM ad_report_day
+          WHERE tenant_id=:t AND advertiser_id=:a AND stat_date BETWEEN :first AND :last
+            AND campaign_automation_type='UPGRADED_SMART_PLUS')
+        SELECT ad_remote_id, min(priority) AS priority FROM candidates GROUP BY ad_remote_id
+        ORDER BY min(priority), ad_remote_id
         """),
         {
             "t": tenant_id,
             "a": advertiser_id,
             "names": sorted(names),
+            "first": first,
+            "last": last,
             "name_hashes": [
                 hashlib.md5(name.encode()).hexdigest() for name in sorted(names)
             ],
         },
     )
-    return [r[0] for r in rows]
+    candidates = list(rows)
+    return [r[0] for r in candidates], sum(r[1] == 0 for r in candidates)
 
 
 # 平台按广告筛选一次最多 200 个广告。
@@ -382,7 +397,14 @@ def _locate_post_step(state, *, read_ad_posts, first, last):
     stack = state["search_stack"]
     if not stack:
         offset = state["next_batch"]
-        batch = state["candidates"][offset : offset + AD_FILTER_LIMIT]
+        # 同名候选独立查完后再扩展报表候选，避免把原本一次命中的查询放大为整批二分。
+        boundary = state.get("preferred_count", len(state["candidates"]))
+        stop = (
+            min(offset + AD_FILTER_LIMIT, boundary)
+            if offset < boundary
+            else offset + AD_FILTER_LIMIT
+        )
+        batch = state["candidates"][offset:stop]
         if not batch:
             return True, None
         stack.append({"ads": batch, "confirmed": False})
@@ -393,7 +415,21 @@ def _locate_post_step(state, *, read_ad_posts, first, last):
     query = state.get("query", {"page": 1, "found": False})
     result = read_ad_posts(tuple(query_ads), first, last, query["page"])
     if result.total_number >= 20_000:
-        raise DomainError("report_truncation_risk", "报表行数达到平台上限，可能被截断")
+        if len(ads) == 1:
+            raise DomainError(
+                "report_truncation_risk", "报表行数达到平台上限，可能被截断"
+            )
+        # 大候选集合可能触及平台结果上限；拆为独立未确认子集，不能据截断页推导缺失。
+        state.pop("query", None)
+        stack.pop()
+        middle = len(ads) // 2
+        stack.extend(
+            [
+                {"ads": ads[middle:], "confirmed": False},
+                {"ads": ads[:middle], "confirmed": False},
+            ]
+        )
+        return False, None
     signature = [result.total_page, result.total_number]
     if query.get("signature", signature) != signature:
         # 翻页期间集合改变时只重读当前子集；不能把不完整的缺失推导为右半命中。
@@ -415,7 +451,7 @@ def _locate_post_step(state, *, read_ad_posts, first, last):
         node["confirmed"] = True
     else:
         stack.pop()
-        return state["next_batch"] >= len(state["candidates"]), None
+        return not stack and state["next_batch"] >= len(state["candidates"]), None
     if len(node["ads"]) == 1:
         return True, node["ads"][0]
     return False, None
@@ -475,11 +511,17 @@ def _scan_signature(
           FROM names n JOIN ad_material_reference u ON u.tenant_id=:t AND u.advertiser_id=:a
             AND u.complete AND md5(u.name)=md5(n.name) AND u.name=n.name
           UNION
-          SELECT jsonb_build_array('report_ad', ad_id)::text FROM ad_report_day
+          SELECT jsonb_build_array('report_ad', ad_id, stat_date)::text FROM ad_report_day
           WHERE tenant_id=:t AND advertiser_id=:a
             AND (CAST(:start AS date) IS NULL OR stat_date>=:start)
             AND (CAST(:end AS date) IS NULL OR stat_date<=:end)
             AND campaign_automation_type='UPGRADED_SMART_PLUS'
+          UNION
+          SELECT jsonb_build_array('report_post', main_material_id, main_material_name, stat_date)::text
+          FROM material_report_day WHERE tenant_id=:t AND advertiser_id=:a
+            AND main_material_id=ANY(:ids)
+            AND (CAST(:start AS date) IS NULL OR stat_date>=:start)
+            AND (CAST(:end AS date) IS NULL OR stat_date<=:end)
           UNION SELECT CAST(:query_scope AS text))
         SELECT md5(COALESCE(string_agg(value, ',' ORDER BY value), '')) FROM evidence
     """),
@@ -573,11 +615,18 @@ def refresh_material_links(
             )
             name, mtype, first, last = stale[mid]
             if not current or current["mid"] != mid:
+                candidates, preferred_count = _candidate_ads(
+                    session,
+                    tenant_id,
+                    advertiser_id,
+                    {name} if name else set(),
+                    first,
+                    last,
+                )
                 current = {
                     "mid": mid,
-                    "candidates": _candidate_ads(
-                        session, tenant_id, advertiser_id, {name} if name else set()
-                    ),
+                    "candidates": candidates,
+                    "preferred_count": preferred_count,
                     "next_batch": 0,
                     "search_stack": [],
                 }

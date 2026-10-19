@@ -212,6 +212,63 @@ def test_negative_scan_scope_and_new_ad_facts_wake_unnamed_post(
     assert len(calls) == 3
 
 
+def test_candidate_date_evidence_changes_negative_cache_and_dependency_signature(
+    session, sync_seed, monkeypatch
+):
+    from app.modules.reporting.material_links import (
+        _scan_signature,
+        dependency_changed,
+        directory_signature,
+    )
+    from app.modules.reporting.store_models import AdReportDay, MaterialReportDay
+
+    monkeypatch.setattr(settings, "ADS_SYNC_ENABLED", False)
+    publish(session, sync_seed, "acc-1", [material_row("p", "5")])
+    job = session.get(ReportSyncJob, request(session, sync_seed, D))
+    first = D - timedelta(days=1)
+    job.start_date = first
+
+    def add_ad(day):
+        session.add(
+            AdReportDay(
+                tenant_id=sync_seed.tenant_id,
+                advertiser_id="acc-1",
+                ad_id="owner",
+                stat_date=day,
+                campaign_id="c",
+                adgroup_id="g",
+                currency="USD",
+                timezone="UTC",
+                fetched_at=NOW,
+                sync_job_id=job.id,
+                campaign_automation_type="UPGRADED_SMART_PLUS",
+            )
+        )
+        session.flush()
+
+    def signature():
+        return _scan_signature(session, sync_seed.tenant_id, "acc-1", ["p"], first, D)
+
+    add_ad(first)
+    assert wait_for_dependencies(session, job, now=NOW)
+    before = signature()
+    assert not dependency_changed(session, job)
+    # 广告集合没变，但新增了帖子所在日期的广告事实；候选范围因此改变。
+    add_ad(D)
+    assert signature() != before
+    assert dependency_changed(session, job)
+    before, before_dependency = signature(), directory_signature(session, job)
+    post = session.exec(
+        select(MaterialReportDay).where(MaterialReportDay.main_material_id == "p")
+    ).one()
+    values = post.model_dump() | {"stat_date": first}
+    session.add(MaterialReportDay(**values))
+    session.flush()
+    # 同一帖子新增日期也会扩展搜索窗口，必须重新核查负证据。
+    assert signature() != before
+    assert directory_signature(session, job) != before_dependency
+
+
 def test_dependency_backoff_cannot_skip_six_hour_scan(session, sync_seed, monkeypatch):
     from app.modules.reporting.material_links import refresh_material_links
 

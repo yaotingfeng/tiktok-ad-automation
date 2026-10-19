@@ -143,6 +143,53 @@ def test_replaced_post_located_by_ad_and_video_resolved_by_name(session, sync_se
     )
 
 
+@pytest.mark.parametrize("has_name_candidate", [False, True])
+def test_missing_post_search_includes_same_period_report_ads(
+    session, sync_seed, has_name_candidate
+):
+    from datetime import timedelta
+    from uuid import uuid4
+
+    from app.modules.reporting.store_models import AdReportDay
+
+    publish(session, sync_seed, "acc-1", [material_row("old-post", "5", "old.mp4")])
+    if has_name_candidate:
+        use(session, sync_seed, adv="acc-1", ad="a-wrong", video="v1", ad_material="m1")
+        session.exec(update(AdMaterialReference).values(name="old.mp4"))
+    for ad, advertiser, day, automation in [
+        ("b-owner", "acc-1", D, "UPGRADED_SMART_PLUS"),
+        ("c-other-account", "acc-2", D, "UPGRADED_SMART_PLUS"),
+        ("d-other-day", "acc-1", D - timedelta(days=1), "UPGRADED_SMART_PLUS"),
+        ("e-regular", "acc-1", D, "MANUAL"),
+    ]:
+        session.add(
+            AdReportDay(
+                tenant_id=sync_seed.tenant_id,
+                advertiser_id=advertiser,
+                stat_date=day,
+                ad_id=ad,
+                campaign_id="c1",
+                adgroup_id="g1",
+                campaign_automation_type=automation,
+                currency="USD",
+                timezone="UTC",
+                fetched_at=NOW,
+                sync_job_id=uuid4(),
+                spend=Decimal(5),
+            )
+        )
+    session.flush()
+    calls = refresh(session, sync_seed, overview(), ad_posts={"b-owner": ["old-post"]})
+    assert ("old-post", "b-owner", None) in links(session, sync_seed)
+    queried = {ad for call in calls if isinstance(call, tuple) for ad in call[1]}
+    assert queried == ({"a-wrong", "b-owner"} if has_name_candidate else {"b-owner"})
+    # 广告归属已经由平台证明；缺少精确视频证据时仍保留待解析，不能按名称猜 VID。
+    row = session.exec(
+        select(MaterialPostLink).where(MaterialPostLink.main_material_id == "old-post")
+    ).one()
+    assert row.platform_material_id is None
+
+
 def test_ad_detail_materials_are_scoped_to_the_ad(session, sync_seed):
     # 同一视频在两条广告：广告详情只看本广告的那条帖子，不混入另一条广告。
     publish(
@@ -424,6 +471,57 @@ def test_locate_posts_splits_only_batches_with_targets():
     assert result == owners
     # 单帖独立续步，每个目标只有整批和三层左半查询；已确认右半无需再查。
     assert len(queried) == 8
+
+
+def test_preferred_candidate_does_not_expand_into_report_candidates():
+    from app.modules.reporting.material_links import _locate_post_step
+
+    state = {
+        "mid": "p",
+        "candidates": ["owner"] + [f"extra-{i}" for i in range(199)],
+        "preferred_count": 1,
+        "next_batch": 0,
+        "search_stack": [],
+    }
+    calls = []
+
+    def read(ads, _first, _last, page):
+        calls.append(ads)
+        assert ads == ("owner",)
+        return RawReportPage(({"dimensions": {"main_material_id": "p"}},), page, 1, 1)
+
+    assert _locate_post_step(state, read_ad_posts=read, first=D, last=D) == (
+        True,
+        "owner",
+    )
+    assert calls == [("owner",)]
+
+
+def test_truncated_candidate_batch_splits_and_preserves_unsearched_half():
+    from app.modules.reporting.material_links import _locate_post_step
+
+    state = {
+        "mid": "p",
+        "candidates": ["a", "b", "c", "owner"],
+        "preferred_count": 0,
+        "next_batch": 0,
+        "search_stack": [],
+    }
+    calls = []
+
+    def read(ads, _first, _last, page):
+        calls.append(ads)
+        if len(ads) == 4:
+            return RawReportPage((), page, 200, 20_000)
+        rows = ({"dimensions": {"main_material_id": "p"}},) if "owner" in ads else ()
+        return RawReportPage(rows, page, 1 if rows else 0, len(rows))
+
+    for _ in range(6):
+        complete, owner = _locate_post_step(state, read_ad_posts=read, first=D, last=D)
+        if complete:
+            break
+    assert complete and owner == "owner"
+    assert calls == [("a", "b", "c", "owner"), ("a", "b"), ("c", "owner"), ("c",)]
 
 
 def test_new_directory_retries_cached_unresolved_posts(session, sync_seed):
