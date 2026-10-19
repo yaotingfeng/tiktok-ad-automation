@@ -21,6 +21,7 @@ def needs_full_backup(old_sha, sha, *, force=False):
     # 这些变更不能仅 set image；还需迁移、队列合同或正式部署清单应用。
     sensitive = re.compile(
         r"^(backend/app/(alembic/|jobs/|models\.py|core/)"
+        r"|backend/app/modules/.*/jobs(?:/|\.py$)"
         r"|backend/.*(?:models?|schema|contracts?)(?:/|\.py$)"
         r"|deploy/k8s/|config/|\.env\.example$|backend/Dockerfile$"
         r"|uv\.lock$|pyproject\.toml$|backend/pyproject\.toml$)"

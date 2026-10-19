@@ -6,7 +6,7 @@
 
 - 普通发布先核验 `/backup/latest` 的清单、文件校验和、恢复证明、生产迁移版本，以及备份不超过24小时。失败时在停止应用前阻断；先执行 `python3 deploy/local.py backup-online`，不自动用过期备份放行。
 - 再正常排空全部任务，将旧源码、实际构建产物、配置和冻结后的Redis状态独立归档至 `/backup/latest-release`，保留旧镜像digest；仅更新现有十一角色的镜像，所有消费者就绪后启动唯一Beat，核实各角色配置、开关、数据库池和HTTPS。无迁移发布不运行Alembic、不迁移队列、不重新应用Kubernetes清单。
-- 数据库迁移、模型/schema/contracts、jobs/core、后端依赖或Kubernetes清单变动自动使用原完整流程。路径检测不能推断业务语义：改变持久化数据格式或任务参数/名称时，发布者必须选择 `deploy --full-backup` / Jenkins `FULL_BACKUP=true`，不能仅凭无Alembic文件变化认为可以快速回退。
+- 数据库迁移、模型/schema/contracts、jobs/core（包含各业务模块的jobs.py及jobs目录）、后端依赖或Kubernetes清单变动自动使用原完整流程。路径检测不能推断业务语义：改变持久化数据格式或任务参数/名称时，发布者必须选择 `deploy --full-backup` / Jenkins `FULL_BACKUP=true`，不能仅凭无Alembic文件变化认为可以快速回退。
 - Jenkins每天北京时间04时段执行一次 `backup-online`，与发布共用串行任务和集群锁。在线PG单连接dump保证数据库自身一致快照，后台完整恢复至隔离实例并验证迁移版本、逐表可读取和凭据解密；运行应用及Beat不停止，不挂载运行中的Beat盘，不导出瞬时Redis队列。只有实际恢复通过才原子替换 `/backup/latest`；每天验证已覆盖每周演练要求。失败由Jenkins标红，超过24小时后普通发布门禁阻断。
 - 在线备份证明明确标注 `online-postgres`，不声称与运行中的源库行数相等，也不声称包含同一时点的Redis/Beat状态。数据库事故恢复须独立制定队列/outbox核对方案，不能将旧PG与新Redis快照拼接后自动重放，更不能把程序回退当成数据库回退。
 - 独立数据库备份只保留最近一份已验证结果；另保留最近一次程序回退材料。无新增服务、业务开关、持久卷或云托管备份依赖。云平台自身备份策略尚未核实，不能代替上述实证。

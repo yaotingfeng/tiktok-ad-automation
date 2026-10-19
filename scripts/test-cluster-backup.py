@@ -145,6 +145,8 @@ class ClusterBackupTests(unittest.TestCase):
         for path in (
             "backend/app/alembic/versions/new.py",
             "backend/app/jobs/celery_app.py",
+            "backend/app/modules/reporting/jobs.py",
+            "backend/app/modules/ads/jobs/reconcile.py",
             "backend/app/modules/ads/models.py",
             "deploy/k8s/tk-ada.yaml",
             "uv.lock",
