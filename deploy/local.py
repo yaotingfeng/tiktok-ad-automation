@@ -72,6 +72,24 @@ def lane_summary(log):
             print(line, flush=True)
 
 
+def release_summary(folder):
+    """只公开阶段名和耗时；发布状态含私有配置，不能整份打印到 Jenkins。"""
+    path = folder / "state.json"
+    if not path.exists():
+        return
+    try:
+        history = json.loads(path.read_text()).get("history", [])
+        for previous, current in zip(history, history[1:]):
+            phase = previous["phase"]
+            if not re.fullmatch(r"[a-z][a-z-]*", phase):
+                continue
+            seconds = max(0, int(current["at"]) - int(previous["at"]))
+            print(f"发布阶段耗时：{phase}（{seconds} 秒）", flush=True)
+    except (OSError, ValueError, KeyError, TypeError):
+        # 计时摘要不得覆盖原发布异常，也不能把异常里的私有内容带入控制台。
+        print("发布阶段耗时：记录不完整，请查私有批次状态。", flush=True)
+
+
 def remote_main(cwd):
     return git("ls-remote", "company", "refs/heads/main", cwd=cwd).split()[0]
 
@@ -422,7 +440,10 @@ def main():
             ]
             if args.action == "deploy":
                 command += ["--sha", sha]
-            stage(command, checkout, env, log)
+            try:
+                stage(command, checkout, env, log)
+            finally:
+                release_summary(folder / "state")
         mark("complete")
         cleanup_checkout(folder)
         print("完成：" + args.action + "；批次：" + run_name, flush=True)
