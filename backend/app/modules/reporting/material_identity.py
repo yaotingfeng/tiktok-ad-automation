@@ -7,10 +7,10 @@ from app.core.errors import DomainError
 ASSET_BATCH = 20  # file/video/ad/search 当前 material_ids 上限；不同于 video_ids。
 
 
-def resolve_asset_videos(session, job, reader) -> bool:
-    """每续步至多一次精确读取；只更新已证实归属、同账户同日期的非 Spark 视频。"""
+def pending_asset_ids(session, job):
+    """尚未在本轮读取的精确 MID；也供终页判断是否仍有可立即执行的身份工作。"""
     checked = set(job.progress.get("asset_identity_checked", []))
-    ids = tuple(
+    return tuple(
         session.connection()
         .execute(
             text("""
@@ -36,6 +36,12 @@ def resolve_asset_videos(session, job, reader) -> bool:
         )
         .scalars()
     )
+
+
+def resolve_asset_videos(session, job, reader) -> bool:
+    """每续步至多一次精确读取；只更新已证实归属、同账户同日期的非 Spark 视频。"""
+    checked = set(job.progress.get("asset_identity_checked", []))
+    ids = pending_asset_ids(session, job)
     if not ids:
         return False
     page = reader.material_videos(advertiser_id=job.advertiser_ids[0], material_ids=ids)

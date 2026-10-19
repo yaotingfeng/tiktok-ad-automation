@@ -873,6 +873,13 @@ def _run(
         from sqlalchemy.orm.attributes import flag_modified
 
         flag_modified(job, "progress")
+        # 最后一页或最后一个归属查询可能刚产生可读取的身份。先提交本次单请求，
+        # 立即续步读取新身份；不能把尚未执行的读取误当外部依赖，提前退避十分钟。
+        if complete and (
+            material_identity.pending_asset_ids(session, job)
+            or spark_identity.pending_spark_links(session, job)
+        ):
+            return None
         return None if not complete else 0
     if job.kind == "account_day":
         rows = _read_all(
