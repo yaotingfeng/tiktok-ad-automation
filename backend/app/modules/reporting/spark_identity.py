@@ -39,16 +39,39 @@ def pending_spark_links(session, job):
         session.connection()
         .execute(
             text("""
-        SELECT l.main_material_id,l.ad_remote_id FROM material_post_link l
-        WHERE l.tenant_id=:t AND l.advertiser_id=:a
-          AND l.main_material_type='VIDEO_SPARK_ADS'
-          AND NULLIF(l.ad_material_id,'') IS NULL
-          AND NULLIF(l.platform_material_id,'') IS NULL
-          AND NOT (jsonb_build_array(l.main_material_id,l.ad_remote_id)::text=ANY(:checked))
-          AND EXISTS (SELECT 1 FROM material_report_day d WHERE d.tenant_id=l.tenant_id
-            AND d.advertiser_id=l.advertiser_id AND d.main_material_id=l.main_material_id
-            AND d.main_material_type='VIDEO_SPARK_ADS' AND d.stat_date BETWEEN :start AND :end)
-        ORDER BY l.ad_remote_id,l.main_material_id LIMIT 50
+        WITH missing AS MATERIALIZED (
+          SELECT l.main_material_id,l.ad_remote_id FROM material_post_link l
+          WHERE l.tenant_id=:t AND l.advertiser_id=:a
+            AND l.main_material_type='VIDEO_SPARK_ADS'
+            AND NULLIF(l.ad_material_id,'') IS NULL
+            AND NULLIF(l.platform_material_id,'') IS NULL
+            AND EXISTS (SELECT 1 FROM material_report_day d WHERE d.tenant_id=l.tenant_id
+              AND d.advertiser_id=l.advertiser_id AND d.main_material_id=l.main_material_id
+              AND d.main_material_type='VIDEO_SPARK_ADS' AND d.stat_date BETWEEN :start AND :end)),
+        scopes AS MATERIALIZED (
+          SELECT owners.ad_remote_id, (
+            SELECT md5(COALESCE(jsonb_agg(DISTINCT value ORDER BY value),'[]'::jsonb)::text)
+            FROM (
+              SELECT jsonb_build_array(
+                creative->'creative_info'->>'identity_type',
+                creative->'creative_info'->>'identity_id',
+                creative->'creative_info'->>'identity_authorized_bc_id',
+                creative->'creative_info'->'video_info'->>'video_id') AS value
+              FROM jsonb_array_elements(CASE
+                WHEN jsonb_typeof(a.configuration->'creative_list')='array'
+                THEN a.configuration->'creative_list' ELSE '[]'::jsonb END) creative
+              WHERE NULLIF(creative->'creative_info'->>'identity_type','') IS NOT NULL
+                AND NULLIF(creative->'creative_info'->>'identity_id','') IS NOT NULL
+                AND NULLIF(creative->'creative_info'->'video_info'->>'video_id','') IS NOT NULL
+            ) evidence
+          ) AS identity_signature
+          FROM (SELECT DISTINCT ad_remote_id FROM missing) owners
+          LEFT JOIN ad_object a ON a.tenant_id=:t AND a.advertiser_id=:a
+            AND a.kind='ad' AND a.remote_id=owners.ad_remote_id)
+        SELECT m.main_material_id,m.ad_remote_id,s.identity_signature
+        FROM missing m JOIN scopes s ON s.ad_remote_id=m.ad_remote_id
+        WHERE NOT (jsonb_build_array(m.main_material_id,m.ad_remote_id,s.identity_signature)::text=ANY(:checked))
+        ORDER BY m.ad_remote_id,m.main_material_id LIMIT 50
     """),
             {
                 "t": job.tenant_id,
@@ -75,7 +98,11 @@ def resolve_spark_videos(session, job, reader) -> bool:
 
     configurations = {}
     for row in rows:
-        key = json.dumps([row.main_material_id, row.ad_remote_id])
+        # 否定结果只适用于当时的身份/VID集合。目录晚到或候选变化必须重新核验；
+        # 名称、状态、观察时间及创意排序改变不属于新的身份证据。
+        key = json.dumps(
+            [row.main_material_id, row.ad_remote_id, row.identity_signature]
+        )
         if row.ad_remote_id not in configurations:
             # 大广告配置只取一次，不能为同一广告的50条旧帖重复搬运完整创意列表。
             configurations[row.ad_remote_id] = (

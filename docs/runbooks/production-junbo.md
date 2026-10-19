@@ -2,7 +2,7 @@
 
 ## 2026-10-20 快速修复现状
 
-用户明确授权范围明确的快速修复不执行备份或恢复演练，优先于本页旧发布备份要求；保留精准版本、正常排空与真实业务验收。当前运行64fef5df/0039_sync_service_class，11角色实际政策摘要f1a757b97de22d8eeb1e38edc4dc44a25486b699343909cb1c978aa9cf9a0dec，app/tenant并发32，账户4，已核对的SDK物理读取端点10QPS/6在途，合计日调用预算0；四业务开关true。后续补修及持续验收以[架构记录](../validation/2026-10-19-sync-architecture.md)为准。
+用户明确授权范围明确的快速修复不执行备份或恢复演练，优先于本页旧发布备份要求；保留精准版本、正常排空与真实业务验收。当前迁移head为0039_sync_service_class，精确生产SHA以[本轮最新发布验收](../validation/2026-10-19-sync-architecture.md)为准，11角色实际政策摘要f1a757b97de22d8eeb1e38edc4dc44a25486b699343909cb1c978aa9cf9a0dec，app/tenant并发32，账户4，已核对的SDK物理读取端点10QPS/6在途，合计日调用预算0；四业务开关true。后续补修及持续验收以[架构记录](../validation/2026-10-19-sync-architecture.md)为准。
 
 
 > **2026-10-19 发布提速规则已获用户确认**：普通发布与独立在线备份分离，24小时内已恢复验证的数据库备份是普通发布前提；数据库/任务数据合同变化仍完整备份后发布。每日后台备份不停止应用。具体入口、恢复边界及上线实测见[发布说明](../../deploy/release/README.md#2026-10-19-普通发布与数据库备份分离)和[耗时记录](../validation/2026-10-19-release-duration.md)。下文逐次全备的要求属于此前规则；托管自动备份仍不能视为已经核实。
@@ -15,7 +15,7 @@
 
 ## 当前实时同步拓扑（2026-10-20）
 
-当前程序版本 `64fef5df641e7fcfebc447f686cbad297e2deeb6`，迁移head `0039_sync_service_class`。API、Beat与9个Worker共11角色，最近快速发布的镜像、实际政策与开关已逐角色验收；历史各版详见[本轮架构记录](../validation/2026-10-19-sync-architecture.md)。
+当前程序发布版本以[本轮最新验收](../validation/2026-10-19-sync-architecture.md)为准，迁移head `0039_sync_service_class`。API、Beat与9个Worker共11角色，最近快速发布的镜像、实际政策与开关已逐角色验收；历史各版详见[本轮架构记录](../validation/2026-10-19-sync-architecture.md)。
 
 | 执行职责 | 当前并发与分工 |
 | --- | --- |

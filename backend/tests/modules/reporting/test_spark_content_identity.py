@@ -192,3 +192,74 @@ def test_changed_owner_candidates_invalidate_cached_metadata(session, sync_seed)
     assert resolve(session, job, reader)
     session.refresh(link)
     assert link.platform_material_id is None
+
+
+def test_late_directory_identity_reopens_previously_unscoped_post(session, sync_seed):
+    job, link = prepare(session, sync_seed)
+    ad = session.get(AdObject, (sync_seed.tenant_id, "acc-1", "ad", "ad"))
+    complete = deepcopy(ad.configuration)
+    ad.configuration = {"creative_list": []}
+    session.flush()
+    reader = Reader()
+    assert not resolve(session, job, reader)
+    assert not reader.history
+    ad.configuration = complete
+    session.flush()
+    assert resolve(session, job, reader)
+    assert resolve(session, job, reader)
+    session.refresh(link)
+    assert link.platform_material_id == "vid"
+
+
+def test_new_identity_candidates_reopen_checked_content(session, sync_seed):
+    job, link = prepare(session, sync_seed)
+    reader = Reader()
+    reader.content = None
+    assert resolve(session, job, reader)
+    assert resolve(session, job, reader)
+    assert not resolve(session, job, reader)
+    ad = session.get(AdObject, (sync_seed.tenant_id, "acc-1", "ad", "ad"))
+    config = deepcopy(ad.configuration)
+    config["creative_list"][0]["creative_info"]["video_info"]["video_id"] = "new-vid"
+    ad.configuration = config
+    session.flush()
+    reader.content = {"signature": DIGEST, "size": 123}
+    reader.assets = [{"video_id": "new-vid", **reader.content}]
+    assert resolve(session, job, reader)
+    assert resolve(session, job, reader)
+    session.refresh(link)
+    assert link.platform_material_id == "new-vid"
+
+
+@pytest.mark.parametrize("change", ["metadata", "order"])
+def test_unchanged_identity_does_not_repeat_checked_content(session, sync_seed, change):
+    job, _ = prepare(session, sync_seed)
+    reader = Reader()
+    reader.content = None
+    assert resolve(session, job, reader)
+    assert resolve(session, job, reader)
+    ad = session.get(AdObject, (sync_seed.tenant_id, "acc-1", "ad", "ad"))
+    config = deepcopy(ad.configuration)
+    if change == "order":
+        config["creative_list"].reverse()
+    else:
+        config["creative_list"][0]["creative_info"]["video_info"]["name"] = "new-name"
+        config["creative_list"][0]["operation_status"] = "DISABLE"
+    ad.configuration = config
+    session.flush()
+    assert not resolve(session, job, reader)
+    assert len(reader.history) == 2
+
+
+def test_unversioned_checks_are_reverified_once_after_upgrade(session, sync_seed):
+    import json
+
+    job, link = prepare(session, sync_seed)
+    job.progress = {"spark_identity_checked": [json.dumps(["post", "ad"])]}
+    reader = Reader()
+    assert resolve(session, job, reader)
+    assert resolve(session, job, reader)
+    assert not resolve(session, job, reader)
+    session.refresh(link)
+    assert link.platform_material_id == "vid"
+    assert len(reader.history) == 2
