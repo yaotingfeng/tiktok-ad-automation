@@ -276,9 +276,11 @@ def claim_jobs(
         lane_filter += f" AND j.kind {operator} 'material_links'"
     # 每类事实按任务创建先后服务；due_at 仅控制准入，退避不能把老任务反复排到队尾。
     # 关联使用独立窗口，不能以旧关联 FIFO 阻挡较新的事实。
-    # 历史等待满一天后提升到每日修正的优先级，仍保留跨租户持久轮转。
+    # 历史关联不再继承产生它的事实优先级，统一按due_at轮转；否则热报来源
+    # 的历史续步会永久压住每日/历史来源。历史事实仍保留一天后的优先级提升。
     priority = (
-        "CASE WHEN j.created_at <= :now - interval '24 hours' THEN LEAST(j.priority, 3) ELSE j.priority END"
+        "CASE WHEN j.kind = 'material_links' THEN 2 "
+        "WHEN j.created_at <= :now - interval '24 hours' THEN LEAST(j.priority, 3) ELSE j.priority END"
         if lane == "backfill"
         else "j.priority"
     )

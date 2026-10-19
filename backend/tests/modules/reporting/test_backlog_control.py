@@ -525,3 +525,30 @@ def test_historical_links_use_backfill_pool_and_share_with_facts(
             if row.start_date < today
             else "reporting.job_step"
         )
+
+
+@pytest.mark.parametrize("origin_tier", ["daily", "history", "manual"])
+def test_backfill_link_continuations_cannot_starve_other_origin_priorities(
+    session, sync_seed, monkeypatch, origin_tier
+):
+    now = datetime.now(UTC)
+    today = now.astimezone(ZoneInfo("Asia/Hong_Kong")).date()
+    monkeypatch.setattr(job_tasks, "BACKFILL_DISPATCH_WINDOW", 2)
+    old = request(
+        session,
+        sync_seed,
+        today - timedelta(days=4),
+        tier=origin_tier,
+        due_at=now - timedelta(minutes=10),
+    )
+    for index in range(3):
+        request(
+            session,
+            sync_seed,
+            today - timedelta(days=4),
+            tier="material",
+            campaign_ids=[str(index)],
+            due_at=now,
+        )
+    job_tasks._dispatch_report_jobs(session, now)
+    assert session.get(ReportSyncJob, old).status == "RUNNING"
