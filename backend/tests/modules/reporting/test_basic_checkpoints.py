@@ -88,7 +88,7 @@ def test_admission_after_first_page_resumes_second_without_repeating_remote_read
         )
 
 
-@pytest.mark.parametrize("change", ["snapshot", "scope"])
+@pytest.mark.parametrize("change", ["snapshot", "scope", "overlap", "duplicate"])
 def test_changed_snapshot_restarts_and_changed_scope_never_reuses_pages(
     committed_sync_seed, change
 ):
@@ -112,6 +112,7 @@ def test_changed_snapshot_restarts_and_changed_scope_never_reuses_pages(
         session.commit()
 
     class Reader:
+        overlap = False
         total = 2
         defer = True
         calls = []
@@ -120,7 +121,12 @@ def test_changed_snapshot_restarts_and_changed_scope_never_reuses_pages(
             self.calls.append(page)
             if page == 2 and self.defer:
                 raise AccountAdmissionDeferred(1000)
-            return RawReportPage((ad_row(f"a{page}", D),), page, self.total, self.total)
+            if change == "duplicate" and page == 2:
+                return RawReportPage((ad_row("same", D), ad_row("same", D)), page, 3, 3)
+            identity = 1 if self.overlap else page
+            return RawReportPage(
+                (ad_row(f"a{identity}", D),), page, self.total, self.total
+            )
 
     reader = Reader()
     assert (
@@ -136,20 +142,40 @@ def test_changed_snapshot_restarts_and_changed_scope_never_reuses_pages(
             job.campaign_ids = ["changed"]
         session.commit()
     reader.defer = False
-    reader.total = 3
+    reader.total = 2 if change == "overlap" else 3
+    reader.overlap = change == "overlap"
     result = execute_job(factory, job_id=job_id, claim_token=token, reader=reader)
-    assert result == ("FAILED" if change == "scope" else "WAITING")
+    assert result == ("FAILED" if change in {"scope", "duplicate"} else "WAITING")
     with factory() as session:
         job = session.get(ReportSyncJob, job_id)
         assert not session.exec(select(AdReportDay)).all()
         assert job.error_code == (
-            "report_query_invalid" if change == "scope" else "report_snapshot_changed"
+            "report_query_invalid"
+            if change == "scope"
+            else "report_row_invalid"
+            if change == "duplicate"
+            else "report_snapshot_changed"
         )
-        if change == "snapshot":
+        if change not in {"scope", "duplicate"}:
             assert "basic_paging" not in job.progress
             assert not session.exec(select(ReportSyncPage)).all()
-        else:
+        elif change == "scope":
             assert reader.calls == [1, 2]
+
+    if change == "overlap":
+        reader.overlap = False
+        with factory() as session:
+            token = claim_jobs(
+                session, now=datetime.now(UTC) + timedelta(seconds=61), limit=1
+            )[0].claim_token
+            session.commit()
+        assert (
+            execute_job(factory, job_id=job_id, claim_token=token, reader=reader)
+            == "COMPLETE"
+        )
+        assert reader.calls == [1, 2, 2, 1, 2]
+        with factory() as session:
+            assert len(session.exec(select(AdReportDay)).all()) == 2
 
 
 def test_campaign_split_resumes_without_repeating_discovery_or_prior_batch(

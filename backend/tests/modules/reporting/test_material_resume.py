@@ -294,7 +294,7 @@ def test_large_single_day_uses_all_pages_instead_of_ad_truncation_guard(
 
 @pytest.mark.parametrize(
     "bad_row",
-    [row("bad", day=DAY + timedelta(days=1)), row("bad", advertiser="outside"), row(0)],
+    [row("bad", day=DAY + timedelta(days=1)), row("bad", advertiser="outside")],
 )
 def test_later_out_of_scope_or_duplicate_row_never_replaces_fact(
     committed_sync_seed, bad_row
@@ -306,6 +306,58 @@ def test_later_out_of_scope_or_duplicate_row_never_replaces_fact(
     assert run(factory, claim(factory, job.id), reader) == "FAILED"
     assert facts(factory, seed.tenant_id) == []
     assert len(pages(factory, job.id)) == 5
+
+
+@pytest.mark.parametrize("bad", ["account", "day", "duplicate"])
+def test_material_bad_rows_stay_terminal_when_total_changes(committed_sync_seed, bad):
+    seed, factory = committed_sync_seed
+    job = enqueue(factory, seed)
+    reader = Pages(count=7)
+    assert run(factory, job, reader) == "WAITING"
+
+    class Changed:
+        def material_day(self, *, page, **_kwargs):
+            invalid = (
+                row("bad", advertiser="outside")
+                if bad == "account"
+                else row("bad", day=DAY + timedelta(days=1))
+            )
+            rows = (row("same"), row("same")) if bad == "duplicate" else (invalid,)
+            return RawReportPage(rows, page, 8, 8)
+
+    assert run(factory, claim(factory, job.id), Changed()) == "FAILED"
+    assert facts(factory, seed.tenant_id) == []
+    assert len(pages(factory, job.id)) == 5
+    with factory() as session:
+        assert session.get(ReportSyncJob, job.id).error_code == "report_row_invalid"
+
+
+@pytest.mark.parametrize("change", ["reorder", "shrink"])
+def test_material_page_drift_restarts_complete_snapshot(committed_sync_seed, change):
+    seed, factory = committed_sync_seed
+    job = enqueue(factory, seed)
+    reader = Pages(count=7)
+    assert run(factory, job, reader) == "WAITING"
+    if change == "reorder":
+        # 总行数不变，按变化中的消耗排序仍可能把已读素材移到下一页。
+        reader.rows[0], reader.rows[5] = reader.rows[5], reader.rows[0]
+    else:
+        # 总页数缩小后，旧游标所在页可能已经为空，必须先识别快照变化。
+        reader.rows = reader.rows[:3]
+    assert run(factory, claim(factory, job.id), reader) == "WAITING"
+    assert pages(factory, job.id) == []
+    assert facts(factory, seed.tenant_id) == []
+    with factory() as session:
+        changed = session.get(ReportSyncJob, job.id)
+        assert changed.error_code == "report_snapshot_changed"
+        assert changed.attempts == 1
+    result = run(factory, claim(factory, job.id), reader)
+    if change == "reorder":
+        assert result == "WAITING"
+        result = run(factory, claim(factory, job.id), reader)
+    assert result == "COMPLETE"
+    assert len(facts(factory, seed.tenant_id)) == len(reader.rows)
+    assert reader.calls[:7] == [1, 2, 3, 4, 5, 6, 1]
 
 
 def test_changed_frozen_scope_cannot_resume_existing_pages(committed_sync_seed):

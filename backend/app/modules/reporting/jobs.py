@@ -489,7 +489,9 @@ def _validate_material_page(session, job, accounts, result, page):
         )
         .scalar_one()
     ):
-        raise DomainError("report_row_invalid", "素材分页与已暂存页重复")
+        raise DomainError(
+            "report_snapshot_changed", "素材跨页内容变化，需要重建完整快照"
+        )
     return keys
 
 
@@ -579,7 +581,30 @@ def _run_material(session, job, reader, accounts):
             end=job.end_date,
             page=page,
         )
+        snapshot_changed = (
+            page > 1
+            and type(result.page) is int
+            and result.page == page
+            and all(
+                type(v) is int and v >= 0
+                for v in (result.total_page, result.total_number)
+            )
+            and (
+                result.total_page != progress.get("total_page")
+                or result.total_number != progress.get("total_number")
+            )
+        )
+        if snapshot_changed and not result.rows:
+            # 缩页会让旧游标返回合法空页；保留正式事实，按已有有限预算重建暂存。
+            raise DomainError(
+                "report_snapshot_changed", "素材分页总数变化，需要重建完整快照"
+            )
+        # 非空页先校验账户、日期及页内唯一性，不能被总数变化掩盖永久坏行。
         keys = _validate_material_page(session, job, accounts, result, page)
+        if snapshot_changed:
+            raise DomainError(
+                "report_snapshot_changed", "素材分页总数变化，需要重建完整快照"
+            )
         if (
             page == 1
             and result.total_number > MATERIAL_SPLIT_ROWS
@@ -587,14 +612,6 @@ def _run_material(session, job, reader, accounts):
         ):
             _split_material_dates(session, job, result)
             return 0
-        if page > 1 and (
-            result.total_page != progress.get("total_page")
-            or result.total_number != progress.get("total_number")
-        ):
-            # 平台无快照 token，总数变化不能混接两套页。显式、有重试预算地重新读取。
-            raise DomainError(
-                "report_snapshot_changed", "素材分页总数变化，需要重建完整快照"
-            )
         session.add(
             ReportSyncPage(
                 job_id=job.id,

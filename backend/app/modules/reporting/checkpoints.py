@@ -100,6 +100,13 @@ class CheckpointReader:
             ).all()
             if len(previous) != page - 1 or result.page != page:
                 raise DomainError("report_response_invalid", "报表断点分页不连续")
+            row_keys = [
+                json.dumps(row.get("dimensions"), sort_keys=True, separators=(",", ":"))
+                for row in result.rows
+            ]
+            existing_keys = {key for p in previous for key in p.row_keys}
+            if len(set(row_keys)) != len(row_keys):
+                raise DomainError("report_row_invalid", "报表单页包含重复行")
             if any(
                 (p.total_page, p.total_number)
                 != (result.total_page, result.total_number)
@@ -108,15 +115,11 @@ class CheckpointReader:
                 raise DomainError(
                     "report_snapshot_changed", "报表分页总数变化，需要重建完整快照"
                 )
-            row_keys = [
-                json.dumps(row.get("dimensions"), sort_keys=True, separators=(",", ":"))
-                for row in result.rows
-            ]
-            existing_keys = {key for p in previous for key in p.row_keys}
-            if len(set(row_keys)) != len(row_keys) or existing_keys.intersection(
-                row_keys
-            ):
-                raise DomainError("report_row_invalid", "报表快照包含重复行")
+            if existing_keys.intersection(row_keys):
+                # 行数不变也可能因源数据排序变化跨页重叠，旧页不能拼成完整快照。
+                raise DomainError(
+                    "report_snapshot_changed", "报表跨页内容变化，需要重建完整快照"
+                )
             if (
                 result.next_page is None
                 and sum(len(p.rows) for p in previous) + len(result.rows)
