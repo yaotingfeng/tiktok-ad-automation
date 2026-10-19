@@ -18,6 +18,8 @@ from app.modules.reporting.store_models import ReportSyncJob
 MAX_REFRESH_ADS = 100
 DIRECTORY_FRESHNESS = timedelta(minutes=2)
 GENERAL_DIRECTORY_FRESHNESS = timedelta(minutes=30)
+# 30分钟是新鲜度上限，25分钟即安排刷新，预留热报周期、排队与接口响应时间。
+GENERAL_DIRECTORY_REFRESH_INTERVAL = timedelta(minutes=25)
 _AD_TYPES = {
     "UPGRADED_SMART_PLUS": "SMART_PLUS",
     "SMART_PLUS": "LEGACY_SMART_PLUS",
@@ -95,7 +97,7 @@ def refresh_report_directory(
                 "accounts": job.advertiser_ids,
                 "now": now,
                 "cutoff": now - DIRECTORY_FRESHNESS,
-                "general_cutoff": now - GENERAL_DIRECTORY_FRESHNESS,
+                "general_cutoff": now - GENERAL_DIRECTORY_REFRESH_INTERVAL,
                 "strict_accounts": sorted(strict_accounts),
                 "limit": MAX_REFRESH_ADS,
             },
@@ -133,7 +135,7 @@ def refresh_report_directory(
         cutoff = now - (
             DIRECTORY_FRESHNESS
             if row.advertiser_id in strict_accounts
-            else GENERAL_DIRECTORY_FRESHNESS
+            else GENERAL_DIRECTORY_REFRESH_INTERVAL
         )
         for kind, column in (
             ("campaign", "campaign_id"),
@@ -174,31 +176,32 @@ def refresh_report_directory(
 def request_link_directory(
     session: Session, job: ReportSyncJob, *, now: datetime
 ) -> int:
-    """已确认广告但缺视频时补读该广告目录；不等当天消耗热报碰巧覆盖历史广告。"""
+    """已确认广告但缺视频时补读含删除对象的目录，不依赖本地广告本体先存在。"""
     if not settings.ADS_SYNC_ENABLED:
         return 0
     rows = (
         session.connection()
         .execute(
             text("""
-        SELECT DISTINCT l.ad_remote_id, a.ad_type
+        SELECT DISTINCT l.ad_remote_id, COALESCE(a.ad_type, 'SMART_PLUS') AS ad_type
         FROM material_report_day d
         JOIN material_post_link l ON l.tenant_id=d.tenant_id AND l.advertiser_id=d.advertiser_id
           AND l.main_material_id=d.main_material_id
-        JOIN ad_object a ON a.tenant_id=l.tenant_id AND a.advertiser_id=l.advertiser_id
+        LEFT JOIN ad_object a ON a.tenant_id=l.tenant_id AND a.advertiser_id=l.advertiser_id
           AND a.kind='ad' AND a.remote_id=l.ad_remote_id
         WHERE d.tenant_id=:t AND d.advertiser_id=:adv AND d.stat_date BETWEEN :start AND :end
           AND NULLIF(l.platform_material_id, '') IS NULL
-          AND a.ad_type IN ('SMART_PLUS','LEGACY_SMART_PLUS','REGULAR')
+          AND (a.ad_type IS NULL OR a.ad_type IN ('SMART_PLUS','LEGACY_SMART_PLUS','REGULAR'))
           AND NOT EXISTS (SELECT 1 FROM material_post_link done
             WHERE done.tenant_id=d.tenant_id AND done.advertiser_id=d.advertiser_id
               AND done.main_material_id=d.main_material_id AND NULLIF(done.platform_material_id, '') IS NOT NULL)
           AND NOT EXISTS (SELECT 1 FROM ad_directory_run r
             WHERE r.tenant_id=:t AND r.bc_id=:bc AND r.actor_id=:actor
               AND r.frozen_route=CAST(:route AS jsonb) AND r.advertiser_id=:adv
-              AND r.kind='ad' AND r.ad_type=a.ad_type AND r.query->'ids' ? l.ad_remote_id
+              AND r.kind='ad' AND r.ad_type=COALESCE(a.ad_type, 'SMART_PLUS')
+              AND r.query->'ids' ? l.ad_remote_id AND r.query->>'include_deleted'='true'
               AND (r.status IN ('QUEUED','RUNNING','ADMISSION_WAIT','WAITING_REMOTE') OR r.created_at>=:cutoff))
-        ORDER BY l.ad_remote_id, a.ad_type LIMIT :limit
+        ORDER BY l.ad_remote_id, ad_type LIMIT :limit
     """),
             {
                 "t": job.tenant_id,
@@ -215,6 +218,9 @@ def request_link_directory(
         .all()
     )
     count = 0
+    # material_post_link 的唯一生产写入源是升级 Smart+ 素材概览/拆分报表，
+    # 其中 smart_plus_ad_id 已证明类型；缺本地 AdObject 时仍可按该证据回读。
+    # 历史报表保留已删除广告的消耗，普通定向刷新默认排除删除对象，不能用于补历史身份。
     for ad_type in sorted({r.ad_type for r in rows}):
         count += request_directory(
             session,
@@ -224,6 +230,7 @@ def request_link_directory(
             frozen_route=job.frozen_route,
             advertiser_ids=job.advertiser_ids,
             scope="targeted",
+            include_deleted=True,
             refs=tuple(
                 EntityRef(job.tenant_id, job.advertiser_ids[0], "ad", r.ad_remote_id)
                 for r in rows

@@ -236,6 +236,7 @@ def _unlinked(
             WHERE l.tenant_id = d.tenant_id AND l.advertiser_id = d.advertiser_id
               AND l.main_material_id = d.main_material_id)
         GROUP BY d.main_material_id
+        ORDER BY sum(d.spend) DESC, d.main_material_id
         """),
         {"t": tenant_id, "a": advertiser_id, "start": start, "end": end},
     )
@@ -472,7 +473,8 @@ def refresh_material_links(
             )
         stale = _unlinked(session, tenant_id, advertiser_id, start=start, end=end)
         checked = set(progress.get("checked_ids", []))
-        remaining = sorted(set(stale) - checked)
+        # 有消耗的缺口先定位，零消耗历史继续保留；在途二分游标不因排序改变而丢失。
+        remaining = [mid for mid in stale if mid not in checked]
         if remaining:
             current = progress.get("locate_post")
             mid = (

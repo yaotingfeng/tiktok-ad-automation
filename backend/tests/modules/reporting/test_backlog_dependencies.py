@@ -1,0 +1,182 @@
+"""生产尾部缺口：缺广告本体也必须补读，历史请求不能漏掉已删除对象。"""
+
+from datetime import UTC, datetime, timedelta
+
+import pytest
+from sqlmodel import select
+
+from app.core.config import settings
+from app.integrations.tiktok.contracts.report_reader import RawReportPage
+from app.modules.ads.models import AdMaterialReference, AdObject
+from app.modules.ads.sync_models import AdDirectoryRun
+from app.modules.reporting.directory_refresh import (
+    refresh_report_directory,
+    request_link_directory,
+)
+from app.modules.reporting.material_links import refresh_material_links
+from app.modules.reporting.store_models import MaterialPostLink, ReportSyncJob
+from tests.modules.reporting.test_backlog_control import request
+from tests.modules.reporting.test_directory_refresh import prepared
+from tests.modules.reporting.test_material_links import overview
+from tests.modules.reporting.test_material_query import D, material_row, publish, use
+
+
+@pytest.mark.parametrize("has_ad", [False, True])
+def test_link_repair_reads_deleted_ads_even_without_local_object(
+    session, sync_seed, monkeypatch, has_ad
+):
+    monkeypatch.setattr(settings, "ADS_SYNC_ENABLED", True)
+    now = datetime.now(UTC)
+    publish(session, sync_seed, "acc-1", [material_row("p", "5", "file.mp4")])
+    if has_ad:
+        session.add(
+            AdObject(
+                tenant_id=sync_seed.tenant_id,
+                advertiser_id="acc-1",
+                kind="ad",
+                remote_id="ad",
+                ad_type="SMART_PLUS",
+                observed_at=now,
+                published_version=1,
+            )
+        )
+    session.add(
+        MaterialPostLink(
+            tenant_id=sync_seed.tenant_id,
+            advertiser_id="acc-1",
+            main_material_id="p",
+            ad_remote_id="ad",
+            main_material_type="VIDEO_SPARK_ADS",
+            observed_at=now,
+        )
+    )
+    job = session.get(ReportSyncJob, request(session, sync_seed, D))
+    session.flush()
+    assert request_link_directory(session, job, now=now) == 1
+    run = session.exec(select(AdDirectoryRun)).one()
+    assert run.ad_type == "SMART_PLUS"
+    assert run.query["ids"] == ["ad"]
+    assert run.query["include_deleted"] is True
+    assert run.advertiser_id == "acc-1" and run.frozen_route == job.frozen_route
+    assert request_link_directory(session, job, now=now) == 0
+
+
+def test_live_only_read_does_not_suppress_deleted_ad_repair(
+    session, sync_seed, monkeypatch
+):
+    monkeypatch.setattr(settings, "ADS_SYNC_ENABLED", True)
+    now = datetime.now(UTC)
+    publish(session, sync_seed, "acc-1", [material_row("p", "5", "file.mp4")])
+    session.add(
+        AdObject(
+            tenant_id=sync_seed.tenant_id,
+            advertiser_id="acc-1",
+            kind="ad",
+            remote_id="ad",
+            ad_type="SMART_PLUS",
+            observed_at=now,
+            published_version=1,
+        )
+    )
+    session.add(
+        MaterialPostLink(
+            tenant_id=sync_seed.tenant_id,
+            advertiser_id="acc-1",
+            main_material_id="p",
+            ad_remote_id="ad",
+            main_material_type="VIDEO_SPARK_ADS",
+            observed_at=now,
+        )
+    )
+    job = session.get(ReportSyncJob, request(session, sync_seed, D))
+    session.flush()
+    assert request_link_directory(session, job, now=now) == 1
+    old = session.exec(select(AdDirectoryRun)).one()
+    old.query = old.query | {"include_deleted": False}
+    old.status = "COMPLETE"
+    session.flush()
+    assert request_link_directory(session, job, now=now) == 1
+
+
+def test_general_directory_refresh_starts_before_freshness_deadline(
+    session, sync_seed, monkeypatch
+):
+    from app.modules.reporting import planner
+    from app.modules.reporting.health import measure_health
+    from app.modules.reporting.store_models import AdSyncBc
+
+    monkeypatch.setattr(settings, "ADS_SYNC_ENABLED", True)
+    now = datetime.now(UTC)
+    job = prepared(session, sync_seed)
+    for kind, remote in [("ad", "a0"), ("adgroup", "g0"), ("campaign", "c0")]:
+        session.add(
+            AdObject(
+                tenant_id=sync_seed.tenant_id,
+                advertiser_id="acc-2",
+                kind=kind,
+                remote_id=remote,
+                ad_type="SMART_PLUS",
+                published_version=1,
+                observed_at=now - timedelta(minutes=26),
+            )
+        )
+    planner.ensure_bc_plans(session, now=now, tenant_id=sync_seed.tenant_id)
+    plan = session.get(AdSyncBc, (sync_seed.tenant_id, "bc-a"))
+    session.flush()
+    assert measure_health(session, plan, now=now)[0]["missing_directory_ads"] == 0
+    assert refresh_report_directory(session, job, now=now) == 3
+    assert refresh_report_directory(session, job, now=now) == 0
+    # 提前刷新不能掩盖真正超期：未收到新目录时，30分钟后仍应告警。
+    assert (
+        measure_health(session, plan, now=now + timedelta(minutes=5))[0][
+            "missing_directory_ads"
+        ]
+        == 1
+    )
+
+
+def test_spending_unresolved_post_is_located_before_zero_spend_history(
+    session, sync_seed
+):
+    publish(
+        session,
+        sync_seed,
+        "acc-1",
+        [
+            material_row("a-zero", "0", "zero.mp4"),
+            material_row("z-spend", "20", "paid.mp4"),
+        ],
+    )
+    for ad, name in [("zero-ad", "zero.mp4"), ("paid-ad", "paid.mp4")]:
+        use(session, sync_seed, adv="acc-1", ad=ad, video=ad, ad_material=ad)
+        ref = session.exec(
+            select(AdMaterialReference).where(AdMaterialReference.ad_remote_id == ad)
+        ).one()
+        ref.name = name
+    session.flush()
+
+    def read_posts(ads, _start, _end, _page):
+        post = "z-spend" if ads == ("paid-ad",) else "a-zero"
+        return RawReportPage(({"dimensions": {"main_material_id": post}},), 1, 1, 1)
+
+    refresh_material_links(
+        session,
+        tenant_id=sync_seed.tenant_id,
+        advertiser_id="acc-1",
+        read_overview=lambda page: overview(),
+        read_ad_posts=read_posts,
+        now=datetime.now(UTC),
+        start=D,
+        end=D,
+        progress={"overview_complete": True},
+    )
+    paid = session.get(
+        MaterialPostLink, (sync_seed.tenant_id, "acc-1", "z-spend", "paid-ad")
+    )
+    assert paid is not None and paid.platform_material_id == "paid-ad"
+    assert (
+        session.get(
+            MaterialPostLink, (sync_seed.tenant_id, "acc-1", "a-zero", "zero-ad")
+        )
+        is None
+    )

@@ -246,11 +246,13 @@ def request_directory(
     scope,
     refs=(),
     ad_types: Mapping[str, Mapping[str, Collection[str]]] | None = None,
+    include_deleted: bool = False,
 ) -> int:
     """ad_types 为空表示请求全部类型全部层级；周期调度传入 directory_ad_types 的裁剪结果。
 
     同一账户同一查询已有尚未开始的运行时不再新建：积压期间每轮的周期请求
     不会层层叠加，排队中的那一条开始执行时自然读到最新数据。
+    历史身份补录可显式包含已删除对象；仍按指定ID有界读取，不扩大为全账户扫描。
     """
     if not settings.ADS_SYNC_ENABLED or frozen_route.get("channel") != "OFFICIAL_API":
         return 0
@@ -345,7 +347,7 @@ def request_directory(
                     "page_size": page_size,
                     "ids": list(id_chunk),
                     "parent_ids": list(parent_chunk),
-                    "include_deleted": scope == "directory",
+                    "include_deleted": scope == "directory" or include_deleted,
                 }
                 partition = _partition_key(query)
                 existing = session.exec(
