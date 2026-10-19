@@ -54,6 +54,9 @@ def measure_health(session, plan, *, now, accounts=None):
         ),
         "now": now,
         "cutoff": now - SLO,
+        # 全球当地日只可能落在 UTC 前后一天；先走日期索引，再按事实时区精确判断。
+        "first_day": now.astimezone(UTC).date() - timedelta(days=1),
+        "last_day": now.astimezone(UTC).date() + timedelta(days=1),
         "general_cutoff": now - GENERAL_DIRECTORY_FRESHNESS,
         "strict_accounts": sorted(strict_accounts),
         "action_cutoff": now - timedelta(minutes=2),
@@ -90,7 +93,8 @@ def measure_health(session, plan, *, now, accounts=None):
         LEFT JOIN ad_object a ON a.tenant_id=r.tenant_id AND a.advertiser_id=r.advertiser_id AND a.kind='ad' AND a.remote_id=r.ad_id
         LEFT JOIN ad_object g ON g.tenant_id=r.tenant_id AND g.advertiser_id=r.advertiser_id AND g.kind='adgroup' AND g.remote_id=r.adgroup_id
         LEFT JOIN ad_object c ON c.tenant_id=r.tenant_id AND c.advertiser_id=r.advertiser_id AND c.kind='campaign' AND c.remote_id=r.campaign_id
-        WHERE r.tenant_id=:t AND r.advertiser_id=ANY(:ids) AND r.stat_date=(CAST(:now AS timestamptz) AT TIME ZONE r.timezone)::date
+        WHERE r.tenant_id=:t AND r.advertiser_id=ANY(:ids)
+          AND r.stat_date BETWEEN :first_day AND :last_day AND r.stat_date=(CAST(:now AS timestamptz) AT TIME ZONE r.timezone)::date
           AND r.spend>0 AND (a.remote_id IS NULL OR g.remote_id IS NULL OR c.remote_id IS NULL
             OR LEAST(a.observed_at,g.observed_at,c.observed_at) < CASE
               WHEN r.advertiser_id=ANY(:strict_accounts) THEN :cutoff ELSE :general_cutoff END)
@@ -105,7 +109,7 @@ def measure_health(session, plan, *, now, accounts=None):
             text("""
         SELECT DISTINCT r.advertiser_id,r.main_material_id FROM material_report_day r
         WHERE r.tenant_id=:t AND r.advertiser_id=ANY(:ids) AND r.spend>0
-          AND r.stat_date=(CAST(:now AS timestamptz) AT TIME ZONE r.timezone)::date
+          AND r.stat_date BETWEEN :first_day AND :last_day AND r.stat_date=(CAST(:now AS timestamptz) AT TIME ZONE r.timezone)::date
           AND NOT EXISTS(SELECT 1 FROM material_post_link l WHERE l.tenant_id=r.tenant_id
             AND l.advertiser_id=r.advertiser_id AND l.main_material_id=r.main_material_id
             AND l.platform_material_id IS NOT NULL)

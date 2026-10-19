@@ -160,3 +160,91 @@ def test_health_observation_survives_contended_repair_lock(committed_sync_seed):
         assert session.exec(
             select(ReportSyncJob).where(ReportSyncJob.tenant_id == seed.tenant_id)
         ).all()
+
+
+def test_health_limits_history_scan_without_losing_local_date_boundaries(
+    session, sync_seed
+):
+    from uuid import uuid4
+
+    from sqlalchemy import event, insert, text
+
+    from app.modules.reporting.health import measure_health
+    from app.modules.reporting.store_models import AdReportDay, MaterialReportDay
+
+    # UTC 次日（+14）和前日（-12）都必须保留；同月历史不应参与当天覆盖查询。
+    for hour, timezone, offset in [
+        (20, "Pacific/Kiritimati", 1),
+        (2, "Etc/GMT+12", -1),
+    ]:
+        now = datetime(2026, 10, 12, hour, tzinfo=UTC)
+        planner.ensure_bc_plans(session, now=now, tenant_id=sync_seed.tenant_id)
+        plan = session.get(AdSyncBc, (sync_seed.tenant_id, "bc-a"))
+        plan.last_active_advertiser_ids, plan.active_screened_at = ["acc-1"], now
+        common = {
+            "tenant_id": sync_seed.tenant_id,
+            "advertiser_id": "acc-1",
+            "currency": "USD",
+            "timezone": timezone,
+            "fetched_at": now,
+            "sync_job_id": uuid4(),
+            "spend": 1,
+        }
+        for model in (AdReportDay, MaterialReportDay):
+            rows = []
+            for index in range(5001):
+                row = common | {
+                    "stat_date": now.date() + timedelta(days=offset)
+                    if index == 0
+                    else now.date().replace(day=1)
+                }
+                identity = f"{hour}-{index}"
+                row |= (
+                    {"ad_id": identity, "campaign_id": "c", "adgroup_id": "g"}
+                    if model is AdReportDay
+                    else {"main_material_id": identity, "main_material_type": "VIDEO"}
+                )
+                rows.append(row)
+            session.execute(insert(model), rows)
+        session.flush()
+        session.connection().execute(text("ANALYZE ad_report_day"))
+        session.connection().execute(text("ANALYZE material_report_day"))
+        queries = []
+
+        def capture(_conn, _cursor, sql, params, _context, _many, queries=queries):
+            if ("FROM ad_report_day r" in sql and "LEFT JOIN ad_object" in sql) or (
+                "SELECT DISTINCT r.advertiser_id,r.main_material_id" in sql
+            ):
+                queries.append((sql, params))
+
+        connection = session.connection()
+        event.listen(connection, "before_cursor_execute", capture)
+        try:
+            metrics, _, _ = measure_health(session, plan, now=now)
+        finally:
+            event.remove(connection, "before_cursor_execute", capture)
+        assert (
+            metrics["missing_directory_ads"] == metrics["unlinked_material_posts"] == 1
+        )
+        assert len(queries) == 2
+
+        def scanned(node):
+            value = (
+                node.get("Actual Rows", 0) + node.get("Rows Removed by Filter", 0)
+                if node.get("Relation Name", "").startswith(
+                    ("ad_report_day", "material_report_day")
+                )
+                else 0
+            )
+            return value + sum(scanned(child) for child in node.get("Plans", []))
+
+        for sql, params in queries:
+            result = connection.exec_driver_sql(
+                "EXPLAIN (ANALYZE, FORMAT JSON) " + sql, params
+            ).scalar_one()
+            assert scanned(result[0]["Plan"]) < 100, result
+        # 下一组使用同一租户时去掉上组事实，保持独立当地日期证据。
+        for model in (AdReportDay, MaterialReportDay):
+            session.execute(
+                model.__table__.delete().where(model.tenant_id == sync_seed.tenant_id)
+            )
