@@ -655,9 +655,12 @@ class Release:
         broker = self.probe("broker")
         write(self.folder / "broker-frozen.json", broker)
         require(
-            broker["unacked"] == 0,
+            self.state.get("mode") == "routine" or broker["unacked"] == 0,
             "Unacknowledged broker deliveries remain; inspect before backup",
         )
+        # 普通发布不搬队列：进程已经正常排空/退出，保留 broker 的未确认记录及
+        # 原租约，由既有投递恢复和 UNKNOWN 保护处理。不能清队列、手工重放或
+        # 将 Redis 内部记录非零误认为仍有在执行任务；完整数据迁移仍要求零未确认。
         self.save("frozen")
 
     def wait_drained(self, expected):

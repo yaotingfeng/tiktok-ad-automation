@@ -625,6 +625,40 @@ class ReleaseTests(unittest.TestCase):
             )
             self.assertEqual(self.release.state["phase"], "draining")
 
+    def test_routine_preserves_unacked_after_drain_but_migration_still_blocks(self):
+        pods = [
+            {"metadata": {"name": role, "labels": {"role": role}}} for role in WORKERS
+        ]
+        for mode in ("routine", "full"):
+            self.release.state["mode"] = mode
+            with (
+                patch.object(self.release, "assert_lock"),
+                patch.object(self.release, "validate_deployments"),
+                patch.object(self.release, "wait_pods"),
+                patch.object(self.release, "wait_drained") as drained,
+                patch.object(
+                    self.release, "probe", return_value={"unacked": 24}
+                ) as probe,
+                patch.object(self.release.cluster, "app_pods", return_value=pods),
+                patch.object(self.release.cluster, "scale"),
+            ):
+                if mode == "routine":
+                    self.release.pause()
+                    self.assertEqual(self.release.state["phase"], "frozen")
+                else:
+                    with self.assertRaisesRegex(RuntimeError, "Unacknowledged"):
+                        self.release.pause()
+                drained.assert_called_once()
+                self.assertEqual(
+                    [c.args[0] for c in probe.call_args_list], ["cancel", "broker"]
+                )
+                self.assertEqual(
+                    json.loads(
+                        (self.release.folder / "broker-frozen.json").read_text()
+                    ),
+                    {"unacked": 24},
+                )
+
     def test_failed_backup_does_not_migrate_or_resume(self):
         with (
             patch.object(self.release, "begin"),
