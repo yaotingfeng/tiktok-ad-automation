@@ -209,7 +209,7 @@ def check_space(pod, database_bytes):
     return {"available": available, "last_dump": last, "required": required}
 
 
-def snapshot(release):
+def snapshot(release, *, online=False):
     """在同一停写窗口内把全部备份写入备份盘的未完成目录，并生成清单。"""
     folder, pod = release.folder, release.pod
     target = release.state["backup_dir"]
@@ -230,11 +230,22 @@ def snapshot(release):
         + shlex.quote(target + "/" + PG_DUMP)
         + "\n",
     )
+    if online:
+        # 在线备份不挂载/复制正在使用的 Beat 盘，不冒充跨 PG/Redis 的停写快照。
+        sh(
+            pod,
+            "app",
+            "mkdir -p /tmp/online-beat; echo online-database-only > /tmp/online-beat/NOT-A-BEAT-SNAPSHOT",
+        )
     for filename, directory, excludes in [
         ("runtime-app.tar.gz", "/app", ["--exclude=.venv", "--exclude=__pycache__"]),
         # Beat 盘上的 .incident-* 是故障现场人工留存的快照（不完整、未经恢复验证），
         # 不属于 Beat 运行状态，不随每次发布重复打包。
-        ("beat-data.tar.gz", "/var/run/celery", ["--exclude=.incident-*"]),
+        (
+            "beat-data.tar.gz",
+            "/tmp/online-beat" if online else "/var/run/celery",
+            ["--exclude=.incident-*"],
+        ),
     ]:
         pod(
             "app",
@@ -246,9 +257,16 @@ def snapshot(release):
             directory,
             ".",
         )
-    write(folder / "source-fingerprint.json", release.probe("fingerprint"))
+    write(
+        folder / "source-fingerprint.json",
+        release.probe("schema" if online else "fingerprint"),
+    )
     # probe 的附加参数按 JSON 透传，这里是备份盘上的导出文件路径。
-    exported = release.probe("redis", target + "/redis.json")
+    if online:
+        exported = {"records": 0}
+        sh(pod, "app", 'echo "[]" > "$1"', target + "/redis.json")
+    else:
+        exported = release.probe("redis", target + "/redis.json")
     counted = pod(
         "app",
         "python",
@@ -286,6 +304,7 @@ def snapshot(release):
         {
             "old_sha": release.state["old_sha"],
             "captured_at": int(time.time()),
+            "consistency": "online-postgres" if online else "frozen",
             "files": {
                 name: remote_digest(pod, target + "/" + name, directory=name == PG_DUMP)
                 for name in files
@@ -317,7 +336,9 @@ pg_restore --use-list=/tmp/restore.toc --exit-on-error --jobs=4 \\
 """
 
 
-def restore_verify(pod, folder, directory, candidate_sha=None, candidate="candidate"):
+def restore_verify(
+    pod, folder, directory, candidate_sha=None, candidate="candidate", *, online=False
+):
     """在辅助 Pod 内的临时实例上完整恢复并验证；candidate 为执行候选迁移的容器名。"""
     verify_archives(pod, folder, directory)
     for _ in range(120):
@@ -355,8 +376,11 @@ def restore_verify(pod, folder, directory, candidate_sha=None, candidate="candid
     )
     detached(pod, "verify-pg", RESTORE_SCRIPT, directory + "/" + PG_DUMP)
     fingerprint = json.loads(guarded(pod, "app", PROBE.read_text(), "fingerprint"))
+    source = json.loads((folder / "source-fingerprint.json").read_text())
     require(
-        fingerprint == json.loads((folder / "source-fingerprint.json").read_text()),
+        fingerprint["migration_heads"] == source["migration_heads"]
+        if online
+        else fingerprint == source,
         "Restored PostgreSQL facts/credentials differ",
     )
     # Redis DUMP/RESTORE 保留键内容及绝对过期时间，允许跨版本重新编码；验证每个有效键，不只比键数。
@@ -385,7 +409,10 @@ def restore_verify(pod, folder, directory, candidate_sha=None, candidate="candid
         folder / "restore-verified.json",
         {
             "manifest_sha256": digest(folder / "manifest.json"),
-            "postgres_matches": True,
+            "postgres_matches": not online,
+            "postgres_restored": True,
+            "consistency": "online-postgres" if online else "frozen",
+            "restored_table_rows": fingerprint["table_rows"],
             "credentials_decrypted": fingerprint["credentials_decrypted"],
             "redis": redis_result,
             "candidate_sha": candidate_sha,
@@ -408,8 +435,15 @@ rm -rf .previous
 def publish(pod, folder, directory):
     """恢复验证通过后，以同盘目录改名替换为唯一保留的 /backup/latest。"""
     proof = json.loads((folder / "restore-verified.json").read_text())
+    manifest = json.loads((folder / "manifest.json").read_text())
+    online_verified = (
+        manifest.get("consistency") == "online-postgres"
+        and proof.get("consistency") == "online-postgres"
+        and proof.get("postgres_restored") is True
+        and bool(proof.get("restored_table_rows"))
+    )
     require(
-        proof.get("postgres_matches") is True
+        (proof.get("postgres_matches") is True or online_verified)
         and "redis" in proof
         and proof.get("manifest_sha256") == digest(folder / "manifest.json"),
         "Successful restore verification required",
@@ -446,7 +480,10 @@ def publish(pod, folder, directory):
 def cleanup_completed(folder):
     """成功验收后删除本批发布端的私密配置副本；失败现场必须保留。"""
     folder = Path(folder)
-    if not (folder / "cluster-backup.json").exists():
+    if (
+        not (folder / "cluster-backup.json").exists()
+        and not (folder / "release-archive.json").exists()
+    ):
         return
     for name in (
         "cluster-before.json",

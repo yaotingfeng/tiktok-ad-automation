@@ -1,5 +1,6 @@
 // TK-ADA 公司 Jenkins 流水线（http://123.207.4.46:8080 任务 tiktok-ad-automation）。
-// 公司 Gitea main 收到推送即自动发布：检查 → 构建推送镜像 → 停写备份并恢复验证 → 迁移 → 发布验收。
+// 公司 Gitea main 推送后检查/构建；普通发布核验近期备份后切镜像，数据变更走完整备份/迁移。
+// 每日定时执行在线备份与隔离恢复验证，不停止运行中的应用。
 // 备份与恢复验证都在新加坡集群内完成（备份盘 tiktok-ad-automation-backup），不回传 Jenkins。
 // 实际编排就是本机的 deploy/local.py（经 deploy/ci/jenkins-run.sh 在工具镜像中运行），两边共用一套逻辑；
 // Jenkins 只负责触发、提供凭据和保存日志。发布状态、检查记录和备份清单/恢复证明在 Jenkins 私有目录
@@ -12,11 +13,16 @@ pipeline {
     agent any
 
     parameters {
-        choice(name: 'ACTION', choices: ['deploy', 'check', 'status', 'recover', 'finish'],
+        choice(name: 'ACTION', choices: ['deploy', 'check', 'backup-online', 'backup', 'status', 'recover', 'finish'],
             description: 'deploy=检查并发布（推送自动触发时使用）；check=只检查；status/recover/finish=处理中断的发布')
         booleanParam(name: 'FULL', defaultValue: false,
             description: '仅 deploy/check：全量检查（默认只检查受改动影响的部分）')
+        booleanParam(name: 'FULL_BACKUP', defaultValue: false,
+            description: '仅 deploy：数据格式/任务合同变化时选择；迁移和部署清单等变化自动执行完整备份')
     }
+
+    // 在线备份及隔离恢复独立运行，应用不停服；与发布共用本任务串行及集群锁。
+    triggers { cron('TZ=Asia/Shanghai\nH 4 * * *') }
 
     environment {
         GIT_URL = 'https://git.gzjunbo.net/yaotf/tiktok-ad-automation.git'
@@ -73,10 +79,15 @@ pipeline {
                     usernamePassword(credentialsId: env.GIT_CREDS_ID, usernameVariable: 'GIT_USER', passwordVariable: 'GIT_TOKEN')
                 ]) {
                     script {
+                        env.SCHEDULED_BACKUP = currentBuild.getBuildCauses('hudson.triggers.TimerTrigger$TimerTriggerCause').size() > 0 ? 'true' : 'false'
                         def status = sh(returnStatus: true, script: '''set -eu
                             set -- "$ACTION"
-                            if [ "$FULL" = true ] && { [ "$ACTION" = deploy ] || [ "$ACTION" = check ]; }; then
-                                set -- "$ACTION" --full
+                            if [ "$SCHEDULED_BACKUP" = true ]; then set -- backup-online; fi
+                            if [ "$SCHEDULED_BACKUP" != true ] && [ "$FULL" = true ] && { [ "$ACTION" = deploy ] || [ "$ACTION" = check ]; }; then
+                                set -- "$@" --full
+                            fi
+                            if [ "$FULL_BACKUP" = true ] && [ "$SCHEDULED_BACKUP" != true ] && [ "$ACTION" = deploy ]; then
+                                set -- "$@" --full-backup
                             fi
                             bash deploy/ci/jenkins-run.sh "$@"
                         ''')

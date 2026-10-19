@@ -433,6 +433,91 @@ r.set('string',b'\\x00secret');r.rpush('queue',b'one',b'two');r.hset('hash',mapp
                 space["last_dump"] > 0,
                 "Space check must size against the retained dump",
             )
+            # 在线备份允许源库继续写；恢复必须保留 dump 的快照，不能伪称与当前源库逐行一致。
+            run(
+                [
+                    "docker",
+                    "exec",
+                    pg,
+                    "psql",
+                    "-U",
+                    "postgres",
+                    "-d",
+                    "tkada",
+                    "-c",
+                    "INSERT INTO fixture VALUES(3,'after snapshot')",
+                ]
+            )
+            write(
+                folder / "source-fingerprint.json",
+                json.loads(
+                    run(app + ["python", "-", "schema"], data=PROBE.read_bytes())
+                ),
+            )
+            write(folder / "redis.json", [])
+            for name_part in ("source-fingerprint.json", "redis.json"):
+                upload(pod, folder / name_part, latest + "/" + name_part)
+            manifest = json.loads((folder / "manifest.json").read_text())
+            manifest["consistency"] = "online-postgres"
+            for name_part in ("source-fingerprint.json", "redis.json"):
+                manifest["files"][name_part] = tree_digest(folder / name_part)
+            write(folder / "manifest.json", manifest)
+            upload(pod, folder / "manifest.json", latest + "/manifest.json")
+            pod(
+                "verify-pg",
+                "dropdb",
+                "-h",
+                "127.0.0.1",
+                "-p",
+                str(VERIFY_PG_PORT),
+                "-U",
+                "postgres",
+                "tkada_verify",
+            )
+            pod(
+                "verify-pg",
+                "createdb",
+                "-h",
+                "127.0.0.1",
+                "-p",
+                str(VERIFY_PG_PORT),
+                "-U",
+                "postgres",
+                "tkada_verify",
+            )
+            restore_verify(pod, folder, latest, online=True)
+            proof = json.loads((folder / "restore-verified.json").read_text())
+            require(
+                proof["postgres_restored"] and not proof["postgres_matches"],
+                "Online proof must not claim frozen source equality",
+            )
+            require(
+                proof["restored_table_rows"]["fixture"] == 2
+                and proof["credentials_decrypted"] == 1,
+                "Online restore must preserve original snapshot and credentials",
+            )
+            source_rows = run(
+                [
+                    "docker",
+                    "exec",
+                    pg,
+                    "psql",
+                    "-U",
+                    "postgres",
+                    "-d",
+                    "tkada",
+                    "-Atc",
+                    "SELECT count(*) FROM fixture",
+                ]
+            )
+            require(
+                source_rows.strip() == b"3",
+                "Online verification must leave live writes intact",
+            )
+            print(
+                "PASS: online database snapshot restored while source keeps newer writes; no cross-store consistency claim",
+                flush=True,
+            )
             # 备份盘上的损坏备份必须在恢复前被拒绝。
             sh(
                 pod,

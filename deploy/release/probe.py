@@ -313,6 +313,8 @@ if __name__ == "__main__":
     action = sys.argv[1]
     if action == "fingerprint":
         result = fingerprint()
+    elif action == "schema":
+        result = fingerprint(count_rows=False)
     elif action == "credentials":
         result = credentials()
     elif action == "redis":

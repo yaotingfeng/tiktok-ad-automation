@@ -63,6 +63,8 @@ Python uses uv in backend; frontend uses Bun and the official template lockfile.
 
 ## 环境与发布
 
+- 2026-10-19 用户确认发布与日常备份分离。本条取代下文及旧手册中“无迁移也必须每次全库备份/恢复”的要求：普通发布先核验最近24小时内已实际恢复验证的数据库备份，保存独立旧程序/构建产物、配置、冻结后的Redis状态，再正常排空并切换镜像；自动检测到数据库迁移、模型、任务调度、依赖或Kubernetes清单变化时继续完整停写备份/恢复/迁移流程。代码语义改变持久化数据格式或任务合同而路径检测不能识别时，发布人必须使用 `--full-backup`（Jenkins `FULL_BACKUP=true`）。每日 `backup-online` 独立备份并恢复验证，应用不停服；在线PG备份与普通发布的Redis快照不是同一时点恢复包。具体约束见 `deploy/release/README.md`。
+
 - 查找或初始化环境配置先读 `config/README.md`，环境文件位置以 `config/environments.json` 为准；统一模板为 `.env.example`，使用 `scripts/environment.py` 定位/初始化。真实环境文件不进 Git，项目内副本不等于服务器已加载配置。
 - 明确区分本地开发和生产环境，不能将本地验证视为生产验证。
 - 发布必须遵循 `docs/runbooks/deployment.md`；首次部署同时参考 `docs/runbooks/bootstrap-deployment.md`。

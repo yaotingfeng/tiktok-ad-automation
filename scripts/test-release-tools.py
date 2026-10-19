@@ -671,6 +671,7 @@ class ReleaseTests(unittest.TestCase):
 
     def test_failed_migration_keeps_zero_replicas_for_inspection(self):
         with (
+            patch("release.needs_full_backup", return_value=True),
             patch.object(self.release, "begin"),
             patch.object(self.release, "prepare_tools"),
             patch.object(self.release, "check_remote"),
@@ -690,6 +691,100 @@ class ReleaseTests(unittest.TestCase):
                 self.release.execute("deploy", "b" * 40)
             self.assertEqual(self.release.state["phase"], "migration-started")
             resume.assert_not_called()
+
+    def test_routine_release_checks_backup_before_freezing_and_never_migrates(self):
+        events = []
+        with (
+            patch.object(self.release, "begin"),
+            patch.object(self.release, "prepare_tools"),
+            patch.object(self.release, "check_remote"),
+            patch("release.needs_full_backup", return_value=False),
+            patch.object(
+                self.release, "helper", side_effect=lambda: events.append("helper")
+            ),
+            patch.object(
+                self.release, "probe", return_value={"migration_heads": ["test"]}
+            ),
+            patch(
+                "release.recent_backup", side_effect=lambda *a: events.append("verify")
+            ),
+            patch.object(
+                self.release, "pause", side_effect=lambda: events.append("freeze")
+            ),
+            patch(
+                "release.snapshot_release",
+                side_effect=lambda *a: events.append("archive"),
+            ),
+            patch.object(
+                self.release,
+                "apply_images",
+                side_effect=lambda: events.append("images"),
+            ),
+            patch.object(
+                self.release, "resume", side_effect=lambda *a: events.append("resume")
+            ),
+            patch("release.snapshot") as snapshot,
+            patch("release.restore_verify") as restore,
+            patch.object(self.release, "migrate_targeted_queue") as migrate,
+        ):
+            self.release.execute("deploy", "b" * 40)
+            self.assertEqual(
+                events, ["helper", "verify", "freeze", "archive", "images", "resume"]
+            )
+            snapshot.assert_not_called()
+            restore.assert_not_called()
+            migrate.assert_not_called()
+
+    def test_online_backup_never_pauses_or_restarts_application(self):
+        with (
+            patch.object(self.release, "begin"),
+            patch.object(self.release, "prepare_tools"),
+            patch.object(self.release, "helper"),
+            patch("release.snapshot") as snapshot,
+            patch("release.restore_verify") as restore,
+            patch("release.publish"),
+            patch.object(self.release, "remove_helper"),
+            patch.object(self.release, "unlock"),
+            patch.object(self.release, "pause") as pause,
+            patch.object(self.release, "resume") as resume,
+        ):
+            self.release.execute("backup-online", None)
+            snapshot.assert_called_once_with(self.release, online=True)
+            self.assertTrue(restore.call_args.kwargs["online"])
+            pause.assert_not_called()
+            resume.assert_not_called()
+
+    def test_lightweight_and_online_helpers_do_not_mount_live_beat_disk(self):
+        for mode, action in [("routine", "deploy"), ("full", "backup-online")]:
+            self.release.state.update(mode=mode, action=action)
+            spec = self.helper_spec(None)
+            self.assertNotIn("beat-data", {v["name"] for v in spec["volumes"]})
+            if mode == "routine":
+                self.assertEqual([c["name"] for c in spec["containers"]], ["app"])
+                self.assertNotIn("verify", {v["name"] for v in spec["volumes"]})
+
+    def test_routine_partial_update_stays_frozen_and_can_finish(self):
+        for name, d in self.deployments.items():
+            d["spec"]["replicas"] = 0
+            d["spec"]["template"]["spec"]["containers"][0]["name"] = name
+        self.release.state.update(mode="routine", candidate_sha="b" * 40)
+        write(self.release.folder / "release-archive.json", {"test": True})
+        with (
+            patch.object(self.release, "assert_lock"),
+            patch.object(self.release, "config_unchanged"),
+            patch.object(
+                self.release, "validate_deployments", return_value=self.deployments
+            ),
+            patch.object(self.release.cluster, "app_pods", return_value=[]),
+            patch("release.needs_full_backup", return_value=False),
+            patch.object(
+                self.release.cluster, "k", side_effect=RuntimeError("transport")
+            ),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "transport"):
+                self.release.apply_images()
+            self.assertEqual(self.release.state["phase"], "image-update-started")
+        self.assertFalse(self.release.state.get("candidate_applied"))
 
     def test_apply_holds_workloads_until_orchestrator_resumes(self):
         spec = importlib.util.spec_from_file_location(

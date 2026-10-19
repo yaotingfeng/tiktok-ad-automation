@@ -11,6 +11,7 @@ import shutil
 import subprocess
 import sys
 import time
+from itertools import pairwise
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -79,7 +80,7 @@ def release_summary(folder):
         return
     try:
         history = json.loads(path.read_text()).get("history", [])
-        for previous, current in zip(history, history[1:]):
+        for previous, current in pairwise(history):
             phase = previous["phase"]
             if not re.fullmatch(r"[a-z][a-z-]*", phase):
                 continue
@@ -262,12 +263,26 @@ def main():
     os.umask(0o077)
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "action", choices=("check", "deploy", "backup", "status", "recover", "finish")
+        "action",
+        choices=(
+            "check",
+            "deploy",
+            "backup",
+            "backup-online",
+            "status",
+            "recover",
+            "finish",
+        ),
     )
     parser.add_argument(
         "--config", type=Path, default=ROOT / ".runtime/local-release/config.json"
     )
     parser.add_argument("--run", help="批次目录名；状态/恢复默认最近一批")
+    parser.add_argument(
+        "--full-backup",
+        action="store_true",
+        help="数据/任务合同变化时强制完整停写备份发布",
+    )
     parser.add_argument(
         "--full", action="store_true", help="按需全量检查；默认只检查受改动影响的部分"
     )
@@ -331,6 +346,10 @@ def main():
             print("恢复处理完成；请运行 status 查看状态。")
             return
         require(args.run is None, "--run is only valid for status/recover/finish")
+        require(
+            not args.full_backup or args.action == "deploy",
+            "--full-backup is only valid for deploy",
+        )
         require(
             not args.full or args.action in ("check", "deploy"),
             "--full is only valid for check/deploy",
@@ -440,6 +459,8 @@ def main():
             ]
             if args.action == "deploy":
                 command += ["--sha", sha]
+                if args.full_backup:
+                    command.append("--full-backup")
             try:
                 stage(command, checkout, env, log)
             finally:
@@ -448,7 +469,9 @@ def main():
         cleanup_checkout(folder)
         print("完成：" + args.action + "；批次：" + run_name, flush=True)
         if args.action != "check":
-            print("最新备份：集群备份盘 tiktok-ad-automation-backup 的 /backup/latest")
+            print(
+                "数据库备份：/backup/latest；普通发布回退材料：/backup/latest-release（不含同一时点数据库）"
+            )
 
 
 if __name__ == "__main__":

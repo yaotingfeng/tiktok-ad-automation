@@ -42,6 +42,7 @@ from common import (
     run,
     write,
 )
+from routine import needs_full_backup, recent_backup, snapshot_release
 
 LOCK = PROJECT + "-release-lock"
 WORKERS = {
@@ -442,8 +443,13 @@ class Release:
             time.sleep(3)
 
     def helper(self):
+        lightweight = self.state.get("mode") == "routine"
+        online = self.state.get("action") == "backup-online"
+        template_role = "api" if lightweight or online else "beat"
         template = copy.deepcopy(
-            self.state["deployments"][PROJECT + "-beat"]["spec"]["template"]["spec"]
+            self.state["deployments"][PROJECT + "-" + template_role]["spec"][
+                "template"
+            ]["spec"]
         )
         app = template["containers"][0]
         app["name"] = "app"
@@ -537,12 +543,12 @@ class Release:
             },
         ]
         candidate = self.state.get("candidate_sha")
-        if candidate and candidate != self.state["old_sha"]:
+        if candidate and candidate != self.state["old_sha"] and not lightweight:
             # 候选迁移只在临时恢复库上试跑；与 app 同配置，运行前同样强制覆盖连接。
             containers.append(
                 dict(copy.deepcopy(app), name="candidate", image=VPC + candidate)
             )
-        template["containers"] = containers
+        template["containers"] = [app] if lightweight else containers
         # 恢复后数据（含索引）约为数据库大小，另留 WAL 与增长余量；阿里云 ESSD 最小 20 GiB。
         verify_gib = max(20, -(-self.state["database_bytes"] * 5 // 2 // 2**30) + 5)
         template.setdefault("volumes", []).extend(
@@ -567,6 +573,10 @@ class Release:
                 },
             ]
         )
+        if lightweight:
+            template["volumes"] = [
+                v for v in template["volumes"] if v["name"] != "verify"
+            ]
         template["restartPolicy"] = "Never"
         template["automountServiceAccountToken"] = False
         template["terminationGracePeriodSeconds"] = 15
@@ -591,7 +601,9 @@ class Release:
         self.cluster.k("wait", "--for=condition=Ready", "pod/" + name, "--timeout=600s")
         self.state["backup_dir"] = BACKUP_ROOT + "/.pending-" + self.state["token"][:12]
         # 余量不足时在取消 Worker 消费前停止，仍可直接 recover 恢复原版。
-        self.state["backup_space"] = check_space(self.pod, self.state["database_bytes"])
+        self.state["backup_space"] = check_space(
+            self.pod, 0 if lightweight else self.state["database_bytes"]
+        )
         self.save("helper-ready")
 
     def probe(self, action, expected=None):
@@ -617,7 +629,8 @@ class Release:
         for role in ("beat", "api"):
             self.cluster.scale(PROJECT + "-" + role, 0)
         self.wait_pods({"api", "beat"})
-        self.helper()
+        if not self.state.get("helper"):
+            self.helper()
         pods = self.cluster.app_pods()
         expected = [
             WORKERS[p["metadata"]["labels"]["role"]] + "@" + p["metadata"]["name"]
@@ -880,6 +893,7 @@ class Release:
                 "candidate-held",
                 "resuming",
                 "complete",
+                "image-update-started",
             ),
             "Inspect migration/acceptance state; automatic old-version recovery is forbidden",
         )
@@ -928,12 +942,82 @@ class Release:
         write(self.folder / "broker-migration.json", receipt)
         self.save("broker-migrated")
 
-    def execute(self, action, sha):
+    def apply_images(self):
+        """普通发布不跑迁移、不改部署清单；零副本状态下仅替换全部镜像。"""
+        self.assert_lock()
+        self.config_unchanged()
+        current = self.validate_deployments()
+        require(
+            self.state.get("mode") == "routine" and self.original_roles == set(ROLES),
+            "Routine release requires unchanged role contract",
+        )
+        require(
+            all(d["spec"]["replicas"] == 0 for d in current.values())
+            and not self.cluster.app_pods(),
+            "All workloads must be frozen before image update",
+        )
+        sha = self.state["candidate_sha"]
+        require(
+            not needs_full_backup(self.state["old_sha"], sha),
+            "Data/deployment changes require full release",
+        )
+        require(
+            (self.folder / "release-archive.json").exists(),
+            "Program/config/Redis archive required",
+        )
+        self.save("image-update-started")
+        for name, deployment in current.items():
+            container = deployment["spec"]["template"]["spec"]["containers"][0]
+            require(
+                container["image"] in (VPC + self.state["old_sha"], VPC + sha),
+                "Unexpected image during routine update",
+            )
+            self.cluster.k(
+                "set",
+                "image",
+                "deployment/" + name,
+                container["name"] + "=" + VPC + sha,
+            )
+        self.state["candidate_applied"] = True
+        self.save("candidate-held")
+
+    def execute(self, action, sha, *, full_backup=False):
         self.begin(action)
         self.prepare_tools(sha)
         if sha:
             self.state["candidate_sha"] = sha
             self.check_remote(sha)
+        if action == "backup-online":
+            # 与发布共用集群锁；PG 使用自身一致快照，应用全程继续运行。
+            self.helper()
+            snapshot(self, online=True)
+            self.save("backed-up")
+            restore_verify(self.pod, self.folder, self.state["backup_dir"], online=True)
+            publish(self.pod, self.folder, self.state["backup_dir"])
+            self.save("backup-verified")
+            self.remove_helper()
+            self.save("complete")
+            self.unlock()
+            cleanup_completed(self.folder)
+            return
+        routine = (
+            sha
+            and self.original_roles == set(ROLES)
+            and not needs_full_backup(self.state["old_sha"], sha, force=full_backup)
+        )
+        self.state["mode"] = "routine" if routine else "full"
+        self.save("prepared")
+        if routine:
+            # 最新备份无效时在停服之前失败，保留现场供 recover 释放锁。
+            self.helper()
+            recent_backup(
+                self.pod, self.folder, self.probe("schema")["migration_heads"]
+            )
+            self.pause()
+            snapshot_release(self)
+            self.apply_images()
+            self.resume(sha)
+            return
         self.pause()
         snapshot(self)
         self.save("backed-up")
@@ -967,7 +1051,8 @@ def main():
     os.umask(0o077)
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "action", choices=("deploy", "backup", "recover", "status", "finish")
+        "action",
+        choices=("deploy", "backup", "backup-online", "recover", "status", "finish"),
     )
     parser.add_argument(
         "--state-dir",
@@ -975,6 +1060,11 @@ def main():
         help="Private persistent directory outside tracked source",
     )
     parser.add_argument("--sha", help="Exact published company main SHA for deploy")
+    parser.add_argument(
+        "--full-backup",
+        action="store_true",
+        help="Data/task compatibility changes require a full frozen backup",
+    )
     args = parser.parse_args()
     release = Release(args.state_dir)
     if args.action == "status":
@@ -992,13 +1082,20 @@ def main():
     elif args.action == "finish":
         release.load()
         require(
-            release.state["phase"] in ("candidate-held", "resuming"),
+            release.state["phase"]
+            in ("image-update-started", "candidate-held", "resuming"),
             "Only a successfully applied candidate can be finished",
         )
+        if release.state["phase"] == "image-update-started":
+            release.apply_images()
         release.resume(release.state.get("candidate_sha", release.state["old_sha"]))
     else:
         require(args.action != "deploy" or args.sha, "--sha required for deploy")
-        release.execute(args.action, args.sha if args.action == "deploy" else None)
+        release.execute(
+            args.action,
+            args.sha if args.action == "deploy" else None,
+            full_backup=args.full_backup,
+        )
 
 
 if __name__ == "__main__":
