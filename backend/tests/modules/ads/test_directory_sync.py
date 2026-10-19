@@ -206,10 +206,17 @@ def test_publish_requires_terminal_page_and_projects_name(session, directory_see
     assert campaign is not None and campaign.published_version == version
 
 
-def test_missing_parent_queues_targeted_follow_up(session, directory_seed, monkeypatch):
+@pytest.mark.parametrize(
+    "include_deleted,pending_change,expected",
+    [(False, None, 1), (True, None, 1), (True, "live_only", 2), (True, "route", 2)],
+)
+def test_missing_parent_queues_only_same_type_parent_and_coalesces_follow_up(
+    session, directory_seed, monkeypatch, include_deleted, pending_change, expected
+):
     monkeypatch.setattr(settings, "ADS_SYNC_ENABLED", True)
     _authority(session, directory_seed)
     run = _run(session, directory_seed, kind="ad", ad_type="SMART_PLUS")
+    run.query = run.query | {"include_deleted": include_deleted}
     parent = EntityRef(
         directory_seed.context.tenant_id, "account-a", "adgroup", "missing-group"
     )
@@ -238,11 +245,41 @@ def test_missing_parent_queues_targeted_follow_up(session, directory_seed, monke
             AdDirectoryRun.tenant_id == run.tenant_id, AdDirectoryRun.id != run.id
         )
     ).all()
-    assert len(targets) == 6
-    assert any(
-        t.kind == "adgroup" and t.query["ids"] == ["missing-group"] for t in targets
-    )
+    assert len(targets) == 1
+    assert targets[0].kind == "adgroup" and targets[0].ad_type == "SMART_PLUS"
+    assert targets[0].query["ids"] == ["missing-group"]
+    assert targets[0].query["parent_ids"] == []
+    assert targets[0].query["include_deleted"] is include_deleted
     assert all(t.frozen_route == run.frozen_route for t in targets)
+    if pending_change == "live_only":
+        targets[0].query = targets[0].query | {"include_deleted": False}
+    if pending_change == "route":
+        targets[0].frozen_route = targets[0].frozen_route | {"binding_revision": 1}
+    session.flush()
+    second = _run(session, directory_seed, kind="ad", ad_type="SMART_PLUS")
+    second.query = second.query | {"include_deleted": include_deleted}
+    next_entity = replace(
+        entity, ref=EntityRef(run.tenant_id, "account-a", "ad", "second-ad")
+    )
+    stage_directory_page(
+        session,
+        run_id=second.id,
+        page=replace(page, items=(next_entity,)),
+        claim_generation=1,
+    )
+    publish_directory(session, run_id=second.id, claim_generation=1)
+    assert (
+        session.get(AdObject, (run.tenant_id, "account-a", "ad", "second-ad"))
+        is not None
+    )
+    assert (
+        len(
+            session.exec(
+                select(AdDirectoryRun).where(AdDirectoryRun.kind == "adgroup")
+            ).all()
+        )
+        == expected
+    )
 
 
 def test_late_older_run_is_fenced_after_newer_run_publishes(session, directory_seed):

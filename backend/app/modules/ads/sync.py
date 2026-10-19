@@ -516,7 +516,38 @@ def _queue_missing_parents(
             ).all()
         )
     if missing:
-        # 按缺失父身份合并定向刷新，避免一个父对象被数千个子对象反复请求。
+        # 同账户多个子对象并发发现缺父级时，只保留一份相同冻结授权的补读。
+        # 锁仅覆盖本地发布事务，不持有网络请求；不能跨路由复用别人的读取证据。
+        session.connection().execute(
+            text("SELECT pg_advisory_xact_lock(hashtextextended(:scope, 0))"),
+            {
+                "scope": f"directory-parent:{run.tenant_id}:{run.bc_id}:{run.advertiser_id}"
+            },
+        )
+        include_deleted = bool(run.query.get("include_deleted"))
+        pending = session.exec(
+            select(AdDirectoryRun).where(
+                AdDirectoryRun.tenant_id == run.tenant_id,
+                AdDirectoryRun.bc_id == run.bc_id,
+                AdDirectoryRun.advertiser_id == run.advertiser_id,
+                AdDirectoryRun.actor_id == run.actor_id,
+                AdDirectoryRun.frozen_route == run.frozen_route,
+                AdDirectoryRun.ad_type == run.ad_type,
+                col(AdDirectoryRun.status).in_(
+                    ["QUEUED", "RUNNING", "ADMISSION_WAIT", "WAITING_REMOTE"]
+                ),
+            )
+        ).all()
+        missing.difference_update(
+            (pending_run.kind, remote_id)
+            for pending_run in pending
+            if not include_deleted or pending_run.query.get("include_deleted")
+            for remote_id in pending_run.query.get("ids", ())
+        )
+        if not missing:
+            return
+        # 父级与子级属于同一广告类型；只补父级，不能顺带再扫子级或其它两种类型。
+        # 历史子对象的父级也可能已经删除，须继承原查询的可见范围。
         request_directory(
             session,
             tenant_id=run.tenant_id,
@@ -525,6 +556,8 @@ def _queue_missing_parents(
             actor_id=run.actor_id,
             advertiser_ids=[run.advertiser_id],
             scope="targeted",
+            include_deleted=include_deleted,
+            ad_types={run.advertiser_id: {run.ad_type: {kind for kind, _ in missing}}},
             refs=[
                 EntityRef(run.tenant_id, run.advertiser_id, cast(Any, kind), remote_id)
                 for kind, remote_id in sorted(missing)

@@ -180,3 +180,57 @@ def test_spending_unresolved_post_is_located_before_zero_spend_history(
         )
         is None
     )
+
+
+def test_concurrent_missing_parent_publishers_share_one_repair(
+    committed_sync_seed, monkeypatch
+):
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Barrier
+    from uuid import uuid4
+
+    from app.modules.ads.sync import _queue_missing_parents
+    from tests.modules.reporting.test_jobs import _route
+
+    monkeypatch.setattr(settings, "ADS_SYNC_ENABLED", True)
+    seed, factory = committed_sync_seed
+    barrier = Barrier(2)
+
+    def publish_parent_repair():
+        with factory() as session:
+            source = AdDirectoryRun(
+                tenant_id=seed.tenant_id,
+                bc_id="bc-a",
+                actor_id=seed.actor_id,
+                advertiser_id="acc-1",
+                connection_id=seed.connection.id,
+                frozen_route=_route(seed),
+                partition_key=uuid4().hex * 2,
+                query={"include_deleted": True},
+                kind="ad",
+                ad_type="SMART_PLUS",
+            )
+            child = AdObject(
+                tenant_id=seed.tenant_id,
+                advertiser_id="acc-1",
+                kind="ad",
+                remote_id=uuid4().hex,
+                parent_kind="adgroup",
+                parent_remote_id="shared-missing-parent",
+                ad_type="SMART_PLUS",
+                observed_at=datetime.now(UTC),
+                published_version=1,
+            )
+            barrier.wait(timeout=5)
+            _queue_missing_parents(session, run=source, objects=[child])
+            session.commit()
+
+    with ThreadPoolExecutor(2) as pool:
+        futures = [pool.submit(publish_parent_repair) for _ in range(2)]
+        for future in futures:
+            future.result(timeout=10)
+    with factory() as session:
+        runs = session.exec(select(AdDirectoryRun)).all()
+        assert len(runs) == 1
+        assert runs[0].kind == "adgroup"
+        assert runs[0].query["ids"] == ["shared-missing-parent"]
