@@ -151,6 +151,14 @@ def directory_signature(session, job):
             AND u.ad_remote_id=ads.ad_remote_id AND u.complete
           UNION
           SELECT u.ad_remote_id, u.ad_material_id, u.platform_material_id, u.name
+          FROM material_post_link l JOIN missing m ON m.main_material_id=l.main_material_id
+          JOIN ad_material_reference u ON u.tenant_id=l.tenant_id AND u.advertiser_id=l.advertiser_id
+            AND u.ad_remote_id=l.ad_remote_id AND u.ad_material_id=l.ad_material_id
+          WHERE l.tenant_id=:t AND l.advertiser_id=:a AND l.main_material_type='VIDEO_SPARK_ADS'
+            AND NULLIF(l.ad_material_id, '') IS NOT NULL AND u.material_type='VIDEO' AND NOT u.complete
+            AND NULLIF(u.platform_material_id, '') IS NOT NULL
+          UNION
+          SELECT u.ad_remote_id, u.ad_material_id, u.platform_material_id, u.name
           FROM (SELECT DISTINCT m.main_material_name FROM missing m
                 WHERE m.main_material_name IS NOT NULL AND NOT EXISTS (
                   SELECT 1 FROM material_post_link l WHERE l.tenant_id=:t
@@ -384,18 +392,26 @@ def _locate_post_step(state, *, read_ad_posts, first, last):
 
 def _resolve_videos(session: Session, tenant_id: UUID, advertiser_id: str) -> None:
     """为尚无视频的对照解析视频：先按广告内素材 ID，再按同一广告内唯一的同名文件。"""
+    # complete表示整页素材/创意补读覆盖，并不否定主响应已证实的精确视频身份。
+    # Spark视频可用同账户、同广告、同广告内素材ID且唯一的VID直接对照；
+    # 不完整的同名候选、帖子命名空间和多VID歧义均不能借此猜测，也不改广告操作的完整性要求。
     session.connection().execute(
         text("""
         UPDATE material_post_link l SET platform_material_id = COALESCE(
-            (SELECT min(u.platform_material_id) FROM ad_material_reference u
+            (SELECT CASE WHEN count(DISTINCT u.platform_material_id)=1
+                    THEN min(u.platform_material_id) END FROM ad_material_reference u
               WHERE u.tenant_id = l.tenant_id AND u.advertiser_id = l.advertiser_id
                 AND u.ad_remote_id = l.ad_remote_id AND u.ad_material_id = l.ad_material_id
-                AND u.complete),
+                AND NULLIF(l.ad_material_id, '') IS NOT NULL
+                AND NULLIF(u.platform_material_id, '') IS NOT NULL
+                AND (l.main_material_type<>'VIDEO_SPARK_ADS' OR u.material_type='VIDEO')
+                AND (u.complete OR (l.main_material_type='VIDEO_SPARK_ADS' AND u.material_type='VIDEO'))),
             (SELECT CASE WHEN count(DISTINCT u.platform_material_id) = 1
                     THEN min(u.platform_material_id) END
                FROM ad_material_reference u
               WHERE u.tenant_id = l.tenant_id AND u.advertiser_id = l.advertiser_id
                 AND u.ad_remote_id = l.ad_remote_id AND u.name = l.material_name
+                AND (l.main_material_type<>'VIDEO_SPARK_ADS' OR u.material_type='VIDEO')
                 AND u.complete))
         WHERE l.tenant_id = :t AND l.advertiser_id = :a AND l.platform_material_id IS NULL
         """),

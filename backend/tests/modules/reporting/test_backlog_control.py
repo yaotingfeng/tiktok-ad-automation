@@ -4,6 +4,7 @@ from datetime import UTC, date, datetime, timedelta
 from uuid import uuid4
 from zoneinfo import ZoneInfo
 
+import pytest
 from sqlmodel import select
 
 from app.modules.reporting import job_tasks
@@ -246,8 +247,10 @@ def test_legacy_merge_preserves_audit_and_resets_incompatible_page_scope(
     assert reconcile_link_work(session, now=datetime.now(UTC)) == 0
 
 
+@pytest.mark.parametrize("complete", [True, False])
 def test_directory_evidence_wakes_same_work_and_completes_without_api(
     committed_sync_seed,
+    complete,
 ):
     from app.modules.ads.models import AdMaterialReference
     from app.modules.reporting.store_models import MaterialPostLink
@@ -288,7 +291,7 @@ def test_directory_evidence_wakes_same_work_and_completes_without_api(
                 platform_material_id="v",
                 material_type="VIDEO",
                 name="file.mp4",
-                complete=True,
+                complete=complete,
                 published_version=1,
             )
         )

@@ -234,3 +234,56 @@ def test_concurrent_missing_parent_publishers_share_one_repair(
         assert len(runs) == 1
         assert runs[0].kind == "adgroup"
         assert runs[0].query["ids"] == ["shared-missing-parent"]
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        "exact",
+        "name_only",
+        "ambiguous",
+        "post_id",
+        "complete_post_id",
+        "other_ad",
+        "other_account",
+    ],
+)
+def test_incomplete_directory_requires_unique_exact_video_identity(
+    session, sync_seed, case
+):
+    from app.modules.reporting.material_links import _resolve_videos
+
+    link = MaterialPostLink(
+        tenant_id=sync_seed.tenant_id,
+        advertiser_id="acc-1",
+        main_material_id="post",
+        ad_remote_id="ad",
+        main_material_type="VIDEO_SPARK_ADS",
+        ad_material_id=None if case == "name_only" else "material",
+        material_name="file.mp4",
+        observed_at=datetime.now(UTC),
+    )
+    session.add(link)
+    for video in ["v1", "v2"] if case == "ambiguous" else ["v1"]:
+        session.add(
+            AdMaterialReference(
+                tenant_id=sync_seed.tenant_id,
+                advertiser_id="acc-2" if case == "other_account" else "acc-1",
+                ad_remote_id="other-ad" if case == "other_ad" else "ad",
+                ad_material_id="material",
+                platform_material_id=video,
+                material_type="TIKTOK_POST"
+                if case in {"post_id", "complete_post_id"}
+                else "VIDEO",
+                name="file.mp4",
+                complete=case == "complete_post_id",
+                published_version=1,
+            )
+        )
+    session.flush()
+    _resolve_videos(session, sync_seed.tenant_id, "acc-1")
+    session.refresh(link)
+    assert link.platform_material_id == ("v1" if case == "exact" else None)
+    assert any(session.exec(select(AdMaterialReference.complete)).all()) == (
+        case == "complete_post_id"
+    )
