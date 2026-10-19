@@ -345,10 +345,11 @@ class Release:
     def prepare_tools(self, sha=None):
         # 恢复验证在集群内运行，发布端不再拉取镜像；摘要直接取自镜像仓库，
         # 验收时与运行中容器实际报告的摘要逐个比对。
-        self.state["image_digests"] = {
-            version: self.image_digest(version)
-            for version in {self.state["old_sha"], sha or self.state["old_sha"]}
-        }
+        versions = {self.state["old_sha"], sha or self.state["old_sha"]}
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            self.state["image_digests"] = dict(
+                zip(versions, pool.map(self.image_digest, versions), strict=True)
+            )
         old_pods = self.cluster.app_pods()
         require(
             len(old_pods) == len(self.state["deployments"])
@@ -453,7 +454,12 @@ class Release:
         )
         app = template["containers"][0]
         app["name"] = "app"
-        app["command"] = ["python", "-c", "import time; time.sleep(86400)"]
+        app["command"] = [
+            "python",
+            "-c",
+            # 容器 PID 1 显式处理 SIGTERM；普通辅助容器不应白等15秒后被强杀。
+            "import signal,sys,time; signal.signal(signal.SIGTERM, lambda *_: sys.exit(0)); time.sleep(86400)",
+        ]
         app.pop("args", None)
         for key in ("readinessProbe", "livenessProbe", "startupProbe"):
             app.pop(key, None)
@@ -649,8 +655,7 @@ class Release:
         self.save("draining")
         self.wait_drained(expected)
         self.save("stopping-workers")
-        for role in self.original_workers:
-            self.cluster.scale(PROJECT + "-" + role, 0)
+        self.scale_roles(self.original_workers, 0)
         self.wait_pods(set(self.original_workers))
         broker = self.probe("broker")
         write(self.folder / "broker-frozen.json", broker)
@@ -703,6 +708,16 @@ class Release:
                 "Runtime configuration changed during release",
             )
 
+    def scale_roles(self, roles, replicas):
+        # 角色已由调用方核实，同一阶段互不依赖；只并发请求，不增加运行副本或Worker并发。
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            list(
+                pool.map(
+                    lambda role: self.cluster.scale(PROJECT + "-" + role, replicas),
+                    roles,
+                )
+            )
+
     def resume(self, sha):
         self.assert_lock()
         current = self.validate_deployments()
@@ -724,12 +739,15 @@ class Release:
         # API 与全部现有 Worker 同时启动并一起等待就绪；Beat 仍最后启动，
         # 保证周期任务投递时所有消费者已在线。
         for group in (("api", *(role for role in WORKERS if role in roles)), ("beat",)):
-            for role in group:
-                self.cluster.scale(PROJECT + "-" + role, 1)
-            for role in group:
+            self.scale_roles(group, 1)
+
+            def ready(role):
                 self.cluster.k(
                     "rollout", "status", f"deployment/{PROJECT}-{role}", "--timeout=10m"
                 )
+
+            with ThreadPoolExecutor(max_workers=4) as pool:
+                list(pool.map(ready, group))
         self.accept(sha)
         self.save("complete")
         self.unlock()
@@ -969,18 +987,25 @@ class Release:
             "Program/config/Redis archive required",
         )
         self.save("image-update-started")
-        for name, deployment in current.items():
+        for deployment in current.values():
             container = deployment["spec"]["template"]["spec"]["containers"][0]
             require(
                 container["image"] in (VPC + self.state["old_sha"], VPC + sha),
                 "Unexpected image during routine update",
             )
+
+        def update(item):
+            name, deployment = item
+            container = deployment["spec"]["template"]["spec"]["containers"][0]
             self.cluster.k(
                 "set",
                 "image",
                 "deployment/" + name,
                 container["name"] + "=" + VPC + sha,
             )
+
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            list(pool.map(update, current.items()))
         self.state["candidate_applied"] = True
         self.save("candidate-held")
 

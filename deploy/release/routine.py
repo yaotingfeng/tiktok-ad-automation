@@ -4,6 +4,7 @@ import json
 import re
 import tarfile
 import time
+from concurrent.futures import ThreadPoolExecutor
 
 from backup import BACKUP_ROOT, remote_digest, sh, upload
 from common import ROOT, digest, require, run, write
@@ -69,8 +70,10 @@ def recent_backup(pod, folder, current_heads, now=None):
         <= manifest["files"].keys(),
         "Recent backup is incomplete",
     )
+
     # 只扫描备份数据的校验和，不再次恢复全库；文件损坏仍阻断普通发布。
-    for name, checksum in manifest["files"].items():
+    def verify_file(item):
+        name, checksum = item
         require(
             re.fullmatch(r"[a-zA-Z0-9_.-]+", name) and name not in (".", ".."),
             "Invalid backup member",
@@ -80,6 +83,10 @@ def recent_backup(pod, folder, current_heads, now=None):
             == checksum,
             "Recent backup checksum mismatch",
         )
+
+    # 各文件核验互不依赖；保留完整字节校验，压缩跨区域 kubectl 的串行等待。
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        list(pool.map(verify_file, manifest["files"].items()))
     source = json.loads(pod("app", "cat", latest + "/source-fingerprint.json"))
     require(
         source["migration_heads"] == current_heads,
