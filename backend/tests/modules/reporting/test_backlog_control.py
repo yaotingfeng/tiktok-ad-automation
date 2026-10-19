@@ -469,3 +469,59 @@ def test_dependency_probe_uses_name_identity_index_in_large_account(session, syn
         and "md5" in n.get("Index Cond", "")
     ]
     assert probes and all(n["Actual Rows"] <= 1 for n in probes), plan
+
+
+@pytest.mark.parametrize("facts", [0, 6])
+def test_historical_links_use_backfill_pool_and_share_with_facts(
+    session, sync_seed, monkeypatch, facts
+):
+    from app.jobs.models import PendingDispatch
+
+    now = datetime.now(UTC)
+    today = now.astimezone(ZoneInfo("Asia/Hong_Kong")).date()
+    monkeypatch.setattr(job_tasks, "LINK_DISPATCH_WINDOW", 2)
+    monkeypatch.setattr(job_tasks, "BACKFILL_DISPATCH_WINDOW", 3)
+    for index in range(6):
+        request(session, sync_seed, today, campaign_ids=[str(index)], due_at=now)
+        request(
+            session,
+            sync_seed,
+            today - timedelta(days=3),
+            campaign_ids=[str(index)],
+            due_at=now,
+        )
+    for index in range(facts):
+        request(
+            session,
+            sync_seed,
+            today - timedelta(days=10 + index),
+            kind="ad_day",
+            tier="history",
+            due_at=now,
+        )
+    assert job_tasks._dispatch_report_jobs(session, now) == 5
+    running = session.exec(
+        select(ReportSyncJob).where(
+            ReportSyncJob.tenant_id == sync_seed.tenant_id,
+            ReportSyncJob.status == "RUNNING",
+        )
+    ).all()
+    history = [row for row in running if row.start_date < today]
+    assert len(history) == 3
+    assert any(row.kind == "material_links" for row in history)
+    if facts:
+        assert any(row.kind == "ad_day" for row in history)
+    dispatch = session.exec(
+        select(PendingDispatch).where(
+            PendingDispatch.tenant_id == sync_seed.tenant_id,
+        )
+    ).all()
+    for row in running:
+        task = next(
+            d for d in dispatch if d.task_key.startswith(f"report-job:{row.id}:")
+        )
+        assert task.task_name == (
+            "reporting.backfill_step"
+            if row.start_date < today
+            else "reporting.job_step"
+        )

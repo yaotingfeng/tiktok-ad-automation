@@ -54,7 +54,6 @@ from app.modules.reporting.jobs import (
     request_time,
 )
 from app.modules.reporting.lanes import (
-    current_day_predicate,
     lane_condition,
     report_workload,
 )
@@ -749,34 +748,30 @@ def _dispatch_report_jobs(
         ).one()
         available = max(0, window - inflight)
         claimed = []
-        if available and lane == "links":
-            # 先填当前/历史最低份额，再借用闲置名额。历史不再依赖当天队列清空。
-            for period in ("history", "current"):
-                if period == "history" and not allow_backfill:
-                    continue
-                predicate = current_day_predicate()
-                if period == "history":
-                    predicate = f"NOT {predicate}"
+        if available and lane == "backfill":
+            # 历史事实与关联在补数池内各留份额，再借用空闲槽；不能让补数池空闲，
+            # 却把历史关联排到实时报表后面。窗口/在途计数仍在同一调度锁内。
+            for group in ("facts", "links"):
+                kind_filter = (
+                    ReportSyncJob.kind == "material_links"
+                    if group == "links"
+                    else ReportSyncJob.kind != "material_links"
+                )
                 running = session.exec(
                     select(func.count())
                     .select_from(ReportSyncJob)
                     .where(
-                        ReportSyncJob.kind == "material_links",
+                        kind_filter,
                         ReportSyncJob.status == "RUNNING",
                         col(ReportSyncJob.claimed_until) > now,
-                        text(predicate).bindparams(lane_now=now),
+                        lane_condition(lane=lane, now=now),
                     )
                 ).one()
-                share = window // 2
+                share = (window + (group == "facts")) // 2
                 count = min(available - len(claimed), max(0, share - running))
                 if count:
                     batch = claim_jobs(
-                        session,
-                        now=now,
-                        limit=count,
-                        lane=lane,
-                        link_period=period,
-                        allow_historical_links=allow_backfill,
+                        session, now=now, limit=count, lane=lane, backfill_group=group
                     )
                     claimed.extend(batch)
                     _record_report_dispatch(session, batch, now)
@@ -788,7 +783,6 @@ def _dispatch_report_jobs(
                     now=now,
                     limit=remaining,
                     lane=lane,
-                    allow_historical_links=allow_backfill,
                 )
             )
         for job in claimed:

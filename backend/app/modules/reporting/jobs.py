@@ -32,7 +32,7 @@ from app.modules.reporting.directory_refresh import (
     refresh_report_directory,
     request_link_directory,
 )
-from app.modules.reporting.lanes import current_day_predicate, lane_predicate
+from app.modules.reporting.lanes import lane_predicate
 from app.modules.reporting.metrics import material_metric_values, parse_local_day
 from app.modules.reporting.store_models import ReportSyncJob, ReportSyncPage
 
@@ -263,20 +263,17 @@ def claim_jobs(
     now: datetime,
     limit: int,
     lane: str | None = None,
-    allow_historical_links: bool = True,
-    link_period: str | None = None,
+    backfill_group: str | None = None,
 ) -> list[ReportSyncJob]:
     """按持久游标轮转租户；实时事实先均衡类型在途，类型内保留创建顺序。"""
     if lane not in {None, "live", "links", "backfill"}:
         raise ValueError("invalid report lane")
     lane_filter = "" if lane is None else f"AND {lane_predicate(lane=lane, alias='j')}"
-    if lane == "links" and not allow_historical_links:
-        # 额度紧张只新领当地今天关联；无时区不能猜作当天，已在途仍由外层全量计槽。
-        lane_filter += f" AND {current_day_predicate('j')}"
-    if lane == "links" and link_period is not None:
-        if link_period not in {"current", "history"}:
-            raise ValueError("invalid link period")
-        lane_filter += f" AND {'NOT ' if link_period == 'history' else ''}{current_day_predicate('j')}"
+    if backfill_group is not None:
+        if lane != "backfill" or backfill_group not in {"facts", "links"}:
+            raise ValueError("invalid backfill group")
+        operator = "=" if backfill_group == "links" else "<>"
+        lane_filter += f" AND j.kind {operator} 'material_links'"
     # 每类事实按任务创建先后服务；due_at 仅控制准入，退避不能把老任务反复排到队尾。
     # 关联使用独立窗口，不能以旧关联 FIFO 阻挡较新的事实。
     # 历史等待满一天后提升到每日修正的优先级，仍保留跨租户持久轮转。
@@ -290,7 +287,7 @@ def claim_jobs(
         if lane == "live"
         else f"{priority}, j.due_at, j.id"
     )
-    # 关联已按当前/历史预留份额，同类按可运行时间轮转，单个大账户每步让出。
+    # 关联按可运行时间轮转，单个大账户每步让出。
     if lane == "links":
         local_order = "j.due_at, j.created_at, j.id"
     global_order = (

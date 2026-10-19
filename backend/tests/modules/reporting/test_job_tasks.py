@@ -946,7 +946,7 @@ def _lane_job_scope(now, lane, index):
     if lane == "backfill":
         return advertiser, "ad_day", day - timedelta(days=index + 1)
     if lane == "links":
-        return advertiser, "material_links", day - timedelta(days=index)
+        return advertiser, "material_links", day
     return advertiser, ("ad_day", "material_day", "campaign_hour")[index // 2], day
 
 
@@ -982,6 +982,7 @@ def test_concurrent_report_dispatchers_cannot_overfill_window(
                 tenant_id=seed.tenant_id,
                 bc_id="bc-a",
                 kind=kind,
+                campaign_ids=[str(index)] if lane == "links" else [],
                 tier="hot",
                 advertiser_ids=[advertiser],
                 start=day,
@@ -1051,6 +1052,7 @@ def test_single_slot_refill_round_robins_three_tenants_across_rounds(monkeypatch
                         tenant_id=seed.tenant_id,
                         bc_id="bc-a",
                         kind=kind,
+                        campaign_ids=[str(index)] if lane == "links" else [],
                         tier="hot",
                         advertiser_ids=[advertiser],
                         start=day,
@@ -1485,7 +1487,7 @@ def test_link_backlog_cannot_consume_fact_or_cold_windows(
     today = now.astimezone(ZoneInfo("Asia/Hong_Kong")).date()
     monkeypatch.setattr(job_tasks, "REPORT_DISPATCH_WINDOW", 1)
     monkeypatch.setattr(job_tasks, "LINK_DISPATCH_WINDOW", 1, raising=False)
-    monkeypatch.setattr(job_tasks, "BACKFILL_DISPATCH_WINDOW", 1)
+    monkeypatch.setattr(job_tasks, "BACKFILL_DISPATCH_WINDOW", 2)
     with factory() as session, session.begin():
         common = {
             "tenant_id": seed.tenant_id,
@@ -1532,7 +1534,7 @@ def test_link_backlog_cannot_consume_fact_or_cold_windows(
             end=today - timedelta(days=40),
             due_at=now,
         )
-    assert job_tasks._dispatch_pending(engine, now) == 3
+    assert job_tasks._dispatch_pending(engine, now) == 4
     with factory() as session, session.begin():
         running = session.exec(
             select(ReportSyncJob).where(
@@ -1599,18 +1601,18 @@ def test_low_budget_links_only_claim_current_day_with_shared_capacity(
         if missing_timezone:
             session.get(AdvertiserAccount, (seed.tenant_id, "acc-1")).timezone = ""
     first_count = job_tasks._dispatch_pending(engine, now, allow_backfill=False)
-    assert first_count == (0 if historical_running or missing_timezone else 1)
+    assert first_count == (0 if missing_timezone else 1)
     with factory() as session, session.begin():
         assert session.get(ReportSyncJob, old).status == (
             "RUNNING" if historical_running else "QUEUED"
         )
         assert session.get(ReportSyncJob, current).status == (
-            "QUEUED" if historical_running or missing_timezone else "RUNNING"
+            "QUEUED" if missing_timezone else "RUNNING"
         )
         if historical_running:
             session.get(ReportSyncJob, old).status = "COMPLETE"
     if historical_running:
-        assert job_tasks._dispatch_pending(engine, now, allow_backfill=False) == 1
+        assert job_tasks._dispatch_pending(engine, now, allow_backfill=False) == 0
         with factory() as session:
             assert session.get(ReportSyncJob, current).status == "RUNNING"
     assert job_tasks._dispatch_pending(engine, now, allow_backfill=False) == 0

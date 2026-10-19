@@ -1121,8 +1121,10 @@ def test_current_link_reservation_preserves_separate_historical_work(
     session.get(ReportSyncJob, old).created_at = now - timedelta(hours=1)
     session.get(ReportSyncJob, old).due_at = now - timedelta(hours=1)
     session.flush()
-    claimed = claim_jobs(session, now=now, limit=1, lane="links", link_period="current")
+    claimed = claim_jobs(session, now=now, limit=1, lane="links")
     assert [j.id for j in claimed] == [current]
     claimed[0].status = "COMPLETE"
     session.flush()
-    assert [j.id for j in claim_jobs(session, now=now, limit=1, lane="links")] == [old]
+    assert [j.id for j in claim_jobs(session, now=now, limit=1, lane="backfill")] == [
+        old
+    ]

@@ -24,19 +24,20 @@ def live_predicate(alias: str = "report_sync_job") -> str:
 
 def lane_predicate(*, lane: str, alias: str = "report_sync_job") -> str:
     predicate = live_predicate(alias)
+    links = f"({alias}.kind = 'material_links' AND {current_day_predicate(alias)})"
     if lane == "live":
         return predicate
     if lane == "links":
-        # 关联独立于事实窗口；派发器在此窗口内为当前/历史分别保留服务份额。
-        return f"{alias}.kind = 'material_links'"
+        # 当前关联留在实时池，历史关联与历史事实共用独立补数池。
+        return links
     if lane == "backfill":
-        return f"(NOT {predicate} AND {alias}.kind <> 'material_links')"
+        return f"NOT ({predicate} OR {links})"
     raise ValueError("invalid report lane")
 
 
 def lane_condition(*, lane: str, now: datetime):
     condition = text(lane_predicate(lane=lane))
-    return condition if lane == "links" else condition.bindparams(lane_now=now)
+    return condition.bindparams(lane_now=now)
 
 
 def report_workload(session, job, *, now):
