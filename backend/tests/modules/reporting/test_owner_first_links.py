@@ -167,3 +167,138 @@ def test_new_owner_waits_for_its_directory_without_scanning_whole_account(
             )
         ).one()
         assert link.ad_remote_id == "ad199" and link.platform_material_id is None
+
+
+@pytest.mark.parametrize("existing_page", [None, 64])
+def test_known_missing_owner_limits_overview_and_freezes_its_pages(
+    committed_sync_seed, existing_page
+):
+    from app.modules.reporting.jobs import _material_link_overview_ads
+    from tests.modules.reporting.test_material_query import material_row, publish
+
+    seed, factory = committed_sync_seed
+    job_id = wide_job(factory, seed, existing_page)
+    with factory() as session:
+        session.add(
+            MaterialPostLink(
+                tenant_id=seed.tenant_id,
+                advertiser_id="acc-1",
+                main_material_id="old-post",
+                main_material_type="VIDEO_SPARK_ADS",
+                ad_remote_id="ad199",
+                observed_at=datetime.now(UTC),
+            )
+        )
+        session.flush()
+        job = session.get(ReportSyncJob, job_id)
+        if existing_page:
+            job.progress = job.progress | {"owner_lookup_first": True}
+        assert _material_link_overview_ads(session, job) == ("ad199",)
+        assert job.progress["next_page"] == 1
+        job.progress = job.progress | {"next_page": 2}
+        publish(
+            session,
+            seed,
+            "acc-1",
+            [
+                material_row("old-post", "5", "same.mp4"),
+                material_row("new-post", "1", "new.mp4"),
+            ],
+        )
+        session.add(
+            MaterialPostLink(
+                tenant_id=seed.tenant_id,
+                advertiser_id="acc-1",
+                main_material_id="new-post",
+                main_material_type="VIDEO_SPARK_ADS",
+                ad_remote_id="ad001",
+                observed_at=datetime.now(UTC),
+            )
+        )
+        session.flush()
+        assert _material_link_overview_ads(session, job) == ("ad199",)
+        assert job.progress["next_page"] == 2
+
+
+def test_known_owner_must_not_narrow_away_an_unknown_post(committed_sync_seed):
+    from app.modules.reporting.jobs import _material_link_overview_ads
+    from tests.modules.reporting.test_material_query import material_row, publish
+
+    seed, factory = committed_sync_seed
+    job_id = wide_job(factory, seed, 64)
+    with factory() as session:
+        publish(
+            session,
+            seed,
+            "acc-1",
+            [
+                material_row("old-post", "5", "same.mp4"),
+                material_row("unknown", "1", "other.mp4"),
+            ],
+        )
+        session.add(
+            MaterialPostLink(
+                tenant_id=seed.tenant_id,
+                advertiser_id="acc-1",
+                main_material_id="old-post",
+                main_material_type="VIDEO_SPARK_ADS",
+                ad_remote_id="ad199",
+                observed_at=datetime.now(UTC),
+            )
+        )
+        session.flush()
+        job = session.get(ReportSyncJob, job_id)
+        assert _material_link_overview_ads(session, job) == ()
+        assert job.progress["next_page"] == 64
+        assert job.progress["owner_lookup_first"] is True
+
+
+def test_known_owner_refreshes_exact_bridge_without_full_scan(committed_sync_seed):
+    from tests.modules.reporting.test_material_links import overview
+
+    seed, factory = committed_sync_seed
+    job_id = wide_job(factory, seed, 64)
+    with factory() as session:
+        session.add(
+            MaterialPostLink(
+                tenant_id=seed.tenant_id,
+                advertiser_id="acc-1",
+                main_material_id="old-post",
+                main_material_type="VIDEO_SPARK_ADS",
+                ad_remote_id="ad199",
+                observed_at=datetime.now(UTC),
+            )
+        )
+        job = session.get(ReportSyncJob, job_id)
+        job.progress = job.progress | {"owner_lookup_first": True}
+        session.commit()
+
+    class Reader(SlowReader):
+        def material_video_content(self, **kwargs):
+            self.tick(("assets",))
+            return []
+
+        def spark_video_content(self, **kwargs):
+            self.tick(("content",))
+            return None
+
+        def material_ad_links(self, *, advertiser_id, page, ad_ids=()):
+            assert advertiser_id == "acc-1" and ad_ids == ("ad199",) and page == 1
+            self.tick(("overview", page))
+            return overview(("ad199", "old-post", "material199", "same.mp4"))
+
+    reader = Reader()
+    assert step(factory, job_id, reader) == "WAITING"
+    assert reader.calls == 1
+    assert step(factory, job_id, reader) == "WAITING"
+    assert reader.calls == 1
+    assert step(factory, job_id, reader) == "COMPLETE"
+    assert reader.calls == 1
+    with factory() as session:
+        link = session.exec(
+            select(MaterialPostLink).where(
+                MaterialPostLink.tenant_id == seed.tenant_id,
+                MaterialPostLink.main_material_id == "old-post",
+            )
+        ).one()
+        assert link.platform_material_id == "video199"

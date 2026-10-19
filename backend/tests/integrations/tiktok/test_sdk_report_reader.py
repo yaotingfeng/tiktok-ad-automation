@@ -816,3 +816,14 @@ def test_content_identity_reads_enforce_real_frozen_account_scope(
         with pytest.raises(DomainError):
             read(advertiser_id="outside-frozen-account", **args)
         assert len(gateway_wire["sdk_calls"]) == 1
+
+
+@pytest.mark.parametrize("count", [0, 21])
+def test_material_search_enforces_twenty_mid_provider_limit(count):
+    reader, rec = _reader({})
+    with pytest.raises(DomainError) as caught:
+        reader.material_videos(
+            advertiser_id="a", material_ids=tuple(str(i) for i in range(count))
+        )
+    assert caught.value.code == "report_query_invalid"
+    assert rec.calls == []

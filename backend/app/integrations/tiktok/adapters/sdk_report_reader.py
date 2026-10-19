@@ -130,11 +130,11 @@ class SdkReportReader:
         from app.integrations.tiktok.contracts.common import CallEvidence
         from app.modules.materials.sdk_assets import video_record
 
-        if not 1 <= len(material_ids) <= 50 or len(set(material_ids)) != len(
+        if not 1 <= len(material_ids) <= 20 or len(set(material_ids)) != len(
             material_ids
         ):
             raise DomainError(
-                "report_query_invalid", "素材身份读取一次须带1–50个不同MID"
+                "report_query_invalid", "素材身份读取一次须带1–20个不同MID"
             )
         data = self._send(
             "materials.search_videos",

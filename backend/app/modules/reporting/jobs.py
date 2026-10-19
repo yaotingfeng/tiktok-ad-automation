@@ -706,6 +706,43 @@ def cleanup_material_pages(session, *, now: datetime, retention_days: int = 7) -
 
 def _material_link_overview_ads(session, job):
     """复用同日期报表的广告范围，避免为少量当天帖子扫描全账户历史。"""
+    if not job.progress.get("overview_complete") and not job.progress.get(
+        "overview_owner_scoped"
+    ):
+        owners = list(
+            session.connection()
+            .execute(
+                text("""
+                WITH missing AS (
+                  SELECT DISTINCT d.main_material_id FROM material_report_day d
+                  WHERE d.tenant_id=:tenant AND d.advertiser_id=:advertiser
+                    AND d.stat_date BETWEEN :start AND :end
+                    AND NOT EXISTS (SELECT 1 FROM material_post_link done
+                      WHERE done.tenant_id=d.tenant_id AND done.advertiser_id=d.advertiser_id
+                        AND done.main_material_id=d.main_material_id
+                        AND NULLIF(done.platform_material_id,'') IS NOT NULL))
+                SELECT DISTINCT l.ad_remote_id FROM missing m
+                LEFT JOIN material_post_link l ON l.tenant_id=:tenant
+                  AND l.advertiser_id=:advertiser AND l.main_material_id=m.main_material_id
+                ORDER BY l.ad_remote_id NULLS FIRST LIMIT 201
+                """),
+                {
+                    "tenant": job.tenant_id,
+                    "advertiser": job.advertiser_ids[0],
+                    "start": job.start_date,
+                    "end": job.end_date,
+                },
+            )
+            .scalars()
+        )
+        if owners and None not in owners and len(owners) <= 200:
+            # 全部缺口已有正向归属证据，概览只读这些广告。切换范围须从第一页开始；
+            # 之后冻结分页，不能随着每页补齐而缩小过滤集合，导致跳页或漏读。
+            job.progress = job.progress | {
+                "overview_ad_ids": owners,
+                "overview_owner_scoped": True,
+                "next_page": 1,
+            }
     if "overview_ad_ids" not in job.progress or (
         not job.progress["overview_ad_ids"]
         and "owner_lookup_first" not in job.progress

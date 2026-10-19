@@ -4,7 +4,7 @@ from sqlalchemy import text
 
 from app.core.errors import DomainError
 
-ASSET_BATCH = 50
+ASSET_BATCH = 20  # file/video/ad/search 当前 material_ids 上限；不同于 video_ids。
 
 
 def resolve_asset_videos(session, job, reader) -> bool:
@@ -39,7 +39,7 @@ def resolve_asset_videos(session, job, reader) -> bool:
     if not ids:
         return False
     page = reader.material_videos(advertiser_id=job.advertiser_ids[0], material_ids=ids)
-    # 精确过滤最多50个MID，只有完整且无歧义的回执才写映射；名字不参与证明。
+    # 精确过滤最多20个MID，只有完整且无歧义的回执才写映射；名字不参与证明。
     pairs = {}
     if page.next_page is not None or page.total_number != len(page.rows):
         raise DomainError("report_response_invalid", "素材身份回执不完整")

@@ -75,9 +75,10 @@ def test_non_spark_batches_resume_without_rereading_resolved_ids(committed_sync_
     reader = Reader()
     assert step(factory, job_id, reader) == "WAITING"
     assert step(factory, job_id, reader) == "WAITING"
+    assert step(factory, job_id, reader) == "WAITING"
     assert step(factory, job_id, reader) == "COMPLETE"
-    assert list(map(len, reader.queries)) == [50, 1]
-    assert set(reader.queries[0]).isdisjoint(reader.queries[1])
+    assert list(map(len, reader.queries)) == [20, 20, 11]
+    assert len({mid for batch in reader.queries for mid in batch}) == 51
 
 
 @pytest.mark.parametrize("kind", ["VIDEO_SPARK_ADS", "CAROUSEL_NON_SPARK_ADS"])
