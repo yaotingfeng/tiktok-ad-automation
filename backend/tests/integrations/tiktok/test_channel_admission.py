@@ -289,3 +289,67 @@ def test_redis_release_failure_preserves_result_and_does_not_log_raw_error(
         assert "admission_release_failed" in caplog.text
     finally:
         redis_client.delete(*keys)
+
+
+@pytest.mark.parametrize(
+    "operation",
+    [
+        "materials.get_videos",
+        "materials.search_videos",
+        "scene.get_identity_video",
+    ],
+)
+def test_content_reads_have_independent_physical_rates_shared_across_connections(
+    redis_client,
+    route,
+    policy,
+    operation,
+):
+    from hashlib import sha256
+
+    api_route = route.model_copy(update={"channel": "OFFICIAL_API"})
+    other_route = api_route.model_copy(
+        update={"connection_id": uuid4(), "bc_id": "other-bc"}
+    )
+    other_operation = (
+        "scene.get_identity_video"
+        if operation != "scene.get_identity_video"
+        else "materials.get_videos"
+    )
+    limited = policy.model_copy(
+        update={
+            "app_calls_per_window": 1,
+            "endpoint_calls_per_window": 1,
+            "window_ms": 60000,
+        }
+    )
+    scope = str(uuid4())
+    try:
+        for op in [other_operation, operation]:
+            with admit_tiktok_call(
+                redis_client,
+                route=api_route,
+                advertiser_id="a",
+                operation=op,
+                scope=scope,
+                policy=limited,
+            ):
+                pass
+        with pytest.raises(AccountAdmissionDeferred):
+            with admit_tiktok_call(
+                redis_client,
+                route=other_route,
+                advertiser_id="b",
+                operation=operation,
+                scope=scope,
+                policy=limited,
+            ):
+                pytest.fail("更换BC/连接不能拆分同一物理接口的应用额度")
+    finally:
+        keys = list(
+            redis_client.scan_iter(
+                "tiktok:{" + sha256(scope.encode()).hexdigest() + "}:*"
+            )
+        )
+        if keys:
+            redis_client.delete(*keys)

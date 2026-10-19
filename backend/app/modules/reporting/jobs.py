@@ -706,7 +706,11 @@ def cleanup_material_pages(session, *, now: datetime, retention_days: int = 7) -
 
 def _material_link_overview_ads(session, job):
     """复用同日期报表的广告范围，避免为少量当天帖子扫描全账户历史。"""
-    if "overview_ad_ids" not in job.progress:
+    if "overview_ad_ids" not in job.progress or (
+        not job.progress["overview_ad_ids"]
+        and "owner_lookup_first" not in job.progress
+        and not job.progress.get("overview_complete")
+    ):
         ids = list(
             session.connection()
             .execute(
@@ -726,8 +730,12 @@ def _material_link_overview_ads(session, job):
             )
             .scalars()
         )
-        # 无广告事实或范围超过接口上限时仍完整读取；零消耗广告也在同一范围内。
-        progress = job.progress | {"overview_ad_ids": ids if len(ids) <= 200 else []}
+        # 宽范围先用缺口自己的日期/候选广告定位，精确内容解析后仍缺失才补概览。
+        # 避免几条旧帖被月份内超过200广告触发的全账户百页扫描挡住。
+        progress = job.progress | {
+            "overview_ad_ids": ids if len(ids) <= 200 else [],
+            "owner_lookup_first": len(ids) > 200,
+        }
         if ids and len(ids) <= 200 and not progress.get("overview_complete"):
             # 旧的全账户页不能与筛选页混接；已写入的真实映射保留。
             progress["next_page"] = 1

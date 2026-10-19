@@ -39,6 +39,9 @@ ACCOUNT_DIRECTORY_OPERATIONS = frozenset(
 # 官方 SDK 已核对的读取端点。配额归属于应用+物理接口，不能按 BC/令牌拆分；
 # 写入接口和 MCP 服务的独立合同不从读取文档推断额度。
 SDK_READ_RATE_GROUPS = {
+    "materials.get_videos": "GET /open_api/v1.3/file/video/ad/info/",
+    "materials.search_videos": "GET /open_api/v1.3/file/video/ad/search/",
+    "scene.get_identity_video": "GET /open_api/v1.3/identity/video/info/",
     "reports.integrated": "GET /open_api/v1.3/report/integrated/get/",
     "reports.bc": "GET /open_api/v1.3/report/integrated/get/",
     "reports.material_overview": "GET /open_api/v1.3/smart_plus/material_report/overview/",

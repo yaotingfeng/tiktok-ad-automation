@@ -645,7 +645,26 @@ def refresh_material_links(
             )
     # owner 已知不代表帖子桥接已知；每轮等待到期可重新读一次概览补迟到 ID。
     # 沿用冻结范围和单页断点；无 owner 的负缓存仍只约束旧帖子定位。
-    if ((unlinked and not cached) or bridges) and not progress.get("overview_complete"):
+    if (
+        progress.get("owner_lookup_first")
+        and not unlinked
+        and bridges
+        and not any(bridges.values())
+    ):
+        # 归属已证明但广告目录尚未到达：等待已有目录依赖即可。全账户概览不能
+        # 替代目录提供的精确视频身份；目录到达后原唤醒链会重试内容匹配。
+        return True
+    owner_first = (
+        progress.get("owner_lookup_first")
+        and not progress.get("owner_lookup_finished")
+        and unlinked
+        and not cached
+    )
+    if (
+        ((unlinked and not cached) or bridges)
+        and not progress.get("overview_complete")
+        and not owner_first
+    ):
         page = read_overview(int(progress.get("next_page", 1)))
         _upsert_links(
             session,
@@ -753,6 +772,16 @@ def refresh_material_links(
                 _resolve_videos(session, tenant_id, advertiser_id)
                 session.flush()
                 return False
+        if (
+            progress.get("owner_lookup_first")
+            and not progress.get("owner_lookup_finished")
+            and not progress.get("overview_complete")
+        ):
+            # 最后一次归属读取后先让精确内容解析运行；此时不能签发概览缺失的负证据，
+            # 也不能把新找到owner但尚待VID读取的帖子送入十分钟依赖退避。
+            progress["owner_lookup_finished"] = True
+            session.flush()
+            return False
         unresolved = set(
             _unlinked(session, tenant_id, advertiser_id, start=start, end=end)
         )

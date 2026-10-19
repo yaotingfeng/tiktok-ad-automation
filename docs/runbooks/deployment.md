@@ -348,3 +348,6 @@ Beat 每秒触发一次 outbox 发布。单次发布默认最多 20 个公平轮
 已核对的报表与目录SDK读取按应用+物理端点共享速率，跨BC/租户/令牌共桶；`reports.bc`与`reports.integrated`别名必须共同限制。`TIKTOK_CALL_POLICIES.endpoints`可使用`OFFICIAL_API:<操作名>`指定仅SDK的覆盖，优先级为base、通用操作、通道操作，启动仍验证所有条目；MCP和写操作不得套用SDK读取额度。当前已批准读取目标为每操作10次/1000ms、最大在途6；应用12、租户10、账户4的在途限制是本地资源保护。并发上限不是平台已限流的证据。
 
 报表任务progress.last_admission记录source(local/provider)、具体reason和等待时间；Redis每个规范化端点的`:metrics`哈希记录granted、local_denied（具体资源编号）与provider_denied，统计不包含令牌、账户或原始报表。原admission_deferred历史没有来源，不能回溯伪造平台限流比例。工作用途只观测用量，不能在容量空闲时因固定份额拒绝请求。
+
+
+2026-10-20补充：官方SDK报表内容解析的`materials.get_videos`、`materials.search_videos`、`scene.get_identity_video`分别对应视频信息、视频搜索与帖子视频信息物理GET端点，均按应用+物理接口共享速率，跨BC/连接不得拆桶。生产仅给`OFFICIAL_API:`前缀的这三个操作配置`endpoint_calls_per_window=10`、`endpoint_max_inflight=6`，沿用1000ms窗口与960000ms租约；通用3QPS基线及写入/MCP不变。依据为[官方默认Basic额度与物理端点独立规则](https://business-api.tiktok.com/gateway/docs/index?doc_id=1740029171730433)，不代表申请到了更高级额度；真实40100继续按平台信号退避。
