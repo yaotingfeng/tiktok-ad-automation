@@ -101,3 +101,62 @@ def test_zero_spend_facts_are_monitored_before_active_screen_catches_up(
     assert metrics["stale_ad_accounts"] == metrics["stale_material_accounts"] == 1
     assert "stale_ad_accounts" in issues and "stale_material_accounts" in issues
     assert repairs["ad"] == repairs["material"] == {"acc-1"}
+
+
+def test_health_observation_survives_contended_repair_lock(committed_sync_seed):
+    from concurrent.futures import ThreadPoolExecutor
+
+    from sqlalchemy import text
+
+    from app.modules.reporting.jobs import _key
+    from app.modules.reporting.store_models import ReportSyncHealth
+
+    seed, factory = committed_sync_seed
+    now = datetime.now(UTC)
+    with factory() as session:
+        planner.ensure_bc_plans(session, now=now, tenant_id=seed.tenant_id)
+        plan = session.get(AdSyncBc, (seed.tenant_id, "bc-a"))
+        plan.last_active_advertiser_ids, plan.active_screened_at = ["acc-2"], now
+        route = plan.frozen_route
+        session.commit()
+    scope = _key(
+        seed.tenant_id,
+        "ad_day",
+        "live-coverage",
+        (),
+        now.date(),
+        now.date(),
+        (),
+        "bc-a",
+        seed.actor_id,
+        route,
+    )
+    with factory() as holder:
+        holder.connection().execute(
+            text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))"),
+            {"key": f"report-enqueue:{scope}"},
+        )
+
+        def observe():
+            with factory() as session:
+                session.connection().execute(
+                    text("SET LOCAL statement_timeout='500ms'")
+                )
+                plan = session.get(AdSyncBc, (seed.tenant_id, "bc-a"))
+                observe_health(session, plan, now=now)
+                session.commit()
+
+        with ThreadPoolExecutor(1) as worker:
+            worker.submit(observe).result(timeout=3)
+        with factory() as session:
+            health = session.get(ReportSyncHealth, (seed.tenant_id, "bc-a"))
+            assert health is not None and health.observed_at == now
+            assert health.metrics["stale_ad_accounts"] == 1
+            assert health.last_repair_at is None
+    with factory() as session:
+        plan = session.get(AdSyncBc, (seed.tenant_id, "bc-a"))
+        observe_health(session, plan, now=now + timedelta(seconds=30))
+        session.commit()
+        assert session.exec(
+            select(ReportSyncJob).where(ReportSyncJob.tenant_id == seed.tenant_id)
+        ).all()

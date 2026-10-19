@@ -12,6 +12,16 @@ class PendingDispatch(SQLModel, table=True):
     __table_args__ = (
         UniqueConstraint("tenant_id", "task_key", name="uq_dispatch_tenant_key"),
         Index(
+            "ix_dispatch_material_operation",
+            "tenant_id",
+            text("(payload ->> 'operation_id')"),
+            "task_name",
+            postgresql_where=text(
+                "task_name IN ('materials.upload_original','materials.verify_original',"
+                "'materials.prepare_target','materials.verify_target')"
+            ),
+        ),
+        Index(
             "ix_dispatch_pending",
             "available_at",
             "id",

@@ -11,6 +11,7 @@ from sqlalchemy import (
     ForeignKeyConstraint,
     Index,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlmodel import Field, SQLModel
@@ -181,6 +182,14 @@ class AdMaterialReference(SQLModel, table=True):
             "jsonb_typeof(creative_ids) = 'array'", name="ck_ad_material_creatives"
         ),
         Index("ix_ad_material_ad", "tenant_id", "advertiser_id", "ad_remote_id"),
+        # 文件名无固定长度上限：哈希索引只用于缩小候选，查询仍以原文相等复核。
+        Index(
+            "ix_ad_material_complete_name",
+            "tenant_id",
+            "advertiser_id",
+            text("md5(name)"),
+            postgresql_where=text("complete"),
+        ),
     )
     id: UUID = Field(default_factory=uuid4, primary_key=True)
     tenant_id: UUID

@@ -566,10 +566,13 @@ def test_material_fact_commits_before_separately_claimed_link_job(committed_sync
         execute_job(
             factory, job_id=link_job.id, claim_token=link_job.claim_token, reader=reader
         )
-        == "COMPLETE"
+        == "WAITING"
     )
     assert reader.calls == [("links", "acc-1", 1)]
     with factory() as s:
+        assert (
+            s.get(ReportSyncJob, link_job.id).error_code == "material_directory_pending"
+        )
         link = s.exec(
             select(MaterialPostLink).where(MaterialPostLink.tenant_id == seed.tenant_id)
         ).one()
@@ -1091,7 +1094,7 @@ def test_live_kind_weight_legacy_empty_scope_still_has_positive_cost(
     assert [job.kind for job in claimed] == ["ad_day", "material_day"] * 3
 
 
-def test_current_local_day_links_precede_old_hot_links_without_dropping_history(
+def test_current_link_reservation_preserves_separate_historical_work(
     session, sync_seed
 ):
     from zoneinfo import ZoneInfo
@@ -1118,7 +1121,7 @@ def test_current_local_day_links_precede_old_hot_links_without_dropping_history(
     session.get(ReportSyncJob, old).created_at = now - timedelta(hours=1)
     session.get(ReportSyncJob, old).due_at = now - timedelta(hours=1)
     session.flush()
-    claimed = claim_jobs(session, now=now, limit=1, lane="links")
+    claimed = claim_jobs(session, now=now, limit=1, lane="links", link_period="current")
     assert [j.id for j in claimed] == [current]
     claimed[0].status = "COMPLETE"
     session.flush()

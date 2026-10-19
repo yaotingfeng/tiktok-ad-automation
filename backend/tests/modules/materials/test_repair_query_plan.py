@@ -37,6 +37,26 @@ def test_repair_locks_candidate_dispatch_by_primary_key(source_env, wire):
         ).one()
         row.published_at = row.available_at = datetime.now(UTC) - timedelta(minutes=3)
         db.flush()
+        # 用历史报表消息模拟生产大 outbox，恢复成本应跟活跃素材身份走。
+        db.connection().execute(
+            text("""
+            INSERT INTO pending_dispatch (id, tenant_id, actor_id, task_name, task_key,
+                payload, available_at, published_at, attempts)
+            SELECT gen_random_uuid(), :tenant, :actor,
+                (ARRAY['reporting.job_step','materials.upload_original','materials.verify_original',
+                  'materials.prepare_target','materials.verify_target'])[1+n%5],
+                :prefix || n::text, jsonb_build_object('operation_id', gen_random_uuid()::text,
+                  'distribution_id', gen_random_uuid()::text),
+                now()-interval '1 day', now()-interval '1 day', 0
+            FROM generate_series(1, 5000) n
+        """),
+            {
+                "tenant": row.tenant_id,
+                "actor": row.actor_id,
+                "prefix": f"history:{uuid4()}:",
+            },
+        )
+        db.execute(text("ANALYZE pending_dispatch"))
         event.listen(engine, "before_cursor_execute", capture)
         try:
             assert repair_material_dispatches(db) == 1
@@ -84,12 +104,24 @@ def test_repair_locks_candidate_dispatch_by_primary_key(source_env, wire):
         ]
         # 失败时输出加锁节点下的完整扫描链，便于区分统计漂移与真实回退。
         chain = [
-            (n.get("Node Type"), n.get("Relation Name"), n.get("Index Name"),
-             n.get("Index Cond") or n.get("Filter"))
+            (
+                n.get("Node Type"),
+                n.get("Relation Name"),
+                n.get("Index Name"),
+                n.get("Index Cond") or n.get("Filter"),
+            )
             for n in nodes(lock_rows[0])
             if "Node Type" in n
         ]
         assert any("id =" in node["Index Cond"] for node in indexed), chain
+        # 源/目标候选必须按活跃 operation 身份探测消息，不能每轮全扫历史 outbox。
+        operation_probes = [
+            n
+            for n in nodes(plan)
+            if n.get("Relation Name") == "pending_dispatch"
+            and "operation_id" in n.get("Index Cond", "")
+        ]
+        assert len(operation_probes) >= 2, chain
         assert db.execute(text("SHOW statement_timeout")).scalar_one() == "10s"
         assert db.execute(text("SHOW jit")).scalar_one() == "off"
     assert wire[0] == []

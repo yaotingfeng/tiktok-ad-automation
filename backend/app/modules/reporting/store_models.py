@@ -234,6 +234,14 @@ class ReportSyncJob(SQLModel, table=True):
         ),
         Index("ix_report_sync_job_due", "status", "priority", "due_at"),
         Index(
+            "ix_report_link_pending_scope",
+            "tenant_id",
+            "bc_id",
+            "actor_id",
+            "advertiser_ids",
+            postgresql_where="kind='material_links' AND status IN ('QUEUED','WAITING')",
+        ),
+        Index(
             "uq_report_sync_job_active_key",
             "job_key",
             unique=True,

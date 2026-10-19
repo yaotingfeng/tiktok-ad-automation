@@ -457,3 +457,20 @@ def test_new_directory_retries_cached_unresolved_posts(session, sync_seed):
         )
     ).one()
     assert link.ad_remote_id == "late-ad" and link.platform_material_id == "late-video"
+
+
+def test_single_ad_response_resolves_all_matching_posts_together(session, sync_seed):
+    posts = [f"old-{i}" for i in range(20)]
+    publish(
+        session, sync_seed, "acc-1", [material_row(p, "1", "v1.mp4") for p in posts]
+    )
+    use(session, sync_seed, adv="acc-1", ad="a1", video="v1", ad_material="new-id")
+    calls = refresh(session, sync_seed, overview(), ad_posts={"a1": posts})
+    assert calls == [1, ("ads", ("a1",), D, D)]
+    rows = session.exec(
+        select(MaterialPostLink).where(
+            MaterialPostLink.tenant_id == sync_seed.tenant_id
+        )
+    ).all()
+    assert len(rows) == 20
+    assert {r.platform_material_id for r in rows} == {"v1"}

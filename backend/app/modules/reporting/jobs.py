@@ -138,6 +138,23 @@ def enqueue_jobs(
     groups = [list(group) for group in advertiser_groups]
     if not groups:
         return []
+    if kind == "material_links":
+        from app.modules.reporting.link_work import enqueue_link_jobs
+
+        return enqueue_link_jobs(
+            session,
+            tenant_id=tenant_id,
+            bc_id=bc_id,
+            actor_id=actor_id,
+            frozen_route=frozen_route,
+            advertiser_groups=groups,
+            campaign_ids=campaign_ids,
+            start=start,
+            end=end,
+            priority=priority,
+            due_at=due_at,
+            requested_at=requested_at,
+        )
     if priority <= 2:
         coverage_key = _key(
             tenant_id,
@@ -237,6 +254,7 @@ def claim_jobs(
     limit: int,
     lane: str | None = None,
     allow_historical_links: bool = True,
+    link_period: str | None = None,
 ) -> list[ReportSyncJob]:
     """按持久游标轮转租户；实时事实先均衡类型在途，类型内保留创建顺序。"""
     if lane not in {None, "live", "links", "backfill"}:
@@ -245,6 +263,10 @@ def claim_jobs(
     if lane == "links" and not allow_historical_links:
         # 额度紧张只新领当地今天关联；无时区不能猜作当天，已在途仍由外层全量计槽。
         lane_filter += f" AND {current_day_predicate('j')}"
+    if lane == "links" and link_period is not None:
+        if link_period not in {"current", "history"}:
+            raise ValueError("invalid link period")
+        lane_filter += f" AND {'NOT ' if link_period == 'history' else ''}{current_day_predicate('j')}"
     # 每类事实按任务创建先后服务；due_at 仅控制准入，退避不能把老任务反复排到队尾。
     # 关联使用独立窗口，不能以旧关联 FIFO 阻挡较新的事实。
     # 历史等待满一天后提升到每日修正的优先级，仍保留跨租户持久轮转。
@@ -253,18 +275,19 @@ def claim_jobs(
         if lane == "backfill"
         else "j.priority"
     )
-    if lane == "links":
-        # 昨天遗留的热关联不能继续以热优先级阻挡今天；保留任务和游标，
-        # 自动按已有每日修正优先级在空余名额推进，日期按账户本地时区判断。
-        priority = f"CASE WHEN {current_day_predicate('j')} THEN j.priority ELSE GREATEST(j.priority, 3) END"
     local_order = (
         f"j.created_at, {priority}, j.id"
         if lane == "live"
         else f"{priority}, j.due_at, j.id"
     )
+    # 关联已按当前/历史预留份额，同类按可运行时间轮转，单个大账户每步让出。
+    if lane == "links":
+        local_order = "j.due_at, j.created_at, j.id"
     global_order = (
         "created_at, priority, id" if lane == "live" else "priority, due_at, id"
     )
+    if lane == "links":
+        global_order = "due_at, created_at, id"
     partition = "j.tenant_id, j.kind" if lane == "live" else "j.tenant_id"
     rank_column = "kind_prefix" if lane == "live" else "rn"
     rank_expression = (
@@ -876,7 +899,16 @@ def execute_job(
                 if not acquired:
                     raise AccountAdmissionDeferred(5000)
             more = _run(session, job, counted) is None
-            if more:
+            if (
+                job.kind == "material_links"
+                and not more
+                and material_links.wait_for_dependencies(
+                    session, job, now=datetime.now(UTC)
+                )
+            ):
+                job.status = "WAITING"
+                result = "WAITING"
+            elif more:
                 job.status, job.error_code = "WAITING", None
                 job.due_at = datetime.now(UTC)
                 result = "WAITING"

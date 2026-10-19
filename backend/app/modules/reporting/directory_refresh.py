@@ -169,3 +169,66 @@ def refresh_report_directory(
             ad_types={adv: {ad_type: types[adv][ad_type]} for adv in advertisers},
         )
     return created
+
+
+def request_link_directory(
+    session: Session, job: ReportSyncJob, *, now: datetime
+) -> int:
+    """已确认广告但缺视频时补读该广告目录；不等当天消耗热报碰巧覆盖历史广告。"""
+    if not settings.ADS_SYNC_ENABLED:
+        return 0
+    rows = (
+        session.connection()
+        .execute(
+            text("""
+        SELECT DISTINCT l.ad_remote_id, a.ad_type
+        FROM material_report_day d
+        JOIN material_post_link l ON l.tenant_id=d.tenant_id AND l.advertiser_id=d.advertiser_id
+          AND l.main_material_id=d.main_material_id
+        JOIN ad_object a ON a.tenant_id=l.tenant_id AND a.advertiser_id=l.advertiser_id
+          AND a.kind='ad' AND a.remote_id=l.ad_remote_id
+        WHERE d.tenant_id=:t AND d.advertiser_id=:adv AND d.stat_date BETWEEN :start AND :end
+          AND NULLIF(l.platform_material_id, '') IS NULL
+          AND a.ad_type IN ('SMART_PLUS','LEGACY_SMART_PLUS','REGULAR')
+          AND NOT EXISTS (SELECT 1 FROM material_post_link done
+            WHERE done.tenant_id=d.tenant_id AND done.advertiser_id=d.advertiser_id
+              AND done.main_material_id=d.main_material_id AND NULLIF(done.platform_material_id, '') IS NOT NULL)
+          AND NOT EXISTS (SELECT 1 FROM ad_directory_run r
+            WHERE r.tenant_id=:t AND r.bc_id=:bc AND r.actor_id=:actor
+              AND r.frozen_route=CAST(:route AS jsonb) AND r.advertiser_id=:adv
+              AND r.kind='ad' AND r.ad_type=a.ad_type AND r.query->'ids' ? l.ad_remote_id
+              AND (r.status IN ('QUEUED','RUNNING','ADMISSION_WAIT','WAITING_REMOTE') OR r.created_at>=:cutoff))
+        ORDER BY l.ad_remote_id, a.ad_type LIMIT :limit
+    """),
+            {
+                "t": job.tenant_id,
+                "adv": job.advertiser_ids[0],
+                "start": job.start_date,
+                "end": job.end_date,
+                "bc": job.bc_id,
+                "actor": job.actor_id,
+                "route": json.dumps(job.frozen_route),
+                "cutoff": now - timedelta(minutes=10),
+                "limit": MAX_REFRESH_ADS,
+            },
+        )
+        .all()
+    )
+    count = 0
+    for ad_type in sorted({r.ad_type for r in rows}):
+        count += request_directory(
+            session,
+            tenant_id=job.tenant_id,
+            bc_id=job.bc_id,
+            actor_id=job.actor_id,
+            frozen_route=job.frozen_route,
+            advertiser_ids=job.advertiser_ids,
+            scope="targeted",
+            refs=tuple(
+                EntityRef(job.tenant_id, job.advertiser_ids[0], "ad", r.ad_remote_id)
+                for r in rows
+                if r.ad_type == ad_type
+            ),
+            ad_types={job.advertiser_ids[0]: {ad_type: {"ad"}}},
+        )
+    return count

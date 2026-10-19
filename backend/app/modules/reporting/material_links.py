@@ -17,6 +17,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from collections.abc import Callable, Sequence
 from datetime import date, datetime, timedelta
@@ -88,6 +89,126 @@ def needs_material_links(
         )
         .scalar_one()
     )
+
+
+# 扫描结束与映射完整是两件事；依赖不齐保留一条等待工作，不能完成后每轮重造。
+DEPENDENCY_ERRORS = {"material_directory_pending", "material_identity_unavailable"}
+DEPENDENCY_RECHECK = timedelta(minutes=10)
+
+
+def missing_video_ids(session, *, tenant_id, advertiser_id, start, end):
+    return set(
+        session.connection()
+        .execute(
+            text("""
+        SELECT DISTINCT d.main_material_id FROM material_report_day d
+        WHERE d.tenant_id=:t AND d.advertiser_id=:a AND d.stat_date BETWEEN :start AND :end
+          AND NOT EXISTS (SELECT 1 FROM material_post_link l
+            WHERE l.tenant_id=d.tenant_id AND l.advertiser_id=d.advertiser_id
+              AND l.main_material_id=d.main_material_id
+              AND NULLIF(l.platform_material_id, '') IS NOT NULL)
+    """),
+            {"t": tenant_id, "a": advertiser_id, "start": start, "end": end},
+        )
+        .scalars()
+    )
+
+
+def dependency_changed(session, job):
+    """只以新缺口、已补齐或新目录证据唤醒，周期触发本身不打断退避。"""
+    missing = missing_video_ids(
+        session,
+        tenant_id=job.tenant_id,
+        advertiser_id=job.advertiser_ids[0],
+        start=job.start_date,
+        end=job.end_date,
+    )
+    if missing != set(job.progress.get("waiting_ids", [])):
+        return True
+    return directory_signature(session, job) != job.progress.get("dependency_signature")
+
+
+def directory_signature(session, job):
+    # 目录热刷新会更新 observed_at，但相同素材身份不属于新证据，不能因此反复唤醒。
+    return (
+        session.connection()
+        .execute(
+            text("""
+        WITH missing AS MATERIALIZED (
+          SELECT DISTINCT d.main_material_id, d.main_material_name
+          FROM material_report_day d
+          WHERE d.tenant_id=:t AND d.advertiser_id=:a AND d.stat_date BETWEEN :start AND :end
+            AND NOT EXISTS (SELECT 1 FROM material_post_link l
+              WHERE l.tenant_id=d.tenant_id AND l.advertiser_id=d.advertiser_id
+                AND l.main_material_id=d.main_material_id
+                AND NULLIF(l.platform_material_id, '') IS NOT NULL)),
+        candidates AS (
+          SELECT u.ad_remote_id, u.ad_material_id, u.platform_material_id, u.name
+          FROM (SELECT DISTINCT l.ad_remote_id FROM material_post_link l
+                JOIN missing m ON m.main_material_id=l.main_material_id
+                WHERE l.tenant_id=:t AND l.advertiser_id=:a) ads
+          JOIN ad_material_reference u ON u.tenant_id=:t AND u.advertiser_id=:a
+            AND u.ad_remote_id=ads.ad_remote_id AND u.complete
+          UNION
+          SELECT u.ad_remote_id, u.ad_material_id, u.platform_material_id, u.name
+          FROM (SELECT DISTINCT m.main_material_name FROM missing m
+                WHERE m.main_material_name IS NOT NULL AND NOT EXISTS (
+                  SELECT 1 FROM material_post_link l WHERE l.tenant_id=:t
+                    AND l.advertiser_id=:a AND l.main_material_id=m.main_material_id)) names
+          JOIN ad_material_reference u ON u.tenant_id=:t AND u.advertiser_id=:a
+            AND u.complete AND md5(u.name)=md5(names.main_material_name)
+            AND u.name=names.main_material_name),
+        evidence AS (
+          SELECT jsonb_build_array(ad_remote_id, ad_material_id, platform_material_id, name)::text AS value
+          FROM candidates)
+        SELECT md5(COALESCE(string_agg(value, ',' ORDER BY value), '')) FROM evidence
+    """),
+            {
+                "t": job.tenant_id,
+                "a": job.advertiser_ids[0],
+                "start": job.start_date,
+                "end": job.end_date,
+            },
+        )
+        .scalar_one()
+    )
+
+
+def wait_for_dependencies(session, job, *, now):
+    missing = missing_video_ids(
+        session,
+        tenant_id=job.tenant_id,
+        advertiser_id=job.advertiser_ids[0],
+        start=job.start_date,
+        end=job.end_date,
+    )
+    if not missing:
+        return False
+    unlinked = _unlinked(
+        session,
+        job.tenant_id,
+        job.advertiser_ids[0],
+        start=job.start_date,
+        end=job.end_date,
+    )
+    job.error_code = (
+        "material_identity_unavailable" if unlinked else "material_directory_pending"
+    )
+    from app.modules.reporting.directory_refresh import request_link_directory
+
+    request_link_directory(session, job, now=now)
+    job.due_at = now + DEPENDENCY_RECHECK
+    # 到期重读时重新确定查询范围；此前验证的映射已经持久化，不回滚。
+    job.progress = {
+        key: value
+        for key, value in job.progress.items()
+        if key in {"coalesced_v1", "requested_at", "initial_window"}
+    } | {
+        "waiting_ids": sorted(missing),
+        "dependency_checked_at": now.isoformat(),
+        "dependency_signature": directory_signature(session, job),
+    }
+    return True
 
 
 def _unlinked(
@@ -192,10 +313,18 @@ def _candidate_ads(
     rows = session.connection().execute(
         text("""
         SELECT DISTINCT ad_remote_id FROM ad_material_reference
-        WHERE tenant_id = :t AND advertiser_id = :a AND complete AND name = ANY(:names)
+        WHERE tenant_id = :t AND advertiser_id = :a AND complete
+          AND md5(name) = ANY(:name_hashes) AND name = ANY(:names)
         ORDER BY ad_remote_id
         """),
-        {"t": tenant_id, "a": advertiser_id, "names": sorted(names)},
+        {
+            "t": tenant_id,
+            "a": advertiser_id,
+            "names": sorted(names),
+            "name_hashes": [
+                hashlib.md5(name.encode()).hexdigest() for name in sorted(names)
+            ],
+        },
     )
     return [r[0] for r in rows]
 
@@ -305,12 +434,15 @@ def refresh_material_links(
                 ON a.tenant_id=u.tenant_id AND a.advertiser_id=u.advertiser_id
                   AND a.kind='ad' AND a.remote_id=u.ad_remote_id
                 WHERE u.tenant_id=:t AND u.advertiser_id=:a AND u.complete
-                  AND u.name=ANY(:names) AND a.observed_at>:scanned)
+                  AND md5(u.name)=ANY(:name_hashes) AND u.name=ANY(:names) AND a.observed_at>:scanned)
         """),
                 {
                     "t": tenant_id,
                     "a": advertiser_id,
                     "names": names,
+                    "name_hashes": [
+                        hashlib.md5(name.encode()).hexdigest() for name in names
+                    ],
                     "scanned": scan.scanned_at,
                 },
             )
@@ -359,8 +491,35 @@ def refresh_material_links(
                     "search_stack": [],
                 }
                 progress["locate_post"] = current
+
+            def read_and_share(ads, first_day, last_day, page_number):
+                result = read_ad_posts(ads, first_day, last_day, page_number)
+                if len(ads) == 1:
+                    # 单广告响应已经证明整页帖子的归属，不再为每个帖子重复读取相同报表。
+                    mids = {
+                        str((row.get("dimensions") or {}).get("main_material_id") or "")
+                        for row in result.rows
+                    }
+                    _upsert_links(
+                        session,
+                        [
+                            _link(
+                                tenant_id,
+                                advertiser_id,
+                                material_id=post,
+                                ad_id=ads[0],
+                                material_type=stale[post][1],
+                                ad_material_id=None,
+                                name=stale[post][0],
+                                now=now,
+                            )
+                            for post in sorted(mids & set(stale))
+                        ],
+                    )
+                return result
+
             complete, owner = _locate_post_step(
-                current, read_ad_posts=read_ad_posts, first=first, last=last
+                current, read_ad_posts=read_and_share, first=first, last=last
             )
             if complete:
                 if owner is not None:
@@ -393,10 +552,8 @@ def refresh_material_links(
             scan = MaterialLinkScan(
                 tenant_id=tenant_id, advertiser_id=advertiser_id, scanned_at=now
             )
-        # 不抹掉其他日期的负缓存；本次已经解决的帖子从缓存移除。
-        scan.unresolved_ids = sorted(
-            (set(scan.unresolved_ids) - set(unlinked)) | unresolved
-        )
+        # 时间戳只属于本次已完整扫描的集合；不可用新窗口给旧窗口负证据无限续期。
+        scan.unresolved_ids = sorted(unresolved)
         scan.scanned_at = now
         session.add(scan)
     _resolve_videos(session, tenant_id, advertiser_id)

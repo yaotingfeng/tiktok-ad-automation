@@ -53,7 +53,7 @@ from app.modules.reporting.jobs import (
     execute_job,
     request_time,
 )
-from app.modules.reporting.lanes import lane_condition
+from app.modules.reporting.lanes import current_day_predicate, lane_condition
 from app.modules.reporting.metrics import parse_decimal
 from app.modules.reporting.partitions import ensure_month_partitions
 from app.modules.reporting.query_models import QuerySnapshot
@@ -79,7 +79,8 @@ DIRECTORY_DISPATCH_WINDOW = 32
 # 12 个执行进程保留两批有界候补，吸收 outbox 投递空档；
 # 实际 SDK 并发和调用次数始终由共享准入额度约束。
 REPORT_DISPATCH_WINDOW = 24
-LINK_DISPATCH_WINDOW = 1
+# 当前与历史关联各保底半个窗口，空闲份额可借用；不增加 Worker 或平台额度。
+LINK_DISPATCH_WINDOW = 4
 BACKFILL_DISPATCH_WINDOW = 1
 # 目录消息发布后超过此时长仍未被领取，视为丢失并重新入队。
 DIRECTORY_MESSAGE_LOST_AFTER = timedelta(hours=6)
@@ -453,6 +454,22 @@ def plan_due_runs(*, database_engine, redis_client, now=None):
         planner.ensure_bc_plans(session, now=now)
         keys = [(p.tenant_id, p.bc_id) for p in planner.due_plans(session, now=now)]
     dispatched = _dispatch_pending(database_engine, now, allow_backfill=allow_backfill)
+    # 本地归并/依赖复核不能阻挡事实派发；独立短事务、总预算与单语句超时双重有界。
+    try:
+        from app.modules.reporting.link_work import (
+            reconcile_link_work,
+            wake_link_dependencies,
+        )
+
+        with Session(database_engine) as session, session.begin():
+            session.connection().execute(text("SET LOCAL statement_timeout='2s'"))
+            session.connection().execute(text("SET LOCAL lock_timeout='100ms'"))
+            maintenance_deadline = datetime.now(UTC) + timedelta(seconds=2)
+            reconcile_link_work(session, now=now, deadline=maintenance_deadline)
+            if datetime.now(UTC) < maintenance_deadline:
+                wake_link_dependencies(session, now=now, deadline=maintenance_deadline)
+    except Exception:
+        logger.exception("report link maintenance deferred")
     for key in keys:
         if datetime.now(UTC) >= deadline:
             break
@@ -728,17 +745,49 @@ def _dispatch_report_jobs(
             )
         ).one()
         available = max(0, window - inflight)
-        claimed = (
-            claim_jobs(
-                session,
-                now=now,
-                limit=available,
-                lane=lane,
-                allow_historical_links=allow_backfill,
+        claimed = []
+        if available and lane == "links":
+            # 先填当前/历史最低份额，再借用闲置名额。历史不再依赖当天队列清空。
+            for period in ("history", "current"):
+                if period == "history" and not allow_backfill:
+                    continue
+                predicate = current_day_predicate()
+                if period == "history":
+                    predicate = f"NOT {predicate}"
+                running = session.exec(
+                    select(func.count())
+                    .select_from(ReportSyncJob)
+                    .where(
+                        ReportSyncJob.kind == "material_links",
+                        ReportSyncJob.status == "RUNNING",
+                        col(ReportSyncJob.claimed_until) > now,
+                        text(predicate).bindparams(lane_now=now),
+                    )
+                ).one()
+                share = window // 2
+                count = min(available - len(claimed), max(0, share - running))
+                if count:
+                    batch = claim_jobs(
+                        session,
+                        now=now,
+                        limit=count,
+                        lane=lane,
+                        link_period=period,
+                        allow_historical_links=allow_backfill,
+                    )
+                    claimed.extend(batch)
+                    _record_report_dispatch(session, batch, now)
+        remaining = available - len(claimed)
+        if remaining:
+            claimed.extend(
+                claim_jobs(
+                    session,
+                    now=now,
+                    limit=remaining,
+                    lane=lane,
+                    allow_historical_links=allow_backfill,
+                )
             )
-            if available
-            else []
-        )
         for job in claimed:
             enqueue_after_commit(
                 session,
@@ -748,6 +797,11 @@ def _dispatch_report_jobs(
                 payload={"job_id": str(job.id), "claim_id": str(job.claim_token)},
             )
         jobs.extend(claimed)
+    _record_report_dispatch(session, jobs, now)
+    return len(jobs)
+
+
+def _record_report_dispatch(session, jobs, now):
     for tenant_id in sorted({job.tenant_id for job in jobs}):
         # 游标与领取/outbox 同事务提交，失败不跳过租户，也不干扰其他业务队列。
         statement = insert(ReportDispatchCursor).values(
@@ -764,7 +818,6 @@ def _dispatch_report_jobs(
                 },
             )
         )
-    return len(jobs)
 
 
 @contextmanager

@@ -4,6 +4,7 @@ import logging
 from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import text
+from sqlalchemy.exc import DBAPIError
 from sqlmodel import Session, col, select
 
 from app.core.config import settings
@@ -228,46 +229,70 @@ def observe_health(session, plan, *, now):
     if issues and (
         row.last_repair_at is None or row.last_repair_at <= now - REPAIR_INTERVAL
     ):
-        count = plan_hot(
-            session, plan, active=sorted(repairs["ad"])[:MAX_REPAIR_ACCOUNTS], now=now
-        )
-        count += plan_material(
-            session,
-            plan,
-            active=sorted(repairs["material"])[:MAX_REPAIR_ACCOUNTS],
-            now=now,
-        )
-        for (start, end), ids in _group_by_window(
-            session,
-            plan,
-            sorted(repairs["links"])[:MAX_REPAIR_ACCOUNTS],
-            lambda tz: _hot_window(tz, now),
-        ).items():
-            for advertiser in ids:
-                count += bool(
-                    enqueue_job(
-                        session,
-                        kind="material_links",
-                        tier="material",
-                        advertiser_ids=[advertiser],
-                        start=start,
-                        end=end,
-                        **_common(plan),
-                    )
+        # 观测先落在外层事务；补任务遇到规划锁时仅回滚补任务，不丢失健康事实。
+        session.flush()
+        try:
+            with session.begin_nested():
+                previous = (
+                    session.connection().execute(text("SHOW lock_timeout")).scalar_one()
                 )
-        count += _rescue_queued_actions(session, plan, now=now)
-        if count:
-            row.last_repair_at = now
-        # 调度唤醒与恢复计划同事务，不发外部广告操作、不篡改上次成功时间。
-        enqueue_after_commit(
-            session,
-            context=TenantContext(plan.tenant_id, plan.actor_id, "operator"),
-            task_name="reporting.plan_due",
-            task_key=f"sync-health:{plan.bc_id}:{now.replace(second=0, microsecond=0).isoformat()}",
-            payload={"dispatch_only": True},
-        )
+                session.connection().execute(text("SET LOCAL lock_timeout='100ms'"))
+                _repair_health(session, plan, row, repairs, now)
+                session.connection().execute(
+                    text("SELECT set_config('lock_timeout', :value, true)"),
+                    {"value": previous},
+                )
+        except DBAPIError as error:
+            if getattr(error.orig, "sqlstate", None) not in {"55P03", "57014"}:
+                raise
+            logger.warning(
+                "sync health repair deferred: tenant=%s bc=%s",
+                plan.tenant_id,
+                plan.bc_id,
+            )
     session.flush()
     return row
+
+
+def _repair_health(session, plan, row, repairs, now):
+    count = plan_hot(
+        session, plan, active=sorted(repairs["ad"])[:MAX_REPAIR_ACCOUNTS], now=now
+    )
+    count += plan_material(
+        session,
+        plan,
+        active=sorted(repairs["material"])[:MAX_REPAIR_ACCOUNTS],
+        now=now,
+    )
+    for (start, end), ids in _group_by_window(
+        session,
+        plan,
+        sorted(repairs["links"])[:MAX_REPAIR_ACCOUNTS],
+        lambda tz: _hot_window(tz, now),
+    ).items():
+        for advertiser in ids:
+            count += bool(
+                enqueue_job(
+                    session,
+                    kind="material_links",
+                    tier="material",
+                    advertiser_ids=[advertiser],
+                    start=start,
+                    end=end,
+                    **_common(plan),
+                )
+            )
+    count += _rescue_queued_actions(session, plan, now=now)
+    if count:
+        row.last_repair_at = now
+    # 调度唤醒与恢复计划同事务，不发外部广告操作、不篡改上次成功时间。
+    enqueue_after_commit(
+        session,
+        context=TenantContext(plan.tenant_id, plan.actor_id, "operator"),
+        task_name="reporting.plan_due",
+        task_key=f"sync-health:{plan.bc_id}:{now.replace(second=0, microsecond=0).isoformat()}",
+        payload={"dispatch_only": True},
+    )
 
 
 @celery_app.task(name="reporting.check_health", time_limit=25, soft_time_limit=20)

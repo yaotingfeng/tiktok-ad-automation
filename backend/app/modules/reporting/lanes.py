@@ -27,7 +27,7 @@ def lane_predicate(*, lane: str, alias: str = "report_sync_job") -> str:
     if lane == "live":
         return predicate
     if lane == "links":
-        # 所有日期关联共用一个有界窗口，旧关联不能占用实时事实或历史事实槽。
+        # 关联独立于事实窗口；派发器在此窗口内为当前/历史分别保留服务份额。
         return f"{alias}.kind = 'material_links'"
     if lane == "backfill":
         return f"(NOT {predicate} AND {alias}.kind <> 'material_links')"
