@@ -684,6 +684,7 @@ def _sdk_report_send(client, request_scope, deadline, *, request_check=None):
             "reports.bc",
             "reports.material_breakdown",
             "reports.material_overview",
+            "materials.search_videos",
         }:
             raise DomainError("report_operation_invalid", "报表操作未登记")
 
@@ -694,6 +695,10 @@ def _sdk_report_send(client, request_scope, deadline, *, request_check=None):
             # 仅在准入与冻结授权核验通过后计数；平台返回限流仍是一次已发送请求。
             sender.request_count += 1
             args = dict(arguments)
+            if operation == "materials.search_videos":
+                return sdk.FileApi(client).ad_video_search(
+                    args.pop("advertiser_id"), token, **args, _request_timeout=timeout
+                )
             if operation in {"reports.integrated", "reports.bc"}:
                 return api.report_integrated_get(
                     args.pop("report_type"), token, **args, _request_timeout=timeout
@@ -717,7 +722,12 @@ def _sdk_report_send(client, request_scope, deadline, *, request_check=None):
                 _request_timeout=timeout,
             )
 
-        return requests.invoke(operation, advertiser_id, call, exact_numbers=True).data
+        return requests.invoke(
+            operation,
+            advertiser_id,
+            call,
+            exact_numbers=operation.startswith("reports."),
+        ).data
 
     class Sender:
         request_count = 0

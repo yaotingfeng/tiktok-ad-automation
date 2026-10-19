@@ -55,6 +55,10 @@ def page_from_data(data: dict, *, requested_page: int) -> RawReportPage:
 
 
 class ReportReader(Protocol):
+    def material_videos(
+        self, *, advertiser_id: str, material_ids: tuple[str, ...]
+    ) -> RawReportPage: ...
+
     def bc_spend(
         self, *, bc_id: str, start: date, end: date, page: int
     ) -> RawReportPage: ...

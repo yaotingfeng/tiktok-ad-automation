@@ -21,7 +21,7 @@ from app.core.errors import DomainError
 from app.integrations.tiktok.contracts.report_reader import RawReportPage, ReportReader
 from app.integrations.tiktok.sdk import AccountAdmissionDeferred
 from app.modules.accounts.models import AdvertiserAccount
-from app.modules.reporting import material_links, publish
+from app.modules.reporting import material_identity, material_links, publish
 from app.modules.reporting.checkpoints import BASIC_KINDS, CheckpointReader
 from app.modules.reporting.directory_refresh import (
     refresh_report_directory,
@@ -795,6 +795,9 @@ def _run(
     if job.kind == "material_day":
         return _run_material(session, job, reader, accounts)
     if job.kind == "material_links":
+        # 库MID与帖子ID是不同命名空间；每步单独回读非Spark的精确视频身份。
+        if material_identity.resolve_asset_videos(session, job, reader):
+            return None
         overview_ads = _material_link_overview_ads(session, job)
         complete = material_links.refresh_material_links(
             session,

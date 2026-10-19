@@ -46,6 +46,43 @@ class SdkReportReader:
     def request_count(self) -> int:
         return getattr(self._send, "request_count", 0)
 
+    def material_videos(self, *, advertiser_id, material_ids):
+        """非 Spark 报表主素材 MID 与素材库 VID 由同一官方回执成对证明。"""
+        from app.integrations.tiktok.contracts.common import CallEvidence
+        from app.modules.materials.sdk_assets import video_record
+
+        if not 1 <= len(material_ids) <= 50 or len(set(material_ids)) != len(
+            material_ids
+        ):
+            raise DomainError(
+                "report_query_invalid", "素材身份读取一次须带1–50个不同MID"
+            )
+        data = self._send(
+            "materials.search_videos",
+            advertiser_id,
+            {
+                "advertiser_id": advertiser_id,
+                "filtering": {"material_ids": list(material_ids)},
+                "page": 1,
+                "page_size": 100,
+            },
+        )
+        result = page_from_data(data, requested_page=1)
+        rows, seen = [], set()
+        for row in result.rows:
+            record = video_record(
+                row, advertiser_id=advertiser_id, evidence=CallEvidence()
+            )
+            if record.mid not in material_ids or record.mid in seen:
+                raise DomainError("report_response_invalid", "素材身份回执越界或有歧义")
+            seen.add(record.mid)
+            rows.append({"material_id": record.mid, "video_id": record.video_id})
+        if result.next_page is not None:
+            raise DomainError("report_response_invalid", "素材身份精确查询未完整返回")
+        return RawReportPage(
+            tuple(rows), result.page, result.total_page, result.total_number
+        )
+
     def _basic(
         self,
         *,

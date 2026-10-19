@@ -117,6 +117,36 @@ def missing_video_ids(session, *, tenant_id, advertiser_id, start, end):
     )
 
 
+def _missing_spark_bridges(session, tenant_id, advertiser_id, *, start, end):
+    """缺广告内素材 ID 的已定位 Spark；布尔值表示目录已提供完整素材证据。"""
+    rows = session.connection().execute(
+        text("""
+        SELECT l.main_material_id,
+          bool_or(a.remote_id IS NOT NULL AND EXISTS (
+            SELECT 1 FROM ad_material_reference u
+            WHERE u.tenant_id=l.tenant_id AND u.advertiser_id=l.advertiser_id
+              AND u.ad_remote_id=l.ad_remote_id AND u.complete)) AS directory_complete
+        FROM material_report_day d
+        JOIN material_post_link l ON l.tenant_id=d.tenant_id
+          AND l.advertiser_id=d.advertiser_id AND l.main_material_id=d.main_material_id
+        LEFT JOIN ad_object a ON a.tenant_id=l.tenant_id AND a.advertiser_id=l.advertiser_id
+          AND a.kind='ad' AND a.remote_id=l.ad_remote_id
+        WHERE d.tenant_id=:t AND d.advertiser_id=:a
+          AND (CAST(:start AS date) IS NULL OR d.stat_date>=:start)
+          AND (CAST(:end AS date) IS NULL OR d.stat_date<=:end)
+          AND l.main_material_type='VIDEO_SPARK_ADS'
+          AND NULLIF(l.ad_material_id, '') IS NULL
+          AND NOT EXISTS (SELECT 1 FROM material_post_link done
+            WHERE done.tenant_id=d.tenant_id AND done.advertiser_id=d.advertiser_id
+              AND done.main_material_id=d.main_material_id
+              AND NULLIF(done.platform_material_id, '') IS NOT NULL)
+        GROUP BY l.main_material_id
+        """),
+        {"t": tenant_id, "a": advertiser_id, "start": start, "end": end},
+    )
+    return {row.main_material_id: row.directory_complete for row in rows}
+
+
 def dependency_changed(session, job):
     """只以新缺口、已补齐或新目录证据唤醒，周期触发本身不打断退避。"""
     missing = missing_video_ids(
@@ -209,8 +239,19 @@ def wait_for_dependencies(session, job, *, now):
         start=job.start_date,
         end=job.end_date,
     )
+    bridges = _missing_spark_bridges(
+        session,
+        job.tenant_id,
+        job.advertiser_ids[0],
+        start=job.start_date,
+        end=job.end_date,
+    )
+    # 已有完整目录却缺帖子桥接时，继续读目录不能补出广告内素材 ID。
+    # 保留真实身份缺口与等待任务；缺广告本体/完整目录的仍是可执行的目录依赖。
     job.error_code = (
-        "material_identity_unavailable" if unlinked else "material_directory_pending"
+        "material_identity_unavailable"
+        if unlinked or any(bridges.values())
+        else "material_directory_pending"
     )
     from app.modules.reporting.directory_refresh import request_link_directory
 
@@ -569,6 +610,12 @@ def refresh_material_links(
     """
     progress = progress if progress is not None else {}
     unlinked = _unlinked(session, tenant_id, advertiser_id, start=start, end=end)
+    # 本轮概览已完整时不再查询桥接依赖，避免每个旧帖二分续步重复扫描事实。
+    bridges = (
+        _missing_spark_bridges(session, tenant_id, advertiser_id, start=start, end=end)
+        if not progress.get("overview_complete")
+        else {}
+    )
     scope = _scan_scope(start, end, overview_ad_ids)
     scan = session.get(MaterialLinkScan, (tenant_id, advertiser_id, scope))
     cached = (
@@ -596,25 +643,26 @@ def refresh_material_links(
             progress["scan_evidence_signature"] = _scan_signature(
                 session, tenant_id, advertiser_id, unlinked, start, end, overview_ad_ids
             )
-        if not progress.get("overview_complete"):
-            page = read_overview(int(progress.get("next_page", 1)))
-            _upsert_links(
-                session,
-                [
-                    _overview_link(row, tenant_id, advertiser_id, now)
-                    for row in page.rows
-                ],
-            )
-            if page.next_page is None:
-                progress["overview_complete"] = True
-            else:
-                progress["next_page"] = page.next_page
-            # 包括概览终页都先独立落库，后面的旧帖定位异常不能撤回这些页。
-            _resolve_videos(session, tenant_id, advertiser_id)
-            session.flush()
-            return bool(progress.get("overview_complete")) and not _unlinked(
-                session, tenant_id, advertiser_id, start=start, end=end
-            )
+    # owner 已知不代表帖子桥接已知；每轮等待到期可重新读一次概览补迟到 ID。
+    # 沿用冻结范围和单页断点；无 owner 的负缓存仍只约束旧帖子定位。
+    if ((unlinked and not cached) or bridges) and not progress.get("overview_complete"):
+        page = read_overview(int(progress.get("next_page", 1)))
+        _upsert_links(
+            session,
+            [_overview_link(row, tenant_id, advertiser_id, now) for row in page.rows],
+        )
+        if page.next_page is None:
+            progress["overview_complete"] = True
+        else:
+            progress["next_page"] = page.next_page
+        # 包括概览终页都先独立落库，后面的旧帖定位异常不能撤回这些页。
+        _resolve_videos(session, tenant_id, advertiser_id)
+        session.flush()
+        return bool(progress.get("overview_complete")) and (
+            cached
+            or not _unlinked(session, tenant_id, advertiser_id, start=start, end=end)
+        )
+    if unlinked and not cached:
         stale = _unlinked(session, tenant_id, advertiser_id, start=start, end=end)
         checked = set(progress.get("checked_ids", []))
         # 有消耗的缺口先定位，零消耗历史继续保留；在途二分游标不因排序改变而丢失。

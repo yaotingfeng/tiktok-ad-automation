@@ -664,3 +664,109 @@ def test_api_read_policy_override_cannot_raise_mcp_policy(monkeypatch):
         ).endpoint_calls_per_window
         == 3
     )
+
+
+def test_non_spark_asset_identity_reads_exact_material_ids():
+    body = {
+        "list": [{"material_id": "mid", "video_id": "vid"}],
+        "page_info": {"page": 1, "page_size": 100, "total_page": 1, "total_number": 1},
+    }
+    reader, rec = _reader(body)
+    result = reader.material_videos(advertiser_id="a", material_ids=("mid",))
+    assert result.rows == ({"material_id": "mid", "video_id": "vid"},)
+    assert rec.calls == [
+        (
+            "materials.search_videos",
+            "a",
+            {
+                "advertiser_id": "a",
+                "filtering": {"material_ids": ["mid"]},
+                "page": 1,
+                "page_size": 100,
+            },
+        )
+    ]
+
+
+@pytest.mark.parametrize(
+    "rows",
+    [
+        [{"material_id": "other", "video_id": "vid"}],
+        [{"material_id": "mid", "video_id": "vid", "advertiser_id": "other-account"}],
+        [{"material_id": "mid", "video_id": ""}],
+        [
+            {"material_id": "mid", "video_id": "v1"},
+            {"material_id": "mid", "video_id": "v2"},
+        ],
+    ],
+)
+def test_asset_identity_rejects_foreign_or_ambiguous_pairs(rows):
+    body = {
+        "list": rows,
+        "page_info": {
+            "page": 1,
+            "page_size": 100,
+            "total_page": 1,
+            "total_number": len(rows),
+        },
+    }
+    reader, _ = _reader(body)
+    with pytest.raises(DomainError):
+        reader.material_videos(advertiser_id="a", material_ids=("mid",))
+
+
+def test_asset_identity_uses_official_sdk_scoped_physical_request(monkeypatch):
+    from contextlib import contextmanager
+    from datetime import UTC, datetime, timedelta
+
+    from urllib3.response import HTTPResponse
+
+    from app.integrations.tiktok.gateway import _sdk_report_send
+    from app.integrations.tiktok.sdk import official_client
+
+    calls, admissions = [], []
+
+    def wire(_pool, method, url, **kwargs):
+        calls.append((method, url, dict(kwargs["fields"])))
+        return HTTPResponse(
+            body=json.dumps(
+                {
+                    "code": 0,
+                    "data": {
+                        "list": [{"material_id": "mid", "video_id": "vid"}],
+                        "page_info": {
+                            "page": 1,
+                            "page_size": 100,
+                            "total_page": 1,
+                            "total_number": 1,
+                        },
+                    },
+                }
+            ).encode(),
+            status=200,
+        )
+
+    @contextmanager
+    def scope(adv, op, _deadline):
+        admissions.append((adv, op))
+        yield
+
+    monkeypatch.setattr("urllib3.PoolManager.request", wire)
+    with official_client(access_token="synthetic-test") as client:
+        reader = SdkReportReader(
+            send=_sdk_report_send(
+                client, scope, datetime.now(UTC) + timedelta(seconds=30)
+            )
+        )
+        assert (
+            reader.material_videos(advertiser_id="a", material_ids=("mid",)).rows[0][
+                "video_id"
+            ]
+            == "vid"
+        )
+        assert reader.request_count == 1
+    assert admissions == [("a", "materials.search_videos")]
+    method, url, fields = calls[0]
+    assert method == "GET" and url.endswith("/file/video/ad/search/")
+    assert fields["advertiser_id"] == "a"
+    assert json.loads(fields["filtering"]) == {"material_ids": ["mid"]}

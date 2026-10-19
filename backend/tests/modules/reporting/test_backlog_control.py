@@ -110,13 +110,19 @@ def test_missing_video_waits_for_directory_without_recreating_work(committed_syn
         job_id = request(session, seed, D)
         session.commit()
 
-    class NoRemote:
+    class BridgeOverview:
         calls = 0
 
         def material_ad_links(self, **kwargs):
-            raise AssertionError("已知帖子所属广告不能重读平台概览")
+            from tests.modules.reporting.test_material_links import overview
 
-    assert step(factory, job_id, NoRemote()) == "WAITING"
+            assert kwargs["advertiser_id"] == "acc-1" and kwargs["page"] == 1
+            self.calls += 1
+            return overview()
+
+    reader = BridgeOverview()
+    assert step(factory, job_id, reader) == "WAITING"
+    assert reader.calls == 1, "缺桥接需有界复核概览，不能只等待目录"
     with factory() as session:
         job = session.get(ReportSyncJob, job_id)
         assert job.error_code == "material_directory_pending"

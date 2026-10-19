@@ -196,6 +196,13 @@ def request_link_directory(
         WHERE d.tenant_id=:t AND d.advertiser_id=:adv AND d.stat_date BETWEEN :start AND :end
           AND NULLIF(l.platform_material_id, '') IS NULL
           AND (a.ad_type IS NULL OR a.ad_type IN ('SMART_PLUS','LEGACY_SMART_PLUS','REGULAR'))
+          -- Spark 缺精确桥接且已有完整目录时，重读同一目录不能恢复旧帖身份。
+          -- 缺本体/完整素材、已有桥接、非 Spark 仍保留原补读路径。
+          AND NOT (l.main_material_type='VIDEO_SPARK_ADS'
+            AND NULLIF(l.ad_material_id, '') IS NULL AND a.remote_id IS NOT NULL
+            AND EXISTS (SELECT 1 FROM ad_material_reference u
+              WHERE u.tenant_id=l.tenant_id AND u.advertiser_id=l.advertiser_id
+                AND u.ad_remote_id=l.ad_remote_id AND u.complete))
           AND NOT EXISTS (SELECT 1 FROM material_post_link done
             WHERE done.tenant_id=d.tenant_id AND done.advertiser_id=d.advertiser_id
               AND done.main_material_id=d.main_material_id AND NULLIF(done.platform_material_id, '') IS NOT NULL)
