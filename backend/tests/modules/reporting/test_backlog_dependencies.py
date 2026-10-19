@@ -21,6 +21,54 @@ from tests.modules.reporting.test_material_links import overview
 from tests.modules.reporting.test_material_query import D, material_row, publish, use
 
 
+def test_partial_overview_repairs_known_directory_before_remaining_search(
+    committed_sync_seed, monkeypatch
+):
+    from tests.modules.reporting.test_material_link_resume import step
+
+    monkeypatch.setattr(settings, "ADS_SYNC_ENABLED", True)
+    seed, factory = committed_sync_seed
+    with factory() as session:
+        publish(
+            session,
+            seed,
+            "acc-1",
+            [
+                material_row("known", "5", "known.mp4"),
+                material_row("old", "2", "old.mp4"),
+            ],
+        )
+        job_id = request(session, seed, D)
+        session.commit()
+
+    class Reader:
+        def material_ad_links(self, *, advertiser_id, page, ad_ids=()):
+            assert advertiser_id == "acc-1"
+            # 第一页证明一个广告身份，后续概览和旧帖定位尚未完成。
+            rows = overview(("known-ad", "known", "material", "known.mp4")).rows
+            return RawReportPage(rows, page, 3, 3)
+
+    reader = Reader()
+    assert step(factory, job_id, reader) == "WAITING"
+    with factory() as session:
+        job = session.get(ReportSyncJob, job_id)
+        assert job.progress["next_page"] == 2
+        assert not job.progress.get("overview_complete")
+        runs = session.exec(select(AdDirectoryRun)).all()
+        assert len(runs) == 1, "已确认的目录依赖不能等待整账户搜索结束才发起"
+        assert runs[0].query["ids"] == ["known-ad"]
+        assert runs[0].query["include_deleted"] is True
+        assert runs[0].frozen_route == job.frozen_route
+
+    # 下一页再次返回同一广告时，保留原补读，不能每页制造重复请求。
+    assert step(factory, job_id, reader) == "WAITING"
+    with factory() as session:
+        assert len(session.exec(select(AdDirectoryRun)).all()) == 1
+        job = session.get(ReportSyncJob, job_id)
+        assert job.progress["next_page"] == 3
+        assert not job.progress.get("overview_complete")
+
+
 @pytest.mark.parametrize("has_ad", [False, True])
 def test_link_repair_reads_deleted_ads_even_without_local_object(
     session, sync_seed, monkeypatch, has_ad

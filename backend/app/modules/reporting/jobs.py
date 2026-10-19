@@ -21,7 +21,10 @@ from app.integrations.tiktok.contracts.report_reader import RawReportPage, Repor
 from app.integrations.tiktok.sdk import AccountAdmissionDeferred
 from app.modules.accounts.models import AdvertiserAccount
 from app.modules.reporting import material_links, publish
-from app.modules.reporting.directory_refresh import refresh_report_directory
+from app.modules.reporting.directory_refresh import (
+    refresh_report_directory,
+    request_link_directory,
+)
 from app.modules.reporting.lanes import current_day_predicate, lane_predicate
 from app.modules.reporting.metrics import material_metric_values, parse_local_day
 from app.modules.reporting.store_models import ReportSyncJob, ReportSyncPage
@@ -784,6 +787,9 @@ def _run(session, job: ReportSyncJob, reader: _CountingReader) -> int | None:
             end=e,
             progress=job.progress,
         )
+        # 本页已证实的广告身份立即补目录，不能被后续概览分页或旧帖二分搜索挡住。
+        # 补读与本页关联同事务提交；复用有界、含删除对象且按冻结路由去重的原请求。
+        request_link_directory(session, job, now=datetime.now(UTC))
         # JSONB 的原地修改需要显式通知 ORM；每个续步都持久化已经完成的页和关联。
         from sqlalchemy.orm.attributes import flag_modified
 
