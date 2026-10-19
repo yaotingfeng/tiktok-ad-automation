@@ -228,6 +228,6 @@ ads-reporting prefork从4调至8，实时领取窗口仍4、补数仍1；TikTok�
 
 ## 2026-10-19：同步架构及配额作用域修正（待发布验收）
 
-本轮目标迁移0039_sync_service_class：目录用途贯穿历史/实时依赖和父链，负证据按账户+具体查询范围存储，完整基础报表支持持久分页断点。实时目录8槽只消费ads-live-directory；后台3槽消费ads-backfill,ads-directory；发布1槽只消费ads-publish。三者总进程数12不变，后台/实时目录内存合计request2.5Gi/limit5Gi不变；其余队列、数据库池、四个true开关保留。
+本轮目标迁移0039_sync_service_class：目录用途贯穿历史/实时依赖和父链，负证据按账户+具体查询范围存储，完整基础报表支持持久分页断点。实时目录8槽只消费ads-live-directory；后台3槽消费ads-backfill,ads-directory；发布1槽只消费ads-publish。三者总进程数12不变，历史事实领取窗口由1改3以填满后台容量；后台/实时目录内存合计request2.5Gi/limit5Gi不变；其余队列、数据库池、四个true开关保留。
 
 生产配额变更必须在可恢复备份后执行：保留base应用12、租户10、账户4在途和1000ms窗口、960秒租约及通用/MCP/写入覆盖；增加OFFICIAL_API限定的报表/目录十个逻辑操作覆盖，每秒10次、端点在途6。物理读取端点独立速率，BC/普通integrated报告共桶，跨BC/令牌不拆分。TIKTOK_REPORT_DAILY_CALL_BUDGET从691200显式改为0，关闭非平台要求的合计日预算。无新增业务开关；参数含义及限流来源见部署手册。本节为已批准实施目标，最终值、版本、备份和业务结果必须在发布后回填。

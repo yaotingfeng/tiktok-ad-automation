@@ -812,7 +812,7 @@ def test_cold_dispatch_window_cannot_block_new_current_day_work(
     with factory() as session, session.begin():
         for index in range(6):
             enqueue(session, index, "history")
-    assert job_tasks._dispatch_pending(engine, now) == 1
+    assert job_tasks._dispatch_pending(engine, now) == 3
     assert job_tasks._dispatch_pending(engine, now) == 0
     with factory() as session, session.begin():
         running = session.exec(
@@ -821,19 +821,22 @@ def test_cold_dispatch_window_cannot_block_new_current_day_work(
                 ReportSyncJob.status == "RUNNING",
             )
         ).all()
-        assert len(running) == 1
-        cold_id = running[0].id
+        assert len(running) == 3
+        cold_ids = {item.id for item in running}
         hot_id = enqueue(session, 20, "hot")
     assert job_tasks._dispatch_pending(engine, now) == 1
     with factory() as session:
         assert session.get(ReportSyncJob, hot_id).status == "RUNNING"
 
-        assert session.get(ReportSyncJob, cold_id).status == "RUNNING"
+        assert all(
+            session.get(ReportSyncJob, cold_id).status == "RUNNING"
+            for cold_id in cold_ids
+        )
         dispatches = session.exec(
             select(PendingDispatch).where(PendingDispatch.tenant_id == seed.tenant_id)
         ).all()
         assert {(item.task_name, item.payload["job_id"]) for item in dispatches} == {
-            ("reporting.backfill_step", str(cold_id)),
+            *(("reporting.backfill_step", str(cold_id)) for cold_id in cold_ids),
             ("reporting.job_step", str(hot_id)),
         }
     assert job_tasks._dispatch_pending(engine, now) == 0
@@ -948,8 +951,9 @@ def _lane_job_scope(now, lane, index):
 
 
 @pytest.mark.parametrize("lane", ["live", "links", "backfill"])
+@pytest.mark.parametrize("window", [2, 3])
 def test_concurrent_report_dispatchers_cannot_overfill_window(
-    monkeypatch, committed_sync_seed, lane
+    monkeypatch, committed_sync_seed, lane, window
 ):
     from concurrent.futures import ThreadPoolExecutor
 
@@ -969,8 +973,7 @@ def test_concurrent_report_dispatchers_cannot_overfill_window(
         "links": "LINK_DISPATCH_WINDOW",
         "backfill": "BACKFILL_DISPATCH_WINDOW",
     }[lane]
-    monkeypatch.setattr(job_tasks, window_name, 2)
-    window = 2
+    monkeypatch.setattr(job_tasks, window_name, window)
     with factory() as session, session.begin():
         for index in range(6):
             advertiser, kind, day = _lane_job_scope(now, lane, index)

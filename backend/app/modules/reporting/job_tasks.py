@@ -82,7 +82,8 @@ DIRECTORY_DISPATCH_WINDOW = 8
 REPORT_DISPATCH_WINDOW = 24
 # 当前与历史关联各保底半个窗口，空闲份额可借用；不增加 Worker 或平台额度。
 LINK_DISPATCH_WINDOW = 4
-BACKFILL_DISPATCH_WINDOW = 1
+# 后台已有3个执行槽，历史事实不能仍由旧单槽窗口人为串行化。
+BACKFILL_DISPATCH_WINDOW = 3
 # 目录消息发布后超过此时长仍未被领取，视为丢失并重新入队。
 DIRECTORY_MESSAGE_LOST_AFTER = timedelta(hours=6)
 TARGETED_MESSAGE_LOST_AFTER = timedelta(minutes=2)
