@@ -86,7 +86,7 @@ pipeline {
                             if [ "$SCHEDULED_BACKUP" != true ] && [ "$FULL" = true ] && { [ "$ACTION" = deploy ] || [ "$ACTION" = check ]; }; then
                                 set -- "$@" --full
                             fi
-                            if [ "$FULL_BACKUP" = true ] && [ "$SCHEDULED_BACKUP" != true ] && [ "$ACTION" = deploy ]; then
+                            if [ "${FULL_BACKUP:-false}" = true ] && [ "$SCHEDULED_BACKUP" != true ] && [ "$ACTION" = deploy ]; then
                                 set -- "$@" --full-backup
                             fi
                             bash deploy/ci/jenkins-run.sh "$@"
