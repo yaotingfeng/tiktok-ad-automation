@@ -2,6 +2,7 @@
 """官方 SDK 报表请求。每个物理请求都经网关传入的 send（冻结路由 + 额度准入）。"""
 
 import json
+import re
 from collections.abc import Callable
 from datetime import date
 from typing import Any
@@ -45,6 +46,84 @@ class SdkReportReader:
     @property
     def request_count(self) -> int:
         return getattr(self._send, "request_count", 0)
+
+    def material_video_content(self, *, advertiser_id, video_ids):
+        from app.integrations.tiktok.contracts.common import CallEvidence
+        from app.modules.materials.sdk_assets import video_record
+
+        if not 1 <= len(video_ids) <= 50 or len(set(video_ids)) != len(video_ids):
+            raise DomainError("report_query_invalid", "视频内容批量范围无效")
+        data = self._send(
+            "materials.get_videos",
+            advertiser_id,
+            {"advertiser_id": advertiser_id, "video_ids": list(video_ids)},
+        )
+        rows = (
+            ([] if data == {} else data.get("list")) if isinstance(data, dict) else None
+        )
+        if not isinstance(rows, list):
+            raise DomainError("report_response_invalid", "视频内容回执无效")
+        result, seen = [], set()
+        for row in rows:
+            record = video_record(
+                row, advertiser_id=advertiser_id, evidence=CallEvidence()
+            )
+            if record.video_id not in video_ids or record.video_id in seen:
+                raise DomainError("report_response_invalid", "视频内容回执越界或有歧义")
+            seen.add(record.video_id)
+            result.append(
+                {
+                    "video_id": record.video_id,
+                    "signature": record.md5,
+                    "size": record.size,
+                }
+            )
+        return result
+
+    def spark_video_content(
+        self,
+        *,
+        advertiser_id,
+        item_id,
+        identity_type,
+        identity_id,
+        identity_authorized_bc_id=None,
+    ):
+        args = {
+            "advertiser_id": advertiser_id,
+            "item_id": item_id,
+            "identity_type": identity_type,
+            "identity_id": identity_id,
+        }
+        if identity_authorized_bc_id is not None:
+            args["identity_authorized_bc_id"] = identity_authorized_bc_id
+        try:
+            data = self._send("scene.get_identity_video", advertiser_id, args)
+        except DomainError as error:
+            if error.code == "tiktok_identity_item_unavailable":
+                return None
+            raise
+        detail = data.get("video_detail")
+        if not detail:
+            return None
+        if not isinstance(detail, dict) or detail.get("item_id") != item_id:
+            raise DomainError("report_response_invalid", "帖子内容身份不匹配")
+        if detail.get("item_type") != "VIDEO":
+            return None
+        info = detail.get("video_info") or {}
+        if not isinstance(info, dict):
+            raise DomainError("report_response_invalid", "帖子内容回执无效")
+        digest, size = info.get("signature"), info.get("size")
+        if digest is None or size is None:
+            return None
+        if (
+            not isinstance(digest, str)
+            or not re.fullmatch(r"[0-9a-fA-F]{32}", digest)
+            or type(size) is not int
+            or size <= 0
+        ):
+            raise DomainError("report_response_invalid", "帖子内容摘要无效")
+        return {"signature": digest.lower(), "size": size}
 
     def material_videos(self, *, advertiser_id, material_ids):
         """非 Spark 报表主素材 MID 与素材库 VID 由同一官方回执成对证明。"""

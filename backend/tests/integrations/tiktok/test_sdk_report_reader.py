@@ -770,3 +770,49 @@ def test_asset_identity_uses_official_sdk_scoped_physical_request(monkeypatch):
     assert method == "GET" and url.endswith("/file/video/ad/search/")
     assert fields["advertiser_id"] == "a"
     assert json.loads(fields["filtering"]) == {"material_ids": ["mid"]}
+
+
+@pytest.mark.parametrize("gateway_case", ["OFFICIAL_API"], indirect=True)
+@pytest.mark.parametrize("kind", ["post", "asset"])
+def test_content_identity_reads_enforce_real_frozen_account_scope(
+    database_engine, redis_client, gateway_case, gateway_wire, kind
+):
+    from datetime import UTC, datetime, timedelta
+
+    from app.integrations.tiktok.gateway import open_tiktok_gateway
+
+    context, route, advertiser = gateway_case
+    content = {"signature": "a" * 32, "size": 123}
+    if kind == "post":
+        body = {
+            "video_detail": {
+                "item_id": "post",
+                "item_type": "VIDEO",
+                "video_info": content,
+            }
+        }
+        method = "spark_video_content"
+        args = {
+            "item_id": "post",
+            "identity_type": "BC_AUTH_TT",
+            "identity_id": "identity",
+            "identity_authorized_bc_id": route.bc_id,
+        }
+    else:
+        body = {"list": [{"video_id": "vid", **content}]}
+        method, args = "material_video_content", {"video_ids": ("vid",)}
+    gateway_wire["sdk_data"]["data"] = body
+    with open_tiktok_gateway(
+        database_engine=database_engine,
+        redis_client=redis_client,
+        context=context,
+        route=route,
+        workload="background",
+        task_deadline=datetime.now(UTC) + timedelta(seconds=30),
+    ) as client:
+        read = getattr(client.report_reader, method)
+        assert read(advertiser_id=advertiser, **args)
+        assert len(gateway_wire["sdk_calls"]) == 1
+        with pytest.raises(DomainError):
+            read(advertiser_id="outside-frozen-account", **args)
+        assert len(gateway_wire["sdk_calls"]) == 1

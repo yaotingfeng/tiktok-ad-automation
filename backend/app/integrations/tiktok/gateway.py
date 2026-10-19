@@ -101,6 +101,7 @@ _OPERATION_CAPABILITIES: dict[str, Capability] = {
     "accounts.list_authorized_advertisers": "read",
     "accounts.get_advertisers": "read",
     "scene.list_identities": "read",
+    "scene.get_identity_video": "read",
     "scene.list_minis": "read",
     "scene.recommend_ctas": "read",
     "scene.list_regions": "read",
@@ -685,6 +686,8 @@ def _sdk_report_send(client, request_scope, deadline, *, request_check=None):
             "reports.material_breakdown",
             "reports.material_overview",
             "materials.search_videos",
+            "materials.get_videos",
+            "scene.get_identity_video",
         }:
             raise DomainError("report_operation_invalid", "报表操作未登记")
 
@@ -695,6 +698,20 @@ def _sdk_report_send(client, request_scope, deadline, *, request_check=None):
             # 仅在准入与冻结授权核验通过后计数；平台返回限流仍是一次已发送请求。
             sender.request_count += 1
             args = dict(arguments)
+            if operation == "materials.get_videos":
+                return sdk.FileApi(client).ad_video_info(
+                    args.pop("advertiser_id"),
+                    args.pop("video_ids"),
+                    token,
+                    **args,
+                    _request_timeout=timeout,
+                )
+            if operation == "scene.get_identity_video":
+                return sdk.IdentityApi(client).identity_video_info(
+                    access_token=token,
+                    **args,
+                    _request_timeout=timeout,
+                )
             if operation == "materials.search_videos":
                 return sdk.FileApi(client).ad_video_search(
                     args.pop("advertiser_id"), token, **args, _request_timeout=timeout

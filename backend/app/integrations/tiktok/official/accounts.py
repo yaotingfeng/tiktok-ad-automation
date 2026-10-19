@@ -41,7 +41,7 @@ def remaining(deadline: datetime) -> float:
 
 @contextmanager
 def _strict_sdk_envelope(
-    client: Any, *, exact: dict[str, Any] | None = None
+    client: Any, *, exact: dict[str, Any] | None = None, operation: str | None = None
 ) -> Iterator[None]:
     # 固定 SDK 会把 code 经 int() 转换，再丢掉 code/message；必须在其
     # deserialize 入口检查原始 JSON，不能把已经转换的模型当原始证据。
@@ -91,6 +91,14 @@ def _strict_sdk_envelope(
                 delay, reason = 300_000, "40100"
             raise AccountAdmissionDeferred(
                 max(delay, retry_after or 0), source="provider", reason=reason
+            )
+        if (
+            operation == "scene.get_identity_video"
+            and raw["code"] == 40000
+            and "unable to fetch a valid item" in str(raw.get("message") or "").lower()
+        ):
+            raise DomainError(
+                "tiktok_identity_item_unavailable", "平台未提供该帖子内容"
             )
         if (
             exact is not None
@@ -167,7 +175,9 @@ class OfficialReadRequests:
             try:
                 exact: dict[str, Any] = {}
                 with _strict_sdk_envelope(
-                    self.client, exact=exact if exact_numbers else None
+                    self.client,
+                    exact=exact if exact_numbers else None,
+                    operation=operation,
                 ):
                     response = send((min(5.0, budget), min(30.0, budget)))
             except ApiException as error:
