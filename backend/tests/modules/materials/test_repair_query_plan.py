@@ -15,9 +15,11 @@ from tests.modules.materials.test_readiness import asset, target
 from tests.modules.materials.test_readiness import runtime_config as runtime_config
 from tests.modules.materials.test_source_uploads import source_env as source_env
 from tests.modules.materials.test_source_uploads import wire as wire
+from tests.query_plans import explain_prepared
 
 
-def test_repair_locks_candidate_dispatch_by_primary_key(source_env, wire):
+@pytest.mark.parametrize("cached", [False, True])
+def test_repair_locks_candidate_dispatch_by_primary_key(source_env, wire, cached):
     with Session(engine) as db, db.begin():
         account = target(db, source_env)
         asset(db, source_env, account, status="result_unknown")
@@ -57,6 +59,8 @@ def test_repair_locks_candidate_dispatch_by_primary_key(source_env, wire):
             },
         )
         db.execute(text("ANALYZE pending_dispatch"))
+        if cached:
+            db.execute(text("SET LOCAL plan_cache_mode='force_generic_plan'"))
         event.listen(engine, "before_cursor_execute", capture)
         try:
             assert repair_material_dispatches(db) == 1
@@ -71,9 +75,13 @@ def test_repair_locks_candidate_dispatch_by_primary_key(source_env, wire):
         db.execute(text("SET LOCAL enable_hashjoin = off"))
         db.execute(text("SET LOCAL enable_bitmapscan = off"))
         plan = (
-            db.connection()
-            .exec_driver_sql("EXPLAIN (FORMAT JSON) " + statement, parameters)
-            .scalar_one()
+            explain_prepared(db.connection(), statement, parameters)
+            if cached
+            else (
+                db.connection()
+                .exec_driver_sql("EXPLAIN (FORMAT JSON) " + statement, parameters)
+                .scalar_one()
+            )
         )
 
         def nodes(value):

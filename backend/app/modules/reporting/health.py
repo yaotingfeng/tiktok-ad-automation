@@ -39,6 +39,9 @@ MAX_REPAIR_ACCOUNTS = 50
 
 
 def measure_health(session, plan, *, now, accounts=None):
+    # 常驻连接的通用计划不知道BC账户数组长度，会放弃日期索引；按本轮参数
+    # 规划，避免“重启后快、复用后慢”使健康检查超时。仅作用于当前事务。
+    session.connection().execute(text("SET LOCAL plan_cache_mode='force_custom_plan'"))
     owned = owned_accounts(session, plan) if accounts is None else accounts
     strict_accounts = rule_accounts(
         session, tenant_id=plan.tenant_id, bc_id=plan.bc_id, accounts=owned

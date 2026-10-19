@@ -1,5 +1,6 @@
 from datetime import UTC, datetime, timedelta
 
+import pytest
 from sqlmodel import select
 
 from app.modules.reporting import planner
@@ -10,6 +11,7 @@ from app.modules.reporting.store_models import (
     ReportSyncJob,
     ReportSyncState,
 )
+from tests.query_plans import explain_prepared
 
 
 def test_missing_current_data_is_degraded_and_repaired_without_fake_success(
@@ -162,8 +164,9 @@ def test_health_observation_survives_contended_repair_lock(committed_sync_seed):
         ).all()
 
 
+@pytest.mark.parametrize("cached", [False, True])
 def test_health_limits_history_scan_without_losing_local_date_boundaries(
-    session, sync_seed
+    session, sync_seed, cached
 ):
     from uuid import uuid4
 
@@ -218,6 +221,8 @@ def test_health_limits_history_scan_without_losing_local_date_boundaries(
                 queries.append((sql, params))
 
         connection = session.connection()
+        if cached:
+            connection.execute(text("SET LOCAL plan_cache_mode='force_generic_plan'"))
         event.listen(connection, "before_cursor_execute", capture)
         try:
             metrics, _, _ = measure_health(session, plan, now=now)
@@ -239,10 +244,30 @@ def test_health_limits_history_scan_without_losing_local_date_boundaries(
             return value + sum(scanned(child) for child in node.get("Plans", []))
 
         for sql, params in queries:
-            result = connection.exec_driver_sql(
-                "EXPLAIN (ANALYZE, FORMAT JSON) " + sql, params
-            ).scalar_one()
+            result = (
+                explain_prepared(connection, sql, params)
+                if cached
+                else connection.exec_driver_sql(
+                    "EXPLAIN (ANALYZE, FORMAT JSON) " + sql, params
+                ).scalar_one()
+            )
             assert scanned(result[0]["Plan"]) < 100, result
+            if cached:
+
+                def fact_conditions(node):
+                    if node.get("Relation Name", "").startswith(
+                        ("ad_report_day", "material_report_day")
+                    ):
+                        yield node.get("Index Cond", "")
+                    for child in node.get("Plans", []):
+                        yield from fact_conditions(child)
+
+                # 宽BC的数组长度和日期不能在长连接计划里退化成未知参数；
+                # 小夹具即使暂时扫描少，也必须保留实际参数参与索引代价判断。
+                assert all(
+                    "$" not in condition
+                    for condition in fact_conditions(result[0]["Plan"])
+                ), result
         # 下一组使用同一租户时去掉上组事实，保持独立当地日期证据。
         for model in (AdReportDay, MaterialReportDay):
             session.execute(

@@ -2090,6 +2090,9 @@ def repair_material_dispatches(session: Session, *, limit: int = 100) -> int:
     session.connection().execute(text("SET LOCAL lock_timeout = '2s'"))
     # 短周期恢复只取 100 条，避免复杂 EXISTS 触发的 JIT 编译挤占本轮预算。
     session.connection().execute(text("SET LOCAL jit = off"))
+    # 预备语句的通用计划无法用参数化任务名/JSON键证明局部表达式索引；
+    # 当前业务身份和消息类型参与规划，避免长连接复用后重新全扫历史outbox。
+    session.connection().execute(text("SET LOCAL plan_cache_mode='force_custom_plan'"))
     now = datetime.now(UTC)
     payload = col(PendingDispatch.payload)
 
