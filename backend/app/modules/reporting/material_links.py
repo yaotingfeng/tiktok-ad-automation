@@ -10,9 +10,9 @@
   已有的消耗仍在素材日报里；拆分接口按广告筛选时仍能查到旧帖子。
 - 广告目录可能晚于平台更新，旧帖子与新帖子的广告内素材 ID 都可能对不上目录。
 
-因此对照里直接记下视频 ID（建立对照时解析：先按广告内素材 ID，再按同一广告内的
-文件名），查询时不再依赖目录当下的广告内素材 ID。概览查不到的旧帖子，只在同账户
-用到同名文件的广告里逐条按广告查拆分报表定位，次数很少且一次定位后不再查。
+因此对照里直接保存精确身份链证明的视频 ID，文件名仅用于优先查找候选广告，不能
+证明历史视频身份。概览查不到的旧帖子再按同日期广告事实查拆分报表，完整查询在
+任务内复用；确认归属后保留结果，缺少视频身份证据时继续保持真实缺口。
 """
 
 from __future__ import annotations
@@ -467,29 +467,29 @@ def _locate_post_step(state, *, read_ad_posts, first, last):
 
 
 def _resolve_videos(session: Session, tenant_id: UUID, advertiser_id: str) -> None:
-    """为尚无视频的对照解析视频：先按广告内素材 ID，再按同一广告内唯一的同名文件。"""
+    """只按同广告内精确素材 ID 解析；同名文件允许异内容，不能证明历史 VID。"""
     # complete表示整页素材/创意补读覆盖，并不否定主响应已证实的精确视频身份。
     # Spark视频可用同账户、同广告、同广告内素材ID且唯一的VID直接对照；
     # 不完整的同名候选、帖子命名空间和多VID歧义均不能借此猜测，也不改广告操作的完整性要求。
     session.connection().execute(
         text("""
-        UPDATE material_post_link l SET platform_material_id = COALESCE(
-            (SELECT CASE WHEN count(DISTINCT u.platform_material_id)=1
-                    THEN min(u.platform_material_id) END FROM ad_material_reference u
-              WHERE u.tenant_id = l.tenant_id AND u.advertiser_id = l.advertiser_id
-                AND u.ad_remote_id = l.ad_remote_id AND u.ad_material_id = l.ad_material_id
-                AND NULLIF(l.ad_material_id, '') IS NOT NULL
-                AND NULLIF(u.platform_material_id, '') IS NOT NULL
-                AND (l.main_material_type<>'VIDEO_SPARK_ADS' OR u.material_type='VIDEO')
-                AND (u.complete OR (l.main_material_type='VIDEO_SPARK_ADS' AND u.material_type='VIDEO'))),
-            (SELECT CASE WHEN count(DISTINCT u.platform_material_id) = 1
-                    THEN min(u.platform_material_id) END
-               FROM ad_material_reference u
-              WHERE u.tenant_id = l.tenant_id AND u.advertiser_id = l.advertiser_id
-                AND u.ad_remote_id = l.ad_remote_id AND u.name = l.material_name
-                AND (l.main_material_type<>'VIDEO_SPARK_ADS' OR u.material_type='VIDEO')
-                AND u.complete))
-        WHERE l.tenant_id = :t AND l.advertiser_id = :a AND l.platform_material_id IS NULL
+        UPDATE material_post_link target SET platform_material_id = resolved.vid
+        FROM (
+          SELECT l.main_material_id, l.ad_remote_id, min(u.platform_material_id) AS vid
+          FROM material_post_link l JOIN ad_material_reference u
+            ON u.tenant_id=l.tenant_id AND u.advertiser_id=l.advertiser_id
+              AND u.ad_remote_id=l.ad_remote_id AND u.ad_material_id=l.ad_material_id
+          WHERE l.tenant_id=:t AND l.advertiser_id=:a AND l.platform_material_id IS NULL
+            AND NULLIF(l.ad_material_id, '') IS NOT NULL
+            AND NULLIF(u.platform_material_id, '') IS NOT NULL
+            AND (l.main_material_type<>'VIDEO_SPARK_ADS' OR u.material_type='VIDEO')
+            AND (u.complete OR (l.main_material_type='VIDEO_SPARK_ADS' AND u.material_type='VIDEO'))
+          GROUP BY l.main_material_id,l.ad_remote_id
+          HAVING count(DISTINCT u.platform_material_id)=1
+        ) resolved
+        WHERE target.tenant_id=:t AND target.advertiser_id=:a
+          AND target.main_material_id=resolved.main_material_id
+          AND target.ad_remote_id=resolved.ad_remote_id AND target.platform_material_id IS NULL
         """),
         {"t": tenant_id, "a": advertiser_id},
     )

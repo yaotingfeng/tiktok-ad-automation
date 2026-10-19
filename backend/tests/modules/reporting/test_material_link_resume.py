@@ -91,9 +91,11 @@ def test_slow_binary_search_and_pages_commit_across_worker_steps(committed_sync_
         assert reader.calls <= 1, "一步只能发送一次请求，慢响应不能抹掉此前进度"
         with factory() as session:
             job = session.get(ReportSyncJob, job_id)
-            assert job.attempts == 0 and job.error_code is None
-        if result == "COMPLETE":
-            break
+            assert job.attempts == 0
+            if job.error_code == "material_directory_pending":
+                assert result == "WAITING"
+                break
+            assert job.error_code is None
     else:
         raise AssertionError("持久化定位不能完成")
     assert reader.history.count(("overview", 1)) == 1
@@ -105,7 +107,7 @@ def test_slow_binary_search_and_pages_commit_across_worker_steps(committed_sync_
                 MaterialPostLink.main_material_id == "old-post",
             )
         ).one()
-        assert (link.ad_remote_id, link.platform_material_id) == ("ad199", "video199")
+        assert (link.ad_remote_id, link.platform_material_id) == ("ad199", None)
 
 
 def test_completed_overview_and_query_page_survive_later_provider_error(

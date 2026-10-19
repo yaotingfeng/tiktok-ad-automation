@@ -221,7 +221,8 @@ def test_spending_unresolved_post_is_located_before_zero_spend_history(
     paid = session.get(
         MaterialPostLink, (sync_seed.tenant_id, "acc-1", "z-spend", "paid-ad")
     )
-    assert paid is not None and paid.platform_material_id == "paid-ad"
+    assert paid is not None and paid.ad_remote_id == "paid-ad"
+    assert paid.platform_material_id is None  # 名称只用于搜索候选，不证明历史视频。
     assert (
         session.get(
             MaterialPostLink, (sync_seed.tenant_id, "acc-1", "a-zero", "zero-ad")
@@ -294,6 +295,8 @@ def test_concurrent_missing_parent_publishers_share_one_repair(
         "complete_post_id",
         "other_ad",
         "other_account",
+        "regular_complete",
+        "regular_incomplete",
     ],
 )
 def test_incomplete_directory_requires_unique_exact_video_identity(
@@ -306,7 +309,9 @@ def test_incomplete_directory_requires_unique_exact_video_identity(
         advertiser_id="acc-1",
         main_material_id="post",
         ad_remote_id="ad",
-        main_material_type="VIDEO_SPARK_ADS",
+        main_material_type="VIDEO"
+        if case.startswith("regular_")
+        else "VIDEO_SPARK_ADS",
         ad_material_id=None if case == "name_only" else "material",
         material_name="file.mp4",
         observed_at=datetime.now(UTC),
@@ -324,14 +329,16 @@ def test_incomplete_directory_requires_unique_exact_video_identity(
                 if case in {"post_id", "complete_post_id"}
                 else "VIDEO",
                 name="file.mp4",
-                complete=case == "complete_post_id",
+                complete=case in {"complete_post_id", "regular_complete"},
                 published_version=1,
             )
         )
     session.flush()
     _resolve_videos(session, sync_seed.tenant_id, "acc-1")
     session.refresh(link)
-    assert link.platform_material_id == ("v1" if case == "exact" else None)
+    assert link.platform_material_id == (
+        "v1" if case in {"exact", "regular_complete"} else None
+    )
     assert any(session.exec(select(AdMaterialReference.complete)).all()) == (
-        case == "complete_post_id"
+        case in {"complete_post_id", "regular_complete"}
     )

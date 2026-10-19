@@ -107,7 +107,9 @@ def test_refresh_links_only_when_new_posts_appear(session, sync_seed):
     assert ("p3", "a3", "m3") in links(session, sync_seed)
 
 
-def test_replaced_post_located_by_ad_and_video_resolved_by_name(session, sync_seed):
+def test_replaced_post_name_does_not_prove_historical_video_identity(
+    session, sync_seed
+):
     # 广告内素材重建：概览只列新帖子 p2，旧帖子 p1 仍有消耗；目录也还停在旧 ID。
     publish(
         session,
@@ -136,11 +138,23 @@ def test_replaced_post_located_by_ad_and_video_resolved_by_name(session, sync_se
             )
         )
     }
-    assert (rows["p1"].ad_remote_id, rows["p1"].platform_material_id) == ("a1", "v7")
+    # 当前目录只有同名视频并不能证明旧帖子使用了它；文件名允许跨内容重用。
+    assert (rows["p1"].ad_remote_id, rows["p1"].platform_material_id) == ("a1", None)
     assert (rows["p2"].ad_material_id, rows["p2"].platform_material_id) == (
         "new-m",
-        "v7",
+        None,
     )
+    # 未解析行每轮不能被 NULL→NULL 重写，避免历史缺口持续产生写放大。
+    from sqlalchemy import text
+
+    from app.modules.reporting.material_links import _resolve_videos
+
+    query = text(
+        "SELECT main_material_id,ctid::text FROM material_post_link ORDER BY 1"
+    )
+    before = session.connection().execute(query).all()
+    _resolve_videos(session, sync_seed.tenant_id, "acc-1")
+    assert session.connection().execute(query).all() == before
 
 
 @pytest.mark.parametrize("has_name_candidate", [False, True])
@@ -605,7 +619,7 @@ def test_new_directory_retries_cached_unresolved_posts(session, sync_seed):
             MaterialPostLink.main_material_id == "late-post",
         )
     ).one()
-    assert link.ad_remote_id == "late-ad" and link.platform_material_id == "late-video"
+    assert link.ad_remote_id == "late-ad" and link.platform_material_id is None
 
 
 def test_single_ad_response_resolves_all_matching_posts_together(session, sync_seed):
@@ -622,4 +636,5 @@ def test_single_ad_response_resolves_all_matching_posts_together(session, sync_s
         )
     ).all()
     assert len(rows) == 20
-    assert {r.platform_material_id for r in rows} == {"v1"}
+    assert {r.ad_remote_id for r in rows} == {"a1"}
+    assert {r.platform_material_id for r in rows} == {None}
