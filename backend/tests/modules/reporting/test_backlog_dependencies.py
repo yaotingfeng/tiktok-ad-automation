@@ -172,7 +172,7 @@ def test_general_directory_refresh_starts_before_freshness_deadline(
     plan = session.get(AdSyncBc, (sync_seed.tenant_id, "bc-a"))
     session.flush()
     assert measure_health(session, plan, now=now)[0]["missing_directory_ads"] == 0
-    assert refresh_report_directory(session, job, now=now) == 3
+    assert refresh_report_directory(session, job, now=now) == 1
     assert refresh_report_directory(session, job, now=now) == 0
     # 提前刷新不能掩盖真正超期：未收到新目录时，30分钟后仍应告警。
     assert (

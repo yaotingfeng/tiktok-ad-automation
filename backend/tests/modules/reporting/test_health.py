@@ -300,3 +300,53 @@ def test_health_allows_realtime_cycle_and_execution_margin(
     health = observe_health(session, plan, now=now)
     assert health.status == expected
     assert len(session.exec(select(ReportSyncJob)).all()) == (2 if age > 20 else 0)
+
+
+@pytest.mark.parametrize(
+    "kind,age,rule,missing",
+    [
+        ("ad", 30, False, 0),
+        ("ad", 31, False, 1),
+        ("adgroup", 31, False, 0),
+        ("adgroup", 60, False, 0),
+        ("adgroup", 61, False, 1),
+        ("campaign", 60, False, 0),
+        ("campaign", 61, False, 1),
+        ("ad", 15, True, 0),
+        ("ad", 16, True, 1),
+        ("adgroup", 15, True, 0),
+        ("adgroup", 16, True, 1),
+        ("campaign", 15, True, 0),
+        ("campaign", 16, True, 1),
+    ],
+)
+def test_directory_health_uses_layer_deadlines_without_early_refresh_margin(
+    session, sync_seed, kind, age, rule, missing
+):
+    from app.modules.automation_rules.models import AutomationRule
+    from app.modules.reporting.health import measure_health
+    from tests.modules.reporting.test_directory_refresh import (
+        directory_objects,
+        prepared,
+    )
+
+    now = datetime.now(UTC)
+    prepared(session, sync_seed)
+    directory_objects(session, sync_seed, now, ages={(kind, 0): age})
+    session.add(
+        AutomationRule(
+            tenant_id=sync_seed.tenant_id,
+            name="health-rule",
+            enabled=rule,
+            created_by=sync_seed.actor_id,
+            updated_by=sync_seed.actor_id,
+            definition={"accounts": {"mode": "ALL"}},
+        )
+    )
+    planner.ensure_bc_plans(session, now=now, tenant_id=sync_seed.tenant_id)
+    plan = session.get(AdSyncBc, (sync_seed.tenant_id, "bc-a"))
+    session.flush()
+    metrics, _, repairs = measure_health(session, plan, now=now)
+    assert metrics["missing_directory_ads"] == missing
+    if missing:
+        assert "acc-2" in repairs["ad"]

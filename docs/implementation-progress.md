@@ -3173,3 +3173,17 @@ bb4a971599c0707e91c79c989ad81bdc8571b281于20:30:44 UTC完成11角色快速发�
 本轮最终验证：CI Ruff（app/tests）和ty均通过；mypy当前509、main基准510，逐条规范化行号及错误正文中的行号后无新增；全部15个修改/新增Python文件格式检查通过；三个模块完整pytest **921 passed，60.30秒，无跳过**。前端上一轮73项浏览器测试、lint及构建通过，之后仅改Python测试换行和记录，前端无新增变更。第一次重跑遇到本地Colima停止、恢复后随机端口变化，连接失败轮次不计通过；更新本地端口并清除旧uv解释器缓存影响后上述完整重跑成功，没有跳过或删测试。
 
 阶段1提交以 `automation-rules: 将实时刷新和暂停规则统一为15分钟` 定位（下一阶段记录其实际哈希）。分支为独立工作树绑定的已有 `feat/automated-rules`，原基准3b4f8c5e；当前main已新增两个仅文档提交至41ae8ea4，后端代码与mypy基准未变。按用户最新指示，本轮只提交三个阶段，**不合并回main、不推送、不发布**。后续合并前需先把本分支变基至届时main并验证，才可在main快进合并；原工作区未跟踪的设计/计划应先核对并备存，避免覆盖阻碍。
+
+### 2026-10-20 同步请求精简：阶段 2 账户整轮目录刷新
+
+阶段1提交：`fac30065`（automation-rules: 将实时刷新和暂停规则统一为15分钟）。阶段2按D3重写 `refresh_report_directory`，先取得原PostgreSQL事务级advisory规划锁，再读取年龄及在途运行；同租户、BC、actor、冻结路由、账户、广告类型、层级任一live运行在QUEUED/RUNNING/ADMISSION_WAIT/WAITING_REMOTE即跳过该组，不再逐ID叠加。
+
+对象范围明确选择**本任务账户的当地今日全部spend>0事实**，移除sync_job_id过滤：同账户当日事实可以由其他任务发布，仅按本任务ID会漏读、破坏整账户时间对齐；仍限制租户、本任务账户和事实当地日期，附UTC前后一天范围做分区裁剪。缺失立即补该对象；某账户某层任一已存在对象到期，则整批刷新该账户该层全部有消耗对象，跨广告类型一起对齐，并对在途类型单独让出。仍调用request_directory按100 ID分片，未新增请求入口。素材关联补读、补父级、周期全量与操作后回读保留原行为。
+
+新常量STATUS_INTERVAL=30分钟、PARENT_INTERVAL=60分钟、REFRESH_MARGIN=5分钟；启用规则账户三层共用planner.HOT_INTERVAL=15分钟。规划提前余量触发（25/55/10分钟），健康告警使用完整30/60/15分钟期限。DIRECTORY_FRESHNESS、GENERAL_DIRECTORY_REFRESH_INTERVAL及GENERAL_DIRECTORY_FRESHNESS的应用/测试引用全部移除。
+
+测试新增/更新覆盖：不齐年龄整账户刷新、跨sync_job_id、零消耗/历史排除、UTC前后一天当地日期和任务账户边界、缺失仅补缺失、混合广告类型对齐、101 ID分片、四种live状态去重、租户/BC/actor/冻结代数/账户/类型/层级/workload隔离、15分钟后不重复和30分钟后整批刷新、真实PG双事务并发只生成一轮分片、健康30/60/15分钟边界。初始目录/依赖红测13失败42通过，健康红测6失败7通过；补充跨类型红测1失败2通过，均随后修正，不删除或跳过用例。
+
+本阶段无迁移。提交定位：`reporting: 按账户整轮刷新有消耗广告目录`；提交正文同步记录选择当日全部有消耗行的理由。保持不合并、不推送、不发布，沿用阶段1确认的门禁。
+
+阶段2最终门禁：`cd backend && uv run pytest tests/modules/reporting tests/modules/automation_rules tests/modules/ads -q` **960 passed，66.08秒，无跳过**；`uv run ruff check app tests && uv run ty check app`通过；mypy当前507，对比main的510条错误清单（忽略行号）无新增；从main以来全部18个修改/新增Python文件 `ruff format --check` 通过；`git diff --check`通过。全仓44个存量格式问题与本轮无关，未处理。

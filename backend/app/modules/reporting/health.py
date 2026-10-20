@@ -13,7 +13,9 @@ from app.core.db import engine
 from app.jobs.celery_app import celery_app
 from app.jobs.outbox import enqueue_after_commit
 from app.modules.reporting.directory_refresh import (
-    GENERAL_DIRECTORY_FRESHNESS,
+    PARENT_INTERVAL,
+    STATUS_INTERVAL,
+    directory_interval,
     rule_accounts,
 )
 from app.modules.reporting.jobs import enqueue_job
@@ -61,7 +63,9 @@ def measure_health(session, plan, *, now, accounts=None):
         # 全球当地日只可能落在 UTC 前后一天；先走日期索引，再按事实时区精确判断。
         "first_day": now.astimezone(UTC).date() - timedelta(days=1),
         "last_day": now.astimezone(UTC).date() + timedelta(days=1),
-        "general_cutoff": now - GENERAL_DIRECTORY_FRESHNESS,
+        "status_cutoff": now - STATUS_INTERVAL,
+        "parent_cutoff": now - PARENT_INTERVAL,
+        "rule_cutoff": now - directory_interval("ad", has_rules=True),
         "strict_accounts": sorted(strict_accounts),
         "action_cutoff": now - timedelta(minutes=2),
     }
@@ -100,8 +104,12 @@ def measure_health(session, plan, *, now, accounts=None):
         WHERE r.tenant_id=:t AND r.advertiser_id=ANY(:ids)
           AND r.stat_date BETWEEN :first_day AND :last_day AND r.stat_date=(CAST(:now AS timestamptz) AT TIME ZONE r.timezone)::date
           AND r.spend>0 AND (a.remote_id IS NULL OR g.remote_id IS NULL OR c.remote_id IS NULL
-            OR LEAST(a.observed_at,g.observed_at,c.observed_at) < CASE
-              WHEN r.advertiser_id=ANY(:strict_accounts) THEN :cutoff ELSE :general_cutoff END)
+            OR a.observed_at < CASE WHEN r.advertiser_id=ANY(:strict_accounts)
+              THEN :rule_cutoff ELSE :status_cutoff END
+            OR g.observed_at < CASE WHEN r.advertiser_id=ANY(:strict_accounts)
+              THEN :rule_cutoff ELSE :parent_cutoff END
+            OR c.observed_at < CASE WHEN r.advertiser_id=ANY(:strict_accounts)
+              THEN :rule_cutoff ELSE :parent_cutoff END)
     """),
             params,
         )

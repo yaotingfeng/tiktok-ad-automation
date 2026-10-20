@@ -8,19 +8,18 @@ from sqlalchemy import text
 from sqlmodel import Session, col, select
 
 from app.core.config import settings
-from app.integrations.tiktok.contracts.ads import EntityRef
+from app.integrations.tiktok.contracts.ads import EntityKind, EntityRef
 from app.modules.ads.directory_requests import request_directory
 from app.modules.ads.sync_models import AdDirectoryRun
 from app.modules.automation_rules.models import AutomationRule
 from app.modules.reporting.lanes import report_workload
 from app.modules.reporting.store_models import ReportSyncJob
 
-# 每份完整热报最多补 100 条广告；查询仍由现有目录服务按 100 ID 分片。
+# 素材关联补读保持原有单轮上限；广告日报刷新不截断账户对象集合。
 MAX_REFRESH_ADS = 100
-DIRECTORY_FRESHNESS = timedelta(minutes=2)
-GENERAL_DIRECTORY_FRESHNESS = timedelta(minutes=30)
-# 30分钟是新鲜度上限，25分钟即安排刷新，预留热报周期、排队与接口响应时间。
-GENERAL_DIRECTORY_REFRESH_INTERVAL = timedelta(minutes=25)
+STATUS_INTERVAL = timedelta(minutes=30)
+PARENT_INTERVAL = timedelta(minutes=60)
+REFRESH_MARGIN = timedelta(minutes=5)
 _AD_TYPES = {
     "UPGRADED_SMART_PLUS": "SMART_PLUS",
     "SMART_PLUS": "LEGACY_SMART_PLUS",
@@ -48,70 +47,31 @@ def rule_accounts(session, *, tenant_id, bc_id, accounts):
     return covered
 
 
+def directory_interval(kind: str, *, has_rules: bool) -> timedelta:
+    """规则账户三层状态必须跟上同一实时轮次，普通账户上级配置可更慢。"""
+    # planner 经 jobs 导入本模块；在运行时取常量，避免初始化循环，也避免复制周期值。
+    from app.modules.reporting import planner
+
+    if has_rules:
+        return planner.HOT_INTERVAL
+    return STATUS_INTERVAL if kind == "ad" else PARENT_INTERVAL
+
+
 def refresh_report_directory(
     session: Session, job: ReportSyncJob, *, now: datetime | None = None
 ) -> int:
-    """仅补本次已发布热报中当地今天有消耗的广告及父链，不借此搬运全量目录。"""
+    """只选本任务账户当地今日有消耗对象，按账户、类型、层级对齐刷新轮次。"""
     if not settings.ADS_SYNC_ENABLED or job.kind != "ad_day" or job.priority != 1:
         return 0
     now = now or datetime.now(UTC)
-    strict_accounts = rule_accounts(
-        session, tenant_id=job.tenant_id, bc_id=job.bc_id, accounts=job.advertiser_ids
-    )
-    rows = list(
-        session.connection()
-        .execute(
-            text("""
-        SELECT r.advertiser_id, r.ad_id, r.adgroup_id, r.campaign_id, r.campaign_automation_type,
-          a.observed_at AS ad_observed_at, g.observed_at AS adgroup_observed_at,
-          c.observed_at AS campaign_observed_at
-        FROM ad_report_day r
-        LEFT JOIN ad_object a ON a.tenant_id=r.tenant_id AND a.advertiser_id=r.advertiser_id AND a.kind='ad' AND a.remote_id=r.ad_id
-        LEFT JOIN ad_object g ON g.tenant_id=r.tenant_id AND g.advertiser_id=r.advertiser_id AND g.kind='adgroup' AND g.remote_id=r.adgroup_id
-        LEFT JOIN ad_object c ON c.tenant_id=r.tenant_id AND c.advertiser_id=r.advertiser_id AND c.kind='campaign' AND c.remote_id=r.campaign_id
-        WHERE r.tenant_id=:tenant AND r.sync_job_id=:job AND r.advertiser_id=ANY(:accounts) AND r.spend>0
-          AND r.stat_date=(CAST(:now AS timestamptz) AT TIME ZONE r.timezone)::date
-          AND EXISTS (
-            SELECT 1 FROM (VALUES ('ad',r.ad_id,a.observed_at),
-              ('adgroup',r.adgroup_id,g.observed_at),
-              ('campaign',r.campaign_id,c.observed_at)) target(kind,remote_id,observed_at)
-            WHERE (target.observed_at IS NULL OR target.observed_at < CASE
-              WHEN r.advertiser_id=ANY(:strict_accounts) THEN :cutoff ELSE :general_cutoff END)
-            AND NOT EXISTS (
-            SELECT 1 FROM ad_directory_run d WHERE d.tenant_id=r.tenant_id
-              AND d.bc_id=:bc AND d.actor_id=:actor AND d.frozen_route=CAST(:route AS jsonb)
-              AND d.advertiser_id=r.advertiser_id AND d.kind=target.kind
-              AND d.ad_type=CASE r.campaign_automation_type WHEN 'UPGRADED_SMART_PLUS' THEN 'SMART_PLUS'
-                WHEN 'SMART_PLUS' THEN 'LEGACY_SMART_PLUS' WHEN 'MANUAL' THEN 'REGULAR' END
-              AND d.workload='live'
-              AND d.status IN ('QUEUED','RUNNING','ADMISSION_WAIT','WAITING_REMOTE')
-              AND d.query->'ids' ? target.remote_id))
-        ORDER BY (a.remote_id IS NOT NULL AND g.remote_id IS NOT NULL AND c.remote_id IS NOT NULL),
-          LEAST(a.observed_at,g.observed_at,c.observed_at) ASC NULLS FIRST,
-          r.spend DESC, r.advertiser_id, r.ad_id LIMIT :limit
-    """),
-            {
-                "tenant": job.tenant_id,
-                "job": job.id,
-                "bc": job.bc_id,
-                "actor": job.actor_id,
-                "route": json.dumps(job.frozen_route),
-                "accounts": job.advertiser_ids,
-                "now": now,
-                "cutoff": now - DIRECTORY_FRESHNESS,
-                "general_cutoff": now - GENERAL_DIRECTORY_REFRESH_INTERVAL,
-                "strict_accounts": sorted(strict_accounts),
-                "limit": MAX_REFRESH_ADS,
-            },
-        )
-        .mappings()
-    )
-    if not rows:
-        return 0
-    # 同一冻结 BC 的并发热报合并未完成回读；用户写后回读仍每次生成新请求。
+    # 先取得规划锁再读取目录年龄和在途运行，保证并发发布看到前一事务的完整计划。
+    # 只约束热报规划；用户操作后的回读仍走既有独立路径。
     session.connection().execute(
         text("SELECT pg_advisory_xact_lock(hashtextextended(:scope, 0))"),
         {"scope": f"report-directory:{job.tenant_id}:{job.bc_id}"},
+    )
+    strict_accounts = rule_accounts(
+        session, tenant_id=job.tenant_id, bc_id=job.bc_id, accounts=job.advertiser_ids
     )
     pending = session.exec(
         select(AdDirectoryRun).where(
@@ -124,44 +84,77 @@ def refresh_report_directory(
             col(AdDirectoryRun.status).in_(_ACTIVE),
         )
     ).all()
-    covered = {
-        (run.advertiser_id, run.ad_type, run.kind, remote_id)
-        for run in pending
-        for remote_id in run.query.get("ids", ())
-    }
-    refs = {}
-    types = defaultdict(lambda: defaultdict(set))
+    # 同账户同类型同层任意 live 运行在途即让出本轮，不能因 ID 不同再制造碎片。
+    covered = {(run.advertiser_id, run.ad_type, run.kind) for run in pending}
+    rows = (
+        session.connection()
+        .execute(
+            text("""
+        SELECT r.advertiser_id, r.ad_id, r.adgroup_id, r.campaign_id, r.campaign_automation_type,
+          a.observed_at AS ad_observed_at, g.observed_at AS adgroup_observed_at,
+          c.observed_at AS campaign_observed_at
+        FROM ad_report_day r
+        LEFT JOIN ad_object a ON a.tenant_id=r.tenant_id AND a.advertiser_id=r.advertiser_id AND a.kind='ad' AND a.remote_id=r.ad_id
+        LEFT JOIN ad_object g ON g.tenant_id=r.tenant_id AND g.advertiser_id=r.advertiser_id AND g.kind='adgroup' AND g.remote_id=r.adgroup_id
+        LEFT JOIN ad_object c ON c.tenant_id=r.tenant_id AND c.advertiser_id=r.advertiser_id AND c.kind='campaign' AND c.remote_id=r.campaign_id
+        WHERE r.tenant_id=:tenant AND r.advertiser_id=ANY(:accounts) AND r.spend>0
+          AND r.stat_date BETWEEN :first_day AND :last_day
+          AND r.stat_date=(CAST(:now AS timestamptz) AT TIME ZONE r.timezone)::date
+    """),
+            {
+                "tenant": job.tenant_id,
+                "accounts": job.advertiser_ids,
+                "now": now,
+                "first_day": now.astimezone(UTC).date() - timedelta(days=1),
+                "last_day": now.astimezone(UTC).date() + timedelta(days=1),
+            },
+        )
+        .mappings()
+    )
+    # 不限 sync_job_id：同账户今日事实可由不同任务发布，必须整批对齐所有有消耗对象。
+    # 日期粗范围用于分区裁剪，精确当地日条件仍以事实时区为准。
+    objects: dict[tuple[str, str, EntityKind], dict[str, datetime | None]] = (
+        defaultdict(dict)
+    )
+    layers: tuple[tuple[EntityKind, str], ...] = (
+        ("campaign", "campaign_id"),
+        ("adgroup", "adgroup_id"),
+        ("ad", "ad_id"),
+    )
     for row in rows:
         ad_type = _AD_TYPES.get(row.campaign_automation_type)
         if ad_type is None:
-            continue  # 报表未证明类型时不猜测，也不把金额当目录状态。
+            continue  # 类型未获报表证明时不猜测平台端点。
+        for kind, column in layers:
+            key = (row.advertiser_id, ad_type, kind)
+            if row[column]:
+                objects[key][row[column]] = row[f"{kind}_observed_at"]
+    expired_layers: set[tuple[str, EntityKind]] = set()
+    for (advertiser, _ad_type, kind), observations in objects.items():
         cutoff = now - (
-            DIRECTORY_FRESHNESS
-            if row.advertiser_id in strict_accounts
-            else GENERAL_DIRECTORY_REFRESH_INTERVAL
+            directory_interval(kind, has_rules=advertiser in strict_accounts)
+            - REFRESH_MARGIN
         )
-        for kind, column in (
-            ("campaign", "campaign_id"),
-            ("adgroup", "adgroup_id"),
-            ("ad", "ad_id"),
-        ):
-            # 三层分别判断：父链某层过期，不应连带重读仍新鲜的另外两层。
-            observed_at = row[f"{kind}_observed_at"]
-            if observed_at is not None and observed_at >= cutoff:
-                continue
-            key = (row.advertiser_id, ad_type, kind, row[column])
-            if key not in covered:
-                refs[key] = EntityRef(
-                    job.tenant_id, row.advertiser_id, kind, row[column]
+        if any(at is not None and at < cutoff for at in observations.values()):
+            expired_layers.add((advertiser, kind))
+    refs_by_type: dict[str, list[EntityRef]] = defaultdict(list)
+    types: dict[str, dict[str, set[str]]] = defaultdict(lambda: defaultdict(set))
+    for (advertiser, ad_type, kind), observations in sorted(objects.items()):
+        if (advertiser, ad_type, kind) in covered:
+            continue
+        # 到期按账户/层级合并，跨广告类型一起对齐；在途约束仍按类型分别让出。
+        # 仅缺失时只补缺失，避免新投放一个对象连带重读整个账户。
+        expired = (advertiser, kind) in expired_layers
+        for remote_id, observed_at in sorted(observations.items()):
+            if expired or observed_at is None:
+                refs_by_type[ad_type].append(
+                    EntityRef(job.tenant_id, advertiser, kind, remote_id)
                 )
-                types[row.advertiser_id][ad_type].add(kind)
-    if not refs:
-        return 0
+                types[advertiser][ad_type].add(kind)
     created = 0
-    # 目录服务的 refs 不带广告类型；分类型请求，避免混合账户把其它类型的 ID 发错端点。
-    for ad_type in sorted({key[1] for key in refs}):
-        group = {key: ref for key, ref in refs.items() if key[1] == ad_type}
-        advertisers = sorted({key[0] for key in group})
+    # 沿用唯一目录请求入口的100 ID分片；分类型传 refs，避免混合类型误发端点。
+    for ad_type, refs in sorted(refs_by_type.items()):
+        advertisers = sorted({ref.advertiser_id for ref in refs})
         created += request_directory(
             session,
             tenant_id=job.tenant_id,
@@ -170,7 +163,7 @@ def refresh_report_directory(
             actor_id=job.actor_id,
             advertiser_ids=advertisers,
             scope="targeted",
-            refs=tuple(group.values()),
+            refs=tuple(refs),
             ad_types={adv: {ad_type: types[adv][ad_type]} for adv in advertisers},
         )
     return created
