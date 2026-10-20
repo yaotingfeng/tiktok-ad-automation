@@ -310,3 +310,15 @@ def test_pages_keep_actual_page_number_for_resume_and_duplicate_detection():
     directory = DirectoryPage((), (), 4, False, EVIDENCE, page=3)
     assert directory.page == 3
     assert DirectoryPage((), (), None, True, EVIDENCE).page == 1
+
+
+def test_directory_material_usage_rejects_report_main_identity_fields():
+    with pytest.raises(TypeError):
+        AdMaterialUsage(
+            MaterialUseRef(entity_ref(), "video-1", "inner-1", "VIDEO"),
+            None,
+            None,
+            True,
+            main_material_id="report-post",
+            main_material_type="VIDEO_SPARK_ADS",
+        )

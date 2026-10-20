@@ -86,8 +86,6 @@ def _material_json(material: Any) -> dict[str, Any]:
         "operation_status": material.operation_status,
         "complete": material.complete,
         "name": material.name,
-        "main_material_id": material.main_material_id,
-        "main_material_type": material.main_material_type,
         "creative_ids": list(material.creative_ids),
     }
 
@@ -445,8 +443,6 @@ def _material_values(
         "ad_material_id": use.get("ad_material_id"),
         "material_type": str(use.get("material_type") or ""),
         "name": str(data.get("name") or ""),
-        "main_material_id": data.get("main_material_id"),
-        "main_material_type": data.get("main_material_type"),
         "creative_ids": list(data.get("creative_ids") or []),
         "local_material_id": local_material_id,
         "operation_status": data.get("operation_status"),

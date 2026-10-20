@@ -271,15 +271,6 @@ class AdsReadAdapter:
             )
             if ad_material_id is not None:
                 identifier(ad_material_id)
-            main_id, main_type = (
-                entry.get("main_material_id"),
-                entry.get("main_material_type"),
-            )
-            if (main_id is None) != (main_type is None):
-                raise invalid()
-            if main_id is not None:
-                identifier(main_id)
-                identifier(main_type)
             name = (
                 info.get("material_name", "")
                 if smart
@@ -307,9 +298,7 @@ class AdsReadAdapter:
                         status,
                         True,
                         name,
-                        main_id,
-                        main_type,
-                        (native_creative,) if native_creative else (),
+                        creative_ids=(native_creative,) if native_creative else (),
                     )
                 )
         return usages, complete
@@ -394,15 +383,7 @@ class AdsReadAdapter:
             if previous is None:
                 merged[usage.use_ref] = usage
             else:
-                if (
-                    previous.main_material_id,
-                    previous.main_material_type,
-                    previous.operation_status,
-                ) != (
-                    usage.main_material_id,
-                    usage.main_material_type,
-                    usage.operation_status,
-                ):
+                if previous.operation_status != usage.operation_status:
                     raise invalid()
                 merged[usage.use_ref] = replace(
                     previous,

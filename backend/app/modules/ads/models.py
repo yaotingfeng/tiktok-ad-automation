@@ -175,10 +175,6 @@ class AdMaterialReference(SQLModel, table=True):
         ),
         CheckConstraint("published_version > 0", name="ck_ad_material_version"),
         CheckConstraint(
-            "(main_material_id IS NULL) = (main_material_type IS NULL)",
-            name="ck_ad_material_main_identity",
-        ),
-        CheckConstraint(
             "jsonb_typeof(creative_ids) = 'array'", name="ck_ad_material_creatives"
         ),
         Index("ix_ad_material_ad", "tenant_id", "advertiser_id", "ad_remote_id"),
@@ -198,10 +194,8 @@ class AdMaterialReference(SQLModel, table=True):
     platform_material_id: str = Field(max_length=128)
     ad_material_id: str | None = Field(default=None, max_length=128)
     material_type: str = Field(max_length=64)
-    # 外部素材可没有本地文件；搜索名称与主素材报表身份独立保存。
+    # 外部素材可没有本地文件；目录保存素材使用身份和名称，报表主素材身份由帖子关联维护。
     name: str = ""
-    main_material_id: str | None = Field(default=None, max_length=128)
-    main_material_type: str | None = Field(default=None, max_length=64)
     creative_ids: list[str] = Field(
         default_factory=list, sa_column=Column(JSONB, nullable=False)
     )

@@ -3187,3 +3187,27 @@ bb4a971599c0707e91c79c989ad81bdc8571b281于20:30:44 UTC完成11角色快速发�
 本阶段无迁移。提交定位：`reporting: 按账户整轮刷新有消耗广告目录`；提交正文同步记录选择当日全部有消耗行的理由。保持不合并、不推送、不发布，沿用阶段1确认的门禁。
 
 阶段2最终门禁：`cd backend && uv run pytest tests/modules/reporting tests/modules/automation_rules tests/modules/ads -q` **960 passed，66.08秒，无跳过**；`uv run ruff check app tests && uv run ty check app`通过；mypy当前507，对比main的510条错误清单（忽略行号）无新增；从main以来全部18个修改/新增Python文件 `ruff format --check` 通过；`git diff --check`通过。全仓44个存量格式问题与本轮无关，未处理。
+
+### 2026-10-20 同步请求精简：阶段 3 删除目录主素材空字段
+
+阶段2提交：`bb92ac5e1d647b3a5f6a49b6fe5bde5fa09e16e2`；阶段1完整提交号：`fac300659e0784fb6cfa2ba237a4fb86385ca388`。阶段3提交定位为本节所在的 `ads: 删除广告目录无来源的主素材字段` 提交，可用 `git log -1 --format=%H --grep='^ads: 删除广告目录无来源的主素材字段$'` 取出提交号；完整哈希在提交后交接说明中提供，避免为了把提交自身哈希写入其内容而循环改写提交。
+
+按D4删除 `AdMaterialReference` 的main_material_id/main_material_type及ck_ad_material_main_identity，同时移除 `AdMaterialUsage` 合同、ads_read解析及重复合并判定、目录暂存和发布写入中的对应字段；保留VID、广告内素材ID、creative_ids、外部素材无本地文件等行为。`material_report_day`、`material_post_link` 的同名字段及帖子关联链路保留，不增加旧字段兼容逻辑。
+
+新增迁移 `0042_drop_ad_material_main.py`：upgrade只删除ad_material_reference的成对约束及两列；downgrade恢复nullable VARCHAR(128)/VARCHAR(64)及原成对约束，不猜填历史值。设计核查中两列均为空；下行是结构可逆，不能恢复假设存在的已删除非空数据。真实PostgreSQL历史库测试覆盖升级、下行、再次升级和Alembic schema无漂移，逐项验证素材日报/帖子关联的同名列与真实值未变、目录VID/素材ID/创意列表未丢失、恢复的成对约束仍拒绝单边身份。
+
+新增/修改测试还覆盖：合同拒绝旧主素材字段；API/MCP传输替身响应混入报表字段不影响帖子/视频身份；外部素材目录往返；1200对象有界发布的暂存JSON不含已删字段。红测如实为5 failed、177 passed（78.51秒），随后完整修正，未跳过或删除测试。
+
+阶段3最终验证（全部仅本地PostgreSQL18、Redis8，外部接口在传输边界使用替身）：
+
+- `cd backend && uv run pytest tests/modules/reporting tests/modules/automation_rules tests/modules/ads -q`：**961 passed，66.27秒，无跳过**。
+- `cd backend && uv run pytest tests/contracts/test_ads_reporting_contracts.py tests/integrations/tiktok/test_ads_read_adapters.py -q`：**142 passed，73.97秒，无跳过**。
+- `cd backend && uv run ruff check app tests && uv run ty check app`：通过。
+- `uv run mypy app`：505 errors / 74 files；对比main的510条错误（忽略位置和错误正文内行号），无新增。main新增的两个提交只改文档，后端基准未变。
+- `ruff format --check`：从main以来全部28个修改/新增Python文件（含测试和迁移）通过；`git diff --check`通过。
+
+阶段2、3按用户批准的新门禁执行；原 `bash scripts/lint.sh` 在阶段1因存量mypy错误失败，不能记为通过。它包含的ty、Ruff已按新门禁独立验证，mypy按错误清单差异验证，格式按全部本轮Python文件验证；全仓510个基准mypy错误和44个存量格式问题未顺手修理。
+
+完成最终独立只读代码审查：未发现Critical、Important或Minor具体问题，未有待处理审查项。审查核对D1–D4生产代码、测试及新迁移；未判断线上请求量、查询性能、迁移耗时，这些不能由本地测试代替。未发布、未调用真实TikTok接口、未连接线上数据库。
+
+当前分支仍为独立工作树的 `feat/automated-rules`，共同基准3b4f8c5e；main为41ae8ea4，另有两个仅文档提交。本轮不合并、不推送。未来先核对并备存main工作区未跟踪的同名设计/计划，再把本分支变基到届时main，保留双方进度记录并重新验证，然后才在main执行 `git merge --ff-only feat/automated-rules`。变基会改变本轮提交号，交接记录的哈希是本次交付时的原始提交号。

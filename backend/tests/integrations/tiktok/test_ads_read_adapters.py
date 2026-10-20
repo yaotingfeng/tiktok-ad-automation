@@ -748,6 +748,8 @@ def test_post_only_material_and_video_identity_do_not_collide(
         {"creative_info": {"video_info": {"video_id": "90071992547409931"}}},
         {
             "smart_plus_creative_id": "post-creative",
+            # 报表字段即使混入目录响应，也不能参与帖子/视频使用身份解析。
+            "main_material_id": "report-only-post",
             "material_operation_status": "DISABLE",
             "creative_info": {
                 "tiktok_item_id": "90071992547409931",
@@ -776,7 +778,6 @@ def test_post_only_material_and_video_identity_do_not_collide(
     post = result.materials[1]
     assert post.use_ref.platform_material_id == "90071992547409931"
     assert post.use_ref.ad_material_id is None and post.local_material_id is None
-    assert post.main_material_id is None and post.main_material_type is None
     assert post.name == "授权帖子" and post.creative_ids == ("post-creative",)
     assert post.operation_status == "DISABLE"
 

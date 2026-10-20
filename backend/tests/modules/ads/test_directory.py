@@ -393,18 +393,13 @@ def test_external_material_metadata_roundtrip(session, directory_seed):
         material_type="VIDEO",
         published_version=1,
         name="external video name",
-        main_material_id="spark-post-id",
-        main_material_type="POST",
         creative_ids=["creative-1", "creative-2"],
     )
     session.add(material)
     session.flush()
     session.expire_all()
     assert material.name == "external video name"
-    assert (material.main_material_id, material.main_material_type) == (
-        "spark-post-id",
-        "POST",
-    )
+    assert material.local_material_id is None
     assert material.creative_ids == ["creative-1", "creative-2"]
     assert (material.platform_material_id, material.ad_material_id) == (
         "library-vid",

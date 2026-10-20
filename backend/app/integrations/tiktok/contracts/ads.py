@@ -133,8 +133,6 @@ class AdMaterialUsage:
     operation_status: str | None
     complete: bool
     name: str = ""
-    main_material_id: str | None = None
-    main_material_type: str | None = None
     creative_ids: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
@@ -149,12 +147,6 @@ class AdMaterialUsage:
             raise ValueError("invalid material completeness")
         if type(self.name) is not str:
             raise ValueError("invalid material name")
-        if (self.main_material_id is None) != (self.main_material_type is None):
-            raise ValueError("main material requires typed identity")
-        if self.main_material_id is not None:
-            require_id(self.main_material_id)
-            assert self.main_material_type is not None
-            require_text(self.main_material_type)
         require_strings(self.creative_ids)
 
 

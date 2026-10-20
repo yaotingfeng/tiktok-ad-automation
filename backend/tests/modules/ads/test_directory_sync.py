@@ -372,6 +372,16 @@ def test_large_publish_has_bounded_database_round_trips(
         run = _run(session, directory_seed, kind=kind)
         page = DirectoryPage(items, materials, None, True, CallEvidence())
         stage_directory_page(session, run_id=run.id, page=page, claim_generation=1)
+        if kind == "ad":
+            payload = session.get(AdDirectoryPage, (run.id, 1)).materials[0]
+            assert set(payload) == {
+                "use_ref",
+                "local_material_id",
+                "operation_status",
+                "complete",
+                "name",
+                "creative_ids",
+            }
         statements.clear()
 
         connection = session.connection()
