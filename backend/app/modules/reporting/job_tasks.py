@@ -539,6 +539,7 @@ def _plan_one(
     *,
     allow_backfill=True,
 ):
+    assert hot == material, "双实时事实必须使用相同周期"
     with Session(database_engine) as session, session.begin():
         plan = session.exec(
             select(AdSyncBc)
@@ -550,6 +551,8 @@ def _plan_one(
         accounts = planner.owned_accounts(session, plan)
         if not accounts:
             return
+        # 到期状态必须在外部筛选和退避前冻结；素材时钟单独到期不代表热报漏投。
+        hot_due_at = plan.next_hot_at if plan.next_hot_at <= now else None
         material_due_at = (
             plan.next_material_at if plan.next_material_at <= now else None
         )
@@ -690,20 +693,27 @@ def _plan_one(
                 planner.record_calls(redis_client, now, counted.count)
         # 已知活跃账户的两类实时事实共用 15 分钟周期；筛选退避时仍刷新
         # 当地今日已有事实，规则不额外扩展到无消耗账户，避免为无数据判断空转。
-        if plan.enabled and material_due_at is not None:
+        if plan.enabled and (hot_due_at is not None or material_due_at is not None):
             refresh_accounts = set(
                 plan.last_active_advertiser_ids
             ) | planner.known_reporting_accounts(
                 session, plan, accounts=accounts, now=now
             )
-            if not hot_planned:
+            if hot_due_at is not None and not hot_planned:
                 planner.plan_hot(
                     session, plan, active=sorted(refresh_accounts), now=now
                 )
             planner.plan_material(
                 session, plan, active=sorted(refresh_accounts), now=now
             )
-            plan.next_material_at = _advance(material_due_at, now, material)
+            # 热报是双时钟相位基准：错相旧计划在下一轮自动归一；筛选失败也已
+            # 为已知账户补投本轮事实，不再把退避时间当成新的热报相位。
+            next_live = (
+                _advance(hot_due_at, now, hot)
+                if hot_due_at is not None
+                else plan.next_hot_at
+            )
+            plan.next_hot_at = plan.next_material_at = next_live
 
 
 def _dispatch_report_jobs(

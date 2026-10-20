@@ -3260,3 +3260,13 @@ CI后端4884项：4882首轮通过、1独立重跑通过、1跳过、最终0失�
 已做内联设计自查：具体规则、源素材键、窗口、人工覆盖、未知执行、并发资金、防重复核销、接管PREPARING、迁移/发布边界与15项行为验收。经营明细独立闭合检查通过，未将最终回补日线当真实盘中因果回测，未声明策略必达ROAS1。
 
 本轮仅新增设计文档和本条进度，尚未实施、未写产品代码、未调用广告写入、未改生产规则、未推送或发布。不因这份设计运行无关产品测试。下一步先请用户审阅已写出的完整设计及风险上限，再依据书面设计形成实施计划；新增持久化结构需Alembic和完整迁移发布流程，不能按阈值小修跳过。
+
+
+## 2026-10-21 同步精简后续阶段 1：实时双时钟
+
+- 修复素材时钟错相重复规划广告日报：冻结进入本轮的热报到期状态，只有到期且筛选失败才兜底；热报轮次同时规划素材，两时钟按原热报相位一起推进。仅素材到期时补素材并向热报对齐，无数据库迁移。
+- 新增错开 ±7 分钟、完成后退出去重范围、连续 3 轮的真实 PG 回归；更新 open/hot/daily/backoff 及规则空账户测试，明确热报未到期不得补拉。权限失败后的热报重筛改为下一 15 分钟周期，已知账户在失败当轮已获兜底。
+- 完整门禁（backend/）：`uv run ruff check app tests && uv run ty check app` 通过；`uv run ruff format --check app/modules/reporting/job_tasks.py tests/modules/reporting/test_job_tasks.py` 通过；`uv run mypy app` 基线及本阶段均 505 条/74 文件，按文件+诊断文本计数比较（忽略行号）无新增；`uv run pytest tests/modules/reporting tests/modules/automation_rules tests/modules/ads -q` **965 passed / 45.78s**。新行为修复前定向 5 failed / 1 passed，修复后完整通过。
+- 使用本机专用 PostgreSQL 17.5（127.0.0.1:55483，tkada_sync_followups_test）和 Redis 8.0.1（127.0.0.1:56483，测试 DB 1），清空继承环境并 APP_ENV_FILE=/dev/null，未读取线上配置或调用真实 TikTok。测试日志位于本机 /tmp/tkada-sync-followups，不进入提交。
+- 设计按用户字面路径保存为 `docs/superpowers/specs/2026-10-d`；计划为 `docs/superpowers/plans/2026-10-21-sync-followups.md`。原 pytest 命令被截断，恢复为 reporting、automation_rules、ads 三模块完整运行。阶段 4 预审发现素材规则依赖所有未定位帖子，待阶段 3 完成后按停止条件提交审计结论，不擅改规则语义。
+- 提交前复核 main 状态、仓库根目录和明确路径暂存差异；不推送、不发布，既有未跟踪文件保持原样。提交号见 Git 中本节对应 reporting 提交。

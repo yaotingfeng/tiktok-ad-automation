@@ -1,0 +1,27 @@
+# 同步请求精简后续修复设计
+
+基线：已发布 fac30065、bb92ac5e、cf560a32、95c34bf2，生产版本 48197483 / schema 0042。本轮只做本地实现和验证，不发布、不推送、不连接线上数据库或真实 TikTok。
+
+## 1. 实时双时钟
+
+素材时钟不能重复规划已按时规划的广告日报。只有进入本轮时热报确实到期且筛选失败，才用已知活跃账户兜底。保留筛选退避保护，已知账户不因外部读取失败漏刷新。每 BC 的 next_hot_at 和 next_material_at 在下一轮实时规划自动同相，一起推进，不迁移数据库。
+
+## 2. 规则前置同步
+
+复用 directory_refresh.rule_accounts（当前代码的启用规则账户判定）。有启用规则覆盖账户的 BC 使用 UTC 15 分钟网格前 RULE_SYNC_LEAD=3 分钟，即 :12/:27/:42/:57；只改变同步时刻，不扩大取数账户范围。无规则 BC 保持独立相位，不全部对齐到同一分钟。规则启停后自动切换；延迟和多轮推进不得漂移。规则执行刻度和 inputs.py 的 20 分钟新鲜度不变。现行账户时区偏移为 15 分钟整数倍，15/30/60 分钟规则刻度因此可共用 UTC 网格。
+
+## 3. 当地昨天收尾
+
+当地零点后第一轮热报，为昨天有事实的账户补 ad_day 和 material_day 单日窗口。复用 report_sync_state 的 last_success_at：晚于当地零点即已收尾，不新增表或字段。在途任务去重，失败走原任务重试。无昨日事实账户不制造请求；各账户按自身时区切日。收尾使用实时优先级，但今天热报优先；每日历史回刷仍可修正昨天。实现时记录具体优先级与派发选择。
+
+## 4. 素材关联与平台缺口
+
+先审计 8bd35045 及当时设计、验证文档、页面/规则/报表调用方。若存在零消耗零收入素材关联的业务依赖，停止阶段 4 并回报，不改该行为。
+
+无依赖才实施：needs_material_links、missing_video_ids、dependency_changed 共用窗口内 spend>0 或收入>0 的业务价值判定。零消耗零收入不追关联，也不能伪造已关联；现有等待任务经正常依赖重查收敛，不直接改数据库任务状态。
+
+健康检查复用 material_link_scan 中完整扫描的负证据和 NEGATIVE_SCAN_TTL，并核实范围、签名和过期条件。已证实平台未给身份的缺口单列 platform_unlinked_material_posts，不进入 issues/DEGRADED；没有有效负证据仍告警并修复。若现有存储不足而需 schema，先停止确认。
+
+## 门禁与交付
+
+每阶段一聚焦提交，标题 reporting: 或 automation-rules:，只暂存明确文件。每次在 backend 执行 Ruff 全量、ty app、本阶段 Python format check、mypy 与上个提交诊断对比、reporting/automation_rules/ads 完整 pytest；并发和锁使用独立真实 PostgreSQL/Redis，不屏蔽失败。用户原命令存在截断，按上述三个明确模块运行 -q。每阶段更新 docs/implementation-progress.md，提交前执行 git status -sb、git rev-parse --show-toplevel 并审查暂存差异。全部既有未跟踪文件保持原样。设计路径按用户字面保存为本文件（无扩展名）。

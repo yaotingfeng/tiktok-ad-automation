@@ -159,9 +159,9 @@ def test_bc_permission_failure_falls_back_next_round(
     job_tasks.plan_due_runs(
         database_engine=engine,
         redis_client=redis_client,
-        now=now + timedelta(minutes=5),
+        now=now + timedelta(minutes=15),
     )
-    # 回退为账户报表筛选：热刷 1 个请求，32 天回刷按 30 天切成 2 个请求。
+    # 已兜底的热报到下一周期再筛选；回退为账户报表筛选：热刷 1 个请求，32 天回刷按 30 天切成 2 个请求。
     assert calls == ["bc", *[("acc-1", "acc-2")] * 3]
 
 
@@ -1872,9 +1872,15 @@ def test_screening_deferral_cannot_skip_due_live_reports(
                 ReportSyncJob.priority == 1,
             )
         ).all()
-        assert {a for j in ads for a in j.advertiser_ids} == {"acc-1", "acc-2"}
+        assert {a for j in ads for a in j.advertiser_ids} == (
+            set() if failure_stage == "backoff" else {"acc-1", "acc-2"}
+        )
         plan = s.get(AdSyncBc, (seed.tenant_id, "bc-a"))
-        assert plan.next_material_at == now + planner.MATERIAL_INTERVAL
+        assert (
+            plan.next_material_at
+            == plan.next_hot_at
+            == now + timedelta(minutes=5 if failure_stage == "backoff" else 15)
+        )
         assert plan.next_daily_at >= now + timedelta(minutes=5)
 
 
@@ -1967,8 +1973,8 @@ def test_screening_backoff_does_not_expand_refresh_to_idle_rule_accounts(
         jobs = s.exec(
             select(ReportSyncJob).where(ReportSyncJob.tenant_id == seed.tenant_id)
         ).all()
-        expected = {"acc-1"}
         for kind in ("ad_day", "material_day"):
+            expected = {"acc-1"} if screen_ok or kind == "material_day" else set()
             assert {
                 a for j in jobs if j.kind == kind for a in j.advertiser_ids
             } == expected
@@ -1993,3 +1999,70 @@ def test_default_does_not_suspend_history_using_aggregate_endpoint_calls(
     now = datetime.now(UTC)
     record_calls(redis_client, now, 900000)
     assert backfill_allowed(redis_client, now)
+
+
+@pytest.mark.parametrize("material_offset", [-7, 7])
+def test_offset_live_clocks_do_not_duplicate_hot_rounds(
+    monkeypatch, committed_sync_seed, redis_client, material_offset
+):
+    """即使完成任务已退出去重范围，素材错相也不能再请求本轮广告日报。"""
+    from datetime import timedelta
+
+    from app.core.db import engine
+    from app.integrations.tiktok.contracts.report_reader import RawReportPage
+    from app.modules.reporting import planner
+    from app.modules.reporting.store_models import AdSyncBc, ReportSyncJob
+
+    seed, factory = committed_sync_seed
+    now = datetime(2026, 10, 21, 4, tzinfo=UTC)
+    with factory() as s, s.begin():
+        planner.ensure_bc_plans(s, now=now)
+        plan = s.get(AdSyncBc, (seed.tenant_id, "bc-a"))
+        plan.next_material_at = now + timedelta(minutes=material_offset)
+        plan.next_daily_at = plan.next_directory_at = now + timedelta(days=1)
+        plan.last_active_advertiser_ids = ["acc-1"]
+
+    class Reader:
+        def bc_spend(self, **_kwargs):
+            return RawReportPage(
+                (
+                    {
+                        "dimensions": {"advertiser_id": "acc-1"},
+                        "metrics": {"spend": "1"},
+                    },
+                ),
+                1,
+                1,
+                1,
+            )
+
+    monkeypatch.setattr(job_tasks, "_reader_for", lambda **_kwargs: _ctx(Reader()))
+    for minute in (0, 7, 15, 22, 30):
+        at = now + timedelta(minutes=minute)
+        job_tasks._plan_one(
+            engine,
+            redis_client,
+            (seed.tenant_id, "bc-a"),
+            at,
+            at + timedelta(seconds=20),
+            planner.HOT_INTERVAL,
+            planner.MATERIAL_INTERVAL,
+            allow_backfill=False,
+        )
+        with factory() as s, s.begin():
+            jobs = s.exec(
+                select(ReportSyncJob).where(
+                    ReportSyncJob.tenant_id == seed.tenant_id,
+                    ReportSyncJob.kind == "ad_day",
+                )
+            ).all()
+            assert len(jobs) == minute // 15 + 1
+            for job in s.exec(
+                select(ReportSyncJob).where(
+                    ReportSyncJob.tenant_id == seed.tenant_id,
+                )
+            ).all():
+                job.status = "COMPLETE"
+            plan = s.get(AdSyncBc, (seed.tenant_id, "bc-a"))
+            assert plan.next_material_at == plan.next_hot_at
+            assert plan.next_hot_at == now + timedelta(minutes=(minute // 15 + 1) * 15)
