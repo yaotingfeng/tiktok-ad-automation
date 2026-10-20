@@ -133,13 +133,14 @@ start_pg "$pg_name"
 start_pg "$acceptance_pg_name"
 start_pg "$browser_pg_name"
 docker run ${ci_labels[@]+"${ci_labels[@]}"} -d --name "$redis_name" -p 127.0.0.1::6379 "$(mirrored redis:8)" --databases 64 >/dev/null
+# 初始化阶段会临时启动仅 Unix socket 的 PostgreSQL，再关闭重启；探测 TCP 才代表最终服务可用。
 for ((attempt=0; attempt<60; attempt++)); do
-  if docker exec "$pg_name" pg_isready -U postgres >/dev/null 2>&1 && docker exec "$acceptance_pg_name" pg_isready -U postgres >/dev/null 2>&1 && docker exec "$browser_pg_name" pg_isready -U postgres >/dev/null 2>&1 && docker exec "$redis_name" redis-cli ping >/dev/null 2>&1; then break; fi
+  if docker exec "$pg_name" pg_isready -h 127.0.0.1 -U postgres >/dev/null 2>&1 && docker exec "$acceptance_pg_name" pg_isready -h 127.0.0.1 -U postgres >/dev/null 2>&1 && docker exec "$browser_pg_name" pg_isready -h 127.0.0.1 -U postgres >/dev/null 2>&1 && docker exec "$redis_name" redis-cli ping >/dev/null 2>&1; then break; fi
   sleep 1
 done
-docker exec "$pg_name" pg_isready -U postgres
-docker exec "$acceptance_pg_name" pg_isready -U postgres
-docker exec "$browser_pg_name" pg_isready -U postgres
+docker exec "$pg_name" pg_isready -h 127.0.0.1 -U postgres
+docker exec "$acceptance_pg_name" pg_isready -h 127.0.0.1 -U postgres
+docker exec "$browser_pg_name" pg_isready -h 127.0.0.1 -U postgres
 docker exec "$redis_name" redis-cli ping
 pg_port=$(docker port "$pg_name" 5432/tcp | sed 's/.*://')
 acceptance_pg_port=$(docker port "$acceptance_pg_name" 5432/tcp | sed 's/.*://')
