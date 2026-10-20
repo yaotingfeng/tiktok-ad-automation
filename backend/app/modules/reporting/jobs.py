@@ -32,11 +32,18 @@ from app.modules.reporting.directory_refresh import (
     refresh_report_directory,
     request_link_directory,
 )
-from app.modules.reporting.lanes import lane_predicate
+from app.modules.reporting.lanes import CLOSEOUT_PRIORITY, lane_predicate
 from app.modules.reporting.metrics import material_metric_values, parse_local_day
 from app.modules.reporting.store_models import ReportSyncJob, ReportSyncPage
 
-PRIORITY = {"hot": 1, "manual": 1, "material": 2, "daily": 3, "history": 4}
+PRIORITY = {
+    "hot": 1,
+    "manual": 1,
+    "material": 2,
+    "daily": 3,
+    "history": 4,
+    "closeout": CLOSEOUT_PRIORITY,
+}
 TRUNCATION_ROWS = 20_000
 MATERIAL_PAGES_PER_STEP = 5
 MATERIAL_SPLIT_ROWS = 5_000
@@ -190,7 +197,10 @@ def enqueue_jobs(
                 ReportSyncJob.actor_id == actor_id,
                 ReportSyncJob.frozen_route == frozen_route,
                 ReportSyncJob.kind == kind,
-                ReportSyncJob.priority <= 2,
+                # 午夜前开始的旧热报未必覆盖尾数，不能吞掉午夜后的收尾请求。
+                ReportSyncJob.priority == CLOSEOUT_PRIORITY
+                if tier == "closeout"
+                else ReportSyncJob.priority <= 2,
                 ReportSyncJob.start_date == start,
                 ReportSyncJob.end_date == end,
                 ReportSyncJob.campaign_ids == list(campaign_ids),
@@ -266,7 +276,7 @@ def claim_jobs(
     backfill_group: str | None = None,
 ) -> list[ReportSyncJob]:
     """按持久游标轮转租户；实时事实先均衡类型在途，类型内保留创建顺序。"""
-    if lane not in {None, "live", "links", "backfill"}:
+    if lane not in {None, "live", "closeout", "links", "backfill"}:
         raise ValueError("invalid report lane")
     lane_filter = "" if lane is None else f"AND {lane_predicate(lane=lane, alias='j')}"
     if backfill_group is not None:

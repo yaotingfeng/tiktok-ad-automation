@@ -947,10 +947,16 @@ def _lane_job_scope(now, lane, index):
         return advertiser, "ad_day", day - timedelta(days=index + 1)
     if lane == "links":
         return advertiser, "material_links", day
+    if lane == "closeout":
+        return (
+            advertiser,
+            ("ad_day", "material_day")[index % 2],
+            day - timedelta(days=1),
+        )
     return advertiser, ("ad_day", "material_day", "campaign_hour")[index // 2], day
 
 
-@pytest.mark.parametrize("lane", ["live", "links", "backfill"])
+@pytest.mark.parametrize("lane", ["live", "closeout", "links", "backfill"])
 @pytest.mark.parametrize("window", [2, 3])
 def test_concurrent_report_dispatchers_cannot_overfill_window(
     monkeypatch, committed_sync_seed, lane, window
@@ -971,6 +977,7 @@ def test_concurrent_report_dispatchers_cannot_overfill_window(
     window_name = {
         "live": "REPORT_DISPATCH_WINDOW",
         "links": "LINK_DISPATCH_WINDOW",
+        "closeout": "CLOSEOUT_DISPATCH_WINDOW",
         "backfill": "BACKFILL_DISPATCH_WINDOW",
     }[lane]
     monkeypatch.setattr(job_tasks, window_name, window)
@@ -982,8 +989,8 @@ def test_concurrent_report_dispatchers_cannot_overfill_window(
                 tenant_id=seed.tenant_id,
                 bc_id="bc-a",
                 kind=kind,
-                campaign_ids=[str(index)] if lane == "links" else [],
-                tier="hot",
+                campaign_ids=[str(index)] if lane in {"links", "closeout"} else [],
+                tier="closeout" if lane == "closeout" else "hot",
                 advertiser_ids=[advertiser],
                 start=day,
                 end=day,
@@ -1010,7 +1017,7 @@ def test_concurrent_report_dispatchers_cannot_overfill_window(
         )
 
 
-@pytest.mark.parametrize("lane", ["live", "links", "backfill"])
+@pytest.mark.parametrize("lane", ["live", "closeout", "links", "backfill"])
 def test_single_slot_refill_round_robins_three_tenants_across_rounds(monkeypatch, lane):
     from contextlib import ExitStack
     from datetime import timedelta
@@ -1032,6 +1039,7 @@ def test_single_slot_refill_round_robins_three_tenants_across_rounds(monkeypatch
         {
             "live": "REPORT_DISPATCH_WINDOW",
             "links": "LINK_DISPATCH_WINDOW",
+            "closeout": "CLOSEOUT_DISPATCH_WINDOW",
             "backfill": "BACKFILL_DISPATCH_WINDOW",
         }[lane],
         2,
@@ -1052,8 +1060,10 @@ def test_single_slot_refill_round_robins_three_tenants_across_rounds(monkeypatch
                         tenant_id=seed.tenant_id,
                         bc_id="bc-a",
                         kind=kind,
-                        campaign_ids=[str(index)] if lane == "links" else [],
-                        tier="hot",
+                        campaign_ids=[str(index)]
+                        if lane in {"links", "closeout"}
+                        else [],
+                        tier="closeout" if lane == "closeout" else "hot",
                         advertiser_ids=[advertiser],
                         start=day,
                         end=day,

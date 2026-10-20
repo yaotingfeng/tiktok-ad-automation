@@ -3279,3 +3279,14 @@ CI后端4884项：4882首轮通过、1独立重跑通过、1跳过、最终0失�
 - 新增 10 项真实 PG 相位回归：ALL/BC/ACCOUNTS、未启用/未覆盖、无 owned 账户 BC、首次到期、精确刻度边界、启停恢复、多轮延迟和失败退避。规则范围共用函数补齐类型声明。
 - backend 门禁：`uv run ruff check app tests && uv run ty check app` 通过；3 个改动 Python 文件 `uv run ruff format --check` 通过；`uv run mypy app` 502 条/74 文件，对比上阶段 505 条按诊断多重集无新增（补类型消除 3 条）；`uv run pytest tests/modules/reporting tests/modules/automation_rules tests/modules/ads -q` **975 passed / 46.38s**。先红 5 failed/3 passed；修复后定向 107 passed，边界补测纳入完整回归。
 - 继续使用阶段 1 的独立本机 PG/Redis 与清洁测试环境；提交前核对 main、仓库根目录、暂存 diff。阶段 1 提交 `53a5888f`；本节提交号见对应 Git 提交。无推送或发布。
+
+
+## 2026-10-21 同步精简后续阶段 3：当地昨日收尾
+
+- 热报到期时，在今日广告/素材规划之后，对 owned 范围中昨日有广告或素材事实的账户规划昨日单日 ad_day/material_day；不依赖今日活跃筛选结果。`report_sync_state.last_success_at` 晚于该账户当地零点就跳过对应类型；无昨日事实不规划，不新增 schema。
+- 复用原任务记录保证每个冻结授权范围、账户、日期、类型只规划一次；WAITING/FAILED/COMPLETE 不会在下一轮重新制造收尾，失败走原重试与每日回刷。午夜前旧热任务不能吞掉新收尾，拆分仍走原任务合同。
+- 调度选择：增加 closeout 实时档（priority=0，仅标识该专用档位）和独立 **2** 个在途名额；仍用 `reporting.job_step`/ads-reporting 与 live 准入，今日 live 先派发、原 **24** 个名额不变。同一 PG 调度锁保护所有窗口，保留跨租户轮转。超过“当地昨天”的收尾自动转 backfill；昨日素材关联仍走历史关联通道。名额不代表独占 Worker，两个候补仍共享实际进程/平台额度，生产容量尚未验证。
+- 新增 `test_day_closeout.py` 12 项：两类昨日事实、混合时区、无事实/成功水位、BC 所有权、筛选失败但无今日活动、今日容量保护、真实发布和每日覆盖、午夜前旧热报、夏令时/45 分钟偏移、等待/失败/完成后不重建。原调度并发/公平用例扩展 closeout 共 3 项，使用真实 PG 多连接。
+- backend 门禁：`uv run ruff check app tests && uv run ty check app`、6 个改动 Python `uv run ruff format --check` 通过；`uv run mypy app` 502 条/74 文件，对比上阶段诊断多重集（规范化位置及诊断内行号）无新增；`uv run pytest tests/modules/reporting tests/modules/automation_rules tests/modules/ads -q` **990 passed / 46.73s**。
+- 过程：初始收尾 6 项先红后绿；并发/时区扩展定向 79 passed；补“失败后仍每天只规划一次”先复现 2 failed，SQL 参数绑定漏补在专项中暴露并已修复，最终收尾 12 passed。中途已中止无意义的未修复完整运行；没有跳过失败或改成宽松断言凑通过。
+- 继续使用本机专用 PG/Redis 与清洁环境，不操作线上。阶段 2 提交 `23abca2d`；本节提交前核对 main、根目录和暂存差异，不推送、不发布。

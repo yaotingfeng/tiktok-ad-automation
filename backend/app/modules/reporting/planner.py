@@ -4,6 +4,7 @@
 数据按账户存放，各 BC 的可见性由查询层按当前授权判断。
 """
 
+import json
 from collections.abc import Sequence
 from datetime import UTC, date, datetime, time, timedelta
 from math import ceil
@@ -21,6 +22,7 @@ from app.modules.accounts.connection_models import BCConnectionBinding
 from app.modules.accounts.models import AdvertiserAccount, DiscoveryRun
 from app.modules.accounts.routing import freeze_route
 from app.modules.reporting.jobs import enqueue_job, enqueue_jobs
+from app.modules.reporting.lanes import CLOSEOUT_PRIORITY
 from app.modules.reporting.partitions import ensure_month_partitions_for_range
 from app.modules.reporting.store_models import (
     AdSyncAccount,
@@ -338,7 +340,7 @@ def _timezones(session, tenant_id, advertiser_ids) -> dict[str, str]:
 
 def _hot_window(timezone: str, now: datetime) -> tuple[date, date]:
     today = local_today(timezone, now)
-    # 当前日独占实时容量；昨天修正仍由每日回刷负责，不能反复搬运旧窗口。
+    # 当前日独占热报容量；昨天由独立收尾入口补一次，不能每轮搬运旧窗口。
     return today, today
 
 
@@ -507,6 +509,83 @@ def plan_hot(
                 ),
                 start=start,
                 end=end,
+                **_common(plan),
+            )
+        )
+    return count
+
+
+def plan_day_closeout(session: Session, plan: AdSyncBc, *, now: datetime) -> int:
+    """当地零点后为昨日有事实的账户收尾；成功水位与原计划防止重复规划。"""
+    rows = (
+        session.connection()
+        .execute(
+            text("""
+        WITH planned AS MATERIALIZED (
+          SELECT ids.advertiser_id,j.kind,j.end_date
+          FROM report_sync_job j
+          CROSS JOIN LATERAL jsonb_array_elements_text(j.advertiser_ids) ids(advertiser_id)
+          WHERE j.tenant_id=:tenant AND j.bc_id=:bc AND j.actor_id=:actor
+            AND j.frozen_route=CAST(:route AS jsonb) AND j.priority=:closeout
+            AND j.start_date=j.end_date AND j.end_date BETWEEN :first_day AND :last_day),
+        owned AS (
+          SELECT a.advertiser_id, a.timezone,
+            (CAST(:now AS timestamptz) AT TIME ZONE a.timezone)::date AS today
+          FROM advertiser_account a JOIN ad_sync_account o
+            ON o.tenant_id=a.tenant_id AND o.advertiser_id=a.advertiser_id
+          WHERE a.tenant_id=:tenant AND o.owner_bc_id=:bc),
+        yesterday AS (
+          SELECT *, today-1 AS day, today::timestamp AT TIME ZONE timezone AS midnight
+          FROM owned)
+        SELECT y.advertiser_id,y.day,k.kind FROM yesterday y
+        CROSS JOIN (VALUES ('ad_day'),('material_day')) k(kind)
+        LEFT JOIN report_sync_state s ON s.tenant_id=:tenant
+          AND s.advertiser_id=y.advertiser_id AND s.stat_date=y.day AND s.report_kind=k.kind
+        WHERE (s.last_success_at IS NULL OR s.last_success_at<=y.midnight)
+          AND NOT EXISTS (SELECT 1 FROM planned p WHERE p.advertiser_id=y.advertiser_id
+            AND p.end_date=y.day AND p.kind=k.kind)
+          AND (EXISTS (SELECT 1 FROM ad_report_day f WHERE f.tenant_id=:tenant
+                AND f.advertiser_id=y.advertiser_id AND f.stat_date=y.day)
+            OR EXISTS (SELECT 1 FROM material_report_day f WHERE f.tenant_id=:tenant
+                AND f.advertiser_id=y.advertiser_id AND f.stat_date=y.day))
+        ORDER BY y.day,k.kind,y.advertiser_id
+        """),
+            {
+                "tenant": plan.tenant_id,
+                "bc": plan.bc_id,
+                "now": now,
+                "actor": plan.actor_id,
+                "route": json.dumps(plan.frozen_route),
+                "closeout": CLOSEOUT_PRIORITY,
+                "first_day": now.astimezone(UTC).date() - timedelta(days=2),
+                "last_day": now.astimezone(UTC).date(),
+            },
+        )
+        .all()
+    )
+    # 每账户/日期/类型只规划一次；失败交给原任务重试和每日回刷，不每轮重建。
+    # planned 按本轮日期一次展开，避免对每个账户重复扫描完整任务历史。
+    grouped: dict[tuple[str, date], list[str]] = {}
+    for advertiser, day, kind in rows:
+        grouped.setdefault((kind, day), []).append(advertiser)
+    count = 0
+    for (kind, day), advertisers in grouped.items():
+        groups = (
+            ([advertiser] for advertiser in advertisers)
+            if kind == "material_day"
+            else batch_accounts(
+                session, tenant_id=plan.tenant_id, advertiser_ids=advertisers, days=1
+            )
+        )
+        count += len(
+            enqueue_jobs(
+                session,
+                kind=kind,
+                tier="closeout",
+                advertiser_groups=groups,
+                start=day,
+                end=day,
+                due_at=now,
                 **_common(plan),
             )
         )

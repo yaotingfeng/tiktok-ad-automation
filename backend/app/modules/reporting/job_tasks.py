@@ -78,6 +78,9 @@ DIRECTORY_DISPATCH_WINDOW = 8
 # 12 个执行进程保留两批有界候补，吸收 outbox 投递空档；
 # 实际 SDK 并发和调用次数始终由共享准入额度约束。
 REPORT_DISPATCH_WINDOW = 24
+# 昨日收尾只保留两个独立实时候补；今日先派发且原 24 个名额不被收尾占用。
+# 这是数据库在途限制，实际执行仍共享 reporting Worker 与平台准入额度。
+CLOSEOUT_DISPATCH_WINDOW = 2
 # 当地今天关联独立于实时事实；历史关联使用下面的后台窗口。
 LINK_DISPATCH_WINDOW = 4
 # 后台3个执行进程同样保留两批有界候补，避免每步等待outbox投递而空转。
@@ -706,6 +709,9 @@ def _plan_one(
             planner.plan_material(
                 session, plan, active=sorted(refresh_accounts), now=now
             )
+            if hot_due_at is not None:
+                # 切日后今天可能尚无消耗；昨日收尾按 owned 昨日事实独立选账户。
+                planner.plan_day_closeout(session, plan, now=now)
             # 热报是双时钟相位基准：错相旧计划在下一轮自动归一；筛选失败也已
             # 为已知账户补投本轮事实，不再把退避时间当成新的热报相位。
             next_live = (
@@ -734,6 +740,7 @@ def _dispatch_report_jobs(
     jobs = []
     for lane, window, task in (
         ("live", REPORT_DISPATCH_WINDOW, "reporting.job_step"),
+        ("closeout", CLOSEOUT_DISPATCH_WINDOW, "reporting.job_step"),
         ("links", LINK_DISPATCH_WINDOW, "reporting.job_step"),
         ("backfill", BACKFILL_DISPATCH_WINDOW, "reporting.backfill_step"),
     ):

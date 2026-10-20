@@ -44,12 +44,12 @@
 
 ## 阶段 3：昨日收尾
 
-**Files:** planner.py、job_tasks.py、jobs.py / lanes.py（如优先级合同需要）、test_planner.py / test_jobs.py、implementation-progress.md。
+**Files:** planner.py、job_tasks.py、jobs.py、lanes.py、新增 test_day_closeout.py、扩展 test_job_tasks.py、implementation-progress.md。
 **Interface:** 按账户昨日事实及 report_sync_state 水位规划单日收尾，复用 enqueue_jobs 去重。
 
-- [ ] 测首轮、重复规划、无事实、混合时区、收尾发布及每日覆盖。
-- [ ] 实现收尾入口；核验实时队列中今日优先，记录选择的优先级机制。
-- [ ] 完整门禁、记录、检查状态与暂存差异、聚焦提交。
+- [x] 测首轮、重复规划、无事实、混合时区、收尾发布及每日覆盖。
+- [x] 实现收尾入口；核验实时队列中今日优先，记录选择的优先级机制。
+- [x] 完整门禁、记录、检查状态与暂存差异、聚焦提交。
 
 ## 阶段 4：关联范围与健康分类
 
