@@ -695,3 +695,179 @@ def test_material_inputs_bound_temporary_memory_across_advertisements(
     } == {"identity-99"}
     # 输入输出只有50个当前身份，不能同时持有全部4950条历史ORM对象。
     assert peak < 6 * 1024 * 1024
+
+
+@pytest.mark.parametrize("mapping", ["owner_missing", "vid_missing", "empty_vid"])
+@pytest.mark.parametrize(
+    "spend,revenue,expected_hits", [("0", "0", 1), ("1", "0", 0), ("0", "1", 0)]
+)
+def test_only_valuable_unlinked_posts_block_rules(
+    session, sync_seed, mapping, spend, revenue, expected_hits
+):
+    """零金额缺关联不能使本来应止损的账户/广告失效，收入独有的帖子仍保护。"""
+    from sqlalchemy import text
+
+    setup(session, sync_seed)
+    use(session, sync_seed, "a1")
+    post(session, sync_seed, "a1", "paid")
+    post(
+        session,
+        sync_seed,
+        "a1",
+        "gap",
+        spend=spend,
+        revenue=revenue,
+        video="" if mapping == "empty_vid" else None,
+    )
+    if mapping == "owner_missing":
+        session.connection().execute(
+            text(
+                "DELETE FROM material_post_link WHERE tenant_id=:t AND main_material_id='gap'"
+            ),
+            {"t": sync_seed.tenant_id},
+        )
+    loaded, found = result(session, sync_seed)
+    assert len(found.hits) == expected_hits
+    ignored = [
+        x
+        for x in loaded.skipped_accounts
+        if x["reason"] == "ZERO_VALUE_UNLINKED_POSTS_IGNORED"
+    ]
+    if expected_hits:
+        assert ignored == [
+            {
+                "advertiser_id": "acc-1",
+                "reason": "ZERO_VALUE_UNLINKED_POSTS_IGNORED",
+                "count": "1",
+            }
+        ]
+    else:
+        assert not ignored
+        expected_reason = (
+            "MATERIAL_REPORT_UNLINKED"
+            if mapping == "owner_missing"
+            else "MATERIAL_LINK_UNRESOLVED"
+        )
+        assert any(x["reason"] == expected_reason for x in loaded.skipped_accounts)
+
+
+def test_ignored_posts_count_persists_in_rule_run_without_alert(session, sync_seed):
+    from sqlalchemy import text
+
+    from app.modules.automation_rules.data_issues import actionable_input_issues
+    from app.modules.automation_rules.models import AutomationRule, AutomationRuleRun
+    from app.modules.automation_rules.runner import execute_run
+
+    setup(session, sync_seed)
+    use(session, sync_seed, "a1")
+    post(session, sync_seed, "a1", "paid")
+    for pid in ("no-owner", "no-vid"):
+        post(session, sync_seed, "a1", pid, spend="0", revenue="0", video=None)
+        fact = session.get(
+            MaterialReportDay, (sync_seed.tenant_id, "acc-1", TODAY, pid)
+        )
+        session.add(
+            MaterialReportDay(
+                **(fact.model_dump() | {"stat_date": TODAY - timedelta(days=1)})
+            )
+        )
+        session.flush()
+    session.connection().execute(
+        text(
+            "DELETE FROM material_post_link WHERE tenant_id=:t AND main_material_id='no-owner'"
+        ),
+        {"t": sync_seed.tenant_id},
+    )
+    definition = rule().model_dump(mode="json")
+    current = AutomationRule(
+        tenant_id=sync_seed.tenant_id,
+        name="零金额排除计数",
+        created_by=sync_seed.actor_id,
+        updated_by=sync_seed.actor_id,
+        definition=definition,
+    )
+    session.add(current)
+    session.flush()
+    run = execute_run(session, rule=current, slot_at=NOW, now=NOW)
+    session.flush()
+    session.expire(run)
+    saved = session.get(AutomationRuleRun, run.id)
+    assert saved.status == "COMPLETE" and saved.hit_count == 1
+    assert saved.skipped_accounts == [
+        {
+            "advertiser_id": "acc-1",
+            "reason": "ZERO_VALUE_UNLINKED_POSTS_IGNORED",
+            "count": "2",
+        }
+    ]
+    assert actionable_input_issues(saved.skipped_accounts) == []
+
+
+@pytest.mark.parametrize("mapping", ["owner_missing", "vid_missing"])
+@pytest.mark.parametrize("window,expected_hits", [("LIFETIME", 1), ("TODAY", 0)])
+def test_rule_gap_uses_cross_day_total_in_its_own_window(
+    session, sync_seed, mapping, window, expected_hits
+):
+    setup(session, sync_seed)
+    use(session, sync_seed, "a1")
+    post(session, sync_seed, "a1", "paid")
+    post(session, sync_seed, "a1", "gap", spend="1", revenue="0", video=None)
+    row = session.get(MaterialReportDay, (sync_seed.tenant_id, "acc-1", TODAY, "gap"))
+    session.add(
+        MaterialReportDay(
+            **(
+                row.model_dump()
+                | {"stat_date": TODAY - timedelta(days=1), "spend": Decimal(-1)}
+            )
+        )
+    )
+    if mapping == "owner_missing":
+        link = session.get(
+            MaterialPostLink, (sync_seed.tenant_id, "acc-1", "gap", "a1")
+        )
+        session.delete(link)
+    session.flush()
+    d = rule()
+    d = d.model_copy(
+        update={
+            "conditions": [c.model_copy(update={"range": window}) for c in d.conditions]
+        }
+    )
+    loaded, found = result(session, sync_seed, d)
+    assert len(found.hits) == expected_hits
+    ignored = [
+        x
+        for x in loaded.skipped_accounts
+        if x["reason"] == "ZERO_VALUE_UNLINKED_POSTS_IGNORED"
+    ]
+    assert bool(ignored) is bool(expected_hits)
+
+
+def test_zero_value_mapped_impressions_do_not_dilute_paid_rule_metrics(
+    session, sync_seed
+):
+    setup(session, sync_seed)
+    use(session, sync_seed, "a1")
+    for pid, spend, revenue, impressions in [
+        ("paid", "30", "15", 100),
+        ("organic", "0", "0", 10000),
+    ]:
+        post(session, sync_seed, "a1", pid, spend=spend, revenue=revenue)
+        row = session.get(MaterialReportDay, (sync_seed.tenant_id, "acc-1", TODAY, pid))
+        row.impressions = impressions
+        session.add(row)
+    session.flush()
+    loaded, found = result(session, sync_seed)
+    assert len(found.hits) == 1
+    values = next(iter(loaded.facts["LIFETIME"].values()))
+    assert values["impressions"] == 100
+    assert values["spend"] == 30 and values["revenue_total"] == 15
+    # 已有的真实映射和页面原始事实不改写，只有规则的付费指标排除零金额曝光。
+    assert len(session.exec(select(MaterialPostLink)).all()) == 2
+    assert (
+        session.get(
+            MaterialReportDay, (sync_seed.tenant_id, "acc-1", TODAY, "organic")
+        ).impressions
+        == 10000
+    )
+    assert loaded.skipped_accounts == []

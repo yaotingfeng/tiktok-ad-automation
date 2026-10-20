@@ -3,6 +3,11 @@
 from sqlalchemy import text
 
 from app.core.errors import DomainError
+from app.modules.reporting.material_value import (
+    MATERIAL_WINDOW_VALUES_SQL,
+    material_value_parameters,
+    valuable_material_condition,
+)
 
 ASSET_BATCH = 20  # file/video/ad/search 当前 material_ids 上限；不同于 video_ids。
 
@@ -13,12 +18,14 @@ def pending_asset_ids(session, job):
     return tuple(
         session.connection()
         .execute(
-            text("""
+            text(f"""
+            WITH material_values AS ({MATERIAL_WINDOW_VALUES_SQL})
             SELECT DISTINCT l.main_material_id FROM material_post_link l
             JOIN material_report_day d ON d.tenant_id=l.tenant_id
               AND d.advertiser_id=l.advertiser_id AND d.main_material_id=l.main_material_id
             WHERE l.tenant_id=:t AND l.advertiser_id=:a
               AND d.stat_date BETWEEN :start AND :end
+              AND {valuable_material_condition("d")}
               AND l.main_material_type='VIDEO_NON_SPARK_ADS'
               AND d.main_material_type='VIDEO_NON_SPARK_ADS'
               AND NULLIF(l.platform_material_id, '') IS NULL
@@ -26,6 +33,10 @@ def pending_asset_ids(session, job):
             ORDER BY l.main_material_id LIMIT :limit
             """),
             {
+                **material_value_parameters(
+                    job.tenant_id,
+                    [(job.advertiser_ids[0], job.start_date, job.end_date)],
+                ),
                 "t": job.tenant_id,
                 "a": job.advertiser_ids[0],
                 "start": job.start_date,

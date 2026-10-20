@@ -293,6 +293,16 @@ test("素材数据问题说明具体原因", async () => {
   const { inputIssueText } = await import(
     "../src/features/automation-rules/dataIssues"
   )
+  // 零金额排除是可审计说明，不表示止损缺数。
+  expect(
+    inputIssueText({
+      advertiser_id: "acc-1",
+      reason: "ZERO_VALUE_UNLINKED_POSTS_IGNORED",
+      count: "3",
+    }),
+  ).toBe(
+    "账户 acc-1：已忽略 3 个窗口内无正消耗且无正收入的未关联帖子，不影响规则判断",
+  )
   expect(
     inputIssueText({
       advertiser_id: "acc-1",

@@ -9,7 +9,6 @@ from decimal import Decimal
 from itertools import groupby
 from uuid import UUID
 
-from sqlalchemy import text
 from sqlmodel import Session, col, select
 
 from app.modules.ads.directory import latest_ad_materials
@@ -22,6 +21,7 @@ from app.modules.automation_rules.inputs import (
 )
 from app.modules.automation_rules.schemas import RuleDefinition
 from app.modules.automation_rules.statuses import known_status
+from app.modules.reporting.material_value import material_window_values
 from app.modules.reporting.metric_catalog import DERIVED_RATIOS, STORED_KEYS
 from app.modules.reporting.store_models import MaterialPostLink
 
@@ -56,6 +56,7 @@ def load_material_entities(
     *,
     definition: RuleDefinition | None = None,
     now: datetime | None = None,
+    ignored_posts: list[dict[str, str]] | None = None,
 ) -> dict[str, Entity]:
     if not accounts:
         return {}
@@ -65,6 +66,21 @@ def load_material_entities(
             col(MaterialPostLink.advertiser_id).in_(list(accounts)),
         )
     ).all()
+    ranges = (
+        {str(c.range) for c in definition.conditions if c.range}
+        if definition
+        else set()
+    )
+    windows = (
+        [
+            (adv, *local_window(r, info.timezone, now))
+            for adv, info in accounts.items()
+            for r in sorted(ranges)
+        ]
+        if now is not None
+        else []
+    )
+    values = material_window_values(session, tenant_id, windows) if windows else {}
     by_video = defaultdict(list)
     owners = defaultdict(set)
     unresolved_ads = set()
@@ -72,15 +88,35 @@ def load_material_entities(
         owners[link.advertiser_id, link.main_material_id].add(
             (link.ad_remote_id, link.platform_material_id)
         )
-        if link.platform_material_id is None:
-            unresolved_ads.add((link.advertiser_id, link.ad_remote_id))
+        if not link.platform_material_id:
+            # 只有窗口合计有金额的帖子身份缺口会影响止损；零金额曝光不能阻断广告。
+            if values.get((link.advertiser_id, link.main_material_id), False):
+                unresolved_ads.add((link.advertiser_id, link.ad_remote_id))
         else:
             by_video[
                 link.advertiser_id, link.ad_remote_id, link.platform_material_id
             ].append(link)
-    unlinked_accounts = unlinked_report_accounts(
-        session, tenant_id, accounts, definition, now
-    )
+    unlinked_accounts = unlinked_report_accounts(values, set(owners))
+    if ignored_posts is not None:
+        mapped = {
+            (link.advertiser_id, link.main_material_id)
+            for link in links
+            if link.platform_material_id
+        }
+        counts = Counter(
+            adv
+            for (adv, mid), valuable in values.items()
+            if not valuable and (adv, mid) not in mapped
+        )
+        # 按账户+帖子去重，不按事实日期/关联行/规则条件重复计数；仅留审计说明，不报缺数。
+        ignored_posts.extend(
+            {
+                "advertiser_id": adv,
+                "reason": "ZERO_VALUE_UNLINKED_POSTS_IGNORED",
+                "count": str(count),
+            }
+            for adv, count in sorted(counts.items())
+        )
     # 按广告顺序分批读取，当前广告选完身份后释放历史ORM行；不要把整个租户
     # 数万条素材及旧身份同时装进 by_ad。完整广告组仍交给共用选择器判定歧义。
     rows = session.exec(
@@ -223,36 +259,12 @@ def mark_missing_metrics(
 
 
 def unlinked_report_accounts(
-    session: Session,
-    tenant_id: UUID,
-    accounts: dict[str, AccountInfo],
-    definition: RuleDefinition | None,
-    now: datetime | None,
+    values: dict[tuple[str, str], bool],
+    linked_posts: set[tuple[str, str]],
 ) -> set[str]:
-    """选中日期内任何完全未定位的帖子都可能属于当前素材，不能静默少算历史回收。"""
-    if definition is None or now is None:
-        return set()
-    ranges = {str(c.range) for c in definition.conditions if c.range}
-    if not ranges:
-        return set()
-    windows = [
-        [local_window(r, info.timezone, now) for r in ranges]
-        for info in accounts.values()
-    ]
-    rows = session.connection().execute(
-        text("""
-        SELECT DISTINCT f.advertiser_id FROM material_report_day f
-        JOIN unnest(CAST(:advs AS text[]), CAST(:starts AS date[]), CAST(:ends AS date[]))
-            AS w(adv,s,e) ON w.adv=f.advertiser_id AND f.stat_date BETWEEN w.s AND w.e
-        WHERE f.tenant_id=:t AND NOT EXISTS (
-            SELECT 1 FROM material_post_link l WHERE l.tenant_id=f.tenant_id
-                AND l.advertiser_id=f.advertiser_id AND l.main_material_id=f.main_material_id)
-    """),
-        {
-            "t": tenant_id,
-            "advs": list(accounts),
-            "starts": [min(w[0] for w in ws) for ws in windows],
-            "ends": [max(w[1] for w in ws) for ws in windows],
-        },
-    )
-    return {row.advertiser_id for row in rows}
+    """共用窗口金额判定：只有有价值且无广告归属的帖子才使账户缺数。"""
+    return {
+        adv
+        for (adv, mid), valuable in values.items()
+        if valuable and (adv, mid) not in linked_posts
+    }

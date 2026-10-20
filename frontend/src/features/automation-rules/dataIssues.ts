@@ -10,6 +10,8 @@ export const MATERIAL_ISSUES: Record<string, string> = {
 }
 
 export function inputIssueText(item: Record<string, string>) {
+  if (item.reason === "ZERO_VALUE_UNLINKED_POSTS_IGNORED")
+    return `账户 ${item.advertiser_id}：已忽略 ${item.count ?? "0"} 个窗口内无正消耗且无正收入的未关联帖子，不影响规则判断`
   if (item.reason === "STALE_REPORT")
     return `账户 ${item.advertiser_id}：报表数据未更新，已跳过`
   return `账户 ${item.advertiser_id}：${item.count ?? "部分"} 个广告内素材无法判断，${MATERIAL_ISSUES[item.reason] ?? "素材数据不完整"}`

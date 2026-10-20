@@ -96,7 +96,8 @@ def test_refresh_links_only_when_new_posts_appear(session, sync_seed):
     )
     page = overview(("a1", "p1", "m1"), ("a1", "p2", "m2"))
     assert refresh(session, sync_seed, page) == [1]
-    assert links(session, sync_seed) == {("p1", "a1", "m1"), ("p2", "a1", "m2")}
+    # 概览附带的无金额/无事实帖子不建立映射，不能把未追关联误记成已关联。
+    assert links(session, sync_seed) == {("p1", "a1", "m1")}
     # 已删除广告的帖子查不到：记为未对照，之后不再因它整账户重扫。
     scan = session.get(MaterialLinkScan, (sync_seed.tenant_id, "acc-1", "unscoped"))
     assert scan.unresolved_ids == ["p9"]

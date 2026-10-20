@@ -1,6 +1,6 @@
 # 同步请求精简后续修复设计
 
-基线：已发布 fac30065、bb92ac5e、cf560a32、95c34bf2，生产版本 48197483 / schema 0042。本轮只做本地实现和验证，不发布、不推送、不连接线上数据库或真实 TikTok。
+基线：已发布 fac30065、bb92ac5e、cf560a32、95c34bf2，生产版本 48197483 / schema 0042。初始范围为本地实现和验证；2026-10-21 用户追加授权：阶段 4 完成验证和独立提交后推送并发布生产。生产按现行发布手册排空和验收，不人工调用真实 TikTok 或改写等待任务。
 
 ## 1. 实时双时钟
 
@@ -14,13 +14,17 @@
 
 当地零点后第一轮热报，为昨天有事实的账户补 ad_day 和 material_day 单日窗口。复用 report_sync_state 的 last_success_at：晚于当地零点即已收尾，不新增表或字段。在途任务去重，失败走原任务重试。无昨日事实账户不制造请求；各账户按自身时区切日。收尾使用实时优先级，但今天热报优先；每日历史回刷仍可修正昨天。实现时记录具体优先级与派发选择。
 
-## 4. 素材关联与平台缺口
+## 4. 素材关联与规则共用窗口金额判定（2026-10-21 用户追加批准）
 
-先审计 8bd35045 及当时设计、验证文档、页面/规则/报表调用方。若存在零消耗零收入素材关联的业务依赖，停止阶段 4 并回报，不改该行为。
+8bd35045 的审计已证明零金额关联影响素材规则，原停止条件成立；用户确认这本身是止损业务缺陷，授权同时修复关联与规则缺数保护。
 
-无依赖才实施：needs_material_links、missing_video_ids、dependency_changed 共用窗口内 spend>0 或收入>0 的业务价值判定。零消耗零收入不追关联，也不能伪造已关联；现有等待任务经正常依赖重查收敛，不直接改数据库任务状态。
+在 reporting.material_value 中按租户、advertiser_id、main_material_id、指定窗口先跨日合计，再判 spend>0 或 revenue_total>0。needs_material_links、missing_video_ids、dependency_changed、规则 unlinked_report_accounts 和 unresolved_ads 共用该定义。规则包含多个窗口时逐窗口判断，任一窗口为正就保护身份缺口，不合并窗口抵消金额。
 
-健康检查复用 material_link_scan 中完整扫描的负证据和 NEGATIVE_SCAN_TTL，并核实范围、签名和过期条件。已证实平台未给身份的缺口单列 platform_unlinked_material_posts，不进入 issues/DEGRADED；没有有效负证据仍告警并修复。若现有存储不足而需 schema，先停止确认。
+零金额帖子不建关联任务、不阻断其他有价值素材判断；已存在的真实映射保留，不伪造映射。关联任务的概览、身份和目录候选也共用过滤，避免混合任务附带追查零金额帖子；现有等待任务经依赖重查和正常执行自然完成，不直接改状态。规则付费指标不计入无正金额帖子的曝光，页面原事实和归并不变，不改 row_set.py/material_query.py。
+
+规则忽略的未关联帖子按账户+帖子去重计数，复用 skipped_accounts 保存 ZERO_VALUE_UNLINKED_POSTS_IGNORED，运行详情明确显示数量和“不影响规则判断”，不触发缺数通知。无 schema 变更。
+
+**健康告警拆分本轮取消**：现有 material_link_scan 的负证据仅证明未找到所属广告，不证明缺 VID；不新增 platform_unlinked_material_posts、不修改 health.py。上线后观察剩余缺口再设计。
 
 ## 门禁与交付
 

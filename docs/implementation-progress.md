@@ -3301,3 +3301,18 @@ CI后端4884项：4882首轮通过、1独立重跑通过、1跳过、最终0失�
 - 审计阶段仍执行用户要求门禁：backend `uv run ruff check app tests && uv run ty check app` 通过；`uv run mypy app` 502 条/74 文件，与阶段 3 无新增；`uv run pytest tests/modules/reporting tests/modules/automation_rules tests/modules/ads -q` **990 passed / 46.09s**。无 Python 源码变更，阶段格式门禁不适用；阶段 3 六文件格式已通过。审计脚本首次缺完整模型注册失败，补齐与 pytest 相同的模型导入后断言通过，合成数据 rollback 未持久化。
 - 本轮产品提交为 `53a5888f`、`23abca2d`、`d2d78398`；审计提交号见本节对应 Git 提交。主工作区 main，逐阶段明确路径暂存、核验根目录/状态/暂存差异；未推送/发布/连接线上/调用真实 TikTok。既有未跟踪文件未由本会话修改；并行文档提交 `98c664c8` 已保留。
 - 下一步需用户确认是否允许同时调整两处素材规则缺数判定与零金额帖子的展示/归并语义，不能只停补链却让规则永久缺数。验收重点为规则前置相位峰值、切日收尾与今日共享进程/平台额度、收尾失败补偿和 PG 负载；本机验证不代表线上容量达标。
+
+
+## 2026-10-21 同步精简后续阶段 4：零金额帖子不再阻断止损
+
+用户在 ff0bb7b5 依赖审计后明确批准：零金额无归属会阻断整账户、缺 VID 会阻断所属广告，这本身是业务缺陷；同时修复五处判定，保留页面独立行。随后追加授权本阶段完成后推送并发布生产，取代此前本地交付限制。
+
+- 新增 `reporting/material_value.py`，金额只在这一处定义：按租户/账户/帖子/各自窗口先跨日合计，再判 spend>0 或 revenue_total>0。多个规则窗口独立聚合后取任一有价值，不用正数日过滤或扩大总窗口掩盖抵消边界。needs_material_links、missing_video_ids、dependency_changed、unlinked_report_accounts、unresolved_ads 共用此结果。
+- 同步收窄补链执行的概览写入、精确 VID 解析、Spark/非 Spark 身份候选、依赖签名和目录请求，避免混合任务仍追零金额帖子。旧等待任务按正常依赖探测唤醒、领取和执行完成；无手工更新生产任务状态、无伪造映射。收入独有的帖子继续保护。
+- 规则的付费指标聚合排除无正金额帖子，避免零金额曝光稀释付费效率；原始事实、真实映射、`row_set.py`、`material_query.py` 均未改动。规则忽略计数按账户+帖子去重，复用 `skipped_accounts`，前端运行详情显示数量及“不影响规则判断”，不触发缺数通知，无 schema。
+- **健康告警拆分按用户新范围取消**：MaterialLinkScan 的负证据只证明未找到广告，不能证明缺 VID。未改 health.py、未新增 platform_unlinked_material_posts；上线后观察剩余缺口再设计，不将本次范围收缩等同健康全绿。
+- 保留并扩展 8bd35045 的 `test_material_publish_only_queues_real_link_gaps` 全部原场景，增加零金额/仅收入/有消耗。精确身份回归补有金额事实前提，概览附带无事实帖子不再写映射；保留两万目录项索引执行计划断言，仅适配新增 CTE。新增 `test_material_value.py`，扩展素材规则和前端说明测试，后端净增44项。覆盖跨日正负抵消、NULL、租户/账户/窗口隔离、多窗口、两种零金额阻断命中恢复、空 VID、审计计数持久化、旧等待自然完成、混合任务不补零金额、收入转正唤醒和零金额曝光排除。
+- 实际门禁（backend）：`uv run ruff check app tests && uv run ty check app` 通过；所有15个改动/新增 Python 的 `ruff format --check` 通过；`uv run mypy app` 499条/74文件，对上个提交502条以规范化诊断多重集比较无新增（mypy本身仍exit1）；`uv run pytest tests/modules/reporting tests/modules/automation_rules tests/modules/ads -q` **1034 passed / 58.68s，无跳过**。沿用本机独立PG17.5/Redis8.0.1和清洁环境，未读取线上数据或调用真实平台做本地测试。
+- 前端改动两文件 Biome通过；`bun x tsc -p tsconfig.build.json` 通过；Playwright工作区中“素材数据问题说明具体原因” **1 passed / 422ms**，包括忽略数量中文文案。未重新生成 API客户端或触碰既有未跟踪构建产物。
+- 如实保留过程失败：首轮全量8 failed/1008 passed（收入夹具误用基础报表指标、身份夹具无事实、旧概览全收断言及索引探针匹配旧CTE）；后续定向4 failed/161 passed为新测试试图改冻结条件模型，改为构造新条件。失败均修复后完整回归，不删测试或放宽核心断言。日志在本机 `/tmp/tkada-sync-followups/`。
+- 本节及设计/计划/验收记录随单个阶段4产品提交，标题 `reporting: 零金额帖子不再阻断素材止损或重复补链`，直接接在ff0bb7b5之后。提交前核对git status -sb、git rev-parse --show-toplevel和明确路径暂存差异。发布结果另记实际证据；截至本条尚未推送/发布。

@@ -1,5 +1,7 @@
 # 同步精简后续修复交接（2026-10-21）
 
+**更新：** 用户在 ff0bb7b5 后批准同时修复五处金额判定，阶段4实现和本地门禁已完成，详见文末；又追加授权完成后推送生产。以下原审计保留为当时决策证据。
+
 阶段 1–3 已完成本地实现和验证；阶段 4 按用户“发现依赖即停止、不修改”的条件停在审计。**第四次提交仅记录阻断，不代表阶段 4 产品行为已修复。** 未推送、未发布、未调用真实 TikTok、未连接线上数据库；没有 schema 变更。
 
 ## 提交与文件
@@ -11,7 +13,7 @@
 | 3 当地昨日收尾 | `d2d78398` | `backend/app/modules/reporting/planner.py`、`job_tasks.py`、`jobs.py`、`lanes.py`；新增 `backend/tests/modules/reporting/test_day_closeout.py`，扩展 `test_job_tasks.py` |
 | 4 依赖审计，实施停止 | 本交接文档所属 `reporting: 记录零金额素材关联依赖并暂停范围收缩` 提交 | 仅本交接文档、`docs/implementation-progress.md` 和执行计划；无产品或测试源码变更 |
 
-各阶段同步更新 `docs/implementation-progress.md` 和 `docs/superpowers/plans/2026-10-21-sync-followups.md`。阶段 1 同时新增用户指定设计 `docs/superpowers/specs/2026-10-d`（按字面路径，无扩展名）。第四次提交号可通过 `git log -1 --format=%h -- docs/validation/2026-10-21-sync-followups.md` 定位。
+各阶段同步更新 `docs/implementation-progress.md` 和 `docs/superpowers/plans/2026-10-21-sync-followups.md`。阶段 1 同时新增用户指定设计 `docs/superpowers/specs/2026-10-d`（按字面路径，无扩展名）。原第四次审计提交为 `ff0bb7b5`。
 
 ## 实现与测试覆盖
 
@@ -87,3 +89,16 @@ mypy 并非全量通过，退出码仍为 1；比较方法为按“文件路径�
 - 收尾独立 2 个名额保护今日数据库在途容量，但不是物理 Worker 隔离；同样共享 Worker、SDK 配额和 PG。重点验收当地切日后今日新鲜度、收尾完成耗时、队列与 PG 查询负载。收尾终态失败后不会每轮重建，只能由原有重试/每日回刷补偿。
 - 新 priority=0 和 JSON 相位键没有 schema 迁移；以后若发布，要按调度/持久化任务合同变更检查冻结、旧任务自然消费及回滚行为。本轮没有发布授权，不能直接上线。
 - 继续阶段 4 前，需要用户确认是否把“规则缺数判定与关联范围保持一致，以及零金额帖子的页面展示/归并语义”纳入变更范围；在此之前保持现行规则安全判断，不绕过缺数保护。
+
+
+## 阶段 4 追加批准后的实现与验证
+
+历史审计结论不撤回：8bd35045原本要保留非空零花费事实并完整映射，规则和页面确有依赖。用户现在认定零金额缺关联导致止损失效是缺陷，批准同时收窄规则保护；未改变页面归并算法，未映射帖子继续独立展示。健康分类因负证据只覆盖广告归属而取消，待上线后观察剩余缺口。
+
+产品文件：新增 `backend/app/modules/reporting/material_value.py`；修改 reporting 下 material_links.py、jobs.py、directory_refresh.py、material_identity.py、spark_identity.py；automation_rules 下 material_inputs.py、inputs.py、data_issues.py；前端 dataIssues.ts。五处判定共用窗口合计，执行候选同步过滤；规则付费指标排除零金额曝光，忽略计数复用原运行摘要。未新增schema或修改health.py、row_set.py、material_query.py。
+
+测试文件：新增 reporting/test_material_value.py；扩展 reporting/test_material_resume.py、test_material_links.py、test_backlog_control.py、test_backlog_dependencies.py、automation_rules/test_material_inputs.py；前端 automation-rule-form.spec.ts。原审计三个场景现均命中1，零金额缺口分别记忽略数1；有消耗/仅收入缺口仍命中0并保留缺数原因。跨日合计抵消为0则不追，合计0.01则追；多个规则窗口分别判断，租户/账户/日期隔离；旧WAITING经真实PG依赖重查、领取和正常执行COMPLETE，不发平台请求，不创建假映射。运行记录跨日期重复帖子按账户+帖子计数2并可回读。
+
+实际验证：三模块 **1034 passed / 58.68s**（净增44），Ruff/ty通过，15个改动Python格式通过；mypy499条对上个提交502条无新增，存量错误仍在。前端两文件Biome、应用tsc通过，Playwright文案1项通过。过程失败及修复细节见实施进度，不将初轮失败记为通过。所有后端测试使用独立本机PG/Redis，日志仅在/tmp，不写生产或调用TikTok。
+
+范围说明：补链候选函数的同步过滤是防止“有金额任务夹带零金额补链”的必要实现；inputs.py付费聚合落实“无消耗曝光不计付费效率”，不改20分钟新鲜度或规则执行刻度。用户追加生产发布授权取代原不推送/不发布约束，其余隔离、真实映射与不手改任务状态要求保持。生产容量、旧任务自然收敛速度与剩余健康缺口以实际发布后观测为准。

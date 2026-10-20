@@ -704,8 +704,9 @@ def test_incomplete_declared_page_rows_never_mark_complete(committed_sync_seed):
         ("other_tenant_facts", False),
     ],
 )
+@pytest.mark.parametrize("spend,revenue", [("0", "0"), ("1", "0"), ("0", "1")])
 def test_material_publish_only_queues_real_link_gaps(
-    session, sync_seed, scenario, needs_links
+    session, sync_seed, scenario, needs_links, spend, revenue
 ):
     from app.modules.reporting.store_models import MaterialPostLink
 
@@ -751,7 +752,15 @@ def test_material_publish_only_queues_real_link_gaps(
     source = (
         []
         if scenario in {"empty", "outside_date", "other_tenant_facts"}
-        else [row(0, spend="0")]
+        else [
+            row(0, spend=spend)
+            | {
+                "metrics": {
+                    **row(0, spend=spend)["metrics"],
+                    "onsite_total_ad_impression_value": revenue,
+                }
+            }
+        ]
     )
     reader = Pages(rows=source)
     assert jobs._run_material(session, job, reader, ACCOUNTS) == len(source)
@@ -760,8 +769,9 @@ def test_material_publish_only_queues_real_link_gaps(
             ReportSyncJob.tenant_id == tenant, ReportSyncJob.kind == "material_links"
         )
     ).all()
-    assert bool(linked) is needs_links
-    if scenario == "null_vid":
+    # 零金额事实继续入库和展示，但不为它们制造补链工作；收入独有仍需关联。
+    assert bool(linked) is (needs_links and (spend != "0" or revenue != "0"))
+    if scenario == "null_vid" and linked:
         from tests.modules.reporting.test_material_query import use
 
         post = session.get(MaterialPostLink, (tenant, "acc-1", "m0", "a0"))

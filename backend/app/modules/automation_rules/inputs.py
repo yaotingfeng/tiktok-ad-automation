@@ -17,6 +17,11 @@ from app.modules.automation_rules.catalog import RULE_METRICS
 from app.modules.automation_rules.schedule import due_at, next_run_at
 from app.modules.automation_rules.schemas import AccountScope, RuleDefinition
 from app.modules.automation_rules.statuses import hierarchy_statuses
+from app.modules.reporting.material_value import (
+    MATERIAL_WINDOW_VALUES_SQL,
+    material_value_parameters,
+    valuable_material_condition,
+)
 from app.modules.reporting.metric_catalog import STORED_KEYS
 from app.modules.reporting.planner import HOT_INTERVAL, MATERIAL_INTERVAL
 
@@ -360,12 +365,19 @@ def _materials(
     *,
     definition: RuleDefinition | None = None,
     now: datetime | None = None,
+    ignored_posts: list[dict[str, str]] | None = None,
 ) -> dict[str, Entity]:
     # 延迟导入避免 Entity 数据合同与素材加载器循环导入。
     from app.modules.automation_rules.material_inputs import load_material_entities
 
     return load_material_entities(
-        session, tenant_id, accounts, ads, definition=definition, now=now
+        session,
+        tenant_id,
+        accounts,
+        ads,
+        definition=definition,
+        now=now,
+        ignored_posts=ignored_posts,
     )
 
 
@@ -408,16 +420,29 @@ def _facts(
         if material
         else ("ad_report_day", "f.campaign_id, f.adgroup_id, f.ad_id")
     )
+    # 付费效率只汇总窗口内有金额的帖子；零金额曝光保留在页面事实中，不稀释规则指标。
+    value_cte = (
+        f"WITH material_values AS ({MATERIAL_WINDOW_VALUES_SQL}) " if material else ""
+    )
+    value_filter = f" AND {valuable_material_condition('f')}" if material else ""
     rows = (
         session.connection()
         .execute(
             text(
-                f"SELECT f.advertiser_id, {ids}, {sums} FROM {table} f "
+                value_cte + f"SELECT f.advertiser_id, {ids}, {sums} FROM {table} f "
                 "JOIN unnest(CAST(:advs AS text[]), CAST(:starts AS date[]), CAST(:ends AS date[])) "
                 "AS w(adv, s, e) ON w.adv = f.advertiser_id AND f.stat_date BETWEEN w.s AND w.e "
-                f"WHERE f.tenant_id = :t GROUP BY f.advertiser_id, {ids}"
+                f"WHERE f.tenant_id = :t {value_filter} GROUP BY f.advertiser_id, {ids}"
             ),
             {
+                **(
+                    material_value_parameters(
+                        tenant_id,
+                        [(adv, *w) for adv, w in zip(accounts, windows, strict=True)],
+                    )
+                    if material
+                    else {}
+                ),
                 "t": tenant_id,
                 "advs": list(accounts),
                 "starts": [w[0] for w in windows],
@@ -481,6 +506,7 @@ def load_inputs(
                 entities,
                 definition=definition if level == "material" else None,
                 now=now,
+                ignored_posts=skipped if level == "material" else None,
             )
         )
     ranges: list[str] = sorted(

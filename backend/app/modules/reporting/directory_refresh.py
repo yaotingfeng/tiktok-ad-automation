@@ -15,6 +15,11 @@ from app.modules.ads.directory_requests import request_directory
 from app.modules.ads.sync_models import AdDirectoryRun
 from app.modules.automation_rules.models import AutomationRule
 from app.modules.reporting.lanes import report_workload
+from app.modules.reporting.material_value import (
+    MATERIAL_WINDOW_VALUES_SQL,
+    material_value_parameters,
+    valuable_material_condition,
+)
 from app.modules.reporting.store_models import ReportSyncJob
 
 # 素材关联补读保持原有单轮上限；广告日报刷新不截断账户对象集合。
@@ -183,7 +188,8 @@ def request_link_directory(
     rows = (
         session.connection()
         .execute(
-            text("""
+            text(f"""
+        WITH material_values AS ({MATERIAL_WINDOW_VALUES_SQL})
         SELECT DISTINCT l.ad_remote_id, COALESCE(a.ad_type, 'SMART_PLUS') AS ad_type
         FROM material_report_day d
         JOIN material_post_link l ON l.tenant_id=d.tenant_id AND l.advertiser_id=d.advertiser_id
@@ -191,6 +197,7 @@ def request_link_directory(
         LEFT JOIN ad_object a ON a.tenant_id=l.tenant_id AND a.advertiser_id=l.advertiser_id
           AND a.kind='ad' AND a.remote_id=l.ad_remote_id
         WHERE d.tenant_id=:t AND d.advertiser_id=:adv AND d.stat_date BETWEEN :start AND :end
+          AND {valuable_material_condition("d")}
           AND NULLIF(l.platform_material_id, '') IS NULL
           AND (a.ad_type IS NULL OR a.ad_type IN ('SMART_PLUS','LEGACY_SMART_PLUS','REGULAR'))
           -- Spark 缺精确桥接且已有完整目录时，重读同一目录不能恢复旧帖身份。
@@ -214,6 +221,10 @@ def request_link_directory(
     """),
             {
                 "workload": workload,
+                **material_value_parameters(
+                    job.tenant_id,
+                    [(job.advertiser_ids[0], job.start_date, job.end_date)],
+                ),
                 "t": job.tenant_id,
                 "adv": job.advertiser_ids[0],
                 "start": job.start_date,

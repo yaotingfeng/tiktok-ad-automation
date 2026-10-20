@@ -30,6 +30,12 @@ from sqlmodel import Session
 from app.core.errors import DomainError
 from app.integrations.tiktok.contracts.report_reader import RawReportPage
 from app.modules.reporting.link_queries import QueryMembershipReader
+from app.modules.reporting.material_value import (
+    MATERIAL_WINDOW_VALUES_SQL,
+    material_value_parameters,
+    material_window_values,
+    valuable_material_condition,
+)
 from app.modules.reporting.spark_identity import IDENTITY_SIGNATURE_SQL
 from app.modules.reporting.store_models import MaterialLinkScan
 
@@ -67,29 +73,15 @@ def needs_material_links(
     start: date,
     end: date,
 ) -> bool:
-    """仅真实事实缺有效视频映射时排关联；零消费也需要对照，空窗口不制造空跑。"""
+    """零金额帖子不影响付费指标，不因它们补链或阻断规则；真实映射保持不变。"""
     return bool(
-        session.connection()
-        .execute(
-            text("""
-            SELECT EXISTS (
-                SELECT 1 FROM material_report_day d
-                WHERE d.tenant_id=:tenant AND d.advertiser_id=:advertiser
-                  AND d.stat_date BETWEEN :start AND :end
-                  AND NOT EXISTS (
-                      SELECT 1 FROM material_post_link l
-                      WHERE l.tenant_id=d.tenant_id AND l.advertiser_id=d.advertiser_id
-                        AND l.main_material_id=d.main_material_id
-                        AND NULLIF(l.platform_material_id, '') IS NOT NULL))
-            """),
-            {
-                "tenant": tenant_id,
-                "advertiser": advertiser_id,
-                "start": start,
-                "end": end,
-            },
+        missing_video_ids(
+            session,
+            tenant_id=tenant_id,
+            advertiser_id=advertiser_id,
+            start=start,
+            end=end,
         )
-        .scalar_one()
     )
 
 
@@ -100,19 +92,26 @@ DEPENDENCY_MAX_RECHECK = timedelta(hours=6)
 NEGATIVE_SCAN_TTL = timedelta(hours=6)
 
 
-def missing_video_ids(session, *, tenant_id, advertiser_id, start, end):
+def missing_video_ids(
+    session: Session,
+    *,
+    tenant_id: UUID,
+    advertiser_id: str,
+    start: date,
+    end: date,
+) -> set[str]:
     return set(
         session.connection()
         .execute(
-            text("""
-        SELECT DISTINCT d.main_material_id FROM material_report_day d
-        WHERE d.tenant_id=:t AND d.advertiser_id=:a AND d.stat_date BETWEEN :start AND :end
-          AND NOT EXISTS (SELECT 1 FROM material_post_link l
-            WHERE l.tenant_id=d.tenant_id AND l.advertiser_id=d.advertiser_id
-              AND l.main_material_id=d.main_material_id
+            text(f"""
+        WITH material_values AS ({MATERIAL_WINDOW_VALUES_SQL})
+        SELECT v.main_material_id FROM material_values v
+        WHERE v.has_value AND NOT EXISTS (
+            SELECT 1 FROM material_post_link l WHERE l.tenant_id=:value_tenant
+              AND l.advertiser_id=v.advertiser_id AND l.main_material_id=v.main_material_id
               AND NULLIF(l.platform_material_id, '') IS NOT NULL)
-    """),
-            {"t": tenant_id, "a": advertiser_id, "start": start, "end": end},
+        """),
+            material_value_parameters(tenant_id, [(advertiser_id, start, end)]),
         )
         .scalars()
     )
@@ -121,7 +120,8 @@ def missing_video_ids(session, *, tenant_id, advertiser_id, start, end):
 def _missing_spark_bridges(session, tenant_id, advertiser_id, *, start, end):
     """缺广告内素材 ID 的已定位 Spark；布尔值表示目录已提供完整素材证据。"""
     rows = session.connection().execute(
-        text("""
+        text(f"""
+        WITH material_values AS ({MATERIAL_WINDOW_VALUES_SQL})
         SELECT l.main_material_id,
           bool_or(a.remote_id IS NOT NULL AND EXISTS (
             SELECT 1 FROM ad_material_reference u
@@ -135,6 +135,7 @@ def _missing_spark_bridges(session, tenant_id, advertiser_id, *, start, end):
         WHERE d.tenant_id=:t AND d.advertiser_id=:a
           AND (CAST(:start AS date) IS NULL OR d.stat_date>=:start)
           AND (CAST(:end AS date) IS NULL OR d.stat_date<=:end)
+          AND {valuable_material_condition("d")}
           AND l.main_material_type='VIDEO_SPARK_ADS'
           AND NULLIF(l.ad_material_id, '') IS NULL
           AND NOT EXISTS (SELECT 1 FROM material_post_link done
@@ -143,7 +144,13 @@ def _missing_spark_bridges(session, tenant_id, advertiser_id, *, start, end):
               AND NULLIF(done.platform_material_id, '') IS NOT NULL)
         GROUP BY l.main_material_id
         """),
-        {"t": tenant_id, "a": advertiser_id, "start": start, "end": end},
+        {
+            **material_value_parameters(tenant_id, [(advertiser_id, start, end)]),
+            "t": tenant_id,
+            "a": advertiser_id,
+            "start": start,
+            "end": end,
+        },
     )
     return {row.main_material_id: row.directory_complete for row in rows}
 
@@ -168,10 +175,11 @@ def directory_signature(session, job):
         session.connection()
         .execute(
             text(f"""
-        WITH missing AS MATERIALIZED (
+        WITH material_values AS ({MATERIAL_WINDOW_VALUES_SQL}), missing AS MATERIALIZED (
           SELECT DISTINCT d.main_material_id, d.main_material_name, d.stat_date
           FROM material_report_day d
           WHERE d.tenant_id=:t AND d.advertiser_id=:a AND d.stat_date BETWEEN :start AND :end
+            AND {valuable_material_condition("d")}
             AND NOT EXISTS (SELECT 1 FROM material_post_link l
               WHERE l.tenant_id=d.tenant_id AND l.advertiser_id=d.advertiser_id
                 AND l.main_material_id=d.main_material_id
@@ -222,6 +230,10 @@ def directory_signature(session, job):
         SELECT md5(COALESCE(string_agg(value, ',' ORDER BY value), '')) FROM evidence
     """),
             {
+                **material_value_parameters(
+                    job.tenant_id,
+                    [(job.advertiser_ids[0], job.start_date, job.end_date)],
+                ),
                 "t": job.tenant_id,
                 "a": job.advertiser_ids[0],
                 "start": job.start_date,
@@ -315,7 +327,8 @@ def _unlinked(
 ) -> dict[str, tuple[str | None, str, date, date]]:
     """尚无对照的主素材 → (最新名称, 类型, 最早日, 最晚日)。"""
     rows = session.connection().execute(
-        text("""
+        text(f"""
+        WITH material_values AS ({MATERIAL_WINDOW_VALUES_SQL})
         SELECT d.main_material_id AS mid,
             (array_agg(d.main_material_name ORDER BY d.stat_date DESC)
                 FILTER (WHERE d.main_material_name IS NOT NULL))[1] AS name,
@@ -325,6 +338,7 @@ def _unlinked(
         WHERE d.tenant_id = :t AND d.advertiser_id = :a
           AND (CAST(:start AS date) IS NULL OR d.stat_date >= :start)
           AND (CAST(:end AS date) IS NULL OR d.stat_date <= :end)
+          AND {valuable_material_condition("d")}
           AND NOT EXISTS (
             SELECT 1 FROM material_post_link l
             WHERE l.tenant_id = d.tenant_id AND l.advertiser_id = d.advertiser_id
@@ -332,7 +346,13 @@ def _unlinked(
         GROUP BY d.main_material_id
         ORDER BY sum(d.spend) DESC, d.main_material_id
         """),
-        {"t": tenant_id, "a": advertiser_id, "start": start, "end": end},
+        {
+            **material_value_parameters(tenant_id, [(advertiser_id, start, end)]),
+            "t": tenant_id,
+            "a": advertiser_id,
+            "start": start,
+            "end": end,
+        },
     )
     return {r.mid: (r.name, r.mtype, r.first_day, r.last_day) for r in rows}
 
@@ -517,13 +537,21 @@ def _locate_post_step(state, *, read_ad_posts, first, last):
     return False, None
 
 
-def _resolve_videos(session: Session, tenant_id: UUID, advertiser_id: str) -> None:
+def _resolve_videos(
+    session: Session,
+    tenant_id: UUID,
+    advertiser_id: str,
+    *,
+    start: date | None = None,
+    end: date | None = None,
+) -> None:
     """只按同广告内精确素材 ID 解析；同名文件允许异内容，不能证明历史 VID。"""
     # complete表示整页素材/创意补读覆盖，并不否定主响应已证实的精确视频身份。
     # Spark视频可用同账户、同广告、同广告内素材ID且唯一的VID直接对照；
     # 不完整的同名候选、帖子命名空间和多VID歧义均不能借此猜测，也不改广告操作的完整性要求。
     session.connection().execute(
-        text("""
+        text(f"""
+        WITH material_values AS ({MATERIAL_WINDOW_VALUES_SQL})
         UPDATE material_post_link target SET platform_material_id = resolved.vid
         FROM (
           SELECT l.main_material_id, l.ad_remote_id, min(u.platform_material_id) AS vid
@@ -531,6 +559,7 @@ def _resolve_videos(session: Session, tenant_id: UUID, advertiser_id: str) -> No
             ON u.tenant_id=l.tenant_id AND u.advertiser_id=l.advertiser_id
               AND u.ad_remote_id=l.ad_remote_id AND u.ad_material_id=l.ad_material_id
           WHERE l.tenant_id=:t AND l.advertiser_id=:a AND l.platform_material_id IS NULL
+            AND {valuable_material_condition("l")}
             AND NULLIF(l.ad_material_id, '') IS NOT NULL
             AND NULLIF(u.platform_material_id, '') IS NOT NULL
             AND (l.main_material_type<>'VIDEO_SPARK_ADS' OR u.material_type='VIDEO')
@@ -542,7 +571,11 @@ def _resolve_videos(session: Session, tenant_id: UUID, advertiser_id: str) -> No
           AND target.main_material_id=resolved.main_material_id
           AND target.ad_remote_id=resolved.ad_remote_id AND target.platform_material_id IS NULL
         """),
-        {"t": tenant_id, "a": advertiser_id},
+        {
+            **material_value_parameters(tenant_id, [(advertiser_id, start, end)]),
+            "t": tenant_id,
+            "a": advertiser_id,
+        },
     )
 
 
@@ -675,17 +708,30 @@ def refresh_material_links(
         and not progress.get("overview_complete")
         and not owner_first
     ):
+        values = material_window_values(
+            session, tenant_id, [(advertiser_id, start, end)]
+        )
         page = read_overview(int(progress.get("next_page", 1)))
         _upsert_links(
             session,
-            [_overview_link(row, tenant_id, advertiser_id, now) for row in page.rows],
+            [
+                _overview_link(row, tenant_id, advertiser_id, now)
+                for row in page.rows
+                if values.get(
+                    (
+                        advertiser_id,
+                        str((row.get("dimensions") or {}).get("main_material_id")),
+                    ),
+                    False,
+                )
+            ],
         )
         if page.next_page is None:
             progress["overview_complete"] = True
         else:
             progress["next_page"] = page.next_page
         # 包括概览终页都先独立落库，后面的旧帖定位异常不能撤回这些页。
-        _resolve_videos(session, tenant_id, advertiser_id)
+        _resolve_videos(session, tenant_id, advertiser_id, start=start, end=end)
         session.flush()
         return bool(progress.get("overview_complete")) and (
             cached
@@ -779,7 +825,7 @@ def refresh_material_links(
                 progress["checked_ids"] = sorted(checked)
                 progress.pop("locate_post", None)
             if not complete or len(remaining) > 1:
-                _resolve_videos(session, tenant_id, advertiser_id)
+                _resolve_videos(session, tenant_id, advertiser_id, start=start, end=end)
                 session.flush()
                 return False
         if (
@@ -837,7 +883,7 @@ def refresh_material_links(
                 "expiry": now - NEGATIVE_SCAN_TTL,
             },
         )
-    _resolve_videos(session, tenant_id, advertiser_id)
+    _resolve_videos(session, tenant_id, advertiser_id, start=start, end=end)
     progress.pop("locate_queries", None)
     session.flush()
     return True

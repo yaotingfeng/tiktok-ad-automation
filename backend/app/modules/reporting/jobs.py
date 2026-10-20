@@ -33,6 +33,11 @@ from app.modules.reporting.directory_refresh import (
     request_link_directory,
 )
 from app.modules.reporting.lanes import CLOSEOUT_PRIORITY, lane_predicate
+from app.modules.reporting.material_value import (
+    MATERIAL_WINDOW_VALUES_SQL,
+    material_value_parameters,
+    valuable_material_condition,
+)
 from app.modules.reporting.metrics import material_metric_values, parse_local_day
 from app.modules.reporting.store_models import ReportSyncJob, ReportSyncPage
 
@@ -722,11 +727,12 @@ def _material_link_overview_ads(session, job):
         owners = list(
             session.connection()
             .execute(
-                text("""
-                WITH missing AS (
+                text(f"""
+                WITH material_values AS ({MATERIAL_WINDOW_VALUES_SQL}), missing AS (
                   SELECT DISTINCT d.main_material_id FROM material_report_day d
                   WHERE d.tenant_id=:tenant AND d.advertiser_id=:advertiser
                     AND d.stat_date BETWEEN :start AND :end
+                    AND {valuable_material_condition("d")}
                     AND NOT EXISTS (SELECT 1 FROM material_post_link done
                       WHERE done.tenant_id=d.tenant_id AND done.advertiser_id=d.advertiser_id
                         AND done.main_material_id=d.main_material_id
@@ -737,6 +743,10 @@ def _material_link_overview_ads(session, job):
                 ORDER BY l.ad_remote_id NULLS FIRST LIMIT 201
                 """),
                 {
+                    **material_value_parameters(
+                        job.tenant_id,
+                        [(job.advertiser_ids[0], job.start_date, job.end_date)],
+                    ),
                     "tenant": job.tenant_id,
                     "advertiser": job.advertiser_ids[0],
                     "start": job.start_date,
@@ -854,6 +864,11 @@ def _run(
     if job.kind == "material_day":
         return _run_material(session, job, reader, accounts)
     if job.kind == "material_links":
+        # 旧等待任务按新金额范围自然复核结束；不能再为零金额帖子读目录或平台身份。
+        if not material_links.needs_material_links(
+            session, tenant_id=t, advertiser_id=advertisers[0], start=s, end=e
+        ):
+            return 0
         # 库MID与帖子ID是不同命名空间；每步单独回读非Spark的精确视频身份。
         if material_identity.resolve_asset_videos(session, job, reader):
             return None

@@ -6,6 +6,12 @@ from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import text
 
+from app.modules.reporting.material_value import (
+    MATERIAL_WINDOW_VALUES_SQL,
+    material_value_parameters,
+    valuable_material_condition,
+)
+
 # 只包含有效身份和VID；忽略名称/状态/排序，避免普通刷新反复唤醒。SQL别名a为广告对象。
 IDENTITY_SIGNATURE_SQL = """(
   SELECT md5(COALESCE(jsonb_agg(DISTINCT value ORDER BY value),'[]'::jsonb)::text)
@@ -57,9 +63,10 @@ def pending_spark_links(session, job):
         session.connection()
         .execute(
             text(f"""
-        WITH missing AS MATERIALIZED (
+        WITH material_values AS ({MATERIAL_WINDOW_VALUES_SQL}), missing AS MATERIALIZED (
           SELECT l.main_material_id,l.ad_remote_id FROM material_post_link l
           WHERE l.tenant_id=:t AND l.advertiser_id=:a
+            AND {valuable_material_condition("l")}
             AND l.main_material_type='VIDEO_SPARK_ADS'
             AND NULLIF(l.ad_material_id,'') IS NULL
             AND NULLIF(l.platform_material_id,'') IS NULL
@@ -77,6 +84,10 @@ def pending_spark_links(session, job):
         ORDER BY m.ad_remote_id,m.main_material_id LIMIT 50
     """),
             {
+                **material_value_parameters(
+                    job.tenant_id,
+                    [(job.advertiser_ids[0], job.start_date, job.end_date)],
+                ),
                 "t": job.tenant_id,
                 "a": job.advertiser_ids[0],
                 "start": job.start_date,

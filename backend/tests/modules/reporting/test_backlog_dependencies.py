@@ -309,7 +309,10 @@ def test_incomplete_directory_requires_unique_exact_video_identity(
     session, sync_seed, case
 ):
     from app.modules.reporting.material_links import _resolve_videos
+    from tests.modules.reporting.test_material_query import material_row, publish
 
+    # 精确身份回归针对有金额的帖子；无金额帖子不再参与补链。
+    publish(session, sync_seed, "acc-1", [material_row("post", "1")])
     link = MaterialPostLink(
         tenant_id=sync_seed.tenant_id,
         advertiser_id="acc-1",

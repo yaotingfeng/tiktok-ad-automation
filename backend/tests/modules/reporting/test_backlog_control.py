@@ -445,7 +445,7 @@ def test_dependency_probe_uses_name_identity_index_in_large_account(session, syn
     connection = session.connection()
 
     def explain(_conn, _cursor, statement, parameters, *_rest):
-        if "WITH missing AS MATERIALIZED" in statement:
+        if "missing AS MATERIALIZED" in statement:
             statement = "EXPLAIN (ANALYZE, FORMAT JSON) " + statement
         return statement, parameters
 

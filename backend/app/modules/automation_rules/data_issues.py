@@ -15,5 +15,10 @@ SYNC_PENDING_REASONS = frozenset(
 
 
 def actionable_input_issues(items: list[dict[str, str]]) -> list[dict[str, str]]:
-    """待同步状态不触发无命中提醒，避免消息轰炸。"""
-    return [item for item in items if item.get("reason") not in SYNC_PENDING_REASONS]
+    """待同步状态和零金额排除说明不触发缺数提醒，原始计数保留在运行记录。"""
+    return [
+        item
+        for item in items
+        if item.get("reason")
+        not in SYNC_PENDING_REASONS | {"ZERO_VALUE_UNLINKED_POSTS_IGNORED"}
+    ]
