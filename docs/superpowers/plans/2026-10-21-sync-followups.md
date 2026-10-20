@@ -38,9 +38,9 @@
 **Files:** planner.py、job_tasks.py、test_planner.py / test_job_tasks.py、implementation-progress.md。
 **Interface:** 复用 rule_accounts 判定；RULE_SYNC_LEAD=3 分钟。
 
-- [ ] 测规则覆盖/未覆盖、启停、跨租户/BC、重复延迟推进的相位。
-- [ ] 在计划维护中对齐规则 BC 时钟；无规则保持独立相位，解除规则锚定。
-- [ ] 完整门禁、记录、检查状态与暂存差异、聚焦提交。
+- [x] 测规则覆盖/未覆盖、启停、跨租户/BC、重复延迟推进的相位。
+- [x] 在计划维护中对齐规则 BC 时钟；无规则保持独立相位，解除规则锚定。
+- [x] 完整门禁、记录、检查状态与暂存差异、聚焦提交。
 
 ## 阶段 3：昨日收尾
 

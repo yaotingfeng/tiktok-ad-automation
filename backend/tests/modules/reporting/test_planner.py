@@ -632,3 +632,134 @@ def test_material_cycle_enqueues_accounts_with_bounded_database_round_trips(
     assert all(
         job.kind == "material_day" and len(job.advertiser_ids) == 1 for job in jobs
     )
+
+
+@pytest.mark.parametrize(
+    "scope,enabled,expected",
+    [
+        ({"mode": "ALL"}, True, True),
+        ({"mode": "BC", "bc_ids": ["bc-a"]}, True, True),
+        ({"mode": "BC", "bc_ids": ["bc-b"]}, True, False),
+        ({"mode": "ACCOUNTS", "advertiser_ids": ["acc-1"]}, True, True),
+        ({"mode": "ACCOUNTS", "advertiser_ids": ["other"]}, True, False),
+        ({"mode": "ALL"}, False, False),
+    ],
+)
+def test_rule_sync_phase_uses_enabled_owned_accounts(
+    session, sync_seed, scope, enabled, expected
+):
+    from app.modules.automation_rules.models import AutomationRule
+
+    now = NOW.replace(minute=4, second=23)
+    ensure_bc_plans(session, now=now)
+    plan = session.get(AdSyncBc, (sync_seed.tenant_id, "bc-a"))
+    plan.next_hot_at = plan.next_material_at = now + timedelta(minutes=15)
+    original = plan.next_hot_at
+    session.add(
+        AutomationRule(
+            tenant_id=sync_seed.tenant_id,
+            name="同步相位",
+            enabled=enabled,
+            created_by=sync_seed.actor_id,
+            updated_by=sync_seed.actor_id,
+            definition={"accounts": scope},
+        )
+    )
+    session.flush()
+    ensure_bc_plans(session, now=now)
+    assert (
+        plan.next_hot_at
+        == plan.next_material_at
+        == (NOW.replace(minute=12) if expected else original)
+    )
+    other = session.get(AdSyncBc, (sync_seed.tenant_id, "bc-b"))
+    assert other.next_hot_at == now  # 没有归属账户的 BC 不借用共享账户改相位。
+
+
+def test_rule_sync_enable_disable_restores_bc_phase_without_drift(session, sync_seed):
+    from app.modules.automation_rules.models import AutomationRule
+    from app.modules.reporting.job_tasks import _advance
+
+    now = NOW.replace(minute=4, second=23, microsecond=123456)
+    ensure_bc_plans(session, now=now)
+    plan = session.get(AdSyncBc, (sync_seed.tenant_id, "bc-a"))
+    original = now + timedelta(minutes=15)
+    plan.next_hot_at = plan.next_material_at = original
+    rule = AutomationRule(
+        tenant_id=sync_seed.tenant_id,
+        name="启停相位",
+        enabled=True,
+        created_by=sync_seed.actor_id,
+        updated_by=sync_seed.actor_id,
+        definition={"accounts": {"mode": "ALL"}},
+    )
+    session.add(rule)
+    session.flush()
+    ensure_bc_plans(session, now=now)
+    for minutes in (13, 29, 63, 117):
+        delayed = NOW + timedelta(minutes=minutes, seconds=41)
+        next_at = _advance(plan.next_hot_at, delayed, timedelta(minutes=15))
+        plan.next_hot_at = plan.next_material_at = next_at
+        ensure_bc_plans(session, now=delayed)
+        assert plan.next_hot_at == next_at == plan.next_material_at
+        assert next_at.minute % 15 == 12 and next_at.second == next_at.microsecond == 0
+    rule.enabled = False
+    session.flush()
+    ensure_bc_plans(session, now=delayed)
+    assert (
+        plan.next_hot_at
+        == plan.next_material_at
+        == _advance(original, delayed, timedelta(minutes=15))
+    )
+    assert plan.screening_progress == {}
+    rule.enabled = True
+    session.flush()
+    ensure_bc_plans(session, now=delayed)
+    assert plan.next_hot_at.minute % 15 == 12
+
+
+def test_new_rule_bc_remains_due_and_anchors_before_grid(session, sync_seed):
+    from app.modules.automation_rules.models import AutomationRule
+
+    session.add(
+        AutomationRule(
+            tenant_id=sync_seed.tenant_id,
+            name="首轮不延误",
+            enabled=True,
+            created_by=sync_seed.actor_id,
+            updated_by=sync_seed.actor_id,
+            definition={"accounts": {"mode": "BC", "bc_ids": ["bc-a"]}},
+        )
+    )
+    session.flush()
+    now = NOW.replace(minute=14)
+    ensure_bc_plans(session, now=now)
+    plan = session.get(AdSyncBc, (sync_seed.tenant_id, "bc-a"))
+    assert plan.next_hot_at == plan.next_material_at == NOW.replace(minute=12)
+
+
+@pytest.mark.parametrize("minute,expected", [(12, 12), (13, 27)])
+def test_rule_sync_grid_boundary_and_failed_plan_backoff(
+    session, sync_seed, minute, expected
+):
+    from app.modules.automation_rules.models import AutomationRule
+
+    ensure_bc_plans(session, now=NOW)
+    plan = session.get(AdSyncBc, (sync_seed.tenant_id, "bc-a"))
+    plan.next_hot_at = plan.next_material_at = NOW + timedelta(minutes=20)
+    session.add(
+        AutomationRule(
+            tenant_id=sync_seed.tenant_id,
+            name="刻度边界",
+            enabled=True,
+            created_by=sync_seed.actor_id,
+            updated_by=sync_seed.actor_id,
+            definition={"accounts": {"mode": "ALL"}},
+        )
+    )
+    session.flush()
+    ensure_bc_plans(session, now=NOW.replace(minute=minute))
+    assert plan.next_hot_at == plan.next_material_at == NOW.replace(minute=expected)
+    plan.next_hot_at = NOW.replace(minute=33, second=7)
+    ensure_bc_plans(session, now=NOW.replace(minute=30))
+    assert plan.next_hot_at == plan.next_material_at == NOW.replace(minute=42)

@@ -3270,3 +3270,12 @@ CI后端4884项：4882首轮通过、1独立重跑通过、1跳过、最终0失�
 - 使用本机专用 PostgreSQL 17.5（127.0.0.1:55483，tkada_sync_followups_test）和 Redis 8.0.1（127.0.0.1:56483，测试 DB 1），清空继承环境并 APP_ENV_FILE=/dev/null，未读取线上配置或调用真实 TikTok。测试日志位于本机 /tmp/tkada-sync-followups，不进入提交。
 - 设计按用户字面路径保存为 `docs/superpowers/specs/2026-10-d`；计划为 `docs/superpowers/plans/2026-10-21-sync-followups.md`。原 pytest 命令被截断，恢复为 reporting、automation_rules、ads 三模块完整运行。阶段 4 预审发现素材规则依赖所有未定位帖子，待阶段 3 完成后按停止条件提交审计结论，不擅改规则语义。
 - 提交前复核 main 状态、仓库根目录和明确路径暂存差异；不推送、不发布，既有未跟踪文件保持原样。提交号见 Git 中本节对应 reporting 提交。
+
+
+## 2026-10-21 同步精简后续阶段 2：规则执行前置取数
+
+- 有启用规则覆盖 owned 账户的 BC 复用 `directory_refresh.rule_accounts`，热报/素材锚定 UTC :12/:27/:42/:57；RULE_SYNC_LEAD 为 3 分钟。首次已到期仍立即规划，尚未到期调到下个准备刻度；迟到及意外规划失败后仍沿网格推进。
+- `AdSyncBc.screening_progress.rule_sync_original_phase` 保存启用规则前的相位，停用规则恢复原相位并删除该键。已有无规则 BC 完全保持原相位；无新增表/字段/迁移/业务开关，不改变规则执行或 20 分钟新鲜度，未扩大事实取数账户范围。
+- 新增 10 项真实 PG 相位回归：ALL/BC/ACCOUNTS、未启用/未覆盖、无 owned 账户 BC、首次到期、精确刻度边界、启停恢复、多轮延迟和失败退避。规则范围共用函数补齐类型声明。
+- backend 门禁：`uv run ruff check app tests && uv run ty check app` 通过；3 个改动 Python 文件 `uv run ruff format --check` 通过；`uv run mypy app` 502 条/74 文件，对比上阶段 505 条按诊断多重集无新增（补类型消除 3 条）；`uv run pytest tests/modules/reporting tests/modules/automation_rules tests/modules/ads -q` **975 passed / 46.38s**。先红 5 failed/3 passed；修复后定向 107 passed，边界补测纳入完整回归。
+- 继续使用阶段 1 的独立本机 PG/Redis 与清洁测试环境；提交前核对 main、仓库根目录、暂存 diff。阶段 1 提交 `53a5888f`；本节提交号见对应 Git 提交。无推送或发布。

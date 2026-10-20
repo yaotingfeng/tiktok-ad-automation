@@ -2,7 +2,9 @@
 
 import json
 from collections import defaultdict
+from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
+from uuid import UUID
 
 from sqlalchemy import text
 from sqlmodel import Session, col, select
@@ -28,7 +30,9 @@ _AD_TYPES = {
 _ACTIVE = ("QUEUED", "RUNNING", "ADMISSION_WAIT", "WAITING_REMOTE")
 
 
-def rule_accounts(session, *, tenant_id, bc_id, accounts):
+def rule_accounts(
+    session: Session, *, tenant_id: UUID, bc_id: str, accounts: Sequence[str]
+) -> set[str]:
     """规则覆盖的账户优先刷新状态；普通目录降低重复读取，给财务事实留下配额。"""
     covered = set()
     rules = session.exec(

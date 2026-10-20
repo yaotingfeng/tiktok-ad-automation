@@ -31,6 +31,7 @@ from app.modules.reporting.store_models import (
 from app.modules.tenants.permissions import require_tenant
 
 HOT_INTERVAL = timedelta(minutes=15)
+RULE_SYNC_LEAD = timedelta(minutes=3)
 MATERIAL_INTERVAL = timedelta(minutes=15)
 HOUR_INTERVAL = timedelta(minutes=30)  # 小时趋势按需缓存，不占当前日止损热刷容量。
 DIRECTORY_INTERVAL = timedelta(hours=3)
@@ -162,7 +163,51 @@ def ensure_bc_plans(
         enabled += 1
     session.flush()
     _refresh_owners(session, tenant_id=scope_tenant)
+    for plan in session.exec(plan_query.where(col(AdSyncBc.enabled).is_(True))).all():
+        align_rule_sync_phase(session, plan, now=now)
     return enabled
+
+
+def align_rule_sync_phase(session: Session, plan: AdSyncBc, *, now: datetime) -> None:
+    """规则提前三分钟取数，停用后恢复本 BC 原相位，避免所有租户永远扎堆。"""
+    from app.modules.reporting.directory_refresh import rule_accounts
+
+    accounts = owned_accounts(session, plan)
+    has_rules = bool(
+        rule_accounts(
+            session, tenant_id=plan.tenant_id, bc_id=plan.bc_id, accounts=accounts
+        )
+    )
+    # 复用计划已有 JSON 记录临时相位转换；账户筛选游标只删除自己的键，不会丢失此锚点。
+    key = "rule_sync_original_phase"
+    original = plan.screening_progress.get(key)
+    epoch = datetime(1970, 1, 1, tzinfo=UTC)
+    anchor = epoch - RULE_SYNC_LEAD
+    if has_rules:
+        if original is None:
+            plan.screening_progress = {
+                **plan.screening_progress,
+                key: plan.next_hot_at.isoformat(),
+            }
+            # 首轮/已到期任务立即可规划；尚未到期的 BC 提前到下一个规则准备刻度。
+            steps, remainder = divmod(now - anchor, HOT_INTERVAL)
+            if plan.next_hot_at > now and remainder:
+                steps += 1
+            target = anchor + steps * HOT_INTERVAL
+        else:
+            # 调度晚到仍沿网格推进；意外规划失败的退避不得把相位永久改成失败时刻。
+            due = plan.next_hot_at
+            steps, remainder = divmod(due - anchor, HOT_INTERVAL)
+            target = anchor + (steps + bool(remainder)) * HOT_INTERVAL
+        plan.next_hot_at = plan.next_material_at = target
+    elif original is not None:
+        unruled = datetime.fromisoformat(original)
+        plan.next_hot_at = plan.next_material_at = (
+            unruled + ((now - unruled) // HOT_INTERVAL + 1) * HOT_INTERVAL
+        )
+        plan.screening_progress = {
+            k: v for k, v in plan.screening_progress.items() if k != key
+        }
 
 
 def _refresh_owners(session, *, tenant_id=None) -> None:
