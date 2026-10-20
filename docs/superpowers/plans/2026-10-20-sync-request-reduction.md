@@ -26,7 +26,7 @@
   - 账户级在途约束：同租户、BC、actor、冻结路由、账户、广告类型、层级存在 `workload='live'` 且状态属于 `_ACTIVE` 的运行，跳过该层。
   - 仍复用 `request_directory`（按 100 ID 分片），不新建并行的目录请求路径。
   - 保留 `pg_advisory_xact_lock` 串行规划，避免并发热报重复规划同一账户。
-- `backend/app/modules/reporting/health.py`：目录过期判定改用新常量（广告层 30 分钟、上级 60 分钟、规则账户 15 分钟）。
+- `backend/app/modules/reporting/health.py`：目录过期判定使用周期加 `REFRESH_MARGIN` 执行余量（广告层 35 分钟、上级 65 分钟、规则账户三层 20 分钟）。热报发布后目录完成仍需时间，精确周期会误判并触发额外报表补拉；刷新规划仍提前 5 分钟，不变。
 - 中文注释写清“按需选对象、按账户合并、账户级在途约束”的业务原因。
 
 测试（真实 PostgreSQL）：

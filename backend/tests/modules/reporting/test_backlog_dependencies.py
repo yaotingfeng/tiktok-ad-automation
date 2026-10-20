@@ -174,9 +174,15 @@ def test_general_directory_refresh_starts_before_freshness_deadline(
     assert measure_health(session, plan, now=now)[0]["missing_directory_ads"] == 0
     assert refresh_report_directory(session, job, now=now) == 1
     assert refresh_report_directory(session, job, now=now) == 0
-    # 提前刷新不能掩盖真正超期：未收到新目录时，30分钟后仍应告警。
+    # 规划提前量与完成余量分开：等待中的35分钟边界健康，超过仍须告警。
     assert (
-        measure_health(session, plan, now=now + timedelta(minutes=5))[0][
+        measure_health(session, plan, now=now + timedelta(minutes=9))[0][
+            "missing_directory_ads"
+        ]
+        == 0
+    )
+    assert (
+        measure_health(session, plan, now=now + timedelta(minutes=10))[0][
             "missing_directory_ads"
         ]
         == 1

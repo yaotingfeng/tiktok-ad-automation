@@ -3211,3 +3211,23 @@ bb4a971599c0707e91c79c989ad81bdc8571b281于20:30:44 UTC完成11角色快速发�
 完成最终独立只读代码审查：未发现Critical、Important或Minor具体问题，未有待处理审查项。审查核对D1–D4生产代码、测试及新迁移；未判断线上请求量、查询性能、迁移耗时，这些不能由本地测试代替。未发布、未调用真实TikTok接口、未连接线上数据库。
 
 当前分支仍为独立工作树的 `feat/automated-rules`，共同基准3b4f8c5e；main为41ae8ea4，另有两个仅文档提交。本轮不合并、不推送。未来先核对并备存main工作区未跟踪的同名设计/计划，再把本分支变基到届时main，保留双方进度记录并重新验证，然后才在main执行 `git merge --ff-only feat/automated-rules`。变基会改变本轮提交号，交接记录的哈希是本次交付时的原始提交号。
+
+### 2026-10-20 同步请求精简复核：目录健康期限保留执行余量
+
+按用户复核修正实施计划 `2026-10-20-sync-request-reduction.md` 第29行；阶段2原实现符合旧计划，本次修正的是计划中的健康期限。目录只有热报每15分钟发布时才规划刷新，读取完成还需要几分钟，正常年龄会略超周期。健康阈值应与阶段1的SLO一样保留执行余量，否则 `missing_directory_ads` 会把账户加入 `repairs["ad"]`，再经 `plan_hot` 额外补拉广告报表，抵消降频。
+
+健康阈值改为周期加既有 `directory_refresh.REFRESH_MARGIN`：规则账户三层20分钟、普通账户广告35分钟、上级两层65分钟。报表SLO也复用该常量，数值仍为20分钟；没有新增数字常量。刷新规划仍提前5分钟，即25/55/10分钟，`directory_refresh.py` 无改动。此条取代阶段2记录中“健康告警使用完整30/60/15分钟期限”的旧决定，计划原文同步修正。
+
+测试改名为 `test_directory_health_allows_layer_cycle_and_execution_margin`，覆盖20/21、35/36、65/66分钟边界。新增规则/普通账户两个真实PostgreSQL回归，模拟每15分钟热报发布、首轮目录延迟1分钟和后续延迟4分钟完成，逐分钟检查至第64分钟：无目录误报、不进入广告修复集合、不创建额外报表任务；同时断言原15/30/60分钟规划频率。已有积压依赖用例继续验证提前刷新及在途去重，将告警边界更新为35分钟健康、36分钟超期。
+
+失败记录：新增/更新健康用例在旧代码下8 failed、17 passed（3.31秒），正常轮次分别在规则账户第17分钟、普通账户第32分钟复现误报；修正后健康用例25 passed（3.98秒）。首次三模块全量1 failed、962 passed（67.27秒），暴露积压依赖用例仍要求31分钟告警，已按新语义更新，未删除或跳过测试。首次改动格式检查发现health.py换行不符，已只格式化该改动文件。
+
+本次在 `cf560a3282ab398b5084d5fc73a4376de53e7b5d` 后新增独立提交，标题为 `reporting: 避免目录正常刷新触发额外报表补拉`；用 `git log -1 --format=%H --grep='^reporting: 避免目录正常刷新触发额外报表补拉$'` 可查询本记录所在提交，提交后回报实际哈希。前三个阶段提交不改写；无迁移，不合并、不推送、不发布，不调用真实TikTok接口或连接线上数据库。
+
+最终门禁（backend/，本地真实PostgreSQL18/Redis8）：
+
+- `uv run pytest tests/modules/reporting tests/modules/automation_rules tests/modules/ads -q`：**963 passed，67.92秒，无跳过**。
+- `uv run ruff check app tests && uv run ty check app`：通过。
+- `uv run mypy app`：505 errors / 74 files；忽略行号对比main基准510及cf560a32的505均无新增。main自基准以来仅改文档，后端基准未变；不把mypy本身记为通过。
+- `uv run ruff format --check app/modules/reporting/health.py tests/modules/reporting/test_health.py tests/modules/reporting/test_backlog_dependencies.py`：全部3文件通过；`git diff --check`通过。
+- 全仓44个存量格式问题未处理。日志位于忽略的 `.superpowers/sync-request-reduction/health-margin-*.log`。

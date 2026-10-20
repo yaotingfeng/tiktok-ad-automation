@@ -14,6 +14,7 @@ from app.jobs.celery_app import celery_app
 from app.jobs.outbox import enqueue_after_commit
 from app.modules.reporting.directory_refresh import (
     PARENT_INTERVAL,
+    REFRESH_MARGIN,
     STATUS_INTERVAL,
     directory_interval,
     rule_accounts,
@@ -37,7 +38,7 @@ from app.modules.reporting.store_models import (
 
 logger = logging.getLogger(__name__)
 # 一个实时轮次外加执行余量，避免正常等待下一轮被健康修复反复补拉。
-SLO = HOT_INTERVAL + timedelta(minutes=5)
+SLO = HOT_INTERVAL + REFRESH_MARGIN
 REPAIR_INTERVAL = timedelta(minutes=2)
 MAX_REPAIR_ACCOUNTS = 50
 
@@ -63,9 +64,12 @@ def measure_health(session, plan, *, now, accounts=None):
         # 全球当地日只可能落在 UTC 前后一天；先走日期索引，再按事实时区精确判断。
         "first_day": now.astimezone(UTC).date() - timedelta(days=1),
         "last_day": now.astimezone(UTC).date() + timedelta(days=1),
-        "status_cutoff": now - STATUS_INTERVAL,
-        "parent_cutoff": now - PARENT_INTERVAL,
-        "rule_cutoff": now - directory_interval("ad", has_rules=True),
+        # 热报发布才规划目录，完成读取还需时间；健康期限要留执行余量，
+        # 否则正常轮次会被当成缺口触发额外报表补拉，抵消降频。
+        "status_cutoff": now - (STATUS_INTERVAL + REFRESH_MARGIN),
+        "parent_cutoff": now - (PARENT_INTERVAL + REFRESH_MARGIN),
+        "rule_cutoff": now
+        - (directory_interval("ad", has_rules=True) + REFRESH_MARGIN),
         "strict_accounts": sorted(strict_accounts),
         "action_cutoff": now - timedelta(minutes=2),
     }

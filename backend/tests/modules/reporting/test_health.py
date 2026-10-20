@@ -305,22 +305,22 @@ def test_health_allows_realtime_cycle_and_execution_margin(
 @pytest.mark.parametrize(
     "kind,age,rule,missing",
     [
-        ("ad", 30, False, 0),
-        ("ad", 31, False, 1),
+        ("ad", 35, False, 0),
+        ("ad", 36, False, 1),
         ("adgroup", 31, False, 0),
-        ("adgroup", 60, False, 0),
-        ("adgroup", 61, False, 1),
-        ("campaign", 60, False, 0),
-        ("campaign", 61, False, 1),
-        ("ad", 15, True, 0),
-        ("ad", 16, True, 1),
-        ("adgroup", 15, True, 0),
-        ("adgroup", 16, True, 1),
-        ("campaign", 15, True, 0),
-        ("campaign", 16, True, 1),
+        ("adgroup", 65, False, 0),
+        ("adgroup", 66, False, 1),
+        ("campaign", 65, False, 0),
+        ("campaign", 66, False, 1),
+        ("ad", 20, True, 0),
+        ("ad", 21, True, 1),
+        ("adgroup", 20, True, 0),
+        ("adgroup", 21, True, 1),
+        ("campaign", 20, True, 0),
+        ("campaign", 21, True, 1),
     ],
 )
-def test_directory_health_uses_layer_deadlines_without_early_refresh_margin(
+def test_directory_health_allows_layer_cycle_and_execution_margin(
     session, sync_seed, kind, age, rule, missing
 ):
     from app.modules.automation_rules.models import AutomationRule
@@ -350,3 +350,86 @@ def test_directory_health_uses_layer_deadlines_without_early_refresh_margin(
     assert metrics["missing_directory_ads"] == missing
     if missing:
         assert "acc-2" in repairs["ad"]
+
+
+@pytest.mark.parametrize("rule", [False, True])
+def test_normal_hot_cycles_wait_for_directory_completion_without_ad_repairs(
+    session, sync_seed, monkeypatch, rule
+):
+    from app.core.config import settings
+    from app.modules.ads.models import AdObject
+    from app.modules.automation_rules.models import AutomationRule
+    from app.modules.reporting.directory_refresh import refresh_report_directory
+    from app.modules.reporting.health import measure_health
+    from tests.modules.reporting.test_directory_refresh import (
+        directory_objects,
+        prepared,
+        runs_for,
+    )
+
+    monkeypatch.setattr(settings, "ADS_SYNC_ENABLED", True)
+    start = datetime.now(UTC).replace(hour=10, minute=0, second=0, microsecond=0)
+    job = prepared(session, sync_seed, day=start.date())
+    job.status = "COMPLETE"
+    # 第一轮目录在热报后1分钟完成，后续延后4分钟，覆盖年龄超过周期的正常窗口。
+    directory_objects(session, sync_seed, start + timedelta(minutes=1))
+    objects = {
+        obj.kind: obj
+        for obj in session.exec(
+            select(AdObject).where(AdObject.tenant_id == sync_seed.tenant_id)
+        ).all()
+    }
+    session.add(
+        AutomationRule(
+            tenant_id=sync_seed.tenant_id,
+            name="normal-cycle-rule",
+            enabled=rule,
+            created_by=sync_seed.actor_id,
+            updated_by=sync_seed.actor_id,
+            definition={"accounts": {"mode": "ALL"}},
+        )
+    )
+    planner.ensure_bc_plans(session, now=start, tenant_id=sync_seed.tenant_id)
+    plan = session.get(AdSyncBc, (sync_seed.tenant_id, "bc-a"))
+    plan.last_active_advertiser_ids, plan.active_screened_at = ["acc-2"], start
+    states = []
+    for kind in ("ad_day", "material_day"):
+        state = session.get(
+            ReportSyncState, (sync_seed.tenant_id, "acc-2", kind, start.date())
+        )
+        if state is None:
+            state = ReportSyncState(
+                tenant_id=sync_seed.tenant_id,
+                advertiser_id="acc-2",
+                report_kind=kind,
+                stat_date=start.date(),
+            )
+            session.add(state)
+        state.status, state.last_success_at = "COMPLETE", start
+        states.append(state)
+    session.flush()
+    planned = []
+    for minute in range(2, 65):
+        now = start + timedelta(minutes=minute)
+        if minute % 15 == 0:
+            # 模拟正常热报发布：报表保持新鲜，只有目录延迟可能触发多余补拉。
+            for state in states:
+                state.last_success_at = now
+            plan.active_screened_at = now
+            session.flush()
+            planned.append(refresh_report_directory(session, job, now=now))
+        if minute % 15 == 4:
+            for run in runs_for(session, sync_seed):
+                if run.status == "QUEUED":
+                    run.status = "COMPLETE"
+                    objects[run.kind].observed_at = now
+        session.flush()
+        metrics, issues, repairs = measure_health(session, plan, now=now)
+        assert metrics["missing_directory_ads"] == 0, (rule, minute, metrics)
+        assert not issues and not repairs["ad"], (rule, minute, repairs)
+        health = observe_health(session, plan, now=now)
+        assert health.status == "HEALTHY"
+        assert health.last_repair_at is None
+        assert session.exec(select(ReportSyncJob)).all() == [job]
+    # 规则账户每轮三层；普通账户广告每30分钟、上级每60分钟，规划频率不变。
+    assert planned == ([3, 3, 3, 3] if rule else [0, 1, 0, 3])
