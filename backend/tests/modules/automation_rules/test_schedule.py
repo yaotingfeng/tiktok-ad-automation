@@ -145,10 +145,10 @@ def test_account_periods_follow_local_daytime():
     assert due_at(s, slot_at=at(2026, 10, 14, 11, 0), timezone="Etc/GMT+3")
 
 
-def test_five_minute_account_slots_cross_local_midnight_and_strict_boundary():
+def test_fifteen_minute_account_slots_cross_local_midnight_and_strict_boundary():
     from app.modules.automation_rules.schedule import due_at
 
-    schedule = Schedule(frequency="5M", window="CONTINUOUS", timezone_basis="ACCOUNT")
+    schedule = Schedule(frequency="15M", window="CONTINUOUS", timezone_basis="ACCOUNT")
     # 加德满都 UTC+05:45；当地 23:59:59 后的槽位为次日零点。
     before = at(2026, 10, 18, 18, 14, 59)
     slot = next_run_at(schedule, after=before, timezones=["Asia/Kathmandu"])
@@ -160,18 +160,18 @@ def test_five_minute_account_slots_cross_local_midnight_and_strict_boundary():
     )
     assert next_run_at(
         schedule, after=slot, timezones=["Asia/Kathmandu"]
-    ) == slot + timedelta(minutes=5)
+    ) == slot + timedelta(minutes=15)
 
 
-def test_five_minute_custom_window_respects_account_local_day():
+def test_fifteen_minute_custom_window_respects_account_local_day():
     from app.modules.automation_rules.schedule import due_at
 
     schedule = Schedule.model_validate(
         {
-            "frequency": "5M",
+            "frequency": "15M",
             "window": "CUSTOM",
             "timezone_basis": "ACCOUNT",
-            "periods": [{"date_type": "DAY", "start": "09:00", "end": "09:05"}],
+            "periods": [{"date_type": "DAY", "start": "09:00", "end": "09:15"}],
         }
     )
     slot = next_run_at(
@@ -180,14 +180,14 @@ def test_five_minute_custom_window_respects_account_local_day():
     assert slot == at(2026, 10, 18, 1)
     assert due_at(schedule, slot_at=slot, timezone=SH)
     assert not due_at(schedule, slot_at=slot, timezone="Etc/GMT+8")
-    assert next_run_at(schedule, after=slot, timezones=[SH]) == at(2026, 10, 18, 1, 5)
-    assert next_run_at(schedule, after=at(2026, 10, 18, 1, 5), timezones=[SH]) == at(
+    assert next_run_at(schedule, after=slot, timezones=[SH]) == at(2026, 10, 18, 1, 15)
+    assert next_run_at(schedule, after=at(2026, 10, 18, 1, 15), timezones=[SH]) == at(
         2026, 10, 19, 1
     )
 
 
-def test_five_minute_slots_cross_daylight_saving_spring_boundary():
-    schedule = Schedule(frequency="5M", window="CONTINUOUS", timezone_basis="ACCOUNT")
+def test_fifteen_minute_slots_cross_daylight_saving_spring_boundary():
+    schedule = Schedule(frequency="15M", window="CONTINUOUS", timezone_basis="ACCOUNT")
     start = at(2026, 3, 8, 5) - timedelta(seconds=1)
     runs = _walk(schedule, start, at(2026, 3, 9, 4), "America/New_York")
-    assert len(runs) == len(set(runs)) == 23 * 12
+    assert len(runs) == len(set(runs)) == 23 * 4

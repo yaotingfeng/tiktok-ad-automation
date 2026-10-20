@@ -126,9 +126,9 @@ def test_material_facts_publish_without_waiting_for_historical_link_lookup(
         assert len(repairs) == 1 and repairs[0].advertiser_ids == ["acc-2"]
 
 
-def test_realtime_planning_refreshes_current_day_every_two_minutes():
-    assert planner.HOT_INTERVAL == timedelta(minutes=2)
-    assert planner.MATERIAL_INTERVAL == timedelta(minutes=2)
+def test_realtime_planning_refreshes_current_day_every_fifteen_minutes():
+    assert planner.HOT_INTERVAL == timedelta(minutes=15)
+    assert planner.MATERIAL_INTERVAL == timedelta(minutes=15)
     today = date(2026, 10, 18)
     assert planner._hot_window("UTC", datetime(2026, 10, 18, 3, tzinfo=UTC)) == (
         today,

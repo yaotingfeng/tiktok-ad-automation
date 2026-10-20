@@ -273,3 +273,30 @@ def test_health_limits_history_scan_without_losing_local_date_boundaries(
             session.execute(
                 model.__table__.delete().where(model.tenant_id == sync_seed.tenant_id)
             )
+
+
+@pytest.mark.parametrize(
+    "age,expected", [(15, "HEALTHY"), (20, "HEALTHY"), (21, "DEGRADED")]
+)
+def test_health_allows_realtime_cycle_and_execution_margin(
+    session, sync_seed, age, expected
+):
+    now = datetime.now(UTC)
+    planner.ensure_bc_plans(session, now=now, tenant_id=sync_seed.tenant_id)
+    plan = session.get(AdSyncBc, (sync_seed.tenant_id, "bc-a"))
+    plan.last_active_advertiser_ids, plan.active_screened_at = ["acc-2"], now
+    for kind in ("ad_day", "material_day"):
+        session.add(
+            ReportSyncState(
+                tenant_id=sync_seed.tenant_id,
+                advertiser_id="acc-2",
+                report_kind=kind,
+                stat_date=now.date(),
+                status="COMPLETE",
+                last_success_at=now - timedelta(minutes=age),
+            )
+        )
+    session.flush()
+    health = observe_health(session, plan, now=now)
+    assert health.status == expected
+    assert len(session.exec(select(ReportSyncJob)).all()) == (2 if age > 20 else 0)

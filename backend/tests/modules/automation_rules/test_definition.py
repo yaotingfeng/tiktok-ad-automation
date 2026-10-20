@@ -252,14 +252,14 @@ def test_video_total_is_a_material_scope():
         ("material", "VIDEO"),
     ],
 )
-def test_five_minute_pause_preserves_existing_judgment_scopes(level, aggregation):
+def test_fifteen_minute_pause_preserves_existing_judgment_scopes(level, aggregation):
     value = base(
         apply_to={"level": level, "status": "ACTIVE"},
         aggregation=aggregation,
         action={"type": "PAUSE", "level": level},
-        schedule={"frequency": "5M", "window": "CONTINUOUS"},
+        schedule={"frequency": "15M", "window": "CONTINUOUS"},
     )
-    assert RuleDefinition.model_validate(value).schedule.frequency == "5M"
+    assert RuleDefinition.model_validate(value).schedule.frequency == "15M"
 
 
 @pytest.mark.parametrize(
@@ -271,7 +271,7 @@ def test_five_minute_pause_preserves_existing_judgment_scopes(level, aggregation
         ("ROAS", "campaign", "30M"),
     ],
 )
-def test_five_minute_frequency_does_not_expand_restore_or_adjustments(
+def test_fifteen_minute_frequency_does_not_expand_restore_or_adjustments(
     action_type, level, minimum
 ):
     action = {"type": action_type, "level": level}
@@ -283,9 +283,17 @@ def test_five_minute_frequency_does_not_expand_restore_or_adjustments(
     value = base(
         apply_to={"level": level, "status": "ACTIVE"},
         action=action,
-        schedule={"frequency": "5M", "window": "CONTINUOUS"},
+        schedule={"frequency": "15M", "window": "CONTINUOUS"},
     )
     with pytest.raises(ValidationError, match="run at most every"):
         RuleDefinition.model_validate(value)
     value["schedule"]["frequency"] = minimum
     assert RuleDefinition.model_validate(value).schedule.frequency == minimum
+
+
+@pytest.mark.parametrize("frequency", ["5M", "10M"])
+def test_pause_rejects_frequency_below_fifteen_minutes(frequency):
+    with pytest.raises(ValidationError):
+        RuleDefinition.model_validate(
+            base(schedule={"frequency": frequency, "window": "CONTINUOUS"})
+        )

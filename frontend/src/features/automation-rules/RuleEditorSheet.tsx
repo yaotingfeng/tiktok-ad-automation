@@ -55,7 +55,7 @@ import {
   validateDefinition,
 } from "./ruleForm"
 
-const FREQUENCY_ORDER: Frequency[] = ["5M", "30M", "1H", "2H", "4H", "DAILY"]
+const FREQUENCY_ORDER: Frequency[] = ["15M", "30M", "1H", "2H", "4H", "DAILY"]
 const WEEKDAYS = ["一", "二", "三", "四", "五", "六", "日"]
 
 export type EditorTarget =

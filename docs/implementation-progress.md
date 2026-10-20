@@ -3144,3 +3144,32 @@ bb4a971599c0707e91c79c989ad81bdc8571b281于20:30:44 UTC完成11角色快速发�
 旧逻辑真实PG回归60条请求2条产生969次SQL，且第二页total为剩余条数；修复后142项广告管理测试、20项浏览器测试、Ruff/全应用ty及前端构建通过。生产只读对照同范围101条：旧查询5秒/2030次SQL仍未返回，候选0.154秒/9次SQL返回50条且total101。没有迁移或平台写入；这次对照不是发布验收。
 
 修改及待发布边界见[操作记录验证](validation/2026-10-20-operation-history-pagination.md)。本轮本地提交主题为`ad-management: 修复操作记录全历史扫描并统一分页`；实际提交ID可按此主题查询。未获得本轮明确推送指令，暂未推送或发布。
+
+### 2026-10-20 同步请求精简：阶段 1 待提交，存量 lint 门禁待确认
+
+工作树 `.worktrees/sync-request-reduction` 复用已合入 main 的 `feat/automated-rules`，快进至基准 `3b4f8c5e`。未新建分支；未暂存、提交、合并、推送或发布。阶段 2、3 尚未开始，不能视为已完成。设计与计划原文已复制到工作树，预定随阶段 1 提交。原工作区所有无关未跟踪文件保留。
+
+已实现 D1/D2：广告和素材实时轮次 15 分钟；规则频率 5M 替换为 15M，不提供兼容解析；暂停最小 15 分钟，其他动作下限保持；前端表单、文案、排序和仓库脚本生成类型同步。筛选退避时实时范围为已知活跃账户与当地今日已有事实，不额外扩展到无消耗规则账户。
+
+定义来源全量审计：`RuleDefinition.model_validate` 的持久化输入仅来自 `automation_rule.definition` 和 `automation_rule_run.definition`；API 模板来自代码常量；其他 JSONB 是命中对象、指标、执行摘要等，并非规则定义。新增 `0041_rule_frequency.py`，upgrade 对两列仅将 schedule.frequency=5M 改为15M，downgrade 对两列将15M改回5M；其他 JSON 键与30M定义保持。真实 PostgreSQL 历史库验证两表升级后均可解析，并验证下行往返。
+
+必要扩展：原计划未包含健康自动补拉的5分钟阈值、规则输入10分钟阈值和页面5分钟提示。保留这些值会使正常15分钟轮次被判过期并自动补拉，抵消降频，或被规则跳过。特别说明：如果仍沿用10分钟阈值，正常的15分钟刷新轮次会被规则误判为“数据过期”；因此阈值统一为15分钟周期+5分钟执行余量（20分钟），添加15/20/21分钟健康边界、规则输入900/1199/1200/1201秒边界及页面计时回归。健康活跃范围也去掉无事实规则账户的额外并入，目录规则范围留给阶段2处理。
+
+本地验证（独立 Docker PostgreSQL18、Redis8，仅回环地址；外部服务使用测试传输替身，无真实TikTok接口或线上数据库）：
+- `cd backend && uv run pytest tests/modules/reporting tests/modules/automation_rules tests/modules/ads -q`：**921 passed，289.25秒**，无跳过。
+- `cd backend && bash scripts/lint.sh`：**失败**，mypy 509 errors / 74 files。未修改基准独立导出后同版本mypy为510 errors / 74 files；规范化行号比较，本次无新增错误、减少1个对已移除rule_accounts调用的提示。脚本在mypy失败处退出。
+- 单独执行后续检查：`uv run ty check app`、`uv run ruff check app` 均通过；`uv run ruff format app --check` 初次45文件失败，其中1个为本次枚举行变长，已修正，改动的7个应用文件格式检查通过。其余44个文件与基准的44个存量格式问题一致，不擅自格式化无关文件。
+- `bash scripts/generate-client.sh`：通过；生成类型差异仅频率枚举。
+- 根目录 `bun run lint`、`bun run --filter frontend build`：均通过；lint脚本自带write，产生的7个无关文件格式变动已仅撤销本轮自动变更，未纳入任务。构建保留现有大chunk提示。
+- `cd frontend && PLAYWRIGHT_PORT=5197 bun x playwright test tests/automation-rule-form.spec.ts tests/automation-rules.spec.ts tests/ads-reporting.spec.ts --project workspace --workers 2 --reporter line`：**73 passed，1.3分钟**。
+- 红测如实记录：定义/排程/迁移/健康16 failed、55 passed；规则输入6 failed、2 passed；浏览器首轮3 failed、70 passed。首个全量基线在393 passed后人工中止（245.36秒），因为执行期间代码已改变，不能用作固定基线；随后完整固定代码的921项全部执行通过。
+
+提交号：**无**。用户要求全部门禁通过才能提交；存量lint失败不等于通过。已请求用户决定是否允许沿用现有CI的ty+Ruff并比较mypy无新增／改动文件格式，或先独立治理全仓存量问题；答复前不提交。日志与继续执行用的本地环境配置留在该工作树 `.superpowers/sync-request-reduction/`（不进Git）；后端虚拟环境已改为工作树独立环境。
+
+### 2026-10-20 同步请求精简：阶段 1 新门禁通过
+
+用户已明确批准：CI命令 `uv run ruff check app tests && uv run ty check app` 必须通过；mypy对比main忽略行号不能新增；所有本轮修改/新增Python文件（含测试、迁移）必须通过 `ruff format --check`。全仓存量510个mypy错误和44个格式问题本轮不治理。更正此前格式验证范围：上轮只验证了7个应用文件，遗漏测试；本轮仅对用户指出的 `test_inputs.py` 运行格式化后，全部15个Python文件格式检查通过。
+
+本轮最终验证：CI Ruff（app/tests）和ty均通过；mypy当前509、main基准510，逐条规范化行号及错误正文中的行号后无新增；全部15个修改/新增Python文件格式检查通过；三个模块完整pytest **921 passed，60.30秒，无跳过**。前端上一轮73项浏览器测试、lint及构建通过，之后仅改Python测试换行和记录，前端无新增变更。第一次重跑遇到本地Colima停止、恢复后随机端口变化，连接失败轮次不计通过；更新本地端口并清除旧uv解释器缓存影响后上述完整重跑成功，没有跳过或删测试。
+
+阶段1提交以 `automation-rules: 将实时刷新和暂停规则统一为15分钟` 定位（下一阶段记录其实际哈希）。分支为独立工作树绑定的已有 `feat/automated-rules`，原基准3b4f8c5e；当前main已新增两个仅文档提交至41ae8ea4，后端代码与mypy基准未变。按用户最新指示，本轮只提交三个阶段，**不合并回main、不推送、不发布**。后续合并前需先把本分支变基至届时main并验证，才可在main快进合并；原工作区未跟踪的设计/计划应先核对并备存，避免覆盖阻碍。

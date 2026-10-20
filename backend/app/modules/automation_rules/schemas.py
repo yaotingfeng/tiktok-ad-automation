@@ -15,7 +15,14 @@ from app.modules.automation_rules.catalog import (
 )
 
 Level = Literal["campaign", "adgroup", "ad", "material"]
-FREQUENCY_MINUTES = {"5M": 5, "30M": 30, "1H": 60, "2H": 120, "4H": 240, "DAILY": 1440}
+FREQUENCY_MINUTES = {
+    "15M": 15,
+    "30M": 30,
+    "1H": 60,
+    "2H": 120,
+    "4H": 240,
+    "DAILY": 1440,
+}
 
 
 class _Strict(BaseModel):
@@ -143,7 +150,7 @@ class Period(_Strict):
 
 
 class Schedule(_Strict):
-    frequency: Literal["5M", "30M", "1H", "2H", "4H", "DAILY"]
+    frequency: Literal["15M", "30M", "1H", "2H", "4H", "DAILY"]
     daily_at: time | None = None
     window: Literal["CONTINUOUS", "CUSTOM", "ONCE"]
     periods: tuple[Period, ...] = Field(default=(), max_length=7)

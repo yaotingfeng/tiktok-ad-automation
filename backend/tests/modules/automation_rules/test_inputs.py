@@ -285,9 +285,10 @@ def test_materials_carry_video_from_report_links(session, sync_seed):
 
 @pytest.mark.parametrize("kind", ["ad_day", "material_day"])
 @pytest.mark.parametrize(
-    "age_seconds,expected_fresh", [(599, True), (600, True), (601, False)]
+    "age_seconds,expected_fresh",
+    [(900, True), (1199, True), (1200, True), (1201, False)],
 )
-def test_report_freshness_ten_minute_boundary(
+def test_report_freshness_twenty_minute_boundary(
     session, sync_seed, kind, age_seconds, expected_fresh
 ):
     from app.modules.automation_rules.inputs import _fresh_accounts
@@ -314,7 +315,7 @@ def test_report_freshness_ten_minute_boundary(
 
 
 def advance_reports(session, seed, now, advertiser_ids=("acc-1", "acc-2")):
-    # 多次运行之间模拟 2 分钟热同步；保留未指定账户的旧状态以验证缺数通知去重。
+    # 多次运行之间模拟 15 分钟热同步；保留未指定账户的旧状态以验证缺数通知去重。
     for adv in advertiser_ids:
         state = session.get(ReportSyncState, (seed.tenant_id, adv, "ad_day", TODAY))
         state.last_success_at = now

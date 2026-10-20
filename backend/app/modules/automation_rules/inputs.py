@@ -18,9 +18,13 @@ from app.modules.automation_rules.schedule import due_at, next_run_at
 from app.modules.automation_rules.schemas import AccountScope, RuleDefinition
 from app.modules.automation_rules.statuses import hierarchy_statuses
 from app.modules.reporting.metric_catalog import STORED_KEYS
+from app.modules.reporting.planner import HOT_INTERVAL, MATERIAL_INTERVAL
 
-# 当前日报表每 2 分钟同步；超过 10 分钟仍跳过判断，并沿用缺数通知。
-FRESHNESS = {"ad_day": timedelta(minutes=10), "material_day": timedelta(minutes=10)}
+# 规则与实时事实共用 15 分钟轮次，并预留 5 分钟执行余量；超时仍跳过判断并通知缺数。
+FRESHNESS = {
+    "ad_day": HOT_INTERVAL + timedelta(minutes=5),
+    "material_day": MATERIAL_INTERVAL + timedelta(minutes=5),
+}
 _PAST = {"PAST_3_DAYS": 3, "PAST_5_DAYS": 5, "PAST_7_DAYS": 7}
 _LIFETIME_START = date(2000, 1, 1)
 _BUDGET_KEYS = ("budget", "daily_budget", "campaign_daily_budget")

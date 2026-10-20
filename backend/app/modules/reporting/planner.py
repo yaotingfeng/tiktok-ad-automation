@@ -30,8 +30,8 @@ from app.modules.reporting.store_models import (
 )
 from app.modules.tenants.permissions import require_tenant
 
-HOT_INTERVAL = timedelta(minutes=2)
-MATERIAL_INTERVAL = timedelta(minutes=2)
+HOT_INTERVAL = timedelta(minutes=15)
+MATERIAL_INTERVAL = timedelta(minutes=15)
 HOUR_INTERVAL = timedelta(minutes=30)  # 小时趋势按需缓存，不占当前日止损热刷容量。
 DIRECTORY_INTERVAL = timedelta(hours=3)
 REFRESH_DAYS = 32

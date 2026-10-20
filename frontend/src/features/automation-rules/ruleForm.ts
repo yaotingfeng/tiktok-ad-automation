@@ -74,7 +74,7 @@ export const OPERATOR_LABELS: Record<Operator, string> = {
   ENDS_WITH: "结尾是",
 }
 export const FREQUENCY_LABELS: Record<Frequency, string> = {
-  "5M": "每 5 分钟",
+  "15M": "每 15 分钟",
   "30M": "每 30 分钟",
   "1H": "每 1 小时",
   "2H": "每 2 小时",
@@ -152,13 +152,13 @@ export function actionLevels(
   return supported.filter((level) => LEVELS.indexOf(level) >= depth)
 }
 
-/** 仅暂停允许每 5 分钟止损；恢复和金额调整保持原来的最短频率。 */
+/** 仅暂停允许每 15 分钟止损；恢复和金额调整保持原来的最短频率。 */
 export function minFrequency(
   applyLevel: Level,
   actionLevel: Level,
   actionType: ActionType,
 ): Frequency {
-  if (actionType === "PAUSE") return "5M"
+  if (actionType === "PAUSE") return "15M"
   return applyLevel === "material" || actionLevel === "material" ? "1H" : "30M"
 }
 
@@ -260,7 +260,7 @@ const TEXT_OPERATORS: Operator[] = [
   "STARTS_WITH",
   "ENDS_WITH",
 ]
-const FREQUENCY_RANK: Frequency[] = ["5M", "30M", "1H", "2H", "4H", "DAILY"]
+const FREQUENCY_RANK: Frequency[] = ["15M", "30M", "1H", "2H", "4H", "DAILY"]
 
 function blank(value: unknown) {
   return value === null || value === undefined || String(value).trim() === ""

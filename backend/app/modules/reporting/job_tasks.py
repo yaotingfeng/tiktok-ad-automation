@@ -43,7 +43,6 @@ from app.modules.ads.directory_requests import (
 )
 from app.modules.ads.sync_models import AdDirectoryPage, AdDirectoryRun
 from app.modules.reporting import planner, publish
-from app.modules.reporting.directory_refresh import rule_accounts
 from app.modules.reporting.jobs import (
     LEASE,
     _CountingReader,
@@ -689,22 +688,14 @@ def _plan_one(
         finally:
             if counted is not None:
                 planner.record_calls(redis_client, now, counted.count)
-        # 已知活跃账户的两类实时事实共用两分钟刷新周期；账户发现/历史筛选
-        # 仍按原时间退避，不能阻挡已有账户刷新，也不能只靠每轮 50 个健康补拉。
-        # 筛选本轮成功时已规划热报，不重复创建；额外规则账户也仅取本 BC 已确认归属。
+        # 已知活跃账户的两类实时事实共用 15 分钟周期；筛选退避时仍刷新
+        # 当地今日已有事实，规则不额外扩展到无消耗账户，避免为无数据判断空转。
         if plan.enabled and material_due_at is not None:
-            refresh_accounts = set(plan.last_active_advertiser_ids)
-            # 沿用最近一个热刷新周期内的完整筛选；两个到期时钟错开时，
-            # 已确认的空账户也不用再逐个读取。筛选过期才扩展到全部规则账户。
-            if plan.active_screened_at is None or plan.active_screened_at < now - hot:
-                refresh_accounts.update(
-                    rule_accounts(
-                        session,
-                        tenant_id=plan.tenant_id,
-                        bc_id=plan.bc_id,
-                        accounts=accounts,
-                    )
-                )
+            refresh_accounts = set(
+                plan.last_active_advertiser_ids
+            ) | planner.known_reporting_accounts(
+                session, plan, accounts=accounts, now=now
+            )
             if not hot_planned:
                 planner.plan_hot(
                     session, plan, active=sorted(refresh_accounts), now=now

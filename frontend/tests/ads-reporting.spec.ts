@@ -280,7 +280,7 @@ test("覆盖时间取最旧账户，混时区明确本地日期及超时账户�
         advertiser_id: "adv-2",
         timezone: "Etc/GMT",
         local_today: "2026-10-18",
-        last_success_at: "2026-10-18T05:50:00Z",
+        last_success_at: "2026-10-18T05:30:00Z",
       },
       {
         advertiser_id: "adv-3",
@@ -292,7 +292,7 @@ test("覆盖时间取最旧账户，混时区明确本地日期及超时账户�
   })
   await page.goto(`/tenants/${TENANT}/ads?bc_id=${BC_A}`)
   const oldest = await page.evaluate(() =>
-    new Date("2026-10-18T05:50:00Z").toLocaleTimeString("zh-CN", {
+    new Date("2026-10-18T05:30:00Z").toLocaleTimeString("zh-CN", {
       hour: "2-digit",
       minute: "2-digit",
       hour12: false,
@@ -304,7 +304,7 @@ test("覆盖时间取最旧账户，混时区明确本地日期及超时账户�
     }),
   ).toBeVisible()
   await expect(
-    page.getByText("1 个账户数据超过 5 分钟", { exact: true }),
+    page.getByText("1 个账户数据超过 20 分钟", { exact: true }),
   ).toBeVisible()
   await expect(
     page.getByText("查询日期按各账户本地日", { exact: true }),
@@ -368,13 +368,13 @@ test("下钻指定账户后覆盖状态仅统计所选账户", async ({ page }) 
         advertiser_id: "adv-2",
         timezone: "Asia/Hong_Kong",
         local_today: "2026-10-18",
-        last_success_at: "2026-10-18T05:50:00Z",
+        last_success_at: "2026-10-18T05:30:00Z",
       },
     ],
   })
   await page.goto(`/tenants/${TENANT}/ads?bc_id=${BC_A}`)
   await expect(
-    page.getByText("最旧有效数据更新到 13:50（账户本地）", { exact: true }),
+    page.getByText("最旧有效数据更新到 13:30（账户本地）", { exact: true }),
   ).toBeVisible()
   await page
     .getByRole("button", { name: "查看 甲账户 的下级", exact: true })
@@ -383,23 +383,23 @@ test("下钻指定账户后覆盖状态仅统计所选账户", async ({ page }) 
     page.getByText("最旧有效数据更新到 13:59（账户本地）", { exact: true }),
   ).toBeVisible()
   await expect(
-    page.getByText("1 个账户数据超过 5 分钟", { exact: true }),
+    page.getByText("1 个账户数据超过 20 分钟", { exact: true }),
   ).toHaveCount(0)
 })
 
-test("接口版本不变时数据超过5分钟仍自动显示超时提示", async ({ page }) => {
+test("接口版本不变时数据超过20分钟仍自动显示超时提示", async ({ page }) => {
   await page.clock.install({ time: new Date("2026-10-18T06:00:00Z") })
-  await adsBoundary(page, { lastSuccess: "2026-10-18T05:55:01Z" })
+  await adsBoundary(page, { lastSuccess: "2026-10-18T05:40:01Z" })
   await page.goto(`/tenants/${TENANT}/ads?bc_id=${BC_A}`)
   await expect(
-    page.getByText("最旧有效数据更新到 13:55（账户本地）", { exact: true }),
+    page.getByText("最旧有效数据更新到 13:40（账户本地）", { exact: true }),
   ).toBeVisible()
   await expect(
-    page.getByText("1 个账户数据超过 5 分钟", { exact: true }),
+    page.getByText("1 个账户数据超过 20 分钟", { exact: true }),
   ).toHaveCount(0)
   await page.clock.fastForward(31_000)
   await expect(
-    page.getByText("1 个账户数据超过 5 分钟", { exact: true }),
+    page.getByText("1 个账户数据超过 20 分钟", { exact: true }),
   ).toBeVisible()
 })
 

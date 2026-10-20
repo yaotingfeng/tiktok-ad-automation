@@ -111,8 +111,8 @@ def test_low_budget_preserves_realtime_and_pauses_cold(
     job_tasks.plan_due_runs(database_engine=engine, redis_client=redis_client, now=now)
     with factory() as session:
         plan = session.get(AdSyncBc, (seed.tenant_id, "bc-a"))
-        assert plan.next_hot_at == now + timedelta(minutes=2)
-        assert plan.next_material_at == now + timedelta(minutes=2)
+        assert plan.next_hot_at == now + timedelta(minutes=15)
+        assert plan.next_material_at == now + timedelta(minutes=15)
         assert plan.next_daily_at == now  # 冷规划仍待执行，不能假装已处理。
         jobs = session.exec(
             select(ReportSyncJob).where(ReportSyncJob.tenant_id == seed.tenant_id)
@@ -1882,7 +1882,7 @@ def test_screening_deferral_cannot_skip_due_live_reports(
 @pytest.mark.parametrize(
     "rule_bc,enabled", [("bc-a", True), ("bc-b", True), ("bc-a", False)]
 )
-def test_screening_backoff_keeps_exact_enabled_rule_accounts_fresh(
+def test_screening_backoff_does_not_expand_refresh_to_idle_rule_accounts(
     monkeypatch, committed_sync_seed, redis_client, rule_bc, enabled, screen_state
 ):
     from datetime import timedelta
@@ -1907,7 +1907,7 @@ def test_screening_backoff_keeps_exact_enabled_rule_accounts_fresh(
         plan.next_hot_at = now if screen_ok else now + timedelta(minutes=5)
         if screen_state in {"recent", "expired"}:
             plan.active_screened_at = now - timedelta(
-                minutes=1 if screen_state == "recent" else 3
+                minutes=1 if screen_state == "recent" else 16
             )
             for kind in ("ad_day", "material_day", "account_day"):
                 s.add(
@@ -1967,11 +1967,7 @@ def test_screening_backoff_keeps_exact_enabled_rule_accounts_fresh(
         jobs = s.exec(
             select(ReportSyncJob).where(ReportSyncJob.tenant_id == seed.tenant_id)
         ).all()
-        expected = (
-            {"acc-1", "acc-2"}
-            if enabled and rule_bc == "bc-a" and screen_state in {"backoff", "expired"}
-            else {"acc-1"}
-        )
+        expected = {"acc-1"}
         for kind in ("ad_day", "material_day"):
             assert {
                 a for j in jobs if j.kind == kind for a in j.advertiser_ids

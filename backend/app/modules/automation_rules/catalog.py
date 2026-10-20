@@ -128,7 +128,7 @@ def allowed_action_levels(
 
 
 def min_frequency_minutes(apply_level: str, action_level: str, action_type: str) -> int:
-    # 当前日报表每 2 分钟同步：仅暂停允许 5 分钟止损，恢复和金额调整保持原频率。
+    # 日报表统一每 15 分钟同步；暂停频率不快于数据周期，恢复和金额调整保持原频率。
     if action_type == "PAUSE":
-        return 5
+        return 15
     return 60 if "material" in (apply_level, action_level) else 30

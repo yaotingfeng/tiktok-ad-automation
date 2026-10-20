@@ -125,7 +125,7 @@ export function ReportStatusBar({
   const stale = applicable.filter(
     (account) =>
       account.last_success_at &&
-      now - Date.parse(account.last_success_at) > 5 * 60_000,
+      now - Date.parse(account.last_success_at) > 20 * 60_000,
   )
   const incomplete = applicable.filter(
     (account) =>
@@ -163,7 +163,10 @@ export function ReportStatusBar({
     { text: "查询日期按各账户本地日", tone: "ok" },
   ]
   if (stale.length)
-    extras.push({ text: `${stale.length} 个账户数据超过 5 分钟`, tone: "warn" })
+    extras.push({
+      text: `${stale.length} 个账户数据超过 20 分钟`,
+      tone: "warn",
+    })
   if (future.length && applicable.length)
     extras.push({
       text: `${future.length} 个账户当地尚未到所选日期`,

@@ -69,10 +69,10 @@ test("素材按广告内位置或同一视频跨账户判断", () => {
   expect(actionLevels("VIDEO", "material", "PAUSE")).toEqual(["material"])
 })
 
-test("恢复保持素材最短 1 小时，暂停支持 5 分钟", () => {
+test("恢复保持素材最短 1 小时，暂停支持 15 分钟", () => {
   expect(minFrequency("adgroup", "material", "ENABLE")).toBe("1H")
   expect(minFrequency("adgroup", "adgroup", "ENABLE")).toBe("30M")
-  expect(minFrequency("material", "material", "PAUSE")).toBe("5M")
+  expect(minFrequency("material", "material", "PAUSE")).toBe("15M")
 })
 
 test("条件与操作摘要", () => {
@@ -356,10 +356,10 @@ test("状态条件保存枚举并显示中文摘要", () => {
   ).toEqual(["条件 1 请选择状态"])
 })
 
-test("5 分钟仅允许暂停，切换恢复或调整后校验阻止保存", () => {
+test("15 分钟仅允许暂停，切换恢复或调整后校验阻止保存", () => {
   const def = emptyDefinition()
   def.conditions[0].values = ["10"]
-  def.schedule.frequency = "5M"
+  def.schedule.frequency = "15M"
   expect(validateDefinition(def, catalog)).toEqual([])
   for (const action of ["ENABLE", "BUDGET", "ROAS"] as const) {
     def.action.type = action

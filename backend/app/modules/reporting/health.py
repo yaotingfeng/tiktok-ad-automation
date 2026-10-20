@@ -18,6 +18,7 @@ from app.modules.reporting.directory_refresh import (
 )
 from app.modules.reporting.jobs import enqueue_job
 from app.modules.reporting.planner import (
+    HOT_INTERVAL,
     _common,
     _group_by_window,
     _hot_window,
@@ -33,7 +34,8 @@ from app.modules.reporting.store_models import (
 )
 
 logger = logging.getLogger(__name__)
-SLO = timedelta(minutes=5)
+# 一个实时轮次外加执行余量，避免正常等待下一轮被健康修复反复补拉。
+SLO = HOT_INTERVAL + timedelta(minutes=5)
 REPAIR_INTERVAL = timedelta(minutes=2)
 MAX_REPAIR_ACCOUNTS = 50
 
@@ -52,7 +54,6 @@ def measure_health(session, plan, *, now, accounts=None):
         "ids": owned,
         "active": sorted(
             set(plan.last_active_advertiser_ids)
-            | strict_accounts
             | known_reporting_accounts(session, plan, accounts=owned, now=now)
         ),
         "now": now,

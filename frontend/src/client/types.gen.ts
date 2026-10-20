@@ -6397,7 +6397,7 @@ export type Schedule = {
     /**
      * Frequency
      */
-    frequency: '5M' | '30M' | '1H' | '2H' | '4H' | 'DAILY';
+    frequency: '15M' | '30M' | '1H' | '2H' | '4H' | 'DAILY';
     /**
      * Daily At
      */
