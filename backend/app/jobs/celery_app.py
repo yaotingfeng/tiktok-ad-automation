@@ -14,6 +14,7 @@ celery_app.conf.update(
     result_backend=None,
     imports=(
         "app.jobs.tasks",
+        "app.modules.material_production.tasks",
         "app.modules.accounts.tasks",
         "app.modules.accounts.capability_tasks",
         "app.modules.accounts.refresh_tasks",
@@ -60,6 +61,8 @@ celery_app.conf.update(
     task_default_queue="control",
     task_create_missing_queues=False,
     task_routes={
+        "material_production.provision": {"queue": "control"},
+        "material_production.recover": {"queue": "control"},
         "jobs.flush_dispatch": {"queue": "control"},
         "jobs.compact_dispatches": {"queue": "control"},
         "reporting.plan_due": {"queue": "control"},
@@ -83,6 +86,11 @@ celery_app.conf.update(
         "automation.send_summary": {"queue": "control"},
     },
     beat_schedule={
+        "recover-material-production": {
+            "task": "material_production.recover",
+            "schedule": 60.0,
+            "options": {"queue": "control"},
+        },
         "repair-external-imports": {
             "task": "materials.repair_external_imports",
             "schedule": 60.0,

@@ -13,7 +13,6 @@ import {
   type BCPublic,
   type TenantSummary,
   TenantsService,
-  type UserCandidate,
 } from "@/client"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -26,6 +25,7 @@ import {
   FieldLabel,
 } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
+import { ProductionStatus } from "@/features/material-production/ProductionStatus"
 import { WorkspacePageTitle } from "@/features/workspace/WorkspacePageTitle"
 import { DirectoryPicker } from "./DirectoryPicker"
 import { ManagementSheet } from "./ManagementSheet"
@@ -280,21 +280,39 @@ function TenantEditor({
     original?.default_bc_id ?? null,
   )
   const [defaultBCName, setDefaultBCName] = useState<string | null>(null)
-  const [administrator, setAdministrator] = useState<UserCandidate | null>(null)
+  const [username, setUsername] = useState("")
+  const [password, setPassword] = useState("")
+  const [requestId] = useState(() => crypto.randomUUID())
   const [submitted, setSubmitted] = useState(false)
   const queryClient = useQueryClient()
   const isCreate = editor.mode === "create"
   const isView = editor.mode === "view"
   const isStatus = editor.mode === "status"
   const nameError = submitted && !name.trim() ? "请输入租户名称" : undefined
-  const administratorError =
-    submitted && isCreate && !administrator ? "请选择初始管理员" : undefined
+  const usernameError =
+    submitted && isCreate && !/^[a-z0-9_.-]{3,64}$/.test(username.trim())
+      ? "账号需为 3 至 64 位小写字母、数字、点、下划线或横线"
+      : undefined
+  const passwordError =
+    submitted &&
+    isCreate &&
+    (password.length < 8 ||
+      password.length > 128 ||
+      !/[a-zA-Z]/.test(password) ||
+      !/[0-9]/.test(password))
+      ? "密码需为 8 至 128 位，同时包含字母和数字"
+      : undefined
   const mutation = useMutation({
     mutationFn: async () =>
       isCreate
         ? (
             await TenantsService.postTenant({
-              body: { name: name.trim(), administrator_id: administrator!.id },
+              body: {
+                name: name.trim(),
+                username: username.trim(),
+                password,
+                request_id: requestId,
+              },
             })
           ).data
         : (
@@ -311,7 +329,8 @@ function TenantEditor({
             })
           ).data,
     onSuccess: async () => {
-      toast.success(isCreate ? "租户已创建" : "租户已更新")
+      toast.success(isCreate ? "租户已创建，素材制作正在开通" : "租户已更新")
+      setPassword("")
       onClose()
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ["platform", "tenants"] }),
@@ -324,7 +343,8 @@ function TenantEditor({
     !isView &&
     !isStatus &&
     (name !== (original?.name ?? "") ||
-      !!administrator ||
+      !!username ||
+      !!password ||
       defaultBCId !== (original?.default_bc_id ?? null))
   const title = isCreate
     ? "新建租户"
@@ -334,15 +354,26 @@ function TenantEditor({
         ? `${original!.active ? "停用" : "恢复"}租户`
         : "编辑租户"
   const submit = () => {
-    if (mutation.isPending || isForbidden(mutation.error)) return
+    if (isView || mutation.isPending || isForbidden(mutation.error)) return
     setSubmitted(true)
-    if (!isStatus && (!name.trim() || (isCreate && !administrator))) return
+    if (!isStatus && !name.trim()) return
+    if (
+      isCreate &&
+      (!/^[a-z0-9_.-]{3,64}$/.test(username.trim()) ||
+        password.length < 8 ||
+        password.length > 128 ||
+        !/[a-zA-Z]/.test(password) ||
+        !/[0-9]/.test(password))
+    )
+      return
     mutation.mutate()
   }
   return (
     <ManagementSheet
       title={title}
-      description={original?.name ?? "设置租户名称和初始管理员。"}
+      description={
+        original?.name ?? "创建租户及专属管理员，并开通同账号的素材制作服务。"
+      }
       dirty={dirty}
       pending={mutation.isPending}
       onClose={onClose}
@@ -388,7 +419,7 @@ function TenantEditor({
               <FieldLabel htmlFor="tenant-name">租户名称</FieldLabel>
               <Input
                 id="tenant-name"
-                maxLength={120}
+                maxLength={isCreate ? 100 : 120}
                 value={name}
                 onChange={(event) => setName(event.target.value)}
                 aria-invalid={!!nameError}
@@ -400,54 +431,43 @@ function TenantEditor({
               )}
             </Field>
             {isCreate && (
-              <Field data-invalid={!!administratorError}>
-                <FieldLabel>初始管理员</FieldLabel>
-                <DirectoryPicker<UserCandidate>
-                  label="初始管理员"
-                  valueLabel={
-                    administrator
-                      ? `${administrator.full_name || administrator.username} · ${administrator.username}`
-                      : undefined
-                  }
-                  queryKey={["platform", "user-candidates"]}
-                  requiredSearch
-                  disabled={mutation.isPending}
-                  invalid={!!administratorError}
-                  describedBy={
-                    administratorError ? "administrator-error" : undefined
-                  }
-                  load={async (query, cursor, limit, signal) =>
-                    (
-                      await TenantsService.getPlatformUserCandidates({
-                        query: { query, after_id: cursor, limit },
-                        signal,
-                      })
-                    ).data
-                  }
-                  renderItem={(item) => (
-                    <>
-                      <span>{item.full_name || item.username}</span>
-                      <span className="text-xs text-muted-foreground">
-                        {item.username}
-                      </span>
-                    </>
-                  )}
-                  onSelect={setAdministrator}
-                />
-                {administrator && (
-                  <p className="break-all font-mono text-xs text-muted-foreground">
-                    {administrator.id}
-                  </p>
-                )}
-                {administratorError && (
-                  <FieldError id="administrator-error">
-                    {administratorError}
-                  </FieldError>
-                )}
-                <p className="text-xs text-muted-foreground">
-                  从已有启用用户中选择。新账号由平台用户管理开通。
-                </p>
-              </Field>
+              <>
+                <Field data-invalid={!!usernameError}>
+                  <FieldLabel htmlFor="tenant-username">登录账号</FieldLabel>
+                  <Input
+                    id="tenant-username"
+                    value={username}
+                    maxLength={64}
+                    autoComplete="off"
+                    disabled={mutation.isPending}
+                    aria-invalid={!!usernameError}
+                    onChange={(event) =>
+                      setUsername(event.target.value.toLowerCase())
+                    }
+                  />
+                  <FieldDescription>
+                    该账号为租户初始管理员，两边使用相同登录账号。
+                  </FieldDescription>
+                  {usernameError && <FieldError>{usernameError}</FieldError>}
+                </Field>
+                <Field data-invalid={!!passwordError}>
+                  <FieldLabel htmlFor="tenant-password">初始密码</FieldLabel>
+                  <Input
+                    id="tenant-password"
+                    type="password"
+                    value={password}
+                    maxLength={128}
+                    autoComplete="new-password"
+                    disabled={mutation.isPending}
+                    aria-invalid={!!passwordError}
+                    onChange={(event) => setPassword(event.target.value)}
+                  />
+                  <FieldDescription>
+                    两边使用相同初始密码。日后可从“素材制作”直接进入，无需再次输入。
+                  </FieldDescription>
+                  {passwordError && <FieldError>{passwordError}</FieldError>}
+                </Field>
+              </>
             )}
             {!isCreate && original && (
               <Field data-disabled={mutation.isPending}>
@@ -526,6 +546,7 @@ function TenantDetails({ tenant }: { tenant: TenantSummary }) {
     <div className="flex flex-col gap-4">
       <p className="break-all font-mono text-sm">{tenant.id}</p>
       <Badge variant="secondary">{tenant.active ? "正常" : "停用"}</Badge>
+      {tenant.active && <ProductionStatus tenantId={tenant.id} />}
       <h3 className="font-medium">租户管理员</h3>
       {!tenant.active ? (
         <p className="text-sm text-muted-foreground">恢复租户后可查看成员。</p>

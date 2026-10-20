@@ -179,9 +179,25 @@ def test_invalid_names_rejected_without_creating_tenant(session, name):
     assert caught.value.code == "invalid_tenant"
 
 
-def test_tenant_api_permissions_and_safe_response(client, session, context):
-    admin = user(session)
-    body = {"name": "Demo", "administrator_id": str(admin.id)}
+def test_tenant_api_permissions_and_safe_response(
+    client, session, context, monkeypatch
+):
+    from cryptography.fernet import Fernet
+
+    from app.core.config import settings
+
+    monkeypatch.setattr(
+        settings, "CONNECTION_ENCRYPTION_KEY", Fernet.generate_key().decode()
+    )
+    monkeypatch.setattr(
+        settings, "MATERIAL_TOOL_PROVISIONING_KEYS", {"default": "owp_test-key"}
+    )
+    body = {
+        "name": "Demo",
+        "username": "demo-new-admin",
+        "password": "Password123",
+        "request_id": str(uuid4()),
+    }
     denied = client.post(
         "/api/platform/tenants", json=body, headers=headers(context.actor_id)
     )
@@ -194,6 +210,7 @@ def test_tenant_api_permissions_and_safe_response(client, session, context):
     assert set(result.json()) == {"id", "name", "active", "default_bc_id"}
     assert "hashed_password" not in result.text
     tenant_id = result.json()["id"]
+    admin = session.exec(select(User).where(User.username == body["username"])).one()
     members = client.get(f"/api/tenants/{tenant_id}/members", headers=headers(admin.id))
     assert members.status_code == 200
     assert members.json()["items"][0]["user_id"] == str(admin.id)

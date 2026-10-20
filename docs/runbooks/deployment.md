@@ -1,5 +1,7 @@
 # 发布与部署
 
+素材工具联合开户与免密入口的配置及验收见 [素材制作接入](../integrations/material-production.md)。新增 `MATERIAL_TOOL_PROVISIONING_KEYS`、`MATERIAL_TOOL_DEFAULT_KEY_REF`，API/control/Beat 使用同一私有配置；没有新增布尔开关。空配置会拒绝新联合开户，已有业务不受影响。本次含 `0040_material_production` 迁移和 Beat 恢复任务，发布须走完整迁移流程；本地测试不代表真实开户/免密联调。
+
 ACK 本地发布和备份入口见 [本地一键发布](../../deploy/release/README.md)：统一检查、推送公司 main、构建上传、备份、发布和验收；本机只保留最新一份恢复验证通过的备份，不需要 Jenkins 或云备份存储。
 
 ## 发布主分支

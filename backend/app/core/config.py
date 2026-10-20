@@ -62,6 +62,13 @@ class Settings(BaseSettings):
     # 仅部署方根据上游事实配置；缺省由所有 MCP 连接共用保守配额域。
     MCP_SERVICE_QUOTA_SCOPE: str | None = None
     CONNECTION_ENCRYPTION_KEY: str = Field(default="", repr=False)
+    # 引用必须保留；免密只能使用最初开户的同一把 owp_ 密钥。
+    MATERIAL_TOOL_PROVISIONING_KEYS: dict[str, str] = Field(
+        default_factory=dict, repr=False
+    )
+    MATERIAL_TOOL_DEFAULT_KEY_REF: str = Field(
+        default="default", min_length=1, max_length=128
+    )
     OBJECT_STORAGE_PROVIDER: Literal["s3", "r2"] = "s3"
     S3_ENDPOINT_URL: str = ""
     S3_BUCKET: str = ""

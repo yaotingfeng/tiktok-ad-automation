@@ -6,6 +6,7 @@ import {
 } from "@tanstack/react-router"
 import { workspaceNavigation } from "@/components/Sidebar/navigation"
 import { BCSelector } from "@/features/accounts/BCSelector"
+import { useMaterialProduction } from "@/features/material-production/useMaterialProduction"
 import { canManage, roleLabels } from "@/features/tenants/shared"
 import {
   TenantAccessGate,
@@ -51,10 +52,16 @@ function ScopedLayout() {
     select: (state) => state.location.pathname,
   })
   const { scope, tenant, tenantId, user, platform, bc } = useTenantScope()
+  const materialProduction = useMaterialProduction(tenantId ?? undefined)
   const prefix = `/tenants/${tenantId}`
   // 平台视图不展示租户菜单；未接入租户时交给侧栏展示全局入口。
   const groups = tenantId
-    ? workspaceNavigation({ prefix, manage: canManage(scope?.role) })
+    ? workspaceNavigation({
+        prefix,
+        manage: canManage(scope?.role),
+        materialProduction:
+          scope && scope.role !== "viewer" ? materialProduction : undefined,
+      })
     : platform
       ? []
       : undefined

@@ -1,7 +1,7 @@
 from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, SecretStr
 
 from app.core.usernames import Username
 from app.modules.tenants.permissions import Role
@@ -19,8 +19,10 @@ class TenantSummary(BaseModel):
 
 class TenantCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    name: str = Field(min_length=1, max_length=120)
-    administrator_id: UUID
+    name: str = Field(min_length=1, max_length=100)
+    username: Username
+    password: SecretStr
+    request_id: UUID
 
 
 class TenantUpdate(BaseModel):

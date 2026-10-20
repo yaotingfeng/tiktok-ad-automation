@@ -3,6 +3,11 @@ from fastapi.responses import JSONResponse
 
 # Register exact business codes here; never infer status from provider text.
 ERROR_HTTP_STATUS: dict[str, int] = {
+    "material_tool_not_configured": 422,
+    "material_onboarding_invalid": 422,
+    "material_onboarding_conflict": 409,
+    "material_production_not_ready": 409,
+    "material_tool_request_failed": 502,
     "link_config_invalid": 422,
     "link_config_template_required": 422,
     "link_episode_out_of_range": 409,

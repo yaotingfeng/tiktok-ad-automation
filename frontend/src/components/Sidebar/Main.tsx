@@ -14,7 +14,9 @@ import {
 export type Item = {
   icon: LucideIcon
   title: string
-  path: string
+  path?: string
+  onClick?: () => void
+  disabled?: boolean
 }
 
 export type NavGroup = {
@@ -46,10 +48,11 @@ export function Main({ items, label }: MainProps) {
           {items.map((item) => {
             // 列表页的详情、新建等子路由也高亮所属菜单项。
             const isActive =
-              currentPath === item.path ||
-              currentPath.startsWith(`${item.path}/`) ||
-              (item.path.endsWith("/builds/new") &&
-                /\/build-(drafts|previews)\//.test(currentPath))
+              !!item.path &&
+              (currentPath === item.path ||
+                currentPath.startsWith(`${item.path}/`) ||
+                (item.path.endsWith("/builds/new") &&
+                  /\/build-(drafts|previews)\//.test(currentPath)))
 
             return (
               <SidebarMenuItem key={item.title}>
@@ -57,12 +60,28 @@ export function Main({ items, label }: MainProps) {
                   tooltip={item.title}
                   isActive={isActive}
                   aria-current={isActive ? "page" : undefined}
-                  asChild
+                  asChild={!!item.path}
+                  disabled={item.disabled}
+                  onClick={
+                    item.path
+                      ? undefined
+                      : () => {
+                          handleMenuClick()
+                          item.onClick?.()
+                        }
+                  }
                 >
-                  <RouterLink to={item.path} onClick={handleMenuClick}>
-                    <item.icon />
-                    <span>{item.title}</span>
-                  </RouterLink>
+                  {item.path ? (
+                    <RouterLink to={item.path} onClick={handleMenuClick}>
+                      <item.icon />
+                      <span>{item.title}</span>
+                    </RouterLink>
+                  ) : (
+                    <>
+                      <item.icon />
+                      <span>{item.title}</span>
+                    </>
+                  )}
                 </SidebarMenuButton>
               </SidebarMenuItem>
             )

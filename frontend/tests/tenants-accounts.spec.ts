@@ -41,6 +41,9 @@ async function boundary(
     memberCount?: number
     count?: number
     lastAdmin?: boolean
+    productionFailure?: boolean
+    productionStatus?: "failed" | "pending" | "ready"
+    delayedLogin?: Promise<void>
     members403?: boolean
     delayedA?: Promise<void>
     listFailure?: boolean
@@ -138,6 +141,40 @@ async function boundary(
     })
     const reply = (json: unknown, status = 200) =>
       route.fulfill({ json, status, headers })
+    if (path.endsWith("/material-production/login-link")) {
+      await options.delayedLogin
+      return options.productionFailure
+        ? reply({ message: "素材制作尚未开通，请联系平台管理员" }, 409)
+        : reply({
+            login_url:
+              "https://manjumt.gzjunbo.net/api/login-links/consume?token=browser-fixture",
+            expires_at: new Date(Date.now() + 300000).toISOString(),
+          })
+    }
+    if (path.endsWith("/material-production/retry")) {
+      options.productionStatus = "pending"
+      return reply({
+        status: "pending",
+        username: "material-test",
+        attempts: 0,
+      })
+    }
+    if (path.endsWith("/material-production")) {
+      return reply({
+        status: options.productionStatus ?? "ready",
+        username: "material-test",
+        attempts: 1,
+        message:
+          options.productionStatus === "failed"
+            ? "素材工具暂时不可用，请稍后重试"
+            : null,
+      })
+    }
+    if (path === "/api/login-links/consume")
+      return route.fulfill({
+        contentType: "text/html",
+        body: "<p>素材工具已接收登录链接</p>",
+      })
     if (path.endsWith("/bcs"))
       return reply({
         items: options.bcs ?? [],
@@ -330,7 +367,7 @@ test("platform login entry lists real tenant records and retains separate user p
   ).toBe(`Bearer ${token}`)
 })
 
-test("platform tenant creation searches active user candidates and submits selected UUID", async ({
+test("platform tenant creation opens a dedicated account and queues material provisioning", async ({
   page,
 }) => {
   const { requests } = await boundary(page)
@@ -340,17 +377,16 @@ test("platform tenant creation searches active user candidates and submits selec
   await sheet.getByRole("button", { name: "创建租户" }).click()
   await expect(sheet.getByText("请输入租户名称")).toBeVisible()
   await sheet.getByLabel("租户名称").fill("新租户")
-  await sheet.getByRole("combobox", { name: "初始管理员" }).click()
-  const picker = page.getByRole("dialog", { name: "选择初始管理员" })
-  await picker.getByLabel("搜索初始管理员").fill("候选")
-  await picker.getByRole("button", { name: "搜索", exact: true }).click()
-  await picker.getByRole("option", { name: /候选用户/ }).click()
+  await sheet.getByLabel("登录账号", { exact: true }).fill("new-company")
+  await sheet.getByLabel("初始密码", { exact: true }).fill("Password123")
   await sheet.getByRole("button", { name: "创建租户" }).click()
   await expect(sheet).not.toBeVisible()
   await expect(page.getByRole("row", { name: /新租户/ })).toBeVisible()
   expect(requests.find((request) => request.method === "POST")?.body).toEqual({
     name: "新租户",
-    administrator_id: V,
+    username: "new-company",
+    password: "Password123",
+    request_id: expect.stringMatching(/^[0-9a-f-]{36}$/),
   })
   expect(
     requests.some((request) => /invite|\/users\/signup/.test(request.path)),
@@ -836,50 +872,40 @@ test("an unavailable tenant URL never reuses another tenant's scope or member da
   )
 })
 
-for (const kind of ["tenant", "member"] as const)
-  for (const submit of ["button", "Enter"] as const)
-    test(`${kind} candidate re-search by ${submit} never submits the parent editor`, async ({
-      page,
-    }) => {
-      const { requests } = await boundary(page)
-      const tenant = kind === "tenant"
-      await page.goto(tenant ? "/platform/tenants" : `/tenants/${A}/members`)
-      const title = tenant ? "新建租户" : "添加成员"
-      const label = tenant ? "初始管理员" : "已有用户"
-      await page.getByRole("button", { name: title }).click()
-      const sheet = page.getByRole("dialog", { name: title, exact: true })
-      if (tenant) await sheet.getByLabel("租户名称").fill("未提交租户")
-      else await sheet.getByRole("tab", { name: "选择已有用户" }).click()
-      await sheet.getByRole("combobox", { name: label }).click()
-      const picker = page.getByRole("dialog", { name: `选择${label}` })
-      await picker.getByLabel(`搜索${label}`).fill("候选")
-      await picker.getByRole("button", { name: "搜索", exact: true }).click()
-      await picker.getByRole("option", { name: /候选用户/ }).click()
-      await sheet.getByRole("combobox", { name: label }).click()
-      await picker.getByLabel(`搜索${label}`).fill("甲管理员")
-      if (submit === "Enter")
-        await picker.getByLabel(`搜索${label}`).press("Enter")
-      else
-        await picker.getByRole("button", { name: "搜索", exact: true }).click()
-      await expect(
-        picker.getByRole("option", { name: /甲管理员/ }),
-      ).toBeVisible()
-      expect(requests.filter((request) => request.method !== "GET")).toEqual([])
-      await page.keyboard.press("Escape")
-      await expect(sheet).toBeVisible()
-      await expect(sheet.getByRole("combobox", { name: label })).toContainText(
-        "候选用户",
-      )
-      if (tenant)
-        await expect(sheet.getByLabel("租户名称")).toHaveValue("未提交租户")
-      await sheet
-        .getByRole("button", { name: tenant ? "创建租户" : "保存成员" })
-        .click()
-      await expect(sheet).not.toBeVisible()
-      expect(
-        requests.filter((request) => request.method !== "GET"),
-      ).toHaveLength(1)
-    })
+for (const submit of ["button", "Enter"] as const)
+  test(`member candidate re-search by ${submit} never submits the parent editor`, async ({
+    page,
+  }) => {
+    const { requests } = await boundary(page)
+    await page.goto(`/tenants/${A}/members`)
+    const title = "添加成员"
+    const label = "已有用户"
+    await page.getByRole("button", { name: title }).click()
+    const sheet = page.getByRole("dialog", { name: title, exact: true })
+    await sheet.getByRole("tab", { name: "选择已有用户" }).click()
+    await sheet.getByRole("combobox", { name: label }).click()
+    const picker = page.getByRole("dialog", { name: `选择${label}` })
+    await picker.getByLabel(`搜索${label}`).fill("候选")
+    await picker.getByRole("button", { name: "搜索", exact: true }).click()
+    await picker.getByRole("option", { name: /候选用户/ }).click()
+    await sheet.getByRole("combobox", { name: label }).click()
+    await picker.getByLabel(`搜索${label}`).fill("甲管理员")
+    if (submit === "Enter")
+      await picker.getByLabel(`搜索${label}`).press("Enter")
+    else await picker.getByRole("button", { name: "搜索", exact: true }).click()
+    await expect(picker.getByRole("option", { name: /甲管理员/ })).toBeVisible()
+    expect(requests.filter((request) => request.method !== "GET")).toEqual([])
+    await page.keyboard.press("Escape")
+    await expect(sheet).toBeVisible()
+    await expect(sheet.getByRole("combobox", { name: label })).toContainText(
+      "候选用户",
+    )
+    await sheet.getByRole("button", { name: "保存成员" }).click()
+    await expect(sheet).not.toBeVisible()
+    expect(requests.filter((request) => request.method !== "GET")).toHaveLength(
+      1,
+    )
+  })
 
 for (const width of [1440, 390])
   for (const kind of ["tenant", "member"] as const)
@@ -3187,4 +3213,104 @@ test("MCP more than 5000 accessible BCs blocks binding without writes", async ({
     sheet.getByRole("button", { name: "接入并同步账户" }),
   ).toBeDisabled()
   expect(requests.every((request) => request.method === "GET")).toBe(true)
+})
+
+test("material production only issues a login link on click and navigates", async ({
+  page,
+}) => {
+  const { requests } = await boundary(page, {
+    platform: false,
+    role: "operator",
+  })
+  await page.goto(`/tenants/${A}/accounts`)
+  const entry = page.getByRole("button", { name: "素材制作", exact: true })
+  await expect(entry).toBeVisible()
+  expect(requests.filter((r) => r.path.endsWith("/login-link"))).toHaveLength(0)
+  await entry.click()
+  await expect(page).toHaveURL(
+    "https://manjumt.gzjunbo.net/api/login-links/consume?token=browser-fixture",
+  )
+  expect(requests.filter((r) => r.path.endsWith("/login-link"))).toEqual([
+    expect.objectContaining({
+      method: "POST",
+      path: `/api/tenants/${A}/material-production/login-link`,
+      body: {},
+    }),
+  ])
+})
+
+test("viewer has no material production entry", async ({ page }) => {
+  await boundary(page, { platform: false, role: "viewer" })
+  await page.goto(`/tenants/${A}/accounts`)
+  await expect(
+    page.getByRole("heading", { name: "账户与授权", exact: true }),
+  ).toBeVisible()
+  await expect(
+    page.getByRole("button", { name: "素材制作", exact: true }),
+  ).toHaveCount(0)
+})
+
+test("material login pending prevents duplicate clicks and cannot cross tenant switches", async ({
+  page,
+}) => {
+  let release!: () => void
+  const delayedLogin = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  const { requests } = await boundary(page, { delayedLogin })
+  await page.goto(`/tenants/${A}/accounts`)
+  const entry = page.getByRole("button", { name: "素材制作", exact: true })
+  await entry.click()
+  await expect(entry).toBeDisabled()
+  await expect
+    .poll(() => requests.filter((r) => r.path.endsWith("/login-link")).length)
+    .toBe(1)
+  const settled = page.waitForEvent("requestfailed", {
+    predicate: (request) =>
+      request.url().endsWith("/material-production/login-link"),
+  })
+  await chooseTenant(page, "租户乙")
+  await expect(page).toHaveURL((url) => url.pathname.includes(`/tenants/${B}/`))
+  release()
+  await settled
+  await expect(entry).toBeEnabled()
+  await expect(page).toHaveURL((url) => url.pathname.includes(`/tenants/${B}/`))
+  expect(requests.filter((r) => r.path.endsWith("/login-link"))).toHaveLength(1)
+})
+
+test("material login failure stays in workspace and can retry", async ({
+  page,
+}) => {
+  const { requests } = await boundary(page, { productionFailure: true })
+  await page.goto(`/tenants/${A}/accounts`)
+  await page.getByRole("button", { name: "素材制作", exact: true }).click()
+  await expect(
+    page.getByText("素材制作尚未开通，请联系平台管理员"),
+  ).toBeVisible()
+  await expect(page).toHaveURL(
+    (url) => url.pathname === `/tenants/${A}/accounts`,
+  )
+  await expect(
+    page.getByRole("button", { name: "素材制作", exact: true }),
+  ).toBeEnabled()
+  expect(requests.filter((r) => r.path.endsWith("/login-link"))).toHaveLength(1)
+})
+
+test("platform can retry failed material provisioning in tenant details", async ({
+  page,
+}) => {
+  const { requests } = await boundary(page, { productionStatus: "failed" })
+  await page.goto("/platform/tenants")
+  await page
+    .getByRole("row", { name: new RegExp(A) })
+    .getByRole("button", { name: "查看", exact: true })
+    .click()
+  const status = page.getByRole("region", { name: "素材制作开通状态" })
+  await expect(status.getByText("开通失败", { exact: true })).toBeVisible()
+  await status.getByRole("button", { name: "重试开通", exact: true }).click()
+  await expect(status.getByText("开通中", { exact: true })).toBeVisible()
+  expect(
+    requests.filter((r) => r.path.endsWith("/material-production/retry")),
+  ).toHaveLength(1)
+  expect(requests.filter((r) => r.method === "PATCH")).toHaveLength(0)
 })

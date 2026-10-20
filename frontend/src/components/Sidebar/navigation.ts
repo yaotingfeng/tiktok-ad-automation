@@ -19,14 +19,26 @@ import type { NavGroup } from "./Main"
 export function workspaceNavigation({
   prefix = "",
   manage,
+  materialProduction,
 }: {
   prefix?: string
   manage: boolean
+  materialProduction?: { open: () => void; pending: boolean }
 }): NavGroup[] {
   return [
     {
       label: "投放准备",
       items: [
+        ...(prefix && materialProduction
+          ? [
+              {
+                icon: Clapperboard,
+                title: "素材制作",
+                onClick: materialProduction.open,
+                disabled: materialProduction.pending,
+              },
+            ]
+          : []),
         { icon: FileVideo, title: "素材库", path: `${prefix}/materials` },
         {
           icon: SlidersHorizontal,

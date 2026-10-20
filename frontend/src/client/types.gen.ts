@@ -1750,6 +1750,13 @@ export type DryRunRequest = {
 };
 
 /**
+ * EmptyRequest
+ */
+export type EmptyRequest = {
+    [key: string]: never;
+};
+
+/**
  * EntityRef
  */
 export type EntityRef = {
@@ -5024,6 +5031,50 @@ export type PreviewUnit = {
 };
 
 /**
+ * ProductionLoginLink
+ */
+export type ProductionLoginLink = {
+    /**
+     * Login Url
+     */
+    login_url: string;
+    /**
+     * Expires At
+     */
+    expires_at: string;
+};
+
+/**
+ * ProductionStatus
+ */
+export type ProductionStatus = {
+    /**
+     * Status
+     */
+    status: 'not_configured' | 'pending' | 'ready' | 'failed';
+    /**
+     * Username
+     */
+    username?: string | null;
+    /**
+     * Company Id
+     */
+    company_id?: string | null;
+    /**
+     * Error Code
+     */
+    error_code?: string | null;
+    /**
+     * Message
+     */
+    message?: string | null;
+    /**
+     * Attempts
+     */
+    attempts?: number;
+};
+
+/**
  * ProviderApplicationPublic
  */
 export type ProviderApplicationPublic = {
@@ -7441,9 +7492,13 @@ export type TenantCreate = {
      */
     name: string;
     /**
-     * Administrator Id
+     * Username
      */
-    administrator_id: string;
+    username: string;
+    /**
+     * Request Id
+     */
+    request_id: string;
 };
 
 /**
@@ -7981,6 +8036,35 @@ export type VersionPublic = {
     request_id: string;
 };
 
+/**
+ * EmptyRequest
+ */
+export type EmptyRequestWritable = {
+    [key: string]: never;
+};
+
+/**
+ * TenantCreate
+ */
+export type TenantCreateWritable = {
+    /**
+     * Name
+     */
+    name: string;
+    /**
+     * Username
+     */
+    username: string;
+    /**
+     * Password
+     */
+    password: string;
+    /**
+     * Request Id
+     */
+    request_id: string;
+};
+
 export type loginLoginAccessTokenData = {
     body: Body_login_login_access_token;
     path?: never;
@@ -8451,7 +8535,7 @@ export type tenantsGetPlatformTenantsResponses = {
 export type tenantsGetPlatformTenantsResponse = tenantsGetPlatformTenantsResponses[keyof tenantsGetPlatformTenantsResponses];
 
 export type tenantsPostTenantData = {
-    body: TenantCreate;
+    body: TenantCreateWritable;
     path?: never;
     query?: never;
     url: '/api/platform/tenants';
@@ -8615,6 +8699,96 @@ export type tenantsPostMemberUserResponses = {
 };
 
 export type tenantsPostMemberUserResponse = tenantsPostMemberUserResponses[keyof tenantsPostMemberUserResponses];
+
+export type materialProductionGetMaterialProductionData = {
+    body?: never;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+    };
+    query?: never;
+    url: '/api/tenants/{tenant_id}/material-production';
+};
+
+export type materialProductionGetMaterialProductionErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type materialProductionGetMaterialProductionError = materialProductionGetMaterialProductionErrors[keyof materialProductionGetMaterialProductionErrors];
+
+export type materialProductionGetMaterialProductionResponses = {
+    /**
+     * Successful Response
+     */
+    200: ProductionStatus;
+};
+
+export type materialProductionGetMaterialProductionResponse = materialProductionGetMaterialProductionResponses[keyof materialProductionGetMaterialProductionResponses];
+
+export type materialProductionRetryMaterialProductionData = {
+    body?: never;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+    };
+    query?: never;
+    url: '/api/platform/tenants/{tenant_id}/material-production/retry';
+};
+
+export type materialProductionRetryMaterialProductionErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type materialProductionRetryMaterialProductionError = materialProductionRetryMaterialProductionErrors[keyof materialProductionRetryMaterialProductionErrors];
+
+export type materialProductionRetryMaterialProductionResponses = {
+    /**
+     * Successful Response
+     */
+    200: ProductionStatus;
+};
+
+export type materialProductionRetryMaterialProductionResponse = materialProductionRetryMaterialProductionResponses[keyof materialProductionRetryMaterialProductionResponses];
+
+export type materialProductionPostMaterialLoginLinkData = {
+    body: EmptyRequestWritable;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+    };
+    query?: never;
+    url: '/api/tenants/{tenant_id}/material-production/login-link';
+};
+
+export type materialProductionPostMaterialLoginLinkErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type materialProductionPostMaterialLoginLinkError = materialProductionPostMaterialLoginLinkErrors[keyof materialProductionPostMaterialLoginLinkErrors];
+
+export type materialProductionPostMaterialLoginLinkResponses = {
+    /**
+     * Successful Response
+     */
+    200: ProductionLoginLink;
+};
+
+export type materialProductionPostMaterialLoginLinkResponse = materialProductionPostMaterialLoginLinkResponses[keyof materialProductionPostMaterialLoginLinkResponses];
 
 export type accountsGetAccountsData = {
     body?: never;

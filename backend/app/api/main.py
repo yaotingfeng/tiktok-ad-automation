@@ -13,6 +13,7 @@ from app.modules.builds.submission_api import router as submission_router
 from app.modules.builds.submission_catalog_api import (
     router as submission_catalog_router,
 )
+from app.modules.material_production.api import router as material_production_router
 from app.modules.materials.ingest_api import router as ingest_router
 from app.modules.materials.push_api import router as material_push_router
 from app.modules.materials.push_api import source_router as material_source_router
@@ -29,6 +30,7 @@ api_router.include_router(users.router)
 api_router.include_router(utils.router)
 api_router.include_router(integrations.router)
 api_router.include_router(tenants_router)
+api_router.include_router(material_production_router)
 api_router.include_router(accounts_router)
 api_router.include_router(ad_management_router)
 api_router.include_router(mcp_accounts_router)

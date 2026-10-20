@@ -101,7 +101,16 @@ def get_platform_tenants(
 
 @router.post("/platform/tenants", response_model=Tenant, status_code=201)
 def post_tenant(body: TenantCreate, session: SessionDep, user: CurrentUser) -> Tenant:
-    result = service.create_tenant(session, actor_id=user.id, **body.model_dump())
+    from app.modules.material_production.service import onboard_tenant
+
+    result = onboard_tenant(
+        session,
+        actor_id=user.id,
+        name=body.name,
+        username=body.username,
+        password=body.password.get_secret_value(),
+        request_id=body.request_id,
+    )
     session.commit()
     session.refresh(result)
     return result
