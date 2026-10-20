@@ -1,5 +1,9 @@
 # TK-ADA 公司生产首发与迁移
 
+## 2026-10-21 同步精简后续四阶段发布
+
+当前生产版本 `340108c711ec375c5acccea88dc207ff84e4c016`，schema仍为 `0042_drop_ad_material_main`；Jenkins #101于北京时间02:06:20完成，11角色Ready，四开关/并发/配额/数据库池保持。双时钟同相、规则BC前置3分钟、当地昨日收尾及零金额关联/规则保护同步上线。原46个等待关联中44个由正常Worker完成且未新增请求，剩余有金额缺口继续保护；UTC18:15正常规则运行已实际保存忽略计数2/8/2，命中1/5/0；健康告警拆分未实施，剩余目录/身份告警如实保留。完整备份源48197483，170表/6凭据/57个Redis键隔离恢复通过，证据及剩余健康缺口见[发布验收](../validation/2026-10-21-sync-followups-release.md)。
+
 ## 2026-10-20 同步请求精简发布
 
 当前生产版本 `481974839bf0f63bda0cbf3da8ffa078863892af`，schema `0042_drop_ad_material_main`；Jenkins #100 于北京时间22:06:41成功，11角色Ready。完整冻结备份已发布到 `/backup/latest/`，升级前版本3b4f8c5e/schema0040；隔离恢复核验170表、6份凭据、56个Redis键通过。四开关、并发、配额保持原值。迁移及上线后核查、尚待观察的目录健康指标详见[同步请求精简验收](../validation/2026-10-20-sync-request-reduction.md)。
@@ -23,7 +27,7 @@
 
 ## 当前实时同步拓扑（2026-10-20）
 
-当前程序发布版本以[同步请求精简验收](../validation/2026-10-20-sync-request-reduction.md)为准，迁移head `0042_drop_ad_material_main`。API、Beat与9个Worker共11角色，最近快速发布的镜像、实际政策与开关已逐角色验收；历史各版详见[本轮架构记录](../validation/2026-10-19-sync-architecture.md)。
+当前程序发布版本以[后续修复验收](../validation/2026-10-21-sync-followups-release.md)为准，迁移head `0042_drop_ad_material_main`。API、Beat与9个Worker共11角色，本次发布的镜像、实际政策与开关已逐角色验收；历史各版详见[本轮架构记录](../validation/2026-10-19-sync-architecture.md)。
 
 | 执行职责 | 当前并发与分工 |
 | --- | --- |
