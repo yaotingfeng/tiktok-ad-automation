@@ -423,3 +423,123 @@ def test_parallel_workers_issue_only_one_provision_request(monkeypatch):
                 db.exec(delete(model).where(model.tenant_id == tenant_id))
             db.exec(delete(Tenant).where(Tenant.id == tenant_id))
             db.exec(delete(User).where(col(User.id).in_([actor_id, admin_id])))
+
+
+@pytest.fixture
+def historical(session):
+    from app.core.security import get_password_hash
+    from app.modules.tenants.service import create_tenant
+
+    platform, admin = user(session, platform=True), user(session)
+    admin.hashed_password = get_password_hash("Existing-password123")
+    session.flush()
+    tenant = create_tenant(
+        session, actor_id=platform.id, name="历史租户", administrator_id=admin.id
+    )
+    return {
+        "actor_id": platform.id,
+        "tenant_id": tenant.id,
+        "administrator_id": admin.id,
+        "expected_name": tenant.name,
+        "expected_username": admin.username,
+    }
+
+
+@pytest.mark.parametrize("generated", [False, True])
+def test_historical_onboarding_preserves_local_login_and_reuses_binding(
+    session, historical, upstream, generated
+):
+    params = {**historical, "generate_password": generated}
+    if not generated:
+        params["password"] = "Existing-password123"
+    admin = session.get(User, historical["administrator_id"])
+    original_hash = admin.hashed_password
+    assert service.onboard_existing_tenant(session, **params).status == "pending"
+    binding = session.get(MaterialProductionBinding, historical["tenant_id"])
+    original_ciphertext = binding.request_ciphertext
+    assert service.onboard_existing_tenant(session, **params).status == "pending"
+    assert binding.request_ciphertext == original_ciphertext
+    service.provision_once(
+        session,
+        tenant_id=historical["tenant_id"],
+        actor_id=historical["actor_id"],
+        sequence=1,
+    )
+    assert service.onboard_existing_tenant(session, **params).status == "ready"
+    assert len(upstream[0]) == 1
+    request = upstream[0][0][1]
+    assert request["companyName"] == historical["expected_name"]
+    assert request["username"] == historical["expected_username"]
+    assert (request["password"] == "Existing-password123") is not generated
+    assert (
+        session.get(User, admin.id, populate_existing=True).hashed_password
+        == original_hash
+    )
+    assert session.exec(
+        select(PendingDispatch).where(
+            PendingDispatch.tenant_id == historical["tenant_id"]
+        )
+    ).one().payload == {"binding_id": str(historical["tenant_id"]), "sequence": 1}
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {},
+        {"password": "wrong-password123"},
+        {"password": "Existing-password123", "generate_password": True},
+        {"expected_name": "错误租户", "generate_password": True},
+        {"expected_username": "other", "generate_password": True},
+    ],
+)
+def test_historical_onboarding_rejects_wrong_identity_or_password_mode(
+    session, historical, changes
+):
+    with pytest.raises(DomainError):
+        service.onboard_existing_tenant(session, **{**historical, **changes})
+    assert session.get(MaterialProductionBinding, historical["tenant_id"]) is None
+
+
+def test_historical_onboarding_requires_active_tenant_admin(session, historical):
+    member = session.get(
+        TenantMembership, (historical["tenant_id"], historical["administrator_id"])
+    )
+    member.active = False
+    session.flush()
+    with pytest.raises(DomainError):
+        service.onboard_existing_tenant(session, **historical, generate_password=True)
+    assert session.get(MaterialProductionBinding, historical["tenant_id"]) is None
+
+
+def test_historical_admin_command_defaults_to_rollback_and_never_prints_password(
+    session, historical, monkeypatch, capsys
+):
+    import io
+    import sys
+
+    from sqlmodel import Session
+
+    from app.modules.material_production import admin
+
+    item = {k: str(v) for k, v in historical.items() if k != "actor_id"}
+    item["password"] = "Existing-password123"
+    body = json.dumps({"actor_id": str(historical["actor_id"]), "tenants": [item]})
+    connection = session.connection()
+    monkeypatch.setattr(
+        admin,
+        "Session",
+        lambda _: Session(bind=connection, join_transaction_mode="create_savepoint"),
+    )
+    for apply in (False, True):
+        monkeypatch.setattr(sys, "stdin", io.StringIO(body))
+        monkeypatch.setattr(
+            sys, "argv", ["material-admin", *(["--apply"] if apply else [])]
+        )
+        assert admin.main() == 0
+        output = capsys.readouterr().out
+        assert "Existing-password123" not in output
+        assert json.loads(output)["applied"] is apply
+        binding = session.get(
+            MaterialProductionBinding, historical["tenant_id"], populate_existing=True
+        )
+        assert (binding is not None) is apply

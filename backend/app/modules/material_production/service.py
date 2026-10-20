@@ -3,10 +3,11 @@
 import hmac
 import json
 import re
+import secrets
 from datetime import UTC, datetime, timedelta
 from hashlib import sha256
 from typing import Literal, cast
-from uuid import UUID
+from uuid import NAMESPACE_URL, UUID, uuid5
 
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, col, select
@@ -15,11 +16,11 @@ from app.core.config import settings
 from app.core.context import TenantContext
 from app.core.credentials import decrypt_credentials, encrypt_credentials
 from app.core.errors import DomainError
-from app.core.security import get_password_hash
+from app.core.security import get_password_hash, verify_password
 from app.jobs.outbox import enqueue_after_commit
 from app.jobs.tasks import register_dispatch_task
 from app.models import User
-from app.modules.tenants.models import AuditEvent, Tenant
+from app.modules.tenants.models import AuditEvent, Tenant, TenantMembership
 from app.modules.tenants.permissions import require_tenant
 from app.modules.tenants.service import create_tenant, require_platform
 
@@ -60,16 +61,7 @@ def _enqueue(session: Session, binding: MaterialProductionBinding) -> None:
     binding.next_attempt_at = datetime.now(UTC) + timedelta(seconds=60)
 
 
-def onboard_tenant(
-    session: Session,
-    *,
-    actor_id: UUID,
-    name: str,
-    username: str,
-    password: str,
-    request_id: UUID,
-) -> Tenant:
-    require_platform(session, actor_id=actor_id)
+def _onboarding_payload(name: str, username: str, password: str) -> tuple[str, str]:
     name = name.strip()
     if not name or len(name) > 100 or any(ord(c) < 32 or ord(c) == 127 for c in name):
         raise DomainError(
@@ -98,6 +90,21 @@ def onboard_tenant(
     digest = hmac.new(
         settings.SECRET_KEY.encode(), encoded.encode(), sha256
     ).hexdigest()
+    return encoded, digest
+
+
+def onboard_tenant(
+    session: Session,
+    *,
+    actor_id: UUID,
+    name: str,
+    username: str,
+    password: str,
+    request_id: UUID,
+) -> Tenant:
+    require_platform(session, actor_id=actor_id)
+    encoded, digest = _onboarding_payload(name, username, password)
+    name = name.strip()
     # 同一提交可能因响应丢失重发；串行查验，先返回原租户，不重复创建本地用户。
     from sqlalchemy import func
 
@@ -142,10 +149,38 @@ def onboard_tenant(
     tenant = create_tenant(
         session, actor_id=actor_id, name=name, administrator_id=admin.id
     )
+    _save_binding(
+        session,
+        tenant=tenant,
+        actor_id=actor_id,
+        administrator_id=admin.id,
+        request_id=request_id,
+        username=username,
+        ref=ref,
+        key=key,
+        encoded=encoded,
+        digest=digest,
+    )
+    return tenant
+
+
+def _save_binding(
+    session: Session,
+    *,
+    tenant: Tenant,
+    actor_id: UUID,
+    administrator_id: UUID,
+    request_id: UUID,
+    username: str,
+    ref: str,
+    key: str,
+    encoded: str,
+    digest: str,
+) -> MaterialProductionBinding:
     binding = MaterialProductionBinding(
         tenant_id=tenant.id,
         actor_id=actor_id,
-        administrator_id=admin.id,
+        administrator_id=administrator_id,
         request_id=request_id,
         request_digest=digest,
         username=username,
@@ -159,7 +194,97 @@ def onboard_tenant(
     session.flush()
     _enqueue(session, binding)
     session.flush()
-    return tenant
+    return binding
+
+
+def onboard_existing_tenant(
+    session: Session,
+    *,
+    actor_id: UUID,
+    tenant_id: UUID,
+    administrator_id: UUID,
+    expected_name: str,
+    expected_username: str,
+    password: str | None = None,
+    generate_password: bool = False,
+) -> ProductionStatus:
+    """仅供受控运维接入已授权历史租户；不修改投放用户、密码或成员关系。"""
+    require_platform(session, actor_id=actor_id)
+    require_tenant(session, actor_id=actor_id, tenant_id=tenant_id, action="manage")
+    tenant = session.exec(
+        select(Tenant)
+        .where(Tenant.id == tenant_id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    ).one()
+    admin = session.get(User, administrator_id, populate_existing=True)
+    member = session.get(
+        TenantMembership, (tenant_id, administrator_id), populate_existing=True
+    )
+    if (
+        tenant.name != expected_name
+        or not admin
+        or not admin.is_active
+        or admin.username != expected_username
+        or not member
+        or not member.active
+        or member.role != "tenant_admin"
+    ):
+        raise DomainError(
+            "material_onboarding_conflict", "历史租户或管理员信息已变化，请重新核对"
+        )
+    if generate_password == (password is not None):
+        raise DomainError(
+            "material_onboarding_invalid", "须明确选择提供原密码或生成独立素材密码"
+        )
+    existing = session.get(MaterialProductionBinding, tenant_id, populate_existing=True)
+    if existing:
+        if (
+            existing.administrator_id != administrator_id
+            or existing.username != expected_username
+        ):
+            raise DomainError(
+                "material_onboarding_conflict", "租户已经绑定其他素材账号"
+            )
+        # 重跑只读原记录，不生成新密码、不重放成功开户或覆盖已有 Key。
+        return production_status(session, tenant_id=tenant_id, actor_id=actor_id)
+    if password is not None and not verify_password(password, admin.hashed_password)[0]:
+        raise DomainError("material_onboarding_invalid", "提供的密码与投放账号不一致")
+    initial_password = (
+        password if password is not None else secrets.token_urlsafe(32) + "a1"
+    )
+    encoded, digest = _onboarding_payload(tenant.name, admin.username, initial_password)
+    ref = settings.MATERIAL_TOOL_DEFAULT_KEY_REF
+    key = provisioning_key(ref)
+    settings.require_connection_encryption()
+    _save_binding(
+        session,
+        tenant=tenant,
+        actor_id=actor_id,
+        administrator_id=administrator_id,
+        request_id=uuid5(
+            NAMESPACE_URL, f"tkada:material-production:existing:{tenant_id}"
+        ),
+        username=admin.username,
+        ref=ref,
+        key=key,
+        encoded=encoded,
+        digest=digest,
+    )
+    session.add(
+        AuditEvent(
+            tenant_id=tenant_id,
+            actor_id=actor_id,
+            action="material_production.onboarding",
+            target_id=str(tenant_id),
+            details={
+                "username": admin.username,
+                "password_mode": "generated" if generate_password else "matched",
+            },
+        )
+    )
+    session.flush()
+    return production_status(session, tenant_id=tenant_id, actor_id=actor_id)
 
 
 def provision_once(
