@@ -3239,3 +3239,14 @@ bb4a971599c0707e91c79c989ad81bdc8571b281于20:30:44 UTC完成11角色快速发�
 - `uv run mypy app`：505 errors / 74 files；忽略行号对比main基准510及cf560a32的505均无新增。main自基准以来仅改文档，后端基准未变；不把mypy本身记为通过。
 - `uv run ruff format --check app/modules/reporting/health.py tests/modules/reporting/test_health.py tests/modules/reporting/test_backlog_dependencies.py`：全部3文件通过；`git diff --check`通过。
 - 全仓44个存量格式问题未处理。日志位于忽略的 `.superpowers/sync-request-reduction/health-margin-*.log`。
+
+
+### 2026-10-20 同步请求精简：已合并、推送并发布生产
+
+用户最新明确授权合并、推送、生产发布，取代前文交付限制。目录健康修正实际提交为 `95c34bf20e1bb165b96bb7c428f925035447e18a`。为保留四个原提交，不采用前文建议的变基：在已有 `feat/automated-rules` 工作树合入main的两个文档提交，再将main快进到 `481974839bf0f63bda0cbf3da8ffa078863892af`。origin/main和company/main均推送成功，Jenkins #100完整发布SUCCESS（北京时间22:06:41）。验收文档单独提交、快进main并推送origin；company停在已上线版本，避免文档触发重复部署。
+
+CI后端4884项：4882首轮通过、1独立重跑通过、1跳过、最终0失败；Ruff/ty通过，前端624+4+1项及构建通过。独立重跑的账户发现用例及耗时见验收记录，不隐藏首轮失败。本轮无代码更改，存量mypy/格式问题未处理。完整冻结备份恢复170表一致、6份凭据、56个Redis键验证通过，正式迁移至0042，11角色Ready、四开关及并发/配额保持原值、HTTPS200。
+
+上线只读核查4条规则及889条历史定义全部通过新合同、两表无5M；仅目录主素材列/约束删除，报表和帖子表同名列保留。两条同步健康记录仍有目录缺口（3642/254），报表过期账户均0；尚未证明稳定周期请求降幅及目录年龄p95，不把进程Ready写成业务健康全绿。额外目录非空计数8秒超时后停止，未当作0；完整备份提供恢复证据。
+
+完整版本、迁移摘要、备份证据、CI和待观察项见 [生产验收](validation/2026-10-20-sync-request-reduction.md)。原无关未跟踪文件保留；同名设计/计划已校验备存到忽略目录。发布记录提交通过 `git log -1 --format=%H --grep='^reporting: 记录同步降频生产发布验收$'` 定位，避免在自身内容嵌入自身哈希。
