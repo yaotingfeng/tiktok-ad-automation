@@ -3290,3 +3290,14 @@ CI后端4884项：4882首轮通过、1独立重跑通过、1跳过、最终0失�
 - backend 门禁：`uv run ruff check app tests && uv run ty check app`、6 个改动 Python `uv run ruff format --check` 通过；`uv run mypy app` 502 条/74 文件，对比上阶段诊断多重集（规范化位置及诊断内行号）无新增；`uv run pytest tests/modules/reporting tests/modules/automation_rules tests/modules/ads -q` **990 passed / 46.73s**。
 - 过程：初始收尾 6 项先红后绿；并发/时区扩展定向 79 passed；补“失败后仍每天只规划一次”先复现 2 failed，SQL 参数绑定漏补在专项中暴露并已修复，最终收尾 12 passed。中途已中止无意义的未修复完整运行；没有跳过失败或改成宽松断言凑通过。
 - 继续使用本机专用 PG/Redis 与清洁环境，不操作线上。阶段 2 提交 `23abca2d`；本节提交前核对 main、根目录和暂存差异，不推送、不发布。
+
+
+## 2026-10-21 同步精简后续阶段 4：确认零金额关联依赖，按要求停止实施
+
+- 已读取 `8bd35045` 的零金额补链实现/回归和该提交时的计划、验证文档。其背景是不能把零花费非空事实冒充空桶，完整事实（包括零花费及 NULL VID）仍需映射；它有意只跳过空窗口和已映射窗口。详见 [完整交接及依赖审计](validation/2026-10-21-sync-followups.md)。
+- 实际依赖已确认：素材规则 `unlinked_report_accounts` 包含零金额未定位帖子，`material_entities` 还会拦截所属广告已知但 VID 缺失的帖子。专用本地 PG 回滚事务复现：原合成规则命中 1 条；增加 spend=0/revenue_total=0 的无 owner 帖子后命中 0、`MATERIAL_REPORT_UNLINKED`；补 owner 但无 VID 时命中 0、`MATERIAL_LINK_UNRESOLVED`。页面/报表的帖子到视频归并也消费该映射。
+- 负证据位置已查明：`material_link_scan`（tenant/advertiser/query_scope，scanned_at/unresolved_ids/evidence_signature），TTL 6h，需范围/签名/过期一起验证；无 owner 负证据不能直接等同全部缺 VID。等待任务 progress 另存 waiting_ids/dependency_signature 等。未改任何 schema。
+- **依用户“存在依赖停下来回报，不要改”停止阶段 4 产品实现**。没有收窄 needs_material_links/missing_video_ids/dependency_changed，没有新增 platform_unlinked_material_posts 分类，没有改现有任务状态或规则缺数判断。第四提交仅交接审计，不能算第四项产品问题已修复。
+- 审计阶段仍执行用户要求门禁：backend `uv run ruff check app tests && uv run ty check app` 通过；`uv run mypy app` 502 条/74 文件，与阶段 3 无新增；`uv run pytest tests/modules/reporting tests/modules/automation_rules tests/modules/ads -q` **990 passed / 46.09s**。无 Python 源码变更，阶段格式门禁不适用；阶段 3 六文件格式已通过。审计脚本首次缺完整模型注册失败，补齐与 pytest 相同的模型导入后断言通过，合成数据 rollback 未持久化。
+- 本轮产品提交为 `53a5888f`、`23abca2d`、`d2d78398`；审计提交号见本节对应 Git 提交。主工作区 main，逐阶段明确路径暂存、核验根目录/状态/暂存差异；未推送/发布/连接线上/调用真实 TikTok。既有未跟踪文件未由本会话修改；并行文档提交 `98c664c8` 已保留。
+- 下一步需用户确认是否允许同时调整两处素材规则缺数判定与零金额帖子的展示/归并语义，不能只停补链却让规则永久缺数。验收重点为规则前置相位峰值、切日收尾与今日共享进程/平台额度、收尾失败补偿和 PG 负载；本机验证不代表线上容量达标。
