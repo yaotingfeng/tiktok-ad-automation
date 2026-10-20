@@ -269,7 +269,7 @@ async function managementBoundary(
       ].filter(
         (row) => query.get("source") !== "rule" || row.source.kind === "rule",
       )
-      // 首页之后由“加载更多”请求第二页。
+      // 仅返回当前页，翻页后不应保留首页记录。
       const page = query.get("cursor")
         ? [
             {
@@ -284,7 +284,7 @@ async function managementBoundary(
         json: {
           items: page,
           next_cursor: query.get("cursor") ? null : "next-page",
-          total: rows.length + 1,
+          total: 51,
         },
       })
     }
@@ -452,7 +452,7 @@ test.describe("广告管理工作台", () => {
     await expect(page.getByRole("button", { name: /刷新重试/ })).toHaveCount(0)
   })
 
-  test("操作记录列表显示动作、对象、来源和结果，可筛选和加载更多", async ({
+  test("操作记录复用服务端分页，翻页替换、刷新当前页，筛选和条数重置首页", async ({
     page,
   }) => {
     const { listQueries } = await managementBoundary(page)
@@ -467,14 +467,38 @@ test.describe("广告管理工作台", () => {
     await expect(byRule).toContainText("部分完成")
     await expect(byRule).toContainText("成功 2")
     await expect(byRule).toContainText("失败 1")
-    await expect(page.getByText("共 3 条")).toBeVisible()
+    await expect(page.getByText("共 51 条 · 第 1 / 2 页")).toBeVisible()
+    await expect(page.getByRole("button", { name: "上一页" })).toBeDisabled()
+    await expect(page.getByRole("button", { name: "加载更多" })).toHaveCount(0)
 
-    await page.getByRole("button", { name: "加载更多" }).click()
+    await page.getByRole("button", { name: "下一页" }).click()
     await expect(
       page.getByRole("row", { name: /目标 ROAS 设为 1.5/ }),
     ).toBeVisible()
-    await expect(page.getByRole("button", { name: "加载更多" })).toHaveCount(0)
+    await expect(manual).toHaveCount(0)
+    await expect(byRule).toHaveCount(0)
+    await expect(page.getByText("共 51 条 · 第 2 / 2 页")).toBeVisible()
+    await expect(page.getByRole("button", { name: "下一页" })).toBeDisabled()
     expect(listQueries[listQueries.length - 1]?.cursor).toBe("next-page")
+    const beforeRefresh = listQueries.length
+    await page.getByRole("button", { name: "刷新", exact: true }).click()
+    await expect.poll(() => listQueries.length).toBe(beforeRefresh + 1)
+    expect(listQueries.at(-1)?.cursor).toBe("next-page")
+    await page.getByRole("button", { name: "上一页" }).click()
+    await expect(manual).toBeVisible()
+    await expect(page.getByRole("row", { name: /目标 ROAS 设为 1.5/ })).toHaveCount(0)
+    await page.getByRole("button", { name: "下一页" }).click()
+    await expect(page.getByText("共 51 条 · 第 2 / 2 页")).toBeVisible()
+
+    await page.getByRole("combobox", { name: "每页条数" }).click()
+    await page.getByRole("option", { name: "100 条" }).click()
+    await expect(page.getByText("共 51 条 · 第 1 / 1 页")).toBeVisible()
+    expect(listQueries.at(-1)?.limit).toBe("100")
+    expect(listQueries.at(-1)?.cursor).toBeUndefined()
+    await page.getByRole("combobox", { name: "每页条数" }).click()
+    await page.getByRole("option", { name: "50 条" }).click()
+    await page.getByRole("button", { name: "下一页" }).click()
+    await expect(page.getByText("共 51 条 · 第 2 / 2 页")).toBeVisible()
 
     await page.getByRole("combobox", { name: "来源" }).click()
     await page.getByRole("option", { name: "自动规则" }).click()
@@ -486,6 +510,11 @@ test.describe("广告管理工作台", () => {
       source: "rule",
     })
     expect(listQueries[listQueries.length - 1]?.cursor).toBeUndefined()
+    await expect(page.getByRole("button", { name: "上一页" })).toBeDisabled()
+    // 浏览器回退也重置页游标，不恢复另一筛选范围的第二页。
+    await page.goBack()
+    await expect(manual).toBeVisible()
+    await expect(page.getByRole("button", { name: "上一页" })).toBeDisabled()
   })
 
   test("排除不可用项会把冻结 ref 发送给服务器", async ({ page }) => {

@@ -4,10 +4,16 @@ from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
 import pytest
-from sqlmodel import Session
+from sqlalchemy import event
+from sqlmodel import Session, select
 
 from app.core.errors import DomainError
 from app.models import User
+from app.modules.accounts.connection_models import (
+    BCConnectionBinding,
+    ConnectionAuthorization,
+)
+from app.modules.accounts.models import BCAccountAccess, TikTokConnection
 from app.modules.ad_management.actions import get_task, list_tasks
 from app.modules.ad_management.models import (
     ManagementPreview,
@@ -133,7 +139,7 @@ def test_list_is_newest_first_with_stable_cursor(session, history):
     assert [item.task_id for item in first.items + second.items] == [
         task.id for task in by_time
     ]
-    assert first.total == 4 and second.next_cursor is None
+    assert first.total == second.total == 4 and second.next_cursor is None
     with pytest.raises(DomainError):
         list_tasks(session, context, bc.bc_id, cursor="not-a-cursor", limit=2)
 
@@ -229,3 +235,154 @@ def test_filter_rename_tasks(session, history):
     assert mutation.field == "name"
     assert mutation.rename_kind == "affix"
     assert mutation.value is None
+
+
+def test_history_queries_are_bounded_by_page_not_history(session, history):
+    context, bc, add = history
+    for minute in range(60):
+        add({"field": "budget", "mode": "set", "value": "10"}, minutes=minute)
+    statements = []
+
+    def record(_conn, _cursor, statement, _params, _context, _many):
+        statements.append(statement)
+
+    connection = session.connection()
+    event.listen(connection, "before_cursor_execute", record)
+    try:
+        page = list_tasks(session, context, bc.bc_id, cursor=None, limit=2)
+    finally:
+        event.remove(connection, "before_cursor_execute", record)
+    assert len(page.items) == 2 and page.total == 60 and page.next_cursor
+    # 权限及计数在 SQL 集合内完成，不随历史任务/任务项数量逐条查询。
+    assert len(statements) <= 12, len(statements)
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        "account_conflict",
+        "account_metadata",
+        "bc_conflict",
+        "grant_revoked",
+        "grant_inactive",
+        "grant_not_in_bc",
+        "grant_unverified",
+        "grant_future",
+        "connection_inactive",
+        "authorization_revision",
+        "adapter_revision",
+        "binding_revision",
+        "binding_inactive",
+        "route_channel",
+        "authorization_missing",
+        "authorization_unknown",
+        "authorization_future",
+        "read_denied",
+        "read_string",
+        "route_tenant",
+        "route_bc",
+        "route_invalid",
+    ],
+)
+def test_sql_visibility_preserves_frozen_route_and_read_permissions(
+    session, history, management_env, change
+):
+    context, bc, add = history
+    _, _, account, route, _ = management_env
+    task = add({"field": "budget", "mode": "set", "value": "10"}, minutes=1)
+    connection = session.get(TikTokConnection, route.connection_id)
+    binding = session.get(
+        BCConnectionBinding, (context.tenant_id, bc.bc_id, route.connection_id)
+    )
+    grant = session.get(
+        BCAccountAccess,
+        (context.tenant_id, bc.bc_id, account.advertiser_id, route.connection_id),
+    )
+    authorization = session.exec(
+        select(ConnectionAuthorization).where(
+            ConnectionAuthorization.connection_id == route.connection_id
+        )
+    ).one()
+    match change:
+        case "account_conflict":
+            account.ownership_conflict = True
+        case "account_metadata":
+            account.currency = " "
+        case "bc_conflict":
+            bc.ownership_conflict = True
+        case "grant_revoked":
+            grant.authorized = False
+        case "grant_inactive":
+            grant.active = False
+        case "grant_not_in_bc":
+            grant.in_bc = False
+        case "grant_unverified":
+            grant.checked_at = None
+        case "grant_future":
+            grant.checked_at = datetime.now(UTC) + timedelta(days=1)
+        case "connection_inactive":
+            connection.status = "DISABLED"
+        case "authorization_revision":
+            connection.authorization_revision += 1
+        case "adapter_revision":
+            connection.adapter_contract_revision = "changed"
+        case "binding_revision":
+            binding.revision += 1
+        case "binding_inactive":
+            binding.status = "DISABLED"
+        case "route_channel":
+            task.route = {**task.route, "channel": "OFFICIAL_MCP"}
+        case "authorization_missing":
+            session.delete(authorization)
+        case "authorization_unknown":
+            authorization.source = "UNKNOWN"
+        case "authorization_future":
+            authorization.verified_at = datetime.now(UTC) + timedelta(days=1)
+        case "read_denied":
+            authorization.permission_summary = {"read_authorized": False}
+        case "read_string":
+            authorization.permission_summary = {"read_authorized": "true"}
+        case "route_tenant":
+            task.route = {**task.route, "tenant_id": str(uuid4())}
+        case "route_bc":
+            task.route = {**task.route, "bc_id": "other-bc"}
+        case "route_invalid":
+            task.route = {}
+    session.flush()
+    with pytest.raises(DomainError):
+        get_task(session, context, bc.bc_id, task.id)
+    page = list_tasks(session, context, bc.bc_id, cursor=None, limit=2)
+    assert page.items == [] and page.total == 0 and page.next_cursor is None
+
+
+def test_hidden_target_excludes_whole_task_before_count_and_paging(session, history):
+    context, bc, add = history
+    tasks = [
+        add(
+            {"field": "budget", "mode": "set", "value": "10"},
+            minutes=0,
+            kinds=("campaign", "adgroup"),
+        )
+        for _ in range(6)
+    ]
+    # 相同时间按 UUID 排序；不可见记录穿插在前、中、后，仍应满页且总数精确。
+    tasks.sort(key=lambda task: task.id, reverse=True)
+    for task in tasks[::2]:
+        item = session.exec(
+            select(ManagementTaskItem).where(
+                ManagementTaskItem.task_id == task.id,
+                ManagementTaskItem.position == 1,
+            )
+        ).one()
+        item.ref = {**item.ref, "advertiser_id": "unavailable-account"}
+    session.flush()
+    first = list_tasks(session, context, bc.bc_id, cursor=None, limit=2)
+    second = list_tasks(session, context, bc.bc_id, cursor=first.next_cursor, limit=2)
+    assert first.total == second.total == 3
+    assert [item.task_id for item in first.items + second.items] == [
+        task.id for task in tasks[1::2]
+    ]
+    assert len(first.items) == 2 and second.next_cursor is None
+    # 查询其它 BC 不能看到本 BC 的记录或总数。
+    other = list_tasks(session, context, "other-bc", cursor=None, limit=2)
+    assert other.items == [] and other.total == 0

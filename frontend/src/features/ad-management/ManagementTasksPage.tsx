@@ -1,4 +1,4 @@
-import { useInfiniteQuery } from "@tanstack/react-query"
+import { useQuery } from "@tanstack/react-query"
 import { getRouteApi, Link } from "@tanstack/react-router"
 import { AdManagementService } from "@/client"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
@@ -13,6 +13,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
+import { Skeleton } from "@/components/ui/skeleton"
 import {
   Table,
   TableBody,
@@ -21,7 +22,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
-import { isForbidden } from "@/features/tenants/shared"
+import { isForbidden, Pager, useCursorPage } from "@/features/tenants/shared"
 import { useTenantScope } from "@/features/tenants/TenantScope"
 import { WorkspaceEmpty } from "@/features/workspace/WorkspaceEmpty"
 import { WorkspacePageTitle } from "@/features/workspace/WorkspacePageTitle"
@@ -51,31 +52,7 @@ const SOURCE_OPTIONS = [
 export function ManagementTasksPage() {
   const { tenantId, scope } = useTenantScope()
   const bcId = scope?.bcId
-  const search = route.useSearch()
-  const navigate = route.useNavigate()
-  const { action, source } = search
-  // 操作记录按提交时间倒序，筛选在后端完成，翻页沿用游标。
-  const query = useInfiniteQuery({
-    queryKey: ["tenant", tenantId, "ad-management-tasks", bcId, action, source],
-    enabled: !!tenantId && !!bcId,
-    initialPageParam: undefined as string | undefined,
-    queryFn: async ({ signal, pageParam }) =>
-      (
-        await AdManagementService.listTasks({
-          path: { tenant_id: tenantId! },
-          query: {
-            bc_id: bcId!,
-            limit: 50,
-            cursor: pageParam,
-            action,
-            source,
-          },
-          signal,
-        })
-      ).data,
-    getNextPageParam: (last) => last.next_cursor ?? undefined,
-    refetchOnWindowFocus: false,
-  })
+  const { action, source } = route.useSearch()
   if (!tenantId || !bcId)
     return (
       <WorkspaceEmpty
@@ -85,8 +62,61 @@ export function ManagementTasksPage() {
         description="操作记录按当前租户与 BC 展示。"
       />
     )
-  const tasks = query.data?.pages.flatMap((page) => page.items) ?? []
-  const total = query.data?.pages[0]?.total
+  // 范围或筛选改变立即重建分页，包含浏览器前进/后退，避免携带旧范围游标。
+  return (
+    <ManagementTaskList
+      key={`${tenantId}:${bcId}:${action ?? ""}:${source ?? ""}`}
+      tenantId={tenantId}
+      bcId={bcId}
+      action={action}
+      source={source}
+    />
+  )
+}
+
+function ManagementTaskList({
+  tenantId,
+  bcId,
+  action,
+  source,
+}: {
+  tenantId: string
+  bcId: string
+  action?: (typeof ACTION_OPTIONS)[number]["value"]
+  source?: (typeof SOURCE_OPTIONS)[number]["value"]
+}) {
+  const navigate = route.useNavigate()
+  const paging = useCursorPage()
+  // 与其它列表共用分页控件；每次只请求当前页，刷新不会串行重读已浏览页面。
+  const query = useQuery({
+    queryKey: [
+      "tenant",
+      tenantId,
+      "ad-management-tasks",
+      bcId,
+      action,
+      source,
+      paging.cursor,
+      paging.limit,
+    ],
+    queryFn: async ({ signal }) =>
+      (
+        await AdManagementService.listTasks({
+          path: { tenant_id: tenantId },
+          query: {
+            bc_id: bcId,
+            limit: paging.limit,
+            cursor: paging.cursor ?? undefined,
+            action,
+            source,
+          },
+          signal,
+        })
+      ).data,
+    refetchOnWindowFocus: false,
+  })
+  const tasks = isForbidden(query.error) ? [] : (query.data?.items ?? [])
+  const total = query.data?.total
   const setFilter = (key: "action" | "source", value: string) =>
     void navigate({
       search: (old) => ({ ...old, [key]: value === ALL ? undefined : value }),
@@ -145,9 +175,6 @@ export function ManagementTasksPage() {
             </SelectGroup>
           </SelectContent>
         </Select>
-        {total !== undefined && (
-          <span className="text-sm text-muted-foreground">共 {total} 条</span>
-        )}
       </div>
       {query.error && (
         <Alert variant="destructive">
@@ -157,7 +184,7 @@ export function ManagementTasksPage() {
           <AlertDescription>请检查当前租户和 BC 权限后重试。</AlertDescription>
         </Alert>
       )}
-      <Card className="py-0">
+      <Card className="py-0" aria-busy={query.isFetching}>
         <CardContent className="overflow-x-auto p-0">
           <Table className="min-w-[860px]">
             <TableHeader>
@@ -171,6 +198,16 @@ export function ManagementTasksPage() {
               </TableRow>
             </TableHeader>
             <TableBody>
+              {query.isPending &&
+                Array.from({ length: 6 }, (_, index) => (
+                  <TableRow key={`loading-${index}`}>
+                    {Array.from({ length: 6 }, (_, column) => (
+                      <TableCell key={column}>
+                        <Skeleton className="h-5 w-full min-w-16" />
+                      </TableCell>
+                    ))}
+                  </TableRow>
+                ))}
               {tasks.map((task) => {
                 const parts = resultParts(task.counts)
                 return (
@@ -225,23 +262,19 @@ export function ManagementTasksPage() {
               })}
             </TableBody>
           </Table>
-          {!query.isPending && !tasks.length && (
+          {!query.isPending && !query.error && !tasks.length && (
             <p className="p-8 text-center text-sm text-muted-foreground">
               {action || source ? "没有符合筛选条件的操作记录" : "暂无操作记录"}
             </p>
           )}
         </CardContent>
       </Card>
-      {query.hasNextPage && (
-        <Button
-          variant="outline"
-          className="self-center"
-          onClick={() => void query.fetchNextPage()}
-          disabled={query.isFetchingNextPage}
-        >
-          {query.isFetchingNextPage ? "加载中…" : "加载更多"}
-        </Button>
-      )}
+      <Pager
+        paging={paging}
+        nextCursor={query.error ? undefined : query.data?.next_cursor}
+        total={total}
+        busy={query.isFetching}
+      />
     </div>
   )
 }

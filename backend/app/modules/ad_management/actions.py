@@ -13,12 +13,13 @@ from sqlmodel import Session, col, select
 
 from app.core.context import TenantContext
 from app.core.errors import DomainError
-from app.core.pagination import Page
+from app.core.pagination import Page, count_rows
 from app.integrations.tiktok.contracts.context import FrozenTikTokRoute
 from app.jobs.outbox import enqueue_after_commit
 from app.models import User
 from app.modules.accounts.routing import verify_route
 from app.modules.ad_management.execution import _public as _item_public
+from app.modules.ad_management.history_scope import readable_history
 from app.modules.ad_management.models import (
     ManagementPreview,
     ManagementPreviewItem,
@@ -292,6 +293,7 @@ def list_tasks(
     statement = select(ManagementTask).where(
         ManagementTask.tenant_id == context.tenant_id,
         ManagementTask.bc_id == bc_id,
+        readable_history(context, bc_id),
     )
     if action is not None:
         field = ManagementPreview.mutation["field"].astext
@@ -317,41 +319,18 @@ def list_tasks(
     # 操作记录按提交时间倒序；同一时刻用任务 ID 稳定排序，游标同时携带两者。
     order = (col(ManagementTask.created_at).desc(), col(ManagementTask.id).desc())
     after = _decode_cursor(cursor) if cursor else None
-    # Verify account visibility in bounded batches.  A revoked account can be
-    # interleaved with usable rows, so stop only after the full candidate scan;
-    # each query and the retained page remain bounded rather than loading the BC
-    # task history into one list.
-    batch_size = max(limit + 1, 50)
-    last = after
-    visible: list[ManagementTask] = []
-    total = 0
-    while True:
-        batch_statement = statement
-        if last is not None:
-            batch_statement = batch_statement.where(
-                tuple_(col(ManagementTask.created_at), col(ManagementTask.id))
-                < tuple_(literal(last[0]), literal(last[1]))
-            )
-        candidates = session.exec(
-            batch_statement.order_by(*order).limit(batch_size)
-        ).all()
-        if not candidates:
-            break
-        for row in candidates:
-            last = (row.created_at, row.id)
-            try:
-                _scoped_task(session, context, bc_id, row.id)
-            except DomainError:
-                continue
-            total += 1
-            if len(visible) < limit + 1:
-                visible.append(row)
-        if len(candidates) < batch_size:
-            break
-    rows = visible
+    # 在完整权限/筛选范围内 COUNT，游标只作用于当前页，避免后续页总数递减。
+    total = count_rows(session, statement)
+    if after is not None:
+        statement = statement.where(
+            tuple_(col(ManagementTask.created_at), col(ManagementTask.id))
+            < tuple_(literal(after[0]), literal(after[1]))
+        )
+    # 数据库最多返回当前页加一条探测记录，不再遍历历史或逐项读取授权。
+    rows = session.exec(statement.order_by(*order).limit(limit + 1)).all()
     next_cursor = _encode_cursor(rows[limit - 1]) if len(rows) > limit else None
     return Page(
-        items=_with_summaries(session, context, rows[:limit]),
+        items=_with_summaries(session, context, list(rows[:limit])),
         next_cursor=next_cursor,
         total=total,
     )
