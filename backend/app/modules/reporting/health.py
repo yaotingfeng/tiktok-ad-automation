@@ -18,9 +18,9 @@ from app.modules.reporting.directory_refresh import (
     directory_interval,
     rule_accounts,
 )
+from app.modules.reporting.freshness import FRESHNESS, fresh_report_success
 from app.modules.reporting.jobs import enqueue_job
 from app.modules.reporting.planner import (
-    HOT_INTERVAL,
     REFRESH_MARGIN,
     _common,
     _group_by_window,
@@ -38,7 +38,7 @@ from app.modules.reporting.store_models import (
 
 logger = logging.getLogger(__name__)
 # 一个实时轮次外加执行余量，避免正常等待下一轮被健康修复反复补拉。
-SLO = HOT_INTERVAL + timedelta(minutes=5)
+SLO = FRESHNESS["ad_day"]
 REPAIR_INTERVAL = timedelta(minutes=2)
 MAX_REPAIR_ACCOUNTS = 50
 
@@ -77,13 +77,17 @@ def measure_health(session, plan, *, now, accounts=None):
         session.execute(
             text("""
         WITH active AS (
-          SELECT a.advertiser_id,(CAST(:now AS timestamptz) AT TIME ZONE a.timezone)::date AS local_day
+          SELECT a.advertiser_id,a.timezone,(CAST(:now AS timestamptz) AT TIME ZONE a.timezone)::date AS local_day
           FROM advertiser_account a WHERE a.tenant_id=:t AND a.advertiser_id=ANY(:ids)
             AND a.advertiser_id=ANY(:active))
-        SELECT a.advertiser_id,kinds.kind AS report_kind,s.status,s.last_success_at
+        SELECT a.advertiser_id,a.timezone,a.local_day,kinds.kind AS report_kind,
+          s.last_success_at, previous.last_success_at AS previous_success_at
         FROM active a CROSS JOIN (VALUES ('ad_day'),('material_day')) kinds(kind)
         LEFT JOIN report_sync_state s ON s.tenant_id=:t AND s.advertiser_id=a.advertiser_id
           AND s.stat_date=a.local_day AND s.report_kind=kinds.kind
+        LEFT JOIN report_sync_state previous ON previous.tenant_id=:t
+          AND previous.advertiser_id=a.advertiser_id AND previous.stat_date=a.local_day-1
+          AND previous.report_kind=kinds.kind
     """),
             params,
         )
@@ -93,10 +97,20 @@ def measure_health(session, plan, *, now, accounts=None):
     stale = {"ad_day": set(), "material_day": set()}
     times = []
     for row in rows:
-        at = row["last_success_at"]
-        if at is not None:
-            times.append(at)
-        if row["status"] != "COMPLETE" or at is None or at < now - SLO:
+        at = fresh_report_success(
+            {
+                row["local_day"]: row["last_success_at"],
+                row["local_day"] - timedelta(days=1): row["previous_success_at"],
+            },
+            timezone=row["timezone"],
+            kind=row["report_kind"],
+            now=now,
+        )
+        # 保留过期今日事实的年龄指标；跨日借用成功时则记录实际采用的时间。
+        measured_at = at if at is not None else row["last_success_at"]
+        if measured_at is not None:
+            times.append(measured_at)
+        if at is None:
             stale[row["report_kind"]].add(row["advertiser_id"])
     missing = (
         session.execute(

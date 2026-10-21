@@ -3339,3 +3339,11 @@ CI affected后端1017项通过、0失败/0并行不稳定，Ruff/ty通过；前�
 - 发布时目录年龄为 15k−e；中点提前量加包含等号的到期比较保证 e≤7.5 分钟时不延后一轮。真实 PostgreSQL 连续 12 次发布验证普通广告每两轮、上级每四轮、规则每轮刷新，覆盖 e=0.5/1/4/5/6/7/7.5 分钟，在发布、完成前与完成时健康检查均不误报。
 - 门禁：Ruff app/tests、ty app、6 个改动 Python 文件格式检查通过；mypy 499 条/74 文件，与改前规范化诊断多重集无新增；指定 reporting/automation_rules/ads 全量 **1046 passed / 81.16s**，使用本机 Docker PostgreSQL 与 Redis DB9。首次完整回归 1045 通过/1 失败，为另一个旧测试仍使用 35 分钟健康期限，更新为 37.5 分钟边界后全量通过。
 - 证据：`.runtime/sync-health-fixes/`（本地忽略目录）。无迁移、无真实 TikTok 调用、无线上数据库连接、未推送/发布。提交标题 `reporting: 按半个热报周期提前刷新目录`，实际哈希在阶段 2 记录。
+
+### 2026-10-21 同步健康修复阶段 2：共用账户当地日新鲜度
+
+- 阶段 1 提交：`f2d50b61`。
+- 将自动规则输入的日期候选与成功时间判断提取到 `reporting/freshness.py`，规则输入和健康巡检共同调用。当地零点后严格小于 SLO（20 分钟）时，允许昨天的 `last_success_at` 参与判断，且成功时间必须不早于 now−SLO；到 20 分钟即只判断今日。零点计算清零微秒，避免边界偏移。
+- 健康查询批量取得今日/昨日状态，按已发布成功时间判断新鲜度，与规则输入一致；新一轮状态本身不抹掉仍新鲜的成功事实。健康最老时间指标使用实际采纳的成功时间。账户/租户/BC 活跃范围不变。
+- 三时区 UTC/Asia-Shanghai/America-Los_Angeles（实际 IANA 名 `Asia/Shanghai`、`America/Los_Angeles`）覆盖零点、宽限前/等于/超过 20 分钟、成功时间等于/超过 20 分钟；每例同时断言规则和健康判定。修复前 9 failed/9 passed，修复后定向 70 passed。
+- 门禁：Ruff app/tests、ty app、4 个改动 Python 文件格式检查通过；mypy 与原始 499 条/74 文件基线比较无新增；真实本机 PostgreSQL/Redis 三模块全量 **1064 passed / 108.72s**。证据 `.runtime/sync-health-fixes/`。未连接线上、未调用真实 TikTok、未推送/发布。提交标题 `reporting: 共用跨日新鲜度避免零点误补拉`，实际哈希在阶段 3 记录。

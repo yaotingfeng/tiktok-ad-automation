@@ -17,19 +17,14 @@ from app.modules.automation_rules.catalog import RULE_METRICS
 from app.modules.automation_rules.schedule import due_at, next_run_at
 from app.modules.automation_rules.schemas import AccountScope, RuleDefinition
 from app.modules.automation_rules.statuses import hierarchy_statuses
+from app.modules.reporting.freshness import fresh_report_success
 from app.modules.reporting.material_value import (
     MATERIAL_WINDOW_VALUES_SQL,
     material_value_parameters,
     valuable_material_condition,
 )
 from app.modules.reporting.metric_catalog import STORED_KEYS
-from app.modules.reporting.planner import HOT_INTERVAL, MATERIAL_INTERVAL
 
-# 规则与实时事实共用 15 分钟轮次，并预留 5 分钟执行余量；超时仍跳过判断并通知缺数。
-FRESHNESS = {
-    "ad_day": HOT_INTERVAL + timedelta(minutes=5),
-    "material_day": MATERIAL_INTERVAL + timedelta(minutes=5),
-}
 _PAST = {"PAST_3_DAYS": 3, "PAST_5_DAYS": 5, "PAST_7_DAYS": 7}
 _LIFETIME_START = date(2000, 1, 1)
 _BUDGET_KEYS = ("budget", "daily_budget", "campaign_daily_budget")
@@ -208,18 +203,18 @@ def _fresh_accounts(
             "since": now.date() - timedelta(days=2),
         },
     )
-    success = {(r.advertiser_id, r.stat_date): r.last_success_at for r in rows}
+    success: dict[str, dict[date, datetime | None]] = defaultdict(dict)
+    for row in rows:
+        success[row.advertiser_id][row.stat_date] = row.last_success_at
     fresh, skipped = {}, []
     for adv, info in accounts.items():
-        local_now = now.astimezone(ZoneInfo(info.timezone))
-        days = [local_now.date()]
-        if local_now - local_now.replace(hour=0, minute=0, second=0) < FRESHNESS[kind]:
-            days.append(local_now.date() - timedelta(days=1))
-        latest = max(
-            (success[(adv, d)] for d in days if success.get((adv, d)) is not None),
-            default=None,
+        latest = fresh_report_success(
+            success[adv],
+            timezone=info.timezone,
+            kind=kind,
+            now=now,
         )
-        if latest is not None and latest >= now - FRESHNESS[kind]:
+        if latest is not None:
             fresh[adv] = info
         else:
             skipped.append({"advertiser_id": adv, "reason": "STALE_REPORT"})

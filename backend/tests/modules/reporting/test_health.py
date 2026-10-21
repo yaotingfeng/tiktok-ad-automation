@@ -441,3 +441,51 @@ def test_normal_hot_cycles_wait_for_directory_completion_without_ad_repairs(
         assert session.exec(select(ReportSyncJob)).all() == [job]
     # 规则账户每轮三层；普通账户广告每30分钟、上级每60分钟，规划频率不变。
     assert planned == ([3] * 12 if rule else [0, 1, 0, 3] * 3)
+
+
+@pytest.mark.parametrize("timezone", ["UTC", "Asia/Shanghai", "America/Los_Angeles"])
+@pytest.mark.parametrize(
+    "minutes,age,expected_stale",
+    [(0, 5, 0), (10, 20, 0), (10, 20.01, 1), (19.99, 5, 0), (20, 5, 1), (21, 5, 1)],
+)
+def test_midnight_health_uses_same_freshness_as_rules(
+    session, sync_seed, timezone, minutes, age, expected_stale
+):
+    from zoneinfo import ZoneInfo
+
+    from app.modules.accounts.models import AdvertiserAccount
+    from app.modules.automation_rules.inputs import AccountInfo, _fresh_accounts
+    from app.modules.reporting.health import measure_health
+
+    local_midnight = datetime(2026, 10, 21, tzinfo=ZoneInfo(timezone))
+    now = local_midnight.astimezone(UTC) + timedelta(minutes=minutes)
+    account = session.get(AdvertiserAccount, (sync_seed.tenant_id, "acc-2"))
+    account.timezone = timezone
+    planner.ensure_bc_plans(session, now=now, tenant_id=sync_seed.tenant_id)
+    plan = session.get(AdSyncBc, (sync_seed.tenant_id, "bc-a"))
+    plan.last_active_advertiser_ids, plan.active_screened_at = ["acc-2"], now
+    for kind in ("ad_day", "material_day"):
+        session.add(
+            ReportSyncState(
+                tenant_id=sync_seed.tenant_id,
+                advertiser_id="acc-2",
+                report_kind=kind,
+                stat_date=local_midnight.date() - timedelta(days=1),
+                status="COMPLETE",
+                last_success_at=now - timedelta(minutes=age),
+            )
+        )
+    session.flush()
+    metrics, _, repairs = measure_health(session, plan, now=now)
+    assert metrics["stale_ad_accounts"] == expected_stale
+    assert metrics["stale_material_accounts"] == expected_stale
+    for kind in ("ad_day", "material_day"):
+        fresh, _ = _fresh_accounts(
+            session,
+            tenant_id=sync_seed.tenant_id,
+            accounts={"acc-2": AccountInfo("acc-2", "bc-a", timezone, "USD", "A")},
+            kind=kind,
+            now=now,
+        )
+        assert bool(fresh) is (not expected_stale)
+    assert repairs["ad"] == ({"acc-2"} if expected_stale else set())
