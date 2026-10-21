@@ -191,8 +191,10 @@ lane_backend() {
 lane_frontend() {
   bun install --frozen-lockfile
   bun run --filter frontend build
-  cd frontend
   # 体验版：openapi 每个接口都必须有演示处理或写明豁免原因，避免生产加接口后体验版悄悄坏掉。
+  # openapi.json 不入库（.gitignore），按当前后端现场导出，与 scripts/generate-client.sh 同一方式。
+  (cd backend && uv run --frozen python -c 'import json; from pathlib import Path; from app.main import app; Path("../frontend/openapi.json").write_text(json.dumps(app.openapi()))')
+  cd frontend
   bun scripts/check-demo-coverage.mjs
   bun x playwright install chromium
   if [[ -n $fe_workspace ]]; then
