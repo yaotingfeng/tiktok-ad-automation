@@ -33,6 +33,9 @@ from app.modules.reporting.store_models import (
 from app.modules.tenants.permissions import require_tenant
 
 HOT_INTERVAL = timedelta(minutes=15)
+# 发布后目录年龄约为 15k−e 分钟，e 为上次刷新耗时。
+# 阈值放在相邻发布年龄的中间，配合包含等号的到期判断，e≤7.5 分钟时不会漂移。
+REFRESH_MARGIN = HOT_INTERVAL / 2
 RULE_SYNC_LEAD = timedelta(minutes=3)
 MATERIAL_INTERVAL = timedelta(minutes=15)
 HOUR_INTERVAL = timedelta(minutes=30)  # 小时趋势按需缓存，不占当前日止损热刷容量。

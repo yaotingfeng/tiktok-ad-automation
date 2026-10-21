@@ -290,15 +290,15 @@ def test_missing_object_is_read_immediately_without_refreshing_fresh_neighbors(
 @pytest.mark.parametrize(
     "age,rule,expected",
     [
-        (24, False, 0),
-        (26, False, 1),
-        (54, False, 1),
-        (56, False, 3),
-        (9, True, 0),
-        (11, True, 3),
+        (22, False, 0),
+        (22.5, False, 1),
+        (52, False, 1),
+        (52.5, False, 3),
+        (7, True, 0),
+        (7.5, True, 3),
     ],
 )
-def test_layer_refresh_intervals_include_five_minute_execution_margin(
+def test_layer_refresh_intervals_include_half_hot_interval_margin(
     session, sync_seed, monkeypatch, age, rule, expected
 ):
     from app.modules.automation_rules.models import AutomationRule

@@ -174,15 +174,15 @@ def test_general_directory_refresh_starts_before_freshness_deadline(
     assert measure_health(session, plan, now=now)[0]["missing_directory_ads"] == 0
     assert refresh_report_directory(session, job, now=now) == 1
     assert refresh_report_directory(session, job, now=now) == 0
-    # 规划提前量与完成余量分开：等待中的35分钟边界健康，超过仍须告警。
+    # 规划提前量与完成余量分开：等待中的37.5分钟边界健康，超过仍须告警。
     assert (
-        measure_health(session, plan, now=now + timedelta(minutes=9))[0][
+        measure_health(session, plan, now=now + timedelta(minutes=11.5))[0][
             "missing_directory_ads"
         ]
         == 0
     )
     assert (
-        measure_health(session, plan, now=now + timedelta(minutes=10))[0][
+        measure_health(session, plan, now=now + timedelta(minutes=12))[0][
             "missing_directory_ads"
         ]
         == 1

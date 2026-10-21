@@ -306,18 +306,18 @@ def test_health_allows_realtime_cycle_and_execution_margin(
     "kind,age,rule,missing",
     [
         ("ad", 35, False, 0),
-        ("ad", 36, False, 1),
+        ("ad", 38, False, 1),
         ("adgroup", 31, False, 0),
         ("adgroup", 65, False, 0),
-        ("adgroup", 66, False, 1),
+        ("adgroup", 68, False, 1),
         ("campaign", 65, False, 0),
-        ("campaign", 66, False, 1),
+        ("campaign", 68, False, 1),
         ("ad", 20, True, 0),
-        ("ad", 21, True, 1),
+        ("ad", 23, True, 1),
         ("adgroup", 20, True, 0),
-        ("adgroup", 21, True, 1),
+        ("adgroup", 23, True, 1),
         ("campaign", 20, True, 0),
-        ("campaign", 21, True, 1),
+        ("campaign", 23, True, 1),
     ],
 )
 def test_directory_health_allows_layer_cycle_and_execution_margin(
@@ -352,9 +352,10 @@ def test_directory_health_allows_layer_cycle_and_execution_margin(
         assert "acc-2" in repairs["ad"]
 
 
+@pytest.mark.parametrize("elapsed", [0.5, 1, 4, 5, 6, 7, 7.5])
 @pytest.mark.parametrize("rule", [False, True])
 def test_normal_hot_cycles_wait_for_directory_completion_without_ad_repairs(
-    session, sync_seed, monkeypatch, rule
+    session, sync_seed, monkeypatch, rule, elapsed
 ):
     from app.core.config import settings
     from app.modules.ads.models import AdObject
@@ -371,8 +372,8 @@ def test_normal_hot_cycles_wait_for_directory_completion_without_ad_repairs(
     start = datetime.now(UTC).replace(hour=10, minute=0, second=0, microsecond=0)
     job = prepared(session, sync_seed, day=start.date())
     job.status = "COMPLETE"
-    # 第一轮目录在热报后1分钟完成，后续延后4分钟，覆盖年龄超过周期的正常窗口。
-    directory_objects(session, sync_seed, start + timedelta(minutes=1))
+    # 模拟每次发布后完成目录，覆盖半周期边界并连续验证多轮不漂移。
+    directory_objects(session, sync_seed, start + timedelta(minutes=elapsed))
     objects = {
         obj.kind: obj
         for obj in session.exec(
@@ -409,7 +410,14 @@ def test_normal_hot_cycles_wait_for_directory_completion_without_ad_repairs(
         states.append(state)
     session.flush()
     planned = []
-    for minute in range(2, 65):
+    moments = sorted(
+        {
+            base + offset
+            for base in range(15, 181, 15)
+            for offset in (0, elapsed - 0.01, elapsed)
+        }
+    )
+    for minute in moments:
         now = start + timedelta(minutes=minute)
         if minute % 15 == 0:
             # 模拟正常热报发布：报表保持新鲜，只有目录延迟可能触发多余补拉。
@@ -418,7 +426,7 @@ def test_normal_hot_cycles_wait_for_directory_completion_without_ad_repairs(
             plan.active_screened_at = now
             session.flush()
             planned.append(refresh_report_directory(session, job, now=now))
-        if minute % 15 == 4:
+        if abs(minute % 15 - elapsed) < 0.000001:
             for run in runs_for(session, sync_seed):
                 if run.status == "QUEUED":
                     run.status = "COMPLETE"
@@ -432,4 +440,4 @@ def test_normal_hot_cycles_wait_for_directory_completion_without_ad_repairs(
         assert health.last_repair_at is None
         assert session.exec(select(ReportSyncJob)).all() == [job]
     # 规则账户每轮三层；普通账户广告每30分钟、上级每60分钟，规划频率不变。
-    assert planned == ([3, 3, 3, 3] if rule else [0, 1, 0, 3])
+    assert planned == ([3] * 12 if rule else [0, 1, 0, 3] * 3)

@@ -26,7 +26,6 @@ from app.modules.reporting.store_models import ReportSyncJob
 MAX_REFRESH_ADS = 100
 STATUS_INTERVAL = timedelta(minutes=30)
 PARENT_INTERVAL = timedelta(minutes=60)
-REFRESH_MARGIN = timedelta(minutes=5)
 _AD_TYPES = {
     "UPGRADED_SMART_PLUS": "SMART_PLUS",
     "SMART_PLUS": "LEGACY_SMART_PLUS",
@@ -72,6 +71,8 @@ def refresh_report_directory(
     """只选本任务账户当地今日有消耗对象，按账户、类型、层级对齐刷新轮次。"""
     if not settings.ADS_SYNC_ENABLED or job.kind != "ad_day" or job.priority != 1:
         return 0
+    from app.modules.reporting.planner import REFRESH_MARGIN
+
     now = now or datetime.now(UTC)
     # 先取得规划锁再读取目录年龄和在途运行，保证并发发布看到前一事务的完整计划。
     # 只约束热报规划；用户操作后的回读仍走既有独立路径。
@@ -144,7 +145,7 @@ def refresh_report_directory(
             directory_interval(kind, has_rules=advertiser in strict_accounts)
             - REFRESH_MARGIN
         )
-        if any(at is not None and at < cutoff for at in observations.values()):
+        if any(at is not None and at <= cutoff for at in observations.values()):
             expired_layers.add((advertiser, kind))
     refs_by_type: dict[str, list[EntityRef]] = defaultdict(list)
     types: dict[str, dict[str, set[str]]] = defaultdict(lambda: defaultdict(set))

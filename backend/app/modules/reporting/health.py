@@ -14,7 +14,6 @@ from app.jobs.celery_app import celery_app
 from app.jobs.outbox import enqueue_after_commit
 from app.modules.reporting.directory_refresh import (
     PARENT_INTERVAL,
-    REFRESH_MARGIN,
     STATUS_INTERVAL,
     directory_interval,
     rule_accounts,
@@ -22,6 +21,7 @@ from app.modules.reporting.directory_refresh import (
 from app.modules.reporting.jobs import enqueue_job
 from app.modules.reporting.planner import (
     HOT_INTERVAL,
+    REFRESH_MARGIN,
     _common,
     _group_by_window,
     _hot_window,
@@ -38,7 +38,7 @@ from app.modules.reporting.store_models import (
 
 logger = logging.getLogger(__name__)
 # 一个实时轮次外加执行余量，避免正常等待下一轮被健康修复反复补拉。
-SLO = HOT_INTERVAL + REFRESH_MARGIN
+SLO = HOT_INTERVAL + timedelta(minutes=5)
 REPAIR_INTERVAL = timedelta(minutes=2)
 MAX_REPAIR_ACCOUNTS = 50
 
