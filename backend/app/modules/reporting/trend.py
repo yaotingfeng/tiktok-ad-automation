@@ -144,7 +144,11 @@ def build_trend(
         posts = [
             key
             for key, vid in post_video_map(
-                session, tenant_id=context.tenant_id, advertisers=sorted(scope)
+                session,
+                tenant_id=context.tenant_id,
+                advertisers=sorted(scope),
+                start=start,
+                end=end,
             ).items()
             if vid in ids
         ]
