@@ -3262,6 +3262,10 @@ test("material login pending prevents duplicate clicks and cannot cross tenant s
   const entry = page.getByRole("button", { name: "素材制作", exact: true })
   await entry.click()
   await expect(entry).toBeDisabled()
+  await expect(entry).toHaveAttribute("aria-busy", "true")
+  await expect(
+    page.getByText("正在登录素材工作台…", { exact: true }),
+  ).toBeVisible()
   await expect
     .poll(() => requests.filter((r) => r.path.endsWith("/login-link")).length)
     .toBe(1)
@@ -3276,6 +3280,79 @@ test("material login pending prevents duplicate clicks and cannot cross tenant s
   await expect(entry).toBeEnabled()
   await expect(page).toHaveURL((url) => url.pathname.includes(`/tenants/${B}/`))
   expect(requests.filter((r) => r.path.endsWith("/login-link"))).toHaveLength(1)
+})
+
+test("material login keeps feedback while the destination is loading", async ({
+  page,
+}) => {
+  const { requests } = await boundary(page)
+  let release!: () => void
+  const destination = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  await page.route(
+    "https://manjumt.gzjunbo.net/api/login-links/consume?**",
+    async (route) => {
+      await destination
+      await route.fulfill({ contentType: "text/html", body: "素材工作台" })
+    },
+  )
+  await page.goto(`/tenants/${A}/accounts`)
+  const entry = page.getByRole("button", { name: "素材制作", exact: true })
+  try {
+    await entry.click({ noWaitAfter: true })
+    // Playwright locator 会等待待提交导航；直接检查仍可见的旧文档。
+    await expect
+      .poll(() =>
+        page.evaluate(() => ({
+          text: document.body.innerText.includes("正在打开素材工作台…"),
+          busy: document
+            .querySelector('[aria-label="素材制作"]')
+            ?.getAttribute("aria-busy"),
+          disabled: document.querySelector<HTMLButtonElement>(
+            '[aria-label="素材制作"]',
+          )?.disabled,
+        })),
+      )
+      .toEqual({ text: true, busy: "true", disabled: true })
+    expect(requests.filter((r) => r.path.endsWith("/login-link"))).toHaveLength(
+      1,
+    )
+  } finally {
+    release()
+  }
+  await expect(page).toHaveURL(/manjumt\.gzjunbo\.net/)
+})
+
+test("material login times out with feedback and ignores a late response", async ({
+  page,
+}) => {
+  let release!: () => void
+  const delayedLogin = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  const { requests } = await boundary(page, { delayedLogin })
+  await page.goto(`/tenants/${A}/accounts`)
+  await page.clock.install()
+  const entry = page.getByRole("button", { name: "素材制作", exact: true })
+  await entry.click()
+  await expect
+    .poll(() => requests.filter((r) => r.path.endsWith("/login-link")).length)
+    .toBe(1)
+  const aborted = page.waitForEvent("requestfailed", {
+    predicate: (request) =>
+      request.url().endsWith("/material-production/login-link"),
+  })
+  await page.clock.fastForward(25_001)
+  await aborted
+  await expect(
+    page.getByText("登录素材工作台超时，请稍后重试", { exact: true }),
+  ).toBeVisible()
+  await expect(entry).toBeEnabled()
+  release()
+  await expect(page).toHaveURL(
+    (url) => url.pathname === `/tenants/${A}/accounts`,
+  )
 })
 
 test("material login failure stays in workspace and can retry", async ({

@@ -23,7 +23,11 @@ export function workspaceNavigation({
 }: {
   prefix?: string
   manage: boolean
-  materialProduction?: { open: () => void; pending: boolean }
+  materialProduction?: {
+    open: () => void
+    pending: boolean
+    pendingLabel: string
+  }
 }): NavGroup[] {
   return [
     {
@@ -36,6 +40,9 @@ export function workspaceNavigation({
                 title: "素材制作",
                 onClick: materialProduction.open,
                 disabled: materialProduction.pending,
+                pendingLabel: materialProduction.pending
+                  ? materialProduction.pendingLabel
+                  : undefined,
               },
             ]
           : []),

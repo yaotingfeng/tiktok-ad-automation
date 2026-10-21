@@ -1,5 +1,5 @@
 import { Link as RouterLink, useRouterState } from "@tanstack/react-router"
-import type { LucideIcon } from "lucide-react"
+import { Loader2, type LucideIcon } from "lucide-react"
 
 import {
   SidebarGroup,
@@ -17,6 +17,7 @@ export type Item = {
   path?: string
   onClick?: () => void
   disabled?: boolean
+  pendingLabel?: string
 }
 
 export type NavGroup = {
@@ -62,6 +63,8 @@ export function Main({ items, label }: MainProps) {
                   aria-current={isActive ? "page" : undefined}
                   asChild={!!item.path}
                   disabled={item.disabled}
+                  aria-label={item.pendingLabel ? item.title : undefined}
+                  aria-busy={item.pendingLabel ? true : undefined}
                   onClick={
                     item.path
                       ? undefined
@@ -78,8 +81,12 @@ export function Main({ items, label }: MainProps) {
                     </RouterLink>
                   ) : (
                     <>
-                      <item.icon />
-                      <span>{item.title}</span>
+                      {item.pendingLabel ? (
+                        <Loader2 className="animate-spin" />
+                      ) : (
+                        <item.icon />
+                      )}
+                      <span>{item.pendingLabel ?? item.title}</span>
                     </>
                   )}
                 </SidebarMenuButton>
