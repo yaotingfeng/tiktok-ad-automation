@@ -136,6 +136,49 @@ def test_snapshot_preserves_coverage_and_versions(report_case):
     assert snapshot.naming_versions
 
 
+def test_naming_versions_handle_more_campaigns_than_bind_parameter_limit(report_case):
+    """历史系列超过 PostgreSQL 65535 绑定参数上限时，快照名称版本仍按最新修订读取。"""
+    from app.modules.reporting.queries import snapshot_naming_versions
+
+    case = report_case
+    ref = case.seed_campaign("P-Old", "report-account", 1, 2)
+    append_campaign_name_projection(
+        case.session, campaign_ref=ref, raw_name="P-Old", parser_revision=1
+    )
+    latest = append_campaign_name_projection(
+        case.session, campaign_ref=ref, raw_name="P-New", parser_revision=1
+    )
+    case.session.flush()
+    # 生产事故规模：788 个账户与 69,228 个系列逐项绑定共 70,016 个参数。
+    pairs = [(f"adv-{i % 788}", f"missing-{i}") for i in range(69_228)]
+    pairs.append((ref.advertiser_id, ref.remote_id))
+    versions = snapshot_naming_versions(
+        case.session, tenant_id=case.context.tenant_id, campaigns=tuple(pairs)
+    )
+    assert versions == {
+        "directory": 1,
+        f"{ref.advertiser_id}:{ref.remote_id}": latest.name_revision,
+    }
+
+
+def test_page_objects_handle_more_ids_than_bind_parameter_limit(report_case):
+    """剧名等维度一页可涉及数万个系列；分页读取目录对象不能因参数上限失败。"""
+    from app.modules.reporting.dimension_query import _page_objects
+
+    case = report_case
+    ref = case.seed_campaign("P-Drama", "report-account", 1, 2)
+    ids = [f"missing-{i}" for i in range(70_000)] + [ref.remote_id]
+    objects = _page_objects(
+        case.session,
+        tenant_id=case.context.tenant_id,
+        advertisers=[ref.advertiser_id],
+        kind="campaign",
+        ids=ids,
+        parents={},
+    )
+    assert set(objects) == {(ref.advertiser_id, "campaign", ref.remote_id)}
+
+
 def test_rename_keeps_old_snapshot_and_new_query_regroups(report_case):
     case = report_case
     ref = case.seed_campaign("P-Old", "report-account", 1, 2)

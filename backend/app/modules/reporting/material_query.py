@@ -22,6 +22,7 @@ from app.modules.reporting.dimension_query import (
     COMPLETE_COVERAGE_STATUSES,
     _aggregate,
     _coverage,
+    any_of,
     empty_metric_values,
     fact_vector,
     merge_metric_buckets,
@@ -78,7 +79,7 @@ def materialize_material_rows(
                 AdMaterialReference.tenant_id == tenant_id,
                 col(AdMaterialReference.advertiser_id).in_(scope),
                 col(AdMaterialReference.complete).is_(True),
-                col(AdMaterialReference.platform_material_id).in_(sorted(videos)),
+                any_of(col(AdMaterialReference.platform_material_id), videos),
             )
         ).all()
         if videos

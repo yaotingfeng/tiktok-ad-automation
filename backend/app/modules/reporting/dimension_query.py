@@ -11,9 +11,10 @@ from hashlib import sha256
 from typing import Any, cast
 from uuid import UUID
 
-from sqlalchemy import func
+from sqlalchemy import Text, any_, bindparam, func
 from sqlalchemy import select as sql_select
-from sqlalchemy.dialects.postgresql import aggregate_order_by
+from sqlalchemy.dialects.postgresql import ARRAY, aggregate_order_by
+from sqlalchemy.sql import ColumnElement
 from sqlmodel import Session, col, select
 
 from app.core.context import TenantContext
@@ -209,7 +210,7 @@ def _aggregate(
             model.stat_date >= start,
             model.stat_date <= end,
             # 分页补全只读页面对象的事实。
-            *([] if ids is None else [col(getattr(model, group_cols[1])).in_(ids)]),
+            *([] if ids is None else [any_of(col(getattr(model, group_cols[1])), ids)]),
         )
         .group_by(*columns, col(model.currency))
     )
@@ -270,6 +271,18 @@ def empty_metric_values(states, *, advertiser, filters, kind="ad_day"):
         == "COMPLETE"
     )
     return {name: Decimal(0) if complete else None for name in METRIC_COLUMNS}
+
+
+def any_of(column: Any, values: Iterable[str]) -> ColumnElement[bool]:
+    """以单个数组参数匹配对象身份列表（column = ANY(:ids)）。
+
+    报表页的系列/广告/素材身份来自查询结果，大租户一页即可涉及数万个；
+    IN 列表逐项绑定会超过 PostgreSQL 65535 个参数上限而使整页失败。
+    """
+    return cast(
+        ColumnElement[bool],
+        column == any_(bindparam(None, sorted(set(values)), type_=ARRAY(Text))),
+    )
 
 
 def latest_projections(
@@ -571,7 +584,7 @@ def materialize_rows(
             select(CampaignNameProjection).where(
                 CampaignNameProjection.tenant_id == tenant_id,
                 col(CampaignNameProjection.advertiser_id).in_(advertisers),
-                col(CampaignNameProjection.campaign_remote_id).in_(campaign_ids),
+                any_of(col(CampaignNameProjection.campaign_remote_id), campaign_ids),
             )
         ).all()
         if campaign_ids
@@ -722,7 +735,7 @@ def _page_objects(
                 AdObject.tenant_id == tenant_id,
                 col(AdObject.advertiser_id).in_(advertisers),
                 AdObject.kind == current,
-                col(AdObject.remote_id).in_(remote_ids),
+                any_of(col(AdObject.remote_id), remote_ids),
             )
         ).all():
             objects[(obj.advertiser_id, obj.kind, obj.remote_id)] = obj

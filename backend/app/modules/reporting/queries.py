@@ -15,15 +15,13 @@ from typing import Any
 from uuid import UUID, uuid4
 
 from fastapi import HTTPException
-from sqlalchemy import func
+from sqlalchemy import func, text
 from sqlmodel import Session, col, select
 
 from app.core.context import TenantContext
 from app.core.db import engine
 from app.modules.accounts.models import TenantBC
-from app.modules.ads.models import CampaignNameProjection
 from app.modules.reporting.dimension_query import (
-    latest_projections,
     materialize_rows,
     metric_vector,
 )
@@ -208,25 +206,9 @@ def _build_snapshot(
         bc_id=bc_id,
         filters=filters,
     )
-    naming_versions = {"directory": 1}
-    if totals.naming_campaigns:
-        projections = latest_projections(
-            session.exec(
-                select(CampaignNameProjection).where(
-                    CampaignNameProjection.tenant_id == context.tenant_id,
-                    col(CampaignNameProjection.advertiser_id).in_(
-                        {item[0] for item in totals.naming_campaigns}
-                    ),
-                    col(CampaignNameProjection.campaign_remote_id).in_(
-                        {item[1] for item in totals.naming_campaigns}
-                    ),
-                )
-            ).all()
-        )
-        for key in totals.naming_campaigns:
-            if key in projections:
-                naming_versions[f"{key[0]}:{key[1]}"] = projections[key].name_revision
-    snapshot.naming_versions = naming_versions
+    snapshot.naming_versions = snapshot_naming_versions(
+        session, tenant_id=context.tenant_id, campaigns=totals.naming_campaigns
+    )
     snapshot.total = totals.total
     snapshot.summary = _summary(totals, dimension=filters.dimension)
     snapshot.coverage = {
@@ -364,3 +346,42 @@ def query_ads(
         cursor=cursor,
         limit=limit,
     )
+
+
+def snapshot_naming_versions(
+    session: Session, *, tenant_id: UUID, campaigns: tuple[tuple[str, str], ...]
+) -> dict[str, int]:
+    """记录快照内每个系列当时的最新名称修订，供后续选择/导出校验改名。
+
+    大租户的历史系列可达数万个，逐项绑定会超过 PostgreSQL 65535 个参数上限，
+    使整个报表查询失败。因此账户与系列各以一个数组参数传入，按精确
+    (账户, 系列) 对关联，并在库内按 grouping/name 修订及观测时间取最新一条，
+    排序规则与 latest_projections 一致。
+    """
+    naming_versions = {"directory": 1}
+    if not campaigns:
+        return naming_versions
+    rows = session.connection().execute(
+        text(
+            """
+            SELECT DISTINCT ON (p.advertiser_id, p.campaign_remote_id)
+                p.advertiser_id, p.campaign_remote_id, p.name_revision
+            FROM unnest(CAST(:advertisers AS text[]), CAST(:campaigns AS text[]))
+                AS k(advertiser_id, campaign_remote_id)
+            JOIN campaign_name_projection p
+              ON p.tenant_id = :tenant_id
+             AND p.advertiser_id = k.advertiser_id
+             AND p.campaign_remote_id = k.campaign_remote_id
+            ORDER BY p.advertiser_id, p.campaign_remote_id,
+                p.grouping_revision DESC, p.name_revision DESC, p.observed_at DESC
+            """
+        ),
+        {
+            "tenant_id": tenant_id,
+            "advertisers": [advertiser for advertiser, _ in campaigns],
+            "campaigns": [campaign for _, campaign in campaigns],
+        },
+    )
+    for advertiser, campaign, revision in rows:
+        naming_versions[f"{advertiser}:{campaign}"] = revision
+    return naming_versions
