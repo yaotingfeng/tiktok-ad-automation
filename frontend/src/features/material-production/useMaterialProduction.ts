@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react"
 import { toast } from "sonner"
 import { MaterialProductionService } from "@/client"
 import { errorMessage } from "@/features/tenants/shared"
+import { assignLocation } from "@/lib/browser-navigation"
 
 export function useMaterialProduction(tenantId?: string) {
   const [stage, setStage] = useState<"idle" | "requesting" | "redirecting">(
@@ -80,7 +81,7 @@ export function useMaterialProduction(tenantId?: string) {
       // 跨站导航会暂停旧页更新，先让提示组件提交本轮渲染。
       await new Promise<void>((resolve) => setTimeout(resolve, 0))
       if (request.signal.aborted || currentTenant.current !== tenantId) return
-      window.location.assign(target.href)
+      assignLocation(target.href)
       // assign 返回时新页面尚未加载，继续保留提示和防重复点击状态。
       navigating = true
     } catch (error) {

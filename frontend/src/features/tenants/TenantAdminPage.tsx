@@ -174,6 +174,12 @@ export function TenantAdminPage() {
           </p>
         </div>
         <div className="flex gap-2">
+          {/* 体验版是独立的静态演示站，全部使用演示数据，链接可直接发给没有账号的人。 */}
+          <Button variant="outline" asChild>
+            <a href="/demo/" target="_blank" rel="noopener">
+              打开体验版
+            </a>
+          </Button>
           <Button variant="outline" asChild>
             <Link to="/admin">用户管理</Link>
           </Button>

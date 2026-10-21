@@ -192,8 +192,11 @@ lane_frontend() {
   bun install --frozen-lockfile
   bun run --filter frontend build
   cd frontend
+  # 体验版：openapi 每个接口都必须有演示处理或写明豁免原因，避免生产加接口后体验版悄悄坏掉。
+  bun scripts/check-demo-coverage.mjs
   bun x playwright install chromium
   if [[ -n $fe_workspace ]]; then
+    bun x playwright test --config=playwright.demo.config.ts --reporter=list
     # 工作台用例只依赖页面内模拟接口，可并行；浏览器验收共用真实后端，保持串行。
     # 页面由 vite preview 提供构建产物（见 playwright.config.ts），多 worker 不再争用编译 CPU。
     bun x playwright test --project workspace --project workspace-source --reporter=list --workers="${CHECK_BROWSER_WORKERS:-3}"

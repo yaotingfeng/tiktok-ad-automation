@@ -23,6 +23,16 @@ To serve the frontend with FastAPI, run `bun run build` from the `frontend` dire
 
 Check `frontend/package.json` to see the other available commands.
 
+## 引导式体验版（/demo/）
+
+体验版是同一套页面的独立构建：入口 `demo/index.html` → `src/demo/main.tsx`，所有接口由浏览器内假后端（`src/demo/handlers`）就地应答，不连接任何后端或 TikTok，链接可公开分享。`bun run build` 会同时产出 `backend/app/frontend/demo/`，由后端以 `/demo/` 提供；平台租户管理页有“打开体验版”入口。
+
+- 本地开发：`bun run dev:demo`，打开 <http://localhost:5180/demo/>。
+- 接口变化后：`bun run generate-client` 之后运行 `bun run demo:operations`，并为新接口在 `src/demo/handlers` 注册演示处理（确实无需演示的写入 `src/demo/coverage-exemptions.ts` 并注明原因）；`bun run demo:coverage` 检查覆盖。
+- 端到端检查：`bun x playwright test --config=playwright.demo.config.ts`（隔离、逐页巡检、主线引导全程）。
+- 改动页面文案时注意 `src/demo/tour/tours.ts` 按可见文字定位，端到端检查会发现失效的引导步骤。
+- 体验版结果只是演示，不能作为任何真实联调或验收证据。
+
 ## Removing the Frontend
 
 If you are developing an API-only app and want to remove the frontend, you can do it easily:

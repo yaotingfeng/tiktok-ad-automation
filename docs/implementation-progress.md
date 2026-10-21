@@ -3407,3 +3407,10 @@ CI affected后端1017项通过、0失败/0并行不稳定，Ruff/ty通过；前�
 - 快照复用未做：目录版本为全局序列、实时同步频繁变化，几乎不会命中，且管理操作后可能短暂沿用旧成员。
 - 验证：reporting/ad_management/automation_rules/ads 1225 项通过（新增搜索、快速路径与完整路径一致等用例，去掉搜索并入后 5 项失败）；前端构建、Biome、广告报表 Playwright 67 项通过。
 - 素材维度：新增迁移 `0043_material_video_index`（`ad_material_reference (tenant_id, platform_material_id) WHERE complete`），默认口径下帖子按主键逐条查对照视频，使用位置只读当天有数据的视频及未对上视频的帖子所对照的广告位置，不再整租户扫描约 776 万条使用记录。勾选「显示无数据对象」时素材维度仍读全部使用位置，预计仍慢。本地 1228 项与迁移结构检查通过；生产耗时待发布后实测。含迁移，发布走完整备份流程。
+
+### 2026-10-21 引导式体验版（/demo/）
+
+- 设计：`docs/superpowers/specs/2026-10-21-guided-demo-mode-design.md`；计划：`docs/superpowers/plans/2026-10-21-guided-demo-mode.md`。用户授权实施者自行决定细节并直接实施。
+- 实现：同一套前端的独立构建（`frontend/vite.demo.config.ts`，产物 `backend/app/frontend/demo/`）。生成客户端换成浏览器内适配器，202 个 openapi 操作全部有演示处理（`frontend/src/demo/handlers`），覆盖检查脚本接入 CI。隔离：内存 localStorage/sessionStorage、IndexedDB 库名加前缀并在启动时清空、fetch/XHR 只放行演示地址、请求地址为 `demo://` 打不到 `/api`、整页跳转经 `src/lib/browser-navigation.ts` 改为站内模拟。外壳与引导：一键进入、38 步主线引导（授权→版权方→素材上传→策略→批量搭建提交→报表→批量改预算→操作记录→自动规则）、每页“本页怎么用”、重置。生产改动仅：应用装配抽到 `src/app.tsx`、五处 `window.location.assign` 改走 `assignLocation`、平台租户管理页“打开体验版”按钮。
+- 验证：生产与体验版构建通过，生产产物无体验版标识；后端 `/demo/` 返回体验版页面；体验版 Playwright 3 项通过（隔离含生产 token 不被读写、16 页巡检无未覆盖、主线引导全程跑通且新搭建广告出现在报表）；现有工作台用例 591 项中 590 通过，`tenants-accounts` “retry failed material provisioning” 在 4 worker 并行时偶发失败、单独重复 8 次均通过。未发布。
+

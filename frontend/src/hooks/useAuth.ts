@@ -8,6 +8,7 @@ import {
   UsersService,
 } from "@/client"
 import { clearApiFeedback } from "@/lib/api-feedback"
+import { assignLocation } from "@/lib/browser-navigation"
 import { consumeLoginReturn } from "@/lib/login-return"
 import { handleError } from "@/utils"
 import useCustomToast from "./useCustomToast"
@@ -56,7 +57,7 @@ const useAuth = () => {
     onSuccess: () => {
       const returnTo = consumeLoginReturn()
       clearApiFeedback()
-      if (returnTo) window.location.assign(returnTo)
+      if (returnTo) assignLocation(returnTo)
       else navigate({ to: "/" })
     },
     onError: handleError.bind(showErrorToast),

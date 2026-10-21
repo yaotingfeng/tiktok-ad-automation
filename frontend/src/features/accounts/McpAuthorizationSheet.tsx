@@ -19,6 +19,7 @@ import {
   RequestError,
 } from "@/features/tenants/shared"
 import { useTenantScope } from "@/features/tenants/TenantScope"
+import { assignLocation } from "@/lib/browser-navigation"
 import { bindingLabels } from "./presentation"
 
 const PAGE_SIZE = 50
@@ -155,7 +156,7 @@ export function McpAuthorizationSheet({
         target.port
       )
         throw new Error("授权地址无法核实")
-      window.location.assign(target.href)
+      assignLocation(target.href)
     },
   })
   useEffect(() => {
@@ -262,7 +263,7 @@ export function McpAuthorizationSheet({
                 </FieldDescription>
                 {selected.length > MAX_SELECTED_BCS && (
                   <Alert variant="destructive">
-                  <AlertTitle>可见 BC 超过单次接入上限</AlertTitle>
+                    <AlertTitle>可见 BC 超过单次接入上限</AlertTitle>
                     <AlertDescription>
                       每次最多自动接入 {MAX_DIRECTORY_BCS} 个 BC，当前有{" "}
                       {selected.length} 个。

@@ -1,4 +1,5 @@
 import { AxiosError } from "axios"
+import { assignLocation } from "./browser-navigation"
 import { rememberLoginReturn } from "./login-return"
 
 export const PERMISSION_MESSAGE =
@@ -30,7 +31,7 @@ export function handleApiError(error: Error) {
         window.location.pathname + window.location.search,
         true,
       )
-      window.location.assign("/login")
+      assignLocation("/login")
     }
   } else if (error.response?.status === 403) {
     permissionMessage = PERMISSION_MESSAGE

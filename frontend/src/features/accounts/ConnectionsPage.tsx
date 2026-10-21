@@ -19,6 +19,7 @@ import {
   useRetainedData,
 } from "@/features/tenants/shared"
 import { useTenantScope } from "@/features/tenants/TenantScope"
+import { assignLocation } from "@/lib/browser-navigation"
 import { McpAuthorizationSheet } from "./McpAuthorizationSheet"
 import {
   authorizationName,
@@ -567,7 +568,7 @@ function ConnectionAction({
           )
         )
           throw new Error("invalid_authorization_url")
-        window.location.assign(target.href)
+        assignLocation(target.href)
       }
     },
   })

@@ -1,0 +1,10 @@
+// 体验版假后端入口：导入即注册全部领域的处理函数。
+import "./session"
+import "./accounts-providers"
+import "./materials"
+import "./builds"
+import "./builds-submissions"
+import "./strategies-admin"
+import "./ads"
+import "./ads-management"
+import "./automation"
