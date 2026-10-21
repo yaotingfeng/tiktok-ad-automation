@@ -733,6 +733,7 @@ export function AdsWorkspace() {
                     allMatching: ads.selection.allMatching,
                     total: ads.query.data?.total ?? 0,
                     dimension: dimension.value,
+                    dataOnly: !applied.include_empty,
                     readonly: roleReadonly,
                     busy: selectionMutation.isPending || !ads.snapshot,
                     onAction: (action) => startManagementAction(action),

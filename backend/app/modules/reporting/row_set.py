@@ -371,6 +371,75 @@ def _obj_ctes(filters: ReportingFilter, chain: Sequence[tuple[str, str | None]])
     return ",\n".join([*parts, f"obj AS ({union})"])
 
 
+def _search_terms(filters: ReportingFilter) -> list[str]:
+    return [word.lower() for word in (filters.query or "").split()]
+
+
+def _metrics_only(filters: ReportingFilter) -> bool:
+    """快照成员只由报表事实决定、可跳过目录与名称投影的查询。
+
+    默认口径下系列/广告组/广告的成员即有事实的对象；没有搜索、目录筛选、
+    命名筛选，也不按名称或配置排序时，快照只需事实与指标。名称与上级在
+    翻页补全时只为当前页读取（materialize_rows），页面显示不变。
+    """
+    return (
+        filters.dimension in ("campaign", "adgroup", "ad")
+        and not filters.include_empty
+        and not filters.ids
+        and not _search_terms(filters)
+        and not filters.naming_status
+        and _null_entity_matches(filters)
+        and filters.sort_by not in NAME_SORT_FIELDS | CONFIG_SORT_FIELDS
+    )
+
+
+_EMPTY_OBJ = f"obj AS ({_obj_select('FALSE')})"
+_EMPTY_PROJ = """proj AS (
+        SELECT NULL::text AS adv, NULL::text AS cid, NULL::text AS provider_label,
+            NULL::text AS drama_name, NULL::text AS status WHERE FALSE
+    )"""
+
+
+def _dir_hits(filters: ReportingFilter, params: _Params, kind: str) -> str | None:
+    """搜索/ID 筛选命中的目录对象（含所选日期无数据的），默认口径下并入行身份。
+
+    用户按名称或 ID 找对象时不应因为当天没有数据就找不到。ID 匹配对象自身或
+    直接上级（下钻只下一级）；关键词匹配对象自身名称或 ID（长数字按完整 ID），
+    账户名、上级名等只对有数据的行生效。
+    """
+    if filters.include_empty:
+        return None
+    conditions = []
+    if filters.ids:
+        ids = params.add("ids", list(filters.ids))
+        conditions.append(
+            f"(remote_id = ANY(CAST({ids} AS text[])) "
+            f"OR parent_remote_id = ANY(CAST({ids} AS text[])))"
+        )
+    tokens = _search_terms(filters)
+    if tokens:
+        # 粘贴的平台 ID（长数字）按主键精确查找；名称关键词只能扫描该层级目录
+        # （库为 C 字符集，三元组索引会丢弃中文，帮不上忙）。
+        platform_ids = [
+            token for token in tokens if token.isdigit() and len(token) >= 10
+        ]
+        if platform_ids:
+            conditions.append(
+                f"remote_id = ANY(CAST({params.add('platform_ids', platform_ids)} AS text[]))"
+            )
+        conditions.append(
+            f"NOT EXISTS (SELECT 1 FROM unnest(CAST({params.add('tokens', tokens)} AS text[])) "
+            "AS q(token) WHERE strpos(lower(concat_ws(' ', remote_id, name)), q.token) = 0)"
+        )
+    if not conditions:
+        return None
+    return f"""dir_hits AS (
+        SELECT advertiser_id AS adv, remote_id AS rid FROM ad_object
+        WHERE tenant_id = :tenant AND advertiser_id = ANY(:advs) AND kind = '{kind}'
+          AND {" AND ".join(conditions)}
+    )"""
+
+
 def _member_buckets(members: str, *, unsupported: frozenset[str]) -> str:
     """成员级指标桶：有事实取事实合计，否则按覆盖填 0 或空（用户裁定）。"""
     values = ", ".join(
@@ -494,6 +563,7 @@ def _dimension_rows(
     )
     entity_filter = _entity_conditions(filters, params, e="e", p="p", tz="a.tz")
     where = " AND ".join(entity_filter) or "TRUE"
+    dir_hits = None if dim == "account" else _dir_hits(filters, params, kind)
     fact_meta = """fm AS (
         SELECT DISTINCT ON (adv, rid) * FROM facts ORDER BY adv, rid, currency
     )"""
@@ -524,8 +594,10 @@ def _dimension_rows(
             SELECT adv, rid FROM facts UNION SELECT adv, rid FROM obj WHERE kind = '{kind}'
         )"""
             if filters.include_empty
-            # 默认只列所选日期有数据的对象，不把目录里无数据的历史对象逐一补 0。
-            else "idn AS (SELECT DISTINCT adv, rid FROM facts)"
+            # 默认只列所选日期有数据的对象，不把目录里无数据的历史对象逐一补 0；
+            # 搜索/ID 筛选另外并入命中的无数据对象。
+            else "idn AS (SELECT adv, rid FROM facts"
+            + (" UNION SELECT adv, rid FROM dir_hits)" if dir_hits else ")")
         )
         target = _first_truthy_num("e.cfg", ("roas_bid", "target_roas"))
         budget = _first_truthy_num(
@@ -588,35 +660,45 @@ def _dimension_rows(
     # 账户维度要冻结账户下全部系列（跨页选择展开），始终读取完整系列目录。
     chain: tuple[tuple[str, str | None], ...] = {
         "account": (),
-        "campaign": (("campaign", "SELECT adv, rid FROM facts"),),
-        "drama": (("campaign", "SELECT adv, rid FROM facts"),),
+        "campaign": (("campaign", "SELECT adv, rid FROM idn"),),
+        "drama": (("campaign", "SELECT adv, rid FROM idn"),),
         "adgroup": (
-            ("adgroup", "SELECT adv, rid FROM facts"),
+            ("adgroup", "SELECT adv, rid FROM idn"),
             ("campaign", "SELECT adv, f_campaign_id FROM facts"),
         ),
         "ad": (
-            ("ad", "SELECT adv, rid FROM facts"),
+            ("ad", "SELECT adv, rid FROM idn"),
             ("adgroup", "SELECT adv, f_adgroup_id FROM facts"),
             ("campaign", "SELECT adv, f_campaign_id FROM facts"),
         ),
     }[dim]
-    obj = (
-        f"obj AS ({_obj_select('advertiser_id = ANY(:advs) AND kind = ANY(:kinds)')})"
-        if dim == "account"
-        else _obj_ctes(filters, chain)
-    )
+    metrics_only = _metrics_only(filters)
+    if dim == "account":
+        obj = f"obj AS ({_obj_select('advertiser_id = ANY(:advs) AND kind = ANY(:kinds)')})"
+    elif metrics_only:
+        obj = _EMPTY_OBJ
+    else:
+        obj = _obj_ctes(filters, chain)
     # 账户维度按账户的首个事实系列取版权方，整租户读取（账户数有限、行数小）。
-    proj = (
-        _proj_cte(full=True, fact_campaigns=None)
-        if dim == "account"
-        else _proj_cte(
+    if dim == "account":
+        proj = _proj_cte(full=True, fact_campaigns=None)
+    elif metrics_only:
+        proj = _EMPTY_PROJ
+    else:
+        proj = _proj_cte(
             full=filters.include_empty,
             fact_campaigns="SELECT adv, rid FROM facts"
             if table == "campaign_report_day"
             else "SELECT adv, f_campaign_id FROM facts",
         )
+    facts = _facts_cte(table, id_column)
+    # 非递归 CTE 只能引用前面的 CTE：列出无数据对象时身份依赖完整目录，
+    # 默认时目录按身份读取，身份需先算出。
+    ctes = (
+        [facts, obj, proj, fact_meta, idn, ent]
+        if dim == "account" or filters.include_empty
+        else [facts, *([dir_hits] if dir_hits else []), idn, obj, proj, fact_meta, ent]
     )
-    ctes = [_facts_cte(table, id_column), obj, proj, fact_meta, idn, ent]
     if dim == "account":
         ctes.append("""members AS (
             SELECT e.adv || ':account:' || e.adv AS row_key, e.adv, e.rid FROM ent e

@@ -251,14 +251,13 @@ def test_drama_ids_filter_matches_member_campaign(session, sync_seed):
     assert {ref.remote_id for ref in result[0].refs} == {"c1", "c2"}
 
 
-@pytest.mark.parametrize("dimension", ["campaign", "drama", "adgroup", "ad"])
-def test_default_lists_only_objects_with_facts(session, sync_seed, dimension):
-    """默认只列所选日期有数据的对象；勾选显示无数据对象后才补出目录里的无数据对象。"""
-    seed_empty(session, sync_seed)
+def seed_hierarchy(session, seed):
+    """两个同剧系列，各一个广告组和广告；只有 c1/g1/a 有当天消耗。"""
+    seed_empty(session, seed)
     session.add_all(
         [
             AdObject(
-                tenant_id=sync_seed.tenant_id,
+                tenant_id=seed.tenant_id,
                 advertiser_id="acc-1",
                 kind=kind,
                 remote_id=rid,
@@ -279,7 +278,7 @@ def test_default_lists_only_objects_with_facts(session, sync_seed, dimension):
     )
     publish_ad_day(
         session,
-        tenant_id=sync_seed.tenant_id,
+        tenant_id=seed.tenant_id,
         job_id=uuid4(),
         accounts={"acc-1": AccountMeta("USD", "UTC")},
         start=D,
@@ -287,6 +286,12 @@ def test_default_lists_only_objects_with_facts(session, sync_seed, dimension):
         rows=[ad_row("a", D, campaign="c1", adgroup="g1", spend="10", d0="5")],
     )
     session.flush()
+
+
+@pytest.mark.parametrize("dimension", ["campaign", "drama", "adgroup", "ad"])
+def test_default_lists_only_objects_with_facts(session, sync_seed, dimension):
+    """默认只列所选日期有数据的对象；勾选显示无数据对象后才补出目录里的无数据对象。"""
+    seed_hierarchy(session, sync_seed)
 
     def query(include_empty):
         return build_rows(
@@ -338,3 +343,112 @@ def test_default_material_lists_only_videos_with_facts(session, sync_seed):
         build_rows(session, context=sync_seed.context, bc_id="bc-a", filters=filters)
         == ()
     )
+
+
+@pytest.mark.parametrize(
+    ("dimension", "changes", "expected"),
+    [
+        ("campaign", {"query": "c2"}, {"c2"}),
+        ("campaign", {"query": "嘉书"}, {"c1", "c2"}),
+        ("adgroup", {"ids": ("c2",)}, {"g2"}),
+        ("ad", {"ids": ("g2",)}, {"a2"}),
+        ("ad", {"query": "广告二"}, {"a2"}),
+    ],
+)
+def test_search_includes_matching_objects_without_facts(
+    session, sync_seed, dimension, changes, expected
+):
+    """默认只列有数据对象，但按名称/ID 搜索或下钻时能找到当天无数据的对象。"""
+    seed_hierarchy(session, sync_seed)
+    result = build_rows(
+        session,
+        context=sync_seed.context,
+        bc_id="bc-a",
+        filters=ReportingFilter(
+            dimension=dimension,
+            start_date=D,
+            end_date=D,
+            advertiser_ids=("acc-1",),
+            **changes,
+        ),
+    )
+    assert {row.display["remote_id"] for row in result} == expected
+
+
+@pytest.mark.parametrize("dimension", ["campaign", "adgroup", "ad"])
+@pytest.mark.parametrize("sort_by", ["spend", "row_key"])
+def test_metrics_only_path_matches_full_directory_path(
+    session, sync_seed, dimension, sort_by
+):
+    """快速路径不读目录，但成员、顺序与展示和读取目录的完整路径一致。"""
+    from app.modules.reporting import row_set
+
+    seed_hierarchy(session, sync_seed)
+    publish_ad_day(
+        session,
+        tenant_id=sync_seed.tenant_id,
+        job_id=uuid4(),
+        accounts={"acc-1": AccountMeta("USD", "UTC")},
+        start=D,
+        end=D,
+        rows=[
+            ad_row("a", D, campaign="c1", adgroup="g1", spend="10", d0="5"),
+            ad_row("a2", D, campaign="c2", adgroup="g2", spend="30", d0="5"),
+        ],
+    )
+    session.flush()
+    filters = ReportingFilter(
+        dimension=dimension,
+        start_date=D,
+        end_date=D,
+        advertiser_ids=("acc-1",),
+        sort_by=sort_by,
+        sort_direction="desc",
+    )
+    assert row_set._metrics_only(filters)
+
+    def snapshot():
+        return [
+            (row.row_key, row.display, row.refs)
+            for row in build_rows(
+                session, context=sync_seed.context, bc_id="bc-a", filters=filters
+            )
+        ]
+
+    fast = snapshot()
+    original = row_set._metrics_only
+    row_set._metrics_only = lambda _filters: False
+    try:
+        full = snapshot()
+    finally:
+        row_set._metrics_only = original
+    assert fast == full
+    assert len(fast) == 2
+
+
+def test_search_by_full_platform_id_finds_object_without_facts(session, sync_seed):
+    seed_hierarchy(session, sync_seed)
+    session.add(
+        AdObject(
+            tenant_id=sync_seed.tenant_id,
+            advertiser_id="acc-1",
+            kind="ad",
+            remote_id="1878123303399042",
+            parent_kind="adgroup",
+            parent_remote_id="g2",
+            ad_type="SMART_PLUS",
+            name="长ID广告",
+            observed_at=datetime.now(UTC),
+            published_version=1,
+        )
+    )
+    session.flush()
+    result = build_rows(
+        session,
+        context=sync_seed.context,
+        bc_id="bc-a",
+        filters=ReportingFilter(
+            dimension="ad", start_date=D, end_date=D, query="1878123303399042"
+        ),
+    )
+    assert [row.display["remote_id"] for row in result] == ["1878123303399042"]

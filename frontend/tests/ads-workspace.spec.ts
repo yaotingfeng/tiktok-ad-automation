@@ -476,6 +476,27 @@ test.describe("ads workspace", () => {
     ).toHaveCount(0)
   })
 
+  test("默认只查有数据对象，勾选后查询包含无数据对象", async ({ page }) => {
+    await adsBoundary(page)
+    const first = page.waitForRequest((r) =>
+      new URL(r.url()).pathname.endsWith(`/tenants/${TENANT}/ads`),
+    )
+    await page.goto(`/tenants/${TENANT}/ads?bc_id=${BC_A}`)
+    // 默认口径不传参数，由后端按“只列有数据对象”处理。
+    expect(
+      new URL((await first).url()).searchParams.get("include_empty"),
+    ).toBeNull()
+    await page.getByRole("checkbox", { name: "显示无数据对象" }).click()
+    const request = page.waitForRequest(
+      (r) =>
+        new URL(r.url()).pathname.endsWith(`/tenants/${TENANT}/ads`) &&
+        new URL(r.url()).searchParams.get("include_empty") === "true",
+    )
+    await page.getByRole("button", { name: "应用筛选" }).click()
+    const url = new URL((await request).url())
+    expect(url.searchParams.get("snapshot_id")).toBeNull()
+  })
+
   test("保存筛选提交字典列键", async ({ page }) => {
     await adsBoundary(page)
     await page.goto(`/tenants/${TENANT}/ads?bc_id=${BC_A}`)

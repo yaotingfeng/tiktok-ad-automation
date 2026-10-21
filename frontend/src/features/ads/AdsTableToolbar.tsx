@@ -83,6 +83,8 @@ export type ToolbarSelection = {
   allMatching: boolean
   total: number
   dimension: AdsDimension
+  /** 当前结果是否只含所选日期有数据的对象（未勾选“显示无数据对象”）。 */
+  dataOnly: boolean
   readonly: boolean
   busy: boolean
   onAction: (action: ManagementAction) => void
@@ -95,6 +97,7 @@ function SelectionToolbar({
   allMatching,
   total,
   dimension,
+  dataOnly,
   readonly,
   busy,
   onAction,
@@ -107,6 +110,13 @@ function SelectionToolbar({
         {allMatching
           ? `已选全部 ${total} 条匹配结果`
           : `已选 ${selectedCount} 条`}
+        {/* 批量操作只覆盖当前结果；默认结果不含所选日期无数据的对象，提前说明。
+            账户维度始终列出全部账户，不提示。 */}
+        {allMatching && dataOnly && dimension !== "account" && (
+          <span className="ml-2 text-muted-foreground">
+            仅包含所选日期有数据的对象；需包含无数据对象请勾选“显示无数据对象”后重新查询
+          </span>
+        )}
       </span>
       <div className="flex flex-wrap items-center gap-2">
         {/* 只读成员只能看到计数与取消选择，不显示任何写入动作和跨页全选。 */}
