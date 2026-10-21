@@ -1,5 +1,6 @@
 """管理适配器合同测试；传输边界使用内存替身，不连接 TikTok。"""
 
+import json
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
@@ -181,7 +182,7 @@ def test_regular_group_replacement_preserves_required_fields():
         desired={"roas_bid": "1.2500"},
     )
     payload = _payload(command, smart_plus=False)
-    assert payload["roas_bid"] == "1.2500"
+    assert payload["roas_bid"] == 1.25 and type(payload["roas_bid"]) is float
     assert payload["campaign_id"] == "campaign-1"
     assert payload["adgroup_name"] == "name"
 
@@ -287,8 +288,44 @@ def test_campaign_budget_uses_campaign_payload_contract(smart_plus):
     assert payload == {
         "advertiser_id": "adv-1",
         "campaign_id": "campaign-1",
-        "budget": "100.00",
+        "budget": 100,
     }
+    assert type(payload["budget"]) is int
+
+
+@pytest.mark.parametrize(
+    ("field", "desired", "key", "expected"),
+    [
+        ("roas", {"roas_bid": "1.03"}, "roas_bid", 1.03),
+        ("budget", {"budget": "150.50"}, "budget", 150.5),
+        ("budget", {"budget": "200"}, "budget", 200),
+    ],
+)
+def test_smart_plus_adgroup_amounts_are_sent_as_json_numbers(
+    field, desired, key, expected
+):
+    # TikTok 对字符串金额返回 40002；冻结的十进制文本必须在发送前转成 JSON 数字。
+    command = ManagementCommand(
+        ref=EntityRef(uuid4(), "adv-1", "adgroup", "group-1"),
+        field=field,
+        original={"ad_type": "SMART_PLUS"},
+        desired=desired,
+    )
+    payload = _payload(command, smart_plus=True)
+    assert payload == {"advertiser_id": "adv-1", "adgroup_id": "group-1", key: expected}
+    assert type(payload[key]) is type(expected)
+    assert json.loads(json.dumps(payload))[key] == expected
+
+
+def test_amount_that_cannot_be_sent_exactly_fails_before_transport():
+    command = ManagementCommand(
+        ref=EntityRef(uuid4(), "adv-1", "adgroup", "group-1"),
+        field="roas",
+        original={"ad_type": "SMART_PLUS"},
+        desired={"roas_bid": "1.000000000000000000001"},
+    )
+    with pytest.raises(DomainError, match="无法精确发送"):
+        _payload(command, smart_plus=True)
 
 
 def test_rename_payload_regular_and_smart_plus():
@@ -312,15 +349,16 @@ def test_rename_payload_regular_and_smart_plus():
 
 
 @pytest.mark.parametrize(
-    ("field", "desired", "operation"),
+    ("field", "desired", "sent", "operation"),
     [
-        ("budget", {"budget": "100.00"}, "update_budget"),
-        ("name", {"campaign_name": "新名"}, "rename"),
+        # 冻结预算是十进制文本，SDK 请求体里必须已是 JSON 数字。
+        ("budget", {"budget": "100.00"}, {"budget": 100}, "update_budget"),
+        ("name", {"campaign_name": "新名"}, {"campaign_name": "新名"}, "rename"),
     ],
 )
 @pytest.mark.parametrize("smart_plus", [False, True])
 def test_sdk_campaign_update_uses_matching_campaign_method(
-    monkeypatch, smart_plus, field, desired, operation
+    monkeypatch, smart_plus, field, desired, sent, operation
 ):
     calls: list[dict] = []
     scope_calls: list[tuple] = []
@@ -377,6 +415,6 @@ def test_sdk_campaign_update_uses_matching_campaign_method(
     assert calls[0]["body"] == {
         "advertiser_id": "adv-1",
         "campaign_id": "campaign-1",
-        **desired,
+        **sent,
     }
     assert scope_calls == [("adv-1", operation, "campaign", deadline)]

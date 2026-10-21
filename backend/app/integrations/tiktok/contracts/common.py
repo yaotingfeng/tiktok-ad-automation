@@ -1,4 +1,6 @@
 from dataclasses import dataclass
+from decimal import Decimal
+from math import isfinite
 from typing import Any, Literal
 
 from app.core.errors import DomainError
@@ -11,6 +13,19 @@ class CallEvidence:
     remote_task_id: str | None = None
     # 仅保存通过业务 envelope 校验的数字错误码，不携带可能含凭据的原始文案。
     remote_code: int | None = None
+
+
+def exact_json_number(value: Decimal) -> int | float | None:
+    """把精确十进制金额转换成 TikTok 要求的 JSON 数字。
+
+    TikTok 的 budget、roas_bid 等金额字段只接受 JSON 数字，传字符串会被平台以
+    40002 参数错误拒绝。转换为浮点后必须能原样还原，否则返回 None，由调用方
+    在发送前拒绝，不能把舍入后的值当作用户确认的金额发出去。
+    """
+    number = float(value)
+    if not isfinite(number) or Decimal(str(number)) != value:
+        return None
+    return int(value) if value == value.to_integral() else number
 
 
 RemoteEffect = Literal["NOT_SENT", "UNKNOWN", "REJECTED_NO_EFFECT"]

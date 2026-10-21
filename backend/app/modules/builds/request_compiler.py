@@ -3,7 +3,6 @@
 import json
 from collections.abc import Sequence
 from decimal import Decimal
-from math import isfinite
 from typing import Any, Literal
 from uuid import UUID
 
@@ -24,7 +23,11 @@ from app.integrations.tiktok.contracts.builds import (
     Id,
     IdentityFields,
 )
-from app.integrations.tiktok.contracts.common import CallEvidence, RemoteCallError
+from app.integrations.tiktok.contracts.common import (
+    CallEvidence,
+    RemoteCallError,
+    exact_json_number,
+)
 from app.integrations.tiktok.contracts.context import ChannelKind
 from app.modules.builds.targeting_schemas import AgeGroup, Gender, Language
 
@@ -349,13 +352,12 @@ def create_arguments(
     for field in ("budget", "roas_bid"):
         if field not in body:
             continue
-        value = Decimal(str(body[field]))
-        number = float(value)
-        if not isfinite(number) or Decimal(str(number)) != value:
+        number = exact_json_number(Decimal(str(body[field])))
+        if number is None:
             raise RemoteCallError(
                 "decimal_serialization_loss", effect="NOT_SENT", evidence=CallEvidence()
             )
-        body[field] = int(value) if value == value.to_integral() else number
+        body[field] = number
     if intent.kind in {"CAMPAIGN", "ADGROUP"}:
         body["request_id"] = remote_request_id(attempt_id)
     return CREATE_OPERATIONS[intent.kind], body

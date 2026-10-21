@@ -14,7 +14,11 @@ import business_api_client as sdk  # type: ignore[import-untyped]
 
 from app.core.errors import DomainError
 from app.integrations.tiktok.adapters.build_results import safe_identifier
-from app.integrations.tiktok.contracts.common import CallEvidence, RemoteCallError
+from app.integrations.tiktok.contracts.common import (
+    CallEvidence,
+    RemoteCallError,
+    exact_json_number,
+)
 from app.integrations.tiktok.contracts.management import (
     MANAGEMENT_OPERATIONS,
     ManagementCommand,
@@ -65,7 +69,8 @@ def _smart_plus(command: ManagementCommand) -> bool:
     return original_type
 
 
-def _decimal(value: object, field: str) -> str:
+def _decimal(value: object, field: str) -> int | float:
+    """冻结值以精确十进制文本保存，发送前转成平台要求的 JSON 数字。"""
     if isinstance(value, Decimal):
         parsed = value
     elif type(value) is str:
@@ -79,7 +84,10 @@ def _decimal(value: object, field: str) -> str:
         raise DomainError("management_request_invalid", f"{field} 必须使用精确十进制")
     if not parsed.is_finite() or parsed <= 0:
         raise DomainError("management_request_invalid", f"{field} 必须为正数")
-    return format(parsed, "f")
+    number = exact_json_number(parsed)
+    if number is None:
+        raise DomainError("management_request_invalid", f"{field} 无法精确发送")
+    return number
 
 
 def _request_id(raw: object) -> str | None:
