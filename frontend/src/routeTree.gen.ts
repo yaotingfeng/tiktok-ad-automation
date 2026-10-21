@@ -19,6 +19,7 @@ import { Route as LayoutAccountsRouteImport } from './routes/_layout/accounts'
 import { Route as LayoutAdminRouteImport } from './routes/_layout/admin'
 import { Route as LayoutAutomationRulesRouteImport } from './routes/_layout/automation-rules'
 import { Route as LayoutBuildTasksRouteImport } from './routes/_layout/build-tasks'
+import { Route as LayoutMaterialProductionRouteImport } from './routes/_layout/material-production'
 import { Route as LayoutMaterialsRouteImport } from './routes/_layout/materials'
 import { Route as LayoutMembersRouteImport } from './routes/_layout/members'
 import { Route as LayoutProvidersRouteImport } from './routes/_layout/providers'
@@ -97,6 +98,12 @@ const LayoutBuildTasksRoute = LayoutBuildTasksRouteImport.update({
   path: '/build-tasks',
   getParentRoute: () => LayoutRoute,
 } as any)
+const LayoutMaterialProductionRoute =
+  LayoutMaterialProductionRouteImport.update({
+    id: '/material-production',
+    path: '/material-production',
+    getParentRoute: () => LayoutRoute,
+  } as any)
 const LayoutMaterialsRoute = LayoutMaterialsRouteImport.update({
   id: '/materials',
   path: '/materials',
@@ -269,6 +276,7 @@ export interface FileRoutesByFullPath {
   '/admin': typeof LayoutAdminRoute
   '/automation-rules': typeof LayoutAutomationRulesRoute
   '/build-tasks': typeof LayoutBuildTasksRoute
+  '/material-production': typeof LayoutMaterialProductionRoute
   '/materials': typeof LayoutMaterialsRoute
   '/members': typeof LayoutMembersRoute
   '/providers': typeof LayoutProvidersRoute
@@ -307,6 +315,7 @@ export interface FileRoutesByTo {
   '/admin': typeof LayoutAdminRoute
   '/automation-rules': typeof LayoutAutomationRulesRoute
   '/build-tasks': typeof LayoutBuildTasksRoute
+  '/material-production': typeof LayoutMaterialProductionRoute
   '/materials': typeof LayoutMaterialsRoute
   '/members': typeof LayoutMembersRoute
   '/providers': typeof LayoutProvidersRoute
@@ -344,6 +353,7 @@ export interface FileRoutesById {
   '/_layout/admin': typeof LayoutAdminRoute
   '/_layout/automation-rules': typeof LayoutAutomationRulesRoute
   '/_layout/build-tasks': typeof LayoutBuildTasksRoute
+  '/_layout/material-production': typeof LayoutMaterialProductionRoute
   '/_layout/materials': typeof LayoutMaterialsRoute
   '/_layout/members': typeof LayoutMembersRoute
   '/_layout/providers': typeof LayoutProvidersRoute
@@ -386,6 +396,7 @@ export interface FileRouteTypes {
     | '/admin'
     | '/automation-rules'
     | '/build-tasks'
+    | '/material-production'
     | '/materials'
     | '/members'
     | '/providers'
@@ -424,6 +435,7 @@ export interface FileRouteTypes {
     | '/admin'
     | '/automation-rules'
     | '/build-tasks'
+    | '/material-production'
     | '/materials'
     | '/members'
     | '/providers'
@@ -460,6 +472,7 @@ export interface FileRouteTypes {
     | '/_layout/admin'
     | '/_layout/automation-rules'
     | '/_layout/build-tasks'
+    | '/_layout/material-production'
     | '/_layout/materials'
     | '/_layout/members'
     | '/_layout/providers'
@@ -569,6 +582,13 @@ declare module '@tanstack/react-router' {
       path: '/build-tasks'
       fullPath: '/build-tasks'
       preLoaderRoute: typeof LayoutBuildTasksRouteImport
+      parentRoute: typeof LayoutRoute
+    }
+    '/_layout/material-production': {
+      id: '/_layout/material-production'
+      path: '/material-production'
+      fullPath: '/material-production'
+      preLoaderRoute: typeof LayoutMaterialProductionRouteImport
       parentRoute: typeof LayoutRoute
     }
     '/_layout/materials': {
@@ -878,6 +898,7 @@ interface LayoutRouteChildren {
   LayoutAdminRoute: typeof LayoutAdminRoute
   LayoutAutomationRulesRoute: typeof LayoutAutomationRulesRoute
   LayoutBuildTasksRoute: typeof LayoutBuildTasksRoute
+  LayoutMaterialProductionRoute: typeof LayoutMaterialProductionRoute
   LayoutMaterialsRoute: typeof LayoutMaterialsRoute
   LayoutMembersRoute: typeof LayoutMembersRoute
   LayoutProvidersRoute: typeof LayoutProvidersRoute
@@ -893,6 +914,7 @@ const LayoutRouteChildren: LayoutRouteChildren = {
   LayoutAdminRoute: LayoutAdminRoute,
   LayoutAutomationRulesRoute: LayoutAutomationRulesRoute,
   LayoutBuildTasksRoute: LayoutBuildTasksRoute,
+  LayoutMaterialProductionRoute: LayoutMaterialProductionRoute,
   LayoutMaterialsRoute: LayoutMaterialsRoute,
   LayoutMembersRoute: LayoutMembersRoute,
   LayoutProvidersRoute: LayoutProvidersRoute,

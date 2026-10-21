@@ -641,16 +641,24 @@ handle("material-production-post_material_login_link", (req) => {
 })
 
 // 注册素材工作台跳转拦截
+// 素材制作：用户确认由体验版直达君博（junbo）租户的真实素材平台，但只有有权限的人能进。
+// 新开生产版的直达页，由生产版用这台浏览器自己的登录状态免密登录；体验版不持有任何凭证，
+// 未登录或没有该租户权限的访客会看到生产登录页或无权限提示。
+export const MATERIAL_PRODUCTION_TENANT = "junbo"
 registerDemoRedirect(
   (url: URL) =>
-    url.href.includes("manjumt.gzjunbo.net") &&
-    url.href.includes("/api/login-links/consume"),
+    url.hostname === "manjumt.gzjunbo.net" &&
+    url.pathname === "/api/login-links/consume",
   () => {
-    // 体验版不打开外部素材工作台：提示后停留在素材库。
-    toast.info("体验版不打开外部素材工作台", {
-      description: "正式环境会在这里免密登录素材制作工作台。",
+    window.open(
+      `/material-production?tenant=${encodeURIComponent(MATERIAL_PRODUCTION_TENANT)}`,
+      "_blank",
+      "noopener",
+    )
+    toast.info("已在新标签页打开素材制作", {
+      description: `素材平台是君博（${MATERIAL_PRODUCTION_TENANT}）租户的真实系统，需要用有权限的生产账号登录。`,
     })
-    return `/tenants/${MAIN_TENANT_ID}/materials?bc_id=${MAIN_BC_ID}`
+    return null
   },
 )
 

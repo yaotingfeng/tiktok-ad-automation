@@ -1,23 +1,31 @@
-import { chooseOptions, fillField } from "./actions"
-import { button, byText, navItem } from "./find"
+import { SAMPLE_ACCOUNTS, SAMPLE_DRAMAS } from "../shell/samples"
+import { fillField } from "./actions"
+import {
+  button,
+  byText,
+  card,
+  dialogClose,
+  dialogTarget,
+  fieldInput,
+  inDialog,
+  inRow,
+  mainHas,
+  navItem,
+  tableRow,
+} from "./find"
 import { chooseSampleVideo } from "./sample-file"
-import type { Tour, TourContext, TourStep } from "./types"
+import type { Tour, TourChapter, TourContext, TourStep } from "./types"
 
-// 体验版引导内容。主线按真实业务顺序带完整流程；每页讲解覆盖主线没有展开的功能。
+// 体验版引导内容：按日常工作顺序分成 7 章，每一步都对应页面上一个具体按钮或区域，
+// 需要操作的地方请体验者亲手点击，点中后自动进入下一步。可以从目录单独演示任意一章。
 // 定位都用页面上可见的文字，生产页面改文案时需要同步这里（端到端测试会发现）。
-const page =
+const at =
   (path = "") =>
   (c: TourContext) =>
     `/tenants/${c.tenantId}${path}?bc_id=${c.bcId}`
-const main = "main"
-const dialog = '[role="dialog"]'
-const inDialog = (selector: string, text: string | RegExp) =>
-  byText(selector, text, { within: dialog })
 const tab = (label: string) => byText('[role="tab"]', label, { exact: true })
-const firstRowCheckbox = () =>
-  document.querySelector(
-    'main tbody tr [role="checkbox"], main tbody tr input[type="checkbox"]',
-  )
+const sideButton = (label: string) =>
+  byText("[data-sidebar] a, [data-sidebar] button", label, { exact: true })
 
 /** 页面上可见的表格里出现了某段文字（不看筛选项、隐藏页签等内容）。 */
 const tableHas = (text: string | RegExp) => () => {
@@ -27,479 +35,788 @@ const tableHas = (text: string | RegExp) => () => {
     .join(" ")
   return typeof text === "string" ? content.includes(text) : text.test(content)
 }
+const hasValue = (find: () => Element | null) => () =>
+  !!(find() as HTMLInputElement | null)?.value?.trim()
 
-const DEMO_DRAMAS_INPUT = [
-  "The Billionaire's Secret Bride",
-  "Reborn as the Alpha's Mate",
-].join("\n")
-const DEMO_ACCOUNTS_INPUT = ["7431000000000001001", "7431000000000001002"].join(
-  "\n",
-)
+const click = (
+  title: string,
+  cta: string,
+  body: string,
+  target: TourStep["target"],
+  extra: Partial<TourStep> = {},
+): TourStep => ({ title, cta, body, target, advance: "click", ...extra })
 
-const mainSteps: TourStep[] = [
-  {
-    title: "欢迎体验 TK-ADA",
-    body: "TK-ADA 是 TikTok 短剧出海的批量投放工具。接下来按日常工作顺序走一遍：\n授权账户 → 版权方与推广链接 → 素材 → 投放策略 → 批量搭建 → 看报表、调广告 → 自动规则。\n\n每一步都会高亮要点的位置，跟着点就行；页面上的数据都是演示数据。",
-    path: page("/accounts"),
-  },
-  {
-    title: "第 1 步 · 广告账户",
-    body: "通过 TikTok 授权后，BC 下的广告账户自动同步到这里：能否搭建、能否上传素材、平台状态一目了然。\n顶部可以切换租户和 BC，所有页面都按当前 BC 隔离。",
-    path: page("/accounts"),
-    target: main,
-  },
-  {
-    title: "授权管理",
-    body: "点“授权管理”，看看 TikTok 官方 API 与 MCP 两种授权连接。",
-    target: tab("授权管理"),
-    advance: "click",
-  },
-  {
-    title: "授权连接",
-    body: "一次授权即可接入多个 BC。授权、同步、停用都在这里完成；搭建时使用 BC 的默认连接。",
-    target: main,
-  },
-  {
-    title: "第 2 步 · 版权方连接",
-    body: "接入网眼、嘉书、刚刚好、兑吧等版权方后台。搭建时系统会自动去版权方取推广链接，不用手工复制。\n点左侧“版权方连接”。",
-    target: navItem("版权方连接"),
-    advance: "click",
-  },
-  {
-    title: "已接入的版权方",
-    body: "每个连接都可以查看已发现的推广应用、编辑凭据、重新验证。",
-    target: main,
-  },
-  {
-    title: "推广链接记录",
-    body: "点“链接记录”，查看系统已经取到的每部剧的推广链接。",
-    target: tab("链接记录"),
-    advance: "click",
-  },
-  {
-    title: "第 3 步 · 素材库",
-    body: "素材统一上传、统一管理。文件名里写上完整剧名，搭建时就能自动匹配到对应的剧。\n点左侧“素材库”。",
-    target: navItem("素材库"),
-    advance: "click",
-  },
-  {
-    title: "上传素材",
-    body: "点“批量上传”，演示一次素材上传。",
-    target: button("批量上传", true),
-    advance: "click",
-    settleMs: 800,
-  },
-  {
-    title: "选择素材文件",
-    body: "正式使用时在这里选择本地视频（一次最多 2 万个）。\n体验版不需要准备文件：点下面的按钮，用示例视频“Love After the Storm_01.mp4”。",
-    target: dialog,
-    action: {
-      label: "使用示例视频",
-      run: () => {
-        chooseSampleVideo()
-      },
-    },
-  },
-  {
-    title: "开始上传",
-    body: "点“开始上传”。",
-    target: inDialog("button", /开始上传/),
-    advance: "click",
-    settleMs: 1200,
-  },
-  {
-    title: "上传进度",
-    body: "原文件先临时中转，再由系统自动安排合法的素材账户上传到 TikTok，最后核实入库。等几秒，状态会依次变化，直到“账户素材可用”。",
-    target: main,
-    readyWhen: tableHas("账户素材可用"),
-  },
-  {
-    title: "第 4 步 · 投放策略",
-    body: "把预算、出价、定向、分组方式、命名规则保存成策略，搭建时一键套用，团队口径统一。\n点左侧“投放策略”。",
-    target: navItem("投放策略"),
-    advance: "click",
-  },
-  {
-    title: "策略列表",
-    body: "每次修改都会保存为新版本，历史版本可追溯。可以新建、编辑、复制为新策略。",
-    target: main,
-  },
-  {
-    title: "第 5 步 · 批量搭建",
-    body: "核心功能：一次把多部剧投到多个账户。\n点左侧“广告搭建”。",
-    target: navItem("广告搭建"),
-    advance: "click",
-  },
-  {
-    title: "选择连接、应用和策略",
-    body: "选择这批剧从哪个版权方取链、用哪个推广应用、套用哪套投放策略。\n点下面的按钮一键选好。",
-    target: byText("label", "版权方连接"),
-    action: {
-      label: "一键选择",
-      run: () =>
-        chooseOptions([
-          ["版权方连接", "网眼"],
-          ["推广应用"],
-          ["投放策略", "美区 · 目标 ROAS 1.1"],
-        ]),
-    },
-  },
-  {
-    title: "填写剧目和账户",
-    body: "每行一部剧名、每行一个账户 ID。所有剧都会投到所有账户。\n点下面的按钮填入示例：2 部剧 × 2 个账户。",
-    target: "#build-drama",
-    action: {
-      label: "填入示例剧目和账户",
-      run: () => {
-        fillField("#build-drama", DEMO_DRAMAS_INPUT)
-        fillField("#build-account", DEMO_ACCOUNTS_INPUT)
-      },
-    },
-  },
-  {
-    title: "解析并准备",
-    body: "点“解析并准备”：系统核实剧名和账户，自动去版权方取推广链接，并按剧名匹配素材。这一步还不会创建广告。",
-    target: button("解析并准备", true),
-    advance: "click",
-    settleMs: 3500,
-  },
-  {
-    title: "准备结果",
-    body: "每部剧的推广链接、匹配到的素材数量都在这里，可以逐个调整链接和素材。",
-    target: main,
-    readyWhen: () => !!button("选择小程序", true)(),
-  },
-  {
-    title: "选择推广小程序",
-    body: "点“选择小程序”，选这批剧实际播放的小程序。",
-    target: button("选择小程序", true),
-    advance: "click",
-    settleMs: 800,
-  },
-  {
-    title: "选一个小程序",
-    body: "点第一个“选择并继续”。系统会检查每个目标账户是否可用。",
-    target: inDialog("button", "选择并继续"),
-    advance: "click",
-    settleMs: 2500,
-  },
-  {
-    title: "选择投放身份",
-    body: "点“选择投放身份”，选广告展示用的 TikTok 账号。",
-    target: button("选择投放身份", true),
-    advance: "click",
-    settleMs: 800,
-  },
-  {
-    title: "选一个身份",
-    body: "点“Velvet Reels”。系统会逐个账户验证这个身份。",
-    target: inDialog(
-      "button, [role=option], li, div[tabindex]",
-      "Velvet Reels",
+const look = (
+  title: string,
+  body: string,
+  target?: TourStep["target"],
+  extra: Partial<TourStep> = {},
+): TourStep => ({ title, body, target, ...extra })
+
+const accounts: TourChapter = {
+  id: "accounts",
+  title: "账户与授权",
+  summary: "TikTok 授权、BC 与广告账户同步",
+  steps: [
+    look(
+      "当前租户与 BC",
+      "所有操作都在当前租户和 BC（商务中心）范围内进行。顶部可以随时切换租户和 BC，各 BC 的账户、素材、广告互相隔离。",
+      byText(
+        "header button, [data-slot=sidebar-inset] button",
+        "星河短剧 BC-A",
+      ),
+      { path: at("/accounts") },
     ),
-    advance: "click",
-    settleMs: 2500,
-  },
-  {
-    title: "生成搭建预览",
-    body: "定向、排期都已按策略带出，也可以针对这批单独修改。点“生成搭建预览”。",
-    target: button("生成搭建预览", true),
-    advance: "click",
-    settleMs: 4000,
-  },
-  {
-    title: "搭建预览",
-    body: "提交前精确列出要创建多少系列、广告组、广告，每个账户的预算合计，以及因为什么原因排除了哪些组合。确认无误再提交。",
-    target: main,
-    readyWhen: () => {
-      const submit = document.querySelector<HTMLButtonElement>(
-        'button[aria-label^="创建并立即启用"]',
-      )
-      return !!submit && !submit.disabled
-    },
-  },
-  {
-    title: "提交搭建",
-    body: "点“创建并立即启用”。提交后系统直接在 TikTok 创建并启用广告，不需要再手动开启。",
-    target: button("创建并立即启用", true),
-    advance: "click",
-    settleMs: 2500,
-  },
-  {
-    title: "搭建任务",
-    body: "后台逐个账户执行，进度、成功和失败数量实时更新；失败的部分可以一键重试或核查。等几秒看看进度变化。",
-    target: main,
-  },
-  {
-    title: "第 6 步 · 广告报表",
-    body: "所有账户的投放数据汇总在一张报表里。\n点左侧“广告报表”。",
-    target: navItem("广告报表"),
-    advance: "click",
-  },
-  {
-    title: "核心指标",
-    body: "消耗、ROAS、展示、点击率、CPM 等指标按所选日期汇总。下面可以按账户、系列、广告组、广告、素材、剧六个维度分析。",
-    target: main,
-  },
-  {
-    title: "按系列查看",
-    body: "点“系列”页签。",
-    target: tab("系列"),
-    advance: "click",
-    settleMs: 1500,
-  },
-  {
-    title: "勾选要调整的广告",
-    body: "勾选第一行。勾选后可以批量启用、暂停、修改预算、修改目标 ROAS、改名。",
-    target: firstRowCheckbox,
-    advance: "click",
-  },
-  {
-    title: "批量修改预算",
-    body: "点“修改预算”。提交前会先预览每个对象的“原值 → 新值”，确认后才真正修改。",
-    target: button("修改预算", true),
-    advance: "click",
-    settleMs: 1500,
-  },
-  {
-    title: "设置新预算",
-    body: "填入新的日预算（例如 250），确认预览无误后点“提交管理任务”。\n也可以点“下一步”跳过。",
-    target: dialog,
-  },
-  {
-    title: "操作记录",
-    body: "每一次批量修改都有记录：谁、什么时候、改了哪些对象、平台回执是否成功。点“查看明细”可以看到每个对象的平台回执。",
-    path: page("/ad-management-tasks"),
-    target: main,
-  },
-  {
-    title: "第 7 步 · 自动规则",
-    body: "让系统按规则盯盘：ROAS 过低自动暂停、达标自动提预算、夜间降预算……\n点左侧“自动规则”。",
-    target: navItem("自动规则"),
-    advance: "click",
-  },
-  {
-    title: "规则与执行模式",
-    body: "每条规则可以选择“仅通知”“确认后执行”或“自动执行”，并按固定频率运行。新建规则时可以先试运行，看看会命中哪些对象。",
-    target: main,
-  },
-  {
-    title: "待确认",
-    body: "点“待确认”：需要人工确认的规则命中会在这里排队，可以勾选后确认执行或忽略。",
-    target: tab("待确认"),
-    advance: "click",
-  },
-  {
-    title: "体验完成",
-    body: "主流程就到这里。左上角的“本页怎么用”可以单独查看每个页面的更多功能；点“重置”回到初始数据重新体验。",
-  },
-]
-
-export const MAIN_TOUR: Tour = {
-  id: "main",
-  title: "主线引导",
-  steps: mainSteps,
+    look(
+      "已同步的广告账户",
+      "TikTok 授权后，BC 下的广告账户自动同步到这里。每个账户都标明能否用于搭建广告、能否上传素材，以及最近一次核验时间。",
+      tableRow(0),
+      { path: at("/accounts") },
+    ),
+    click(
+      "授权管理",
+      "授权管理",
+      "接下来看看授权连接：官方 API 和官方 MCP 两种通道，一次授权可以接入多个 BC。",
+      tab("授权管理"),
+    ),
+    look(
+      "授权连接列表",
+      "每条连接显示授权状态、关联的 BC 和最近一次发现账户的时间。当前 BC 默认使用哪条连接，在上方“使用授权”里设置。",
+      tableRow(0),
+    ),
+    click(
+      "重新授权",
+      "重新授权",
+      "授权过期或要扩大权限时点“重新授权”，演示一下完整的授权流程。",
+      inRow("button", 0, "重新授权"),
+      { settleMs: 800 },
+    ),
+    click(
+      "前往 TikTok 授权",
+      "前往 TikTok 授权",
+      "正式环境会跳到 TikTok 官方页面登录确认；体验版会模拟授权完成并直接返回。",
+      inDialog("button", "前往 TikTok 授权"),
+      { settleMs: 2000 },
+    ),
+    look(
+      "授权完成",
+      "返回后系统自动发现账户，发现成功后新授权才正式生效，取消或失败不会影响原来可用的连接。",
+      tableRow(0),
+    ),
+  ],
 }
 
-const pageTour = (id: string, title: string, steps: TourStep[]): Tour => ({
-  id,
-  title,
-  steps,
-})
+const providers: TourChapter = {
+  id: "providers",
+  title: "版权方与推广链接",
+  summary: "接入版权方后台，自动取推广链接",
+  steps: [
+    click(
+      "打开版权方连接",
+      "版权方连接",
+      "版权方（网眼、嘉书、刚刚好、兑吧等）的分销后台接入后，搭建时系统会自动去取每部剧的推广链接，不用手工复制。",
+      navItem("版权方连接"),
+    ),
+    look(
+      "已接入的版权方",
+      "每个连接对应一个版权方后台账号，系统定期验证；会话过期时取链会自动恢复。",
+      tableRow(0),
+      { path: at("/providers") },
+    ),
+    click(
+      "查看推广应用",
+      "查看已发现应用",
+      "看看这个版权方下有哪些推广应用（小程序）。",
+      inRow("button", 0, "查看已发现应用"),
+      { settleMs: 800 },
+    ),
+    look(
+      "推广应用与取链默认值",
+      "每个应用可以设置取链默认值，比如起播集、卡点集；搭建时按这里的默认值取链，也可以单次调整。",
+      dialogTarget,
+    ),
+    click("关闭", "关闭", "看完点“关闭”。", inDialog("button", "关闭")),
+    click(
+      "链接记录",
+      "链接记录",
+      "所有已经取到的推广链接都记录在这里。",
+      tab("链接记录"),
+    ),
+    look(
+      "每部剧的推广链接",
+      "同一部剧再次搭建时优先复用已有链接；链接过期或参数变化时自动重新取链。",
+      tableRow(0),
+    ),
+  ],
+}
 
-const PAGE_TOURS: { match: RegExp; tour: Tour }[] = [
-  {
-    match: /\/accounts$/,
-    tour: pageTour("accounts", "账户与授权", [
+const materials: TourChapter = {
+  id: "materials",
+  title: "素材上传",
+  summary: "批量上传视频，自动安排账户入库",
+  steps: [
+    click(
+      "打开素材库",
+      "素材库",
+      "素材统一上传、统一管理，搭建时按剧名自动匹配。",
+      navItem("素材库"),
+    ),
+    look(
+      "素材列表",
+      "文件名里写上完整剧名，搭建时就能自动匹配到这部剧。每条素材显示上传来源、文件信息、入库状态和可用账户数。",
+      tableRow(0),
+      { path: at("/materials") },
+    ),
+    look(
+      "素材制作",
+      "需要剪辑新素材时点左侧“素材制作”，会在新标签页打开君博的素材平台并自动登录（需要有权限的生产账号）。",
+      sideButton("素材制作"),
+      { placement: "right" },
+    ),
+    click(
+      "批量上传",
+      "批量上传",
+      "演示一次上传。正式使用时可以一次选择上万个视频。",
+      button("批量上传", true),
+      { settleMs: 800 },
+    ),
+    look(
+      "选择素材文件",
+      "体验版不需要准备视频：点下面的“使用示例视频”，用示例文件“Love After the Storm_01.mp4”。",
+      inDialog("button", "选择本地素材"),
       {
-        title: "广告账户目录",
-        body: "这里列出当前 BC 下已同步的广告账户，可按名称或 ID、平台状态、可用性筛选。“可搭建”“可上传”表示该账户能否用于建广告、上传素材。",
-        target: main,
+        action: { label: "使用示例视频", run: () => void chooseSampleVideo() },
+        readyWhen: () => !!inDialog("button", /开始上传/)(),
+        waitingText: "点上面的“使用示例视频”选好文件。",
       },
+    ),
+    click(
+      "开始上传",
+      "开始上传",
+      "确认文件后开始上传。",
+      inDialog("button", /开始上传/),
+      { settleMs: 1500 },
+    ),
+    look(
+      "上传进度",
+      "原文件先临时中转，系统自动安排合法的素材账户上传到 TikTok，最后核实入库。状态会依次变化，直到“账户素材可用”。",
+      tableRow(0),
       {
-        title: "账户详情",
-        body: "点任意一行的“查看详情”可以看到账户的币种、时区、权限和最近核验时间。",
-        target: button("查看详情", true),
+        readyWhen: tableHas("账户素材可用"),
+        waitingText: "正在上传和核实，约 10 秒…",
       },
+    ),
+    click(
+      "回到素材库",
+      "素材库",
+      "回到素材库看看刚上传的素材。",
+      tab("素材库"),
+    ),
+    look(
+      "新素材已入库",
+      "刚上传的素材已经入库，可以用于搭建。",
+      tableRow(0, "Love After the Storm"),
+    ),
+  ],
+}
+
+const strategies: TourChapter = {
+  id: "strategies",
+  title: "投放策略",
+  summary: "预算、出价、定向、分组规则保存成策略",
+  steps: [
+    click(
+      "打开投放策略",
+      "投放策略",
+      "把预算、出价、定向、广告组和广告的生成规则保存成策略，搭建时一键套用，团队口径统一。",
+      navItem("投放策略"),
+    ),
+    look(
+      "策略列表",
+      "每套策略显示当前版本、预算策略、竞价策略和生成规则。每次修改都保存为新版本，历史可追溯。",
+      tableRow(0),
+      { path: at("/strategies") },
+    ),
+    click(
+      "复制为新策略",
+      "复制为新策略",
+      "基于现有策略改一改最快。点第一行的“复制为新策略”。",
+      inRow("button, a", 0, "复制为新策略"),
+      { settleMs: 1200 },
+    ),
+    look(
+      "策略名称",
+      "给新策略起个名字。点下面的按钮填入示例名称，也可以自己输入。",
+      fieldInput("策略名称"),
       {
-        title: "授权管理",
-        body: "“授权管理”页签管理 TikTok 授权连接：新增授权、为 BC 设置默认连接、手动同步账户、停用连接。",
-        target: tab("授权管理"),
+        action: {
+          label: "帮我填写",
+          run: () =>
+            void fillField(fieldInput("策略名称")(), "体验策略 · 美区加量测试"),
+        },
+        readyWhen: hasValue(fieldInput("策略名称")),
+        waitingText: "先填写策略名称。",
       },
-    ]),
-  },
-  {
-    match: /\/providers$/,
-    tour: pageTour("providers", "版权方连接", [
+    ),
+    look(
+      "实时结构预览",
+      "右侧按当前设置实时演示会生成多少系列、广告组和广告，以及预算合计，改完马上看到效果。",
+      card("结构与预算示例"),
+    ),
+    click(
+      "创建策略",
+      "创建策略",
+      "保存为新策略的第 1 个版本。",
+      button("创建策略", true),
+      { settleMs: 1500 },
+    ),
+    look(
+      "策略已创建",
+      "新策略已经可以在搭建时选用。之后每次编辑都会生成新版本，已提交的搭建任务不受影响。",
+      "main h1",
+    ),
+  ],
+}
+
+const builds: TourChapter = {
+  id: "builds",
+  title: "批量搭建广告",
+  summary: "多部剧 × 多个账户一次搭建并启用",
+  steps: [
+    click(
+      "打开广告搭建",
+      "广告搭建",
+      "核心功能：一次把多部剧投到多个账户。",
+      navItem("广告搭建"),
+    ),
+    look(
+      "三步完成搭建",
+      "批量输入 → 准备与调整 → 搭建预览。前两步都不会创建广告，预览确认后才提交。",
+      byText("main div", /^1·批量输入/),
+      { path: at("/builds/new") },
+    ),
+    click(
+      "选择版权方连接",
+      "版权方连接",
+      "先选这批剧从哪个版权方取推广链接。",
+      '[role="combobox"][aria-label="版权方连接"]',
+      { settleMs: 600 },
+    ),
+    click(
+      "选择网眼",
+      "网眼 · 主账号",
+      "选“网眼 · 主账号”。",
+      inDialog('[role="option"]', "网眼"),
+    ),
+    click(
+      "选择推广应用",
+      "推广应用",
+      "再选用哪个推广应用（小程序）。",
+      '[role="combobox"][aria-label="推广应用"]',
+      { settleMs: 600 },
+    ),
+    click(
+      "选一个应用",
+      "第一个应用",
+      "选第一个可用的应用。",
+      inDialog('[role="option"]'),
+    ),
+    click(
+      "选择投放策略",
+      "投放策略",
+      "最后选套用哪套投放策略。",
+      '[role="combobox"][aria-label="投放策略"]',
+      { settleMs: 600 },
+    ),
+    click(
+      "选一套策略",
+      "美区 · 目标 ROAS 1.1",
+      "选“美区 · 目标 ROAS 1.1 · 按素材分组”。",
+      inDialog('[role="option"]', "美区·目标ROAS1.1"),
+    ),
+    look(
+      "填写剧目",
+      "每行一部完整剧名。点下面的按钮填入 2 部示例剧。",
+      "#build-drama",
       {
-        title: "版权方连接",
-        body: "每个连接对应一个版权方后台账号。系统会定期验证连接，取链时自动恢复过期会话。",
-        target: main,
+        action: {
+          label: "填入示例剧目",
+          run: () => void fillField("#build-drama", SAMPLE_DRAMAS.join("\n")),
+        },
+        readyWhen: hasValue(() => document.getElementById("build-drama")),
+        waitingText: "先填入剧目。",
       },
+    ),
+    look(
+      "填写广告账户",
+      "每行一个账户 ID 或名称，也可以点“选择账户”从列表勾选。所有剧都会投到所有账户。点下面的按钮填入 2 个示例账户。",
+      "#build-account",
       {
-        title: "新增连接",
-        body: "点“新增连接”选择版权方类型并填写账号即可接入。",
-        target: button("新增连接", true),
+        action: {
+          label: "填入示例账户",
+          run: () =>
+            void fillField("#build-account", SAMPLE_ACCOUNTS.join("\n")),
+        },
+        readyWhen: hasValue(() => document.getElementById("build-account")),
+        waitingText: "先填入账户。",
       },
+    ),
+    click(
+      "解析并准备",
+      "解析并准备",
+      "系统核实剧名和账户、自动取推广链接、按剧名匹配素材。这一步还不会创建广告。",
+      button("解析并准备", true),
+      { settleMs: 2500 },
+    ),
+    look(
+      "准备结果",
+      "每部剧的推广链接、匹配到的素材数量都在这里，可以逐个修改链接、调整素材。",
+      tableRow(0),
       {
-        title: "推广应用",
-        body: "“查看已发现应用”列出该连接下的推广应用，可为每个应用设置默认的起播集、卡点集等取链参数。",
-        target: button("查看已发现应用", true),
+        readyWhen: () => !!button("选择小程序", true)(),
+        waitingText: "正在取链和匹配素材…",
       },
+    ),
+    click(
+      "选择推广小程序",
+      "选择小程序",
+      "选这批剧实际播放的小程序。",
+      button("选择小程序", true),
+      { settleMs: 800 },
+    ),
+    click(
+      "选一个小程序",
+      "选择并继续",
+      "系统会检查每个目标账户是否都能用这个小程序。",
+      inDialog("button", "选择并继续"),
+      { settleMs: 2000 },
+    ),
+    click(
+      "选择投放身份",
+      "选择投放身份",
+      "选广告展示时用的 TikTok 账号。",
+      button("选择投放身份", true),
+      { settleMs: 800 },
+    ),
+    click(
+      "选一个身份",
+      "Velvet Reels",
+      "选“Velvet Reels”，系统会逐个账户验证这个身份。",
+      inDialog("button, [role=option], li, div[tabindex]", "Velvet Reels"),
+      { settleMs: 2000 },
+    ),
+    look(
+      "定向与排期",
+      "国家、语言、年龄等定向默认来自策略，可以只针对这一批修改；排期可以立即开始或指定时间。",
+      byText("label, button, [role=radio]", "立即开始"),
+    ),
+    click(
+      "生成搭建预览",
+      "生成搭建预览",
+      "生成最终要创建的内容。",
+      button("生成搭建预览", true),
+      { settleMs: 2500 },
+    ),
+    look(
+      "搭建预览",
+      "精确列出每部剧在每个账户会创建多少系列、广告组、广告，以及排除了哪些组合、为什么排除。",
+      tableRow(0),
       {
-        title: "链接记录",
-        body: "“链接记录”页签保存每部剧已取得的推广链接，搭建时会优先复用。",
-        target: tab("链接记录"),
+        readyWhen: () => {
+          const submit = document.querySelector<HTMLButtonElement>(
+            'button[aria-label^="创建并立即启用"]',
+          )
+          return !!submit && !submit.disabled
+        },
+        waitingText: "正在生成预览…",
       },
-    ]),
-  },
-  {
-    match: /\/materials$/,
-    tour: pageTour("materials", "素材库", [
+    ),
+    look(
+      "数量与预算合计",
+      "底部汇总：总共多少系列、广告组、广告，以及系列预算合计。",
+      byText("p", /Campaign·\d+AdGroup/),
+    ),
+    click(
+      "提交搭建",
+      "创建并立即启用",
+      "提交后系统直接在 TikTok 创建并启用，不需要再手动开启。",
+      'button[aria-label^="创建并立即启用"]',
+      { settleMs: 2000 },
+    ),
+    look(
+      "执行进度",
+      "后台逐个账户执行，已创建数量实时更新。等几秒看看进度变化。",
+      'dl[aria-label="创建数量摘要"]',
       {
-        title: "素材列表",
-        body: "所有已上传素材：来源 BC、文件信息、平台入库状态、上传账户和可用账户数。可按文件名、状态、日期筛选。",
-        target: main,
+        readyWhen: () => !mainHas("任务正在处理")() && !mainHas("排队中")(),
+        waitingText: "正在逐个账户创建…",
       },
+    ),
+    click(
+      "查看组合明细",
+      "查看明细",
+      "每个“剧 × 账户”组合都能看到具体创建了哪些广告组和广告。",
+      inRow("button", 0, "查看明细"),
+      { settleMs: 1000 },
+    ),
+    look(
+      "组合明细",
+      "广告组、广告、素材逐项列出，带平台返回的 ID 和审核状态。失败的步骤可以一键重试。",
+      dialogTarget,
+    ),
+    click("关闭明细", "关闭", "点右上角的 × 关闭。", dialogClose),
+  ],
+}
+
+const ads: TourChapter = {
+  id: "ads",
+  title: "报表与批量调整",
+  summary: "六维报表、批量改预算、操作记录",
+  steps: [
+    click(
+      "打开广告报表",
+      "广告报表",
+      "所有账户的投放数据汇总在一张报表里。",
+      navItem("广告报表"),
+    ),
+    look(
+      "核心指标",
+      "消耗、ROAS、展示、点击率、CPM 等指标按所选日期汇总，日期和筛选条件可以保存起来常用。",
+      card("消耗"),
+      { path: at("/ads") },
+    ),
+    click(
+      "按系列查看",
+      "系列",
+      "可以按账户、系列、广告组、广告、素材、剧六个维度分析。点“系列”。",
+      tab("系列"),
+      { settleMs: 1200 },
+    ),
+    look(
+      "系列明细",
+      "每一行是一个系列，显示状态、预算、消耗、ROAS 和多日回收。点行首的箭头可以展开详情和趋势。",
+      tableRow(0),
+    ),
+    click(
+      "勾选系列",
+      "勾选框",
+      "勾选第一行。勾选后可以批量启用、暂停、改预算、改目标 ROAS、改名。",
+      inRow('[role="checkbox"]', 0),
+    ),
+    click(
+      "批量修改预算",
+      "修改预算",
+      "演示批量改预算。",
+      button("修改预算", true),
+      { settleMs: 1000 },
+    ),
+    look(
+      "填写新预算",
+      "预算会改在实际持有预算的那一层。点下面的按钮填入 250，下方会立即预览每个对象的“原值 → 新值”。",
+      "#management-value",
       {
-        title: "批量上传",
-        body: "点“批量上传”选择本地视频。体验版可以在引导里使用示例视频。",
-        target: button("批量上传", true),
+        action: {
+          label: "填入 250",
+          run: () => void fillField("#management-value", "250"),
+        },
+        readyWhen: () =>
+          !!inDialog("button", /^提交/)() && !mainHas("没有需要修改的对象")(),
+        waitingText: "先填入新的日预算。",
       },
-      {
-        title: "上传队列",
-        body: "“上传队列”页签查看每一批导入的进度，中断的上传可以继续或重选文件。",
-        target: tab("上传队列"),
-      },
-    ]),
-  },
-  {
-    match: /\/strategies(\/new)?$/,
-    tour: pageTour("strategies", "投放策略", [
-      {
-        title: "策略列表",
-        body: "每套策略包含预算、出价、广告组与广告的生成规则、定向、命名模板和文案池。",
-        target: main,
-      },
-      {
-        title: "新建策略",
-        body: "点“新建策略”，右侧会实时演示按当前规则会生成多少系列、广告组和广告。",
-        target: button("新建策略"),
-      },
-    ]),
-  },
-  {
-    match: /\/builds\/new$/,
-    tour: pageTour("builds-new", "广告搭建", [
-      {
-        title: "三步完成批量搭建",
-        body: "批量输入 → 准备与调整 → 搭建预览。准备阶段自动取链、匹配素材，预览确认后才会提交。",
-        target: main,
-      },
-      {
-        title: "草稿箱",
-        body: "没做完的搭建会保存在“草稿箱”，可以随时继续。",
-        target: button("草稿箱", true),
-      },
-    ]),
-  },
+    ),
+    click(
+      "确认提交",
+      "提交",
+      "核对预览无误后提交。提交前不会改动任何广告。",
+      inDialog("button", /^提交，/),
+      { settleMs: 1500 },
+    ),
+    click(
+      "查看操作记录",
+      "查看操作记录",
+      "修改已经提交，几秒后执行完成，报表里的预算会同步更新。点“查看操作记录”。",
+      byText("a, button", "查看操作记录"),
+      { settleMs: 1200 },
+    ),
+    look(
+      "操作记录",
+      "每次批量修改都有记录：谁、什么时候、改了哪些对象、平台是否接收。人工操作和自动规则触发的都在这里。",
+      tableRow(0),
+      { path: at("/ad-management-tasks") },
+    ),
+    click(
+      "查看明细",
+      "查看明细",
+      "点第一条的“查看明细”。",
+      inRow("a, button", 0, "查看明细"),
+      { settleMs: 1200 },
+    ),
+    look(
+      "逐项回执",
+      "每个对象的原值、新值、平台回执和数据核对结果；需要时可以一键恢复成原值。",
+      card("逐项回执"),
+    ),
+  ],
+}
+
+const rules: TourChapter = {
+  id: "rules",
+  title: "自动规则",
+  summary: "按条件自动盯盘、提预算、止损",
+  steps: [
+    click(
+      "打开自动规则",
+      "自动规则",
+      "让系统按规则盯盘：ROAS 过低自动暂停、达标自动提预算、夜间降预算……",
+      navItem("自动规则"),
+    ),
+    look(
+      "执行概览",
+      "最近的执行动作、待确认、失败和冲突数量一目了然。",
+      card("执行动作"),
+      { path: at("/automation-rules") },
+    ),
+    look(
+      "规则列表",
+      "每条规则可以选择“仅通知”“确认后执行”或“自动执行”，按固定频率运行，开关随时启停。",
+      tableRow(0),
+    ),
+    click(
+      "从模板新建",
+      "从模板新建",
+      "用模板快速建一条规则。",
+      button("从模板新建", true),
+      { settleMs: 800 },
+    ),
+    click(
+      "选模板",
+      "剧级止损",
+      "选“剧级止损”：每部剧今天消耗高且 ROAS 偏低时暂停。",
+      inDialog("button, [role=option], div[tabindex], li", "剧级止损"),
+      { settleMs: 1200 },
+    ),
+    look(
+      "规则内容",
+      "范围、条件、动作、频率和通知都已按模板填好，可以按需调整。",
+      dialogTarget,
+    ),
+    click(
+      "试运行",
+      "试运行",
+      "保存前先试运行，看看按现在的数据会命中哪些对象。试运行不会改动广告。",
+      inDialog("button", "试运行"),
+      { settleMs: 2000 },
+    ),
+    click("保存规则", "保存", "确认后保存。", inDialog("button", "保存")),
+    click(
+      "待确认",
+      "待确认",
+      "“确认后执行”的规则命中后会在这里排队等人确认。",
+      tab("待确认"),
+    ),
+    click(
+      "处理一批",
+      "处理",
+      "点第一批的“处理”。",
+      inRow("button", 0, "处理"),
+      { settleMs: 1000 },
+    ),
+    look(
+      "判断时与现在",
+      "同时显示规则判断时和现在的数据；条件已不满足的对象会单独标出，不会被执行。",
+      dialogTarget,
+    ),
+    click(
+      "确认执行",
+      "确认执行所选",
+      "确认执行勾选的对象。",
+      inDialog("button", "确认执行所选"),
+      { settleMs: 1500 },
+    ),
+    click(
+      "通知设置",
+      "通知设置",
+      "规则的预警和执行结果可以推送到飞书群。",
+      navItem("通知设置"),
+    ),
+    click(
+      "发送测试消息",
+      "发送测试消息",
+      "配置好飞书机器人后，先发一条测试消息确认能收到。",
+      button("发送测试消息", true),
+      { path: at("/notifications"), settleMs: 1200 },
+    ),
+    look(
+      "体验完成",
+      "主流程就到这里。左下角“引导”可以按章节重新演示；“本页讲解”讲解当前页面；需要输入时点“填入示例…”一键填好；“重置”回到初始数据。",
+    ),
+  ],
+}
+
+export const CHAPTERS: TourChapter[] = [
+  accounts,
+  providers,
+  materials,
+  strategies,
+  builds,
+  ads,
+  rules,
+]
+
+function tourOf(id: string, title: string, chapters: TourChapter[]): Tour {
+  return {
+    id,
+    title,
+    steps: chapters.flatMap((chapter, index) =>
+      chapter.steps.map((step) => ({
+        ...step,
+        chapter: `第 ${CHAPTERS.indexOf(chapter) + 1} 章 ${chapter.title}`,
+        // 单独演示某一章时，第一步要先回到这一章开始的页面。
+        path:
+          step === chapter.steps[0] && index === 0 && !step.path
+            ? chapterStart[chapter.id]
+            : step.path,
+      })),
+    ),
+  }
+}
+
+// 每章第一步是点侧栏进入；单独演示一章时先停在一个能看到侧栏的页面上。
+const chapterStart: Record<string, TourStep["path"]> = {
+  accounts: at("/accounts"),
+  providers: at("/accounts"),
+  materials: at("/providers"),
+  strategies: at("/materials"),
+  builds: at("/strategies"),
+  ads: at("/build-tasks"),
+  rules: at("/ads"),
+}
+
+export const MAIN_TOUR = tourOf("main", "完整引导", CHAPTERS)
+export const chapterTour = (chapter: TourChapter) =>
+  tourOf(chapter.id, chapter.title, [chapter])
+
+// “本页怎么用”：当前页面对应的章节，从这一页开始讲（跳过“点侧栏进入”这一步）。
+const PAGE_CHAPTERS: { match: RegExp; chapter: TourChapter }[] = [
+  { match: /\/accounts$/, chapter: accounts },
+  { match: /\/providers$/, chapter: providers },
+  { match: /\/materials$/, chapter: materials },
+  { match: /\/strategies$/, chapter: strategies },
+  { match: /\/builds\/new$/, chapter: builds },
+  { match: /\/ads$/, chapter: ads },
+  { match: /\/automation-rules$/, chapter: rules },
+]
+
+const SIMPLE_PAGE_TOURS: { match: RegExp; tour: Tour }[] = [
   {
     match: /\/build-tasks$/,
-    tour: pageTour("build-tasks", "搭建任务", [
-      {
-        title: "搭建任务",
-        body: "每次提交都是一个任务，可以按状态筛选：进行中、需处理、已完成。点进任务查看每个剧 × 账户组合的结果。",
-        target: main,
-      },
-    ]),
-  },
-  {
-    match: /\/ads$/,
-    tour: pageTour("ads", "广告报表", [
-      {
-        title: "日期与搜索",
-        body: "选择日期范围、按名称/剧名/版权方/ID 搜索，可以把常用筛选保存起来。",
-        target: button("保存筛选", true),
-      },
-      {
-        title: "六个维度",
-        body: "账户、系列、广告组、广告、素材、剧，同一套指标从不同角度看。",
-        target: tab("系列"),
-      },
-      {
-        title: "列设置",
-        body: "“列设置”可以选择要看的指标和顺序。",
-        target: button("列设置", true),
-      },
-      {
-        title: "刷新与导出",
-        body: "“刷新”立即同步最新数据，“导出”生成报表文件下载。",
-        target: button("导出", true),
-      },
-    ]),
+    tour: {
+      id: "build-tasks",
+      title: "搭建任务",
+      steps: [
+        look(
+          "搭建任务",
+          "每次提交都是一个任务，可以按进行中、需处理、已完成筛选。部分失败的任务点进去可以一键重试，结果待核实的可以一键核查。",
+          tableRow(0),
+        ),
+        click(
+          "打开任务",
+          "任务行",
+          "点第一条任务进入详情。",
+          inRow("a, button", 0),
+        ),
+      ],
+    },
   },
   {
     match: /\/ad-management-tasks$/,
-    tour: pageTour("ad-management-tasks", "操作记录", [
-      {
-        title: "操作记录",
-        body: "所有批量启停、改预算、改出价、改名的执行记录，包括人工和自动规则触发的。点“查看明细”看每个对象的平台回执。",
-        target: main,
-      },
-    ]),
-  },
-  {
-    match: /\/automation-rules$/,
-    tour: pageTour("automation-rules", "自动规则", [
-      {
-        title: "执行概览",
-        body: "顶部统计最近的执行动作、待确认、失败和冲突数量。",
-        target: main,
-      },
-      {
-        title: "新建规则",
-        body: "可以从模板新建，也可以自定义条件、动作、范围和运行频率；保存前可以试运行。",
-        target: button("从模板新建", true),
-      },
-      {
-        title: "待确认与执行记录",
-        body: "“待确认”处理需要人工确认的命中，“执行记录”查看每次运行的结果。",
-        target: tab("执行记录"),
-      },
-    ]),
+    tour: {
+      id: "ad-management-tasks",
+      title: "操作记录",
+      steps: [
+        look(
+          "操作记录",
+          "所有批量启停、改预算、改出价、改名的执行记录，包括人工和自动规则触发的。",
+          tableRow(0),
+        ),
+        click(
+          "查看明细",
+          "查看明细",
+          "点“查看明细”看每个对象的平台回执。",
+          inRow("a, button", 0, "查看明细"),
+        ),
+      ],
+    },
   },
   {
     match: /\/notifications$/,
-    tour: pageTour("notifications", "通知设置", [
-      {
-        title: "飞书通知",
-        body: "配置飞书机器人地址后，自动规则的预警和执行结果会推送到群里，可以先发测试消息验证。",
-        target: main,
-      },
-    ]),
+    tour: {
+      id: "notifications",
+      title: "通知设置",
+      steps: [
+        click(
+          "飞书通知",
+          "发送测试消息",
+          "配置飞书机器人地址后，自动规则的预警和执行结果会推送到群里。先发一条测试消息验证。",
+          button("发送测试消息", true),
+        ),
+      ],
+    },
   },
   {
     match: /\/members$/,
-    tour: pageTour("members", "成员管理", [
-      {
-        title: "成员与角色",
-        body: "租户管理员、投手、只读成员三种角色，权限按租户隔离。可以添加已有用户或新建用户。",
-        target: main,
-      },
-    ]),
+    tour: {
+      id: "members",
+      title: "成员管理",
+      steps: [
+        look(
+          "成员与角色",
+          "租户管理员、投手、只读成员三种角色，权限按租户隔离。",
+          tableRow(0),
+        ),
+        click(
+          "添加成员",
+          "添加成员",
+          "可以添加已有用户，或者直接新建用户加入租户。",
+          button("添加成员", true),
+        ),
+      ],
+    },
   },
   {
     match: /^\/platform\/tenants$/,
-    tour: pageTour("platform", "平台管理", [
-      {
-        title: "多租户",
-        body: "平台管理员在这里开通租户、设置默认 BC、停用租户，并可“进入租户”代管操作。",
-        target: main,
-      },
-    ]),
+    tour: {
+      id: "platform",
+      title: "平台管理",
+      steps: [
+        look(
+          "多租户",
+          "平台管理员在这里开通租户、设置默认 BC、停用租户。",
+          tableRow(0),
+        ),
+        click(
+          "进入租户",
+          "进入租户",
+          "点“进入租户”代管这个租户的投放。",
+          inRow("a, button", 0, "进入租户"),
+        ),
+      ],
+    },
   },
 ]
 
-export function pageTourFor(pathname: string) {
-  return PAGE_TOURS.find(({ match }) => match.test(pathname))?.tour ?? null
+export function pageTourFor(pathname: string): Tour | null {
+  const page = PAGE_CHAPTERS.find(({ match }) => match.test(pathname))
+  if (page) {
+    const tour = chapterTour(page.chapter)
+    // 已经在这一页了：章节第一步若是“点侧栏进入”，就从第二步讲起。
+    const steps =
+      page.chapter.steps[0].advance === "click"
+        ? tour.steps.slice(1)
+        : tour.steps
+    return { ...tour, id: `page-${tour.id}`, steps }
+  }
+  return (
+    SIMPLE_PAGE_TOURS.find(({ match }) => match.test(pathname))?.tour ?? null
+  )
 }

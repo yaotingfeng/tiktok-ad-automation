@@ -119,39 +119,48 @@ test("每个页面都有内容且没有未覆盖操作", async ({ page, baseURL 
   expectIsolated(state, new URL(baseURL as string).origin)
 })
 
-test("主线引导可以从头走到尾", async ({ page, baseURL }) => {
-  test.setTimeout(420_000)
+test("完整引导每一步都能定位并跑通", async ({ page, baseURL }) => {
+  test.setTimeout(600_000)
   const state = watch(page)
   await page.goto("/demo/#/login")
   await page.getByRole("button", { name: "一键进入并开始引导" }).click()
   const card = page.locator("[data-demo-tour-card]")
   await expect(card).toBeVisible()
-  const counter = card.locator("span").first()
-  const total = Number(/\/(\d+)/.exec(await counter.innerText())?.[1])
-  expect(total).toBeGreaterThan(30)
+  const progress = card.locator("[data-demo-tour-progress]")
+  const total = Number(/\/(\d+)/.exec(await progress.innerText())?.[1])
+  expect(total).toBeGreaterThan(60)
+  const fixed = new Set([
+    "上一步",
+    "跳过这步",
+    "下一步",
+    "完成",
+    "跳过",
+    "退出",
+  ])
   for (let step = 1; step <= total; step++) {
-    await expect(counter).toContainText(`${step}/${total}`, { timeout: 20_000 })
-    // 等页面就绪（上传完成、预览生成等）与高亮元素定位完成。
-    await expect(card.getByRole("button", { name: "处理中…" })).toHaveCount(0, {
-      timeout: 25_000,
+    await expect(progress).toContainText(`${step}/${total}`, {
+      timeout: 20_000,
     })
-    await expect(card.getByText("正在定位页面元素…")).toHaveCount(0, {
-      timeout: 15_000,
-    })
+    await expect(card.getByText("正在定位")).toHaveCount(0, { timeout: 15_000 })
     const title = await card.locator("h2").innerText()
-    const action = card.getByRole("button", {
-      name: /使用示例视频|一键选择|填入示例/,
-    })
-    if (await action.count()) {
-      await action.click()
-      await page.waitForTimeout(2500)
+    // 卡片上的辅助按钮（使用示例视频、填入示例…）照着点，就像体验者那样。
+    for (const action of await card.getByRole("button").all()) {
+      const label = (await action.innerText()).trim()
+      if (!fixed.has(label) && label !== "处理中…") {
+        await action.click()
+        await page.waitForTimeout(2000)
+      }
     }
+    await expect(card.getByRole("button", { name: "处理中…" })).toHaveCount(0, {
+      timeout: 30_000,
+    })
+    // 每一步都必须在页面上找到要讲解或要点击的位置。
+    await expect(card.getByText("页面上没有找到"), title).toHaveCount(0)
     const target = page.locator('[data-demo-tour-target="click"]')
     if (await target.count()) {
-      // 需要点击页面元素才能继续的步骤必须能定位到元素，并且点击后自动前进。
       await target.first().click()
       if (step < total)
-        await expect(counter, title).toContainText(`${step + 1}/${total}`, {
+        await expect(progress, title).toContainText(`${step + 1}/${total}`, {
           timeout: 15_000,
         })
     } else {
@@ -161,11 +170,61 @@ test("主线引导可以从头走到尾", async ({ page, baseURL }) => {
     }
   }
   await expect(card).toHaveCount(0)
-  // 走完主线后，新搭建的广告已出现在报表里。
+  // 走完引导后，新搭建的广告已出现在报表里。
   await go(page, tenantPage("/ads"))
   await page.getByRole("tab", { name: "系列", exact: true }).click()
   await expect(page.locator("main tbody")).toContainText("Reborn as the Alpha")
   expect(await gaps(page)).toEqual([])
   expect(state.errors).toEqual([])
   expectIsolated(state, new URL(baseURL as string).origin)
+})
+
+test("自由体验时搭建页自动填好示例数据，其他输入可一键填写", async ({
+  page,
+}) => {
+  await enter(page)
+  // 等租户侧栏加载完（加载前侧栏里的“广告搭建”指向首页）。
+  await expect(
+    page.getByRole("heading", { name: "账户与授权", exact: true }),
+  ).toBeVisible()
+  await page.locator("[data-sidebar] a", { hasText: "广告搭建" }).click()
+  await expect(page.locator("#build-drama")).toHaveValue(/Billionaire/, {
+    timeout: 15_000,
+  })
+  await expect(page.locator("#build-account")).toHaveValue(
+    /7431000000000001001/,
+  )
+  await expect(page.getByRole("combobox", { name: "投放策略" })).toContainText(
+    "美区",
+  )
+  await page.getByRole("button", { name: "解析并准备" }).click()
+  await expect(page).toHaveURL(/build-drafts/)
+  await expect(page.getByRole("button", { name: "选择小程序" })).toBeVisible()
+
+  await go(page, tenantPage("/materials"))
+  const leave = page.getByRole("button", { name: /丢弃未保存修改/ })
+  if (await leave.count()) await leave.click()
+  await page.getByRole("button", { name: "批量上传" }).click()
+  await page.locator("[data-demo-fill]", { hasText: "使用示例视频" }).click()
+  await expect(
+    page.getByRole("button", { name: /开始上传 1 个文件/ }),
+  ).toBeVisible()
+})
+
+test("素材制作在新标签页打开君博租户的生产直达页", async ({
+  page,
+  context,
+}) => {
+  await enter(page)
+  await expect(
+    page.getByRole("heading", { name: "账户与授权", exact: true }),
+  ).toBeVisible()
+  const popup = context.waitForEvent("page")
+  await page.getByRole("button", { name: "素材制作", exact: true }).click()
+  const opened = await popup
+  expect(new URL(opened.url()).pathname + new URL(opened.url()).search).toBe(
+    "/material-production?tenant=junbo",
+  )
+  await opened.close()
+  expect(await gaps(page)).toEqual([])
 })

@@ -162,8 +162,8 @@ registerDemoRedirect(
     url.hostname === "business-api.tiktok.com" &&
     url.pathname === "/portal/auth/authorize",
   async (_url) => {
-    // 模拟授权成功，直接回到账户页带 authorization=success
-    return `/tenants/${MAIN_TENANT_ID}/accounts?bc_id=${MAIN_BC_ID}&tab=connections&authorization=success`
+    // 模拟用户在 TikTok 页面确认授权后回跳：与真实回调一致，带 CANDIDATE_READY 与连接 ID。
+    return `/tenants/${MAIN_TENANT_ID}/accounts?bc_id=${MAIN_BC_ID}&tab=connections&authorization=CANDIDATE_READY&connection_id=${demoConnections[0].id}`
   },
 )
 

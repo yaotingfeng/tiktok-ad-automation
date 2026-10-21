@@ -15,6 +15,7 @@ export default defineConfig({
   use: {
     baseURL,
     trace: "on-first-retry",
+    screenshot: "only-on-failure",
     ...devices["Desktop Chrome"],
     viewport: { width: 1440, height: 900 },
   },

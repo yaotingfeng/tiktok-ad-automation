@@ -62,16 +62,19 @@ export function renderApp({
   router,
   queryClient,
   overlay,
+  wrapRoutes = (routes) => routes,
 }: {
   router: AppRouter
   queryClient: QueryClient
   overlay?: ReactNode
+  /** 体验版用它在模拟整页跳转时重新挂载页面。 */
+  wrapRoutes?: (routes: ReactNode) => ReactNode
 }) {
   ReactDOM.createRoot(document.getElementById("root")!).render(
     <StrictMode>
       <ThemeProvider defaultTheme="light" storageKey="workbench-theme">
         <QueryClientProvider client={queryClient}>
-          <RouterProvider router={router} />
+          {wrapRoutes(<RouterProvider router={router} />)}
           {overlay}
           <Toaster richColors closeButton />
         </QueryClientProvider>

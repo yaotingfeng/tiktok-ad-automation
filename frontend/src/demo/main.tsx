@@ -36,16 +36,20 @@ async function boot() {
     auth: () => localStorage.getItem("access_token") || "",
   })
   const router = app.createAppRouter(createHashHistory())
-  navigation.installDemoNavigation((path, options) =>
+  navigation.installDemoNavigation((path, options) => {
     router.history.push(path, undefined, {
       ignoreBlocker: options?.leavePage ?? false,
-    }),
-  )
+    })
+    // 真实系统这里是整页跳转（例如从 TikTok 授权页返回），页面状态和弹窗都会重置；
+    // 体验版不能刷新（演示数据在内存里），改为重新挂载页面达到同样效果。
+    if (options?.leavePage) shell.reloadDemoPage()
+  })
   const queryClient = app.createAppQueryClient()
   app.renderApp({
     router,
     queryClient,
     overlay: <shell.DemoShell router={router} queryClient={queryClient} />,
+    wrapRoutes: (routes) => <shell.Remountable>{routes}</shell.Remountable>,
   })
   document.documentElement.dataset.demoReady = "true"
 }

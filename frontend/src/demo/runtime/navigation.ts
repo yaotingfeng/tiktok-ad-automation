@@ -3,7 +3,8 @@ import { reportDemoGap } from "./gaps"
 
 // 体验版里的整页跳转：站内路径改走 hash 路由；TikTok 授权、素材工作台等外部地址
 // 交给各领域注册的模拟回调，回调返回应跳回的站内路径（例如带授权成功参数的账户页）。
-type ExternalRedirect = (url: URL) => string | Promise<string>
+// 返回 null 表示回调已自行处理（例如新开窗口），体验版页面保持不动。
+type ExternalRedirect = (url: URL) => string | null | Promise<string | null>
 
 const externalRedirects: {
   match: (url: URL) => boolean
@@ -43,6 +44,7 @@ export function installDemoNavigation(navigate: DemoNavigate) {
       reportDemoGap(`跳转 ${url.origin}${url.pathname}`)
       return
     }
-    navigate(await redirect.to(url), { leavePage: true })
+    const target = await redirect.to(url)
+    if (target !== null) navigate(target, { leavePage: true })
   })
 }

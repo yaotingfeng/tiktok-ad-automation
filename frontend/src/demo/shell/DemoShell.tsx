@@ -1,6 +1,14 @@
 import type { QueryClient } from "@tanstack/react-query"
-import { BookOpen, Compass, RotateCcw, Sparkles } from "lucide-react"
 import {
+  BookOpen,
+  Compass,
+  RotateCcw,
+  Sparkles,
+  WandSparkles,
+} from "lucide-react"
+import {
+  Fragment,
+  type ReactNode,
   useCallback,
   useEffect,
   useMemo,
@@ -13,15 +21,43 @@ import { toast } from "sonner"
 import type { AppRouter } from "@/app"
 import { LoginService } from "@/client"
 import { Button } from "@/components/ui/button"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
 import { MAIN_BC_ID, MAIN_TENANT_ID } from "../fixtures/world"
 import { DEMO_GAP_EVENT } from "../runtime/gaps"
 import { TourOverlay } from "../tour/TourOverlay"
-import { MAIN_TOUR, pageTourFor } from "../tour/tours"
+import { CHAPTERS, chapterTour, MAIN_TOUR, pageTourFor } from "../tour/tours"
 import type { Tour, TourContext } from "../tour/types"
+import { currentFiller, fillBuildInput } from "./samples"
 
 // 体验版外壳：常驻“体验版 · 演示数据”标识、一键进入、主线引导、本页讲解、重置，
 // 以及未覆盖操作的醒目提示。外壳渲染在应用路由之外，通过 router.history 读写位置。
-export const DEMO_HOME = `/tenants/${MAIN_TENANT_ID}?bc_id=${MAIN_BC_ID}`
+// 进入体验版先到“账户与授权”（租户首页会直接进入广告搭建，自动填好的示例数据会让
+// 第一次离开页面就弹出“有未保存的修改”）。
+export const DEMO_HOME = `/tenants/${MAIN_TENANT_ID}/accounts?bc_id=${MAIN_BC_ID}`
+
+const RELOAD_EVENT = "tk-ada-demo:reload"
+
+/** 模拟整页刷新：重新挂载页面，内存里的演示数据保留。 */
+export function reloadDemoPage() {
+  window.dispatchEvent(new Event(RELOAD_EVENT))
+}
+
+export function Remountable({ children }: { children: ReactNode }) {
+  const [key, setKey] = useState(0)
+  useEffect(() => {
+    const onReload = () => setKey((value) => value + 1)
+    window.addEventListener(RELOAD_EVENT, onReload)
+    return () => window.removeEventListener(RELOAD_EVENT, onReload)
+  }, [])
+  return <Fragment key={key}>{children}</Fragment>
+}
 
 function useLocation(router: AppRouter) {
   const subscribe = useCallback(
@@ -92,6 +128,47 @@ export function DemoShell({
   const onLogin = pathname === "/login"
   const pageTour = onLogin ? null : pageTourFor(pathname)
 
+  // 自由体验时，进入“广告搭建”页自动填好示例的版权方、应用、策略、剧目和账户，
+  // 体验者直接点“解析并准备”即可；跟着引导时由引导一步步带着选，不自动填。
+  const touring = useRef(false)
+  touring.current = !!active
+  useEffect(() => {
+    if (!/\/builds\/new$/.test(pathname)) return
+    let cancelled = false
+    const started = Date.now()
+    const timer = window.setInterval(() => {
+      const drama = document.getElementById(
+        "build-drama",
+      ) as HTMLTextAreaElement | null
+      const connection = document.querySelector(
+        '[role="combobox"][aria-label="版权方连接"]',
+      )
+      if (Date.now() - started > 8000) window.clearInterval(timer)
+      if (!drama || !connection || touring.current) return
+      window.clearInterval(timer)
+      if (drama.value.trim()) return
+      void fillBuildInput({ quiet: true }).then(() => {
+        if (!cancelled && !touring.current)
+          toast.success("已自动填好示例数据", {
+            position: "top-center",
+            description:
+              "2 部示例剧 × 2 个示例账户，版权方、应用和策略也已选好。直接点“解析并准备”继续。",
+          })
+      })
+    }, 300)
+    return () => {
+      cancelled = true
+      window.clearInterval(timer)
+    }
+  }, [pathname])
+
+  // 当前页面或弹窗能填什么示例数据，用于外壳上的“填入示例数据”按钮。
+  const [filler, setFiller] = useState<ReturnType<typeof currentFiller>>()
+  useEffect(() => {
+    const timer = window.setInterval(() => setFiller(currentFiller()), 600)
+    return () => window.clearInterval(timer)
+  }, [])
+
   const enterDemo = async (startTour: boolean) => {
     setEntering(true)
     try {
@@ -114,7 +191,7 @@ export function DemoShell({
   }
 
   const startTour = (tour: Tour) => {
-    if (!localStorage.getItem("access_token") && tour === MAIN_TOUR) {
+    if (!localStorage.getItem("access_token")) {
       void enterDemo(true)
       return
     }
@@ -125,9 +202,9 @@ export function DemoShell({
     <>
       {onLogin ? <LoginCard entering={entering} onEnter={enterDemo} /> : null}
       <Dock
-        onStartMain={() => startTour(MAIN_TOUR)}
+        onStartTour={startTour}
         pageTour={pageTour}
-        onStartPage={(tour) => startTour(tour)}
+        filler={filler}
         onReset={reset}
       />
       {active ? (
@@ -176,24 +253,26 @@ function useStopOutsidePointer() {
 }
 
 function Dock({
-  onStartMain,
+  onStartTour,
   pageTour,
-  onStartPage,
+  filler,
   onReset,
 }: {
-  onStartMain: () => void
+  onStartTour: (tour: Tour) => void
   pageTour: Tour | null
-  onStartPage: (tour: Tour) => void
+  filler: ReturnType<typeof currentFiller>
   onReset: () => void
 }) {
   const ref = useStopOutsidePointer()
+  // 外壳拦截了 pointerdown（避免关掉页面弹窗），菜单改为点击打开。
+  const [menuOpen, setMenuOpen] = useState(false)
   return createPortal(
     <div
       ref={ref}
       data-demo-shell
       data-demo-dock
-      // 覆盖在左上角品牌位置：不遮挡页面内容和弹窗底部的主操作按钮。
-      className="pointer-events-auto fixed top-2 left-2 w-[256px] rounded-lg border border-amber-300 bg-amber-50 px-2 py-1.5 text-xs shadow-sm dark:bg-amber-950"
+      // 覆盖在左下角的账号信息位置：不遮挡侧栏导航、页面内容和弹窗底部的主操作按钮。
+      className="pointer-events-auto fixed bottom-2 left-2 w-[256px] rounded-lg border border-amber-300 bg-amber-50 px-2 py-1.5 text-xs shadow-md dark:bg-amber-950"
       style={{ zIndex: 2147482000 }}
     >
       <p className="flex items-center gap-1 px-1 font-semibold text-amber-800 dark:text-amber-200">
@@ -201,24 +280,61 @@ function Dock({
         TK-ADA 体验版 · 演示数据
       </p>
       <div className="mt-1 flex items-center gap-0.5">
-        <Button
-          size="sm"
-          variant="ghost"
-          className="h-7 px-2 text-xs"
-          onClick={onStartMain}
-        >
-          <Compass aria-hidden />
-          主线引导
-        </Button>
+        <DropdownMenu modal={false} open={menuOpen} onOpenChange={setMenuOpen}>
+          <DropdownMenuTrigger asChild>
+            <Button
+              size="sm"
+              variant="ghost"
+              className="h-7 px-2 text-xs"
+              onClick={() => setMenuOpen((open) => !open)}
+            >
+              <Compass aria-hidden />
+              引导
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent
+            data-demo-shell
+            align="start"
+            side="top"
+            className="w-72"
+            style={{ zIndex: 2147482500 }}
+          >
+            <DropdownMenuLabel>选择要演示的内容</DropdownMenuLabel>
+            <DropdownMenuItem onSelect={() => onStartTour(MAIN_TOUR)}>
+              <div className="flex flex-col">
+                <span className="font-medium">完整流程</span>
+                <span className="text-xs text-muted-foreground">
+                  7 章，共 {MAIN_TOUR.steps.length} 步，从授权一路到自动规则
+                </span>
+              </div>
+            </DropdownMenuItem>
+            <DropdownMenuSeparator />
+            {CHAPTERS.map((chapter, index) => (
+              <DropdownMenuItem
+                key={chapter.id}
+                onSelect={() => onStartTour(chapterTour(chapter))}
+              >
+                <div className="flex flex-col">
+                  <span>
+                    第 {index + 1} 章 · {chapter.title}
+                  </span>
+                  <span className="text-xs text-muted-foreground">
+                    {chapter.summary} · {chapter.steps.length} 步
+                  </span>
+                </div>
+              </DropdownMenuItem>
+            ))}
+          </DropdownMenuContent>
+        </DropdownMenu>
         {pageTour ? (
           <Button
             size="sm"
             variant="ghost"
             className="h-7 px-2 text-xs"
-            onClick={() => onStartPage(pageTour)}
+            onClick={() => onStartTour(pageTour)}
           >
             <BookOpen aria-hidden />
-            本页怎么用
+            本页讲解
           </Button>
         ) : null}
         <Button
@@ -231,6 +347,17 @@ function Dock({
           重置
         </Button>
       </div>
+      {filler ? (
+        <Button
+          size="sm"
+          className="mt-1 h-7 w-full bg-amber-500 text-xs text-white hover:bg-amber-600"
+          onClick={() => void filler.run()}
+          data-demo-fill
+        >
+          <WandSparkles aria-hidden />
+          {filler.label}
+        </Button>
+      ) : null}
     </div>,
     document.body,
   )

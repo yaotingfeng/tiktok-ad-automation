@@ -19,10 +19,13 @@ const visible = (el: Element) => {
 }
 
 /** 给 React 受控输入框赋值：走原生 setter 再派发 input 事件，React 才会更新状态。 */
-export function fillField(selector: string, value: string) {
-  const el = document.querySelector<HTMLInputElement | HTMLTextAreaElement>(
-    selector,
-  )
+export function fillField(
+  selector: string | Element | null | undefined,
+  value: string,
+) {
+  const el = (
+    typeof selector === "string" ? document.querySelector(selector) : selector
+  ) as HTMLInputElement | HTMLTextAreaElement | null
   if (!el) return false
   const proto =
     el instanceof HTMLTextAreaElement
@@ -77,8 +80,23 @@ export async function chooseOption(label: string, option?: string) {
   return true
 }
 
-/** 依次完成多个选择；前一个选择会解锁后一个下拉框，候选项可能还在加载，失败时稍等重试。 */
-export async function chooseOptions(pairs: [string, string?][]) {
+/**
+ * 依次完成多个选择；前一个选择会解锁后一个下拉框，候选项可能还在加载，失败时稍等重试。
+ * quiet：自动填写示例数据时隐藏中途弹出的选择弹窗，体验者只看到填好的结果。
+ */
+export async function chooseOptions(
+  pairs: [string, string?][],
+  options: { quiet?: boolean } = {},
+) {
+  if (options.quiet) document.documentElement.dataset.demoAutofill = "true"
+  try {
+    await choosePairs(pairs)
+  } finally {
+    delete document.documentElement.dataset.demoAutofill
+  }
+}
+
+async function choosePairs(pairs: [string, string?][]) {
   for (const [label, option] of pairs) {
     for (let attempt = 0; attempt < 4; attempt++) {
       if (await chooseOption(label, option)) break

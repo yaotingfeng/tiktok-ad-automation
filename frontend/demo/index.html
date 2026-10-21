@@ -7,6 +7,14 @@
     <title>TK-ADA 体验版</title>
     <meta name="theme-color" content="#000000" />
     <link rel="icon" type="image/png" sizes="32x32" href="/assets/brand/favicon-32.png" />
+    <style>
+      /* 自动填写示例数据时，中途弹出的选择弹窗不显示，体验者只看到填好的结果。 */
+      html[data-demo-autofill] [role="dialog"]:not([data-demo-tour-card]),
+      html[data-demo-autofill] [data-slot="dialog-overlay"],
+      html[data-demo-autofill] [data-slot="sheet-overlay"] {
+        opacity: 0 !important;
+      }
+    </style>
   </head>
   <body>
     <div id="root"></div>

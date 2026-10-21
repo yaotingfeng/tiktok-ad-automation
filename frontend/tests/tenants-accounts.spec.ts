@@ -3239,6 +3239,39 @@ test("material production only issues a login link on click and navigates", asyn
   ])
 })
 
+test("material production launcher opens the named tenant's workbench", async ({
+  page,
+}) => {
+  const { requests } = await boundary(page, {
+    platform: false,
+    role: "operator",
+  })
+  await page.goto("/material-production?tenant=%E7%A7%9F%E6%88%B7%E7%94%B2")
+  await expect(page).toHaveURL(
+    "https://manjumt.gzjunbo.net/api/login-links/consume?token=browser-fixture",
+  )
+  expect(requests.filter((r) => r.path.endsWith("/login-link"))).toEqual([
+    expect.objectContaining({
+      method: "POST",
+      path: `/api/tenants/${A}/material-production/login-link`,
+    }),
+  ])
+})
+
+test("material production launcher refuses tenants the account cannot use", async ({
+  page,
+}) => {
+  const { requests } = await boundary(page, {
+    platform: false,
+    role: "operator",
+  })
+  await page.goto("/material-production?tenant=junbo")
+  await expect(
+    page.getByText("当前账号不能打开 junbo 的素材制作"),
+  ).toBeVisible()
+  expect(requests.filter((r) => r.path.endsWith("/login-link"))).toEqual([])
+})
+
 test("viewer has no material production entry", async ({ page }) => {
   await boundary(page, { platform: false, role: "viewer" })
   await page.goto(`/tenants/${A}/accounts`)
