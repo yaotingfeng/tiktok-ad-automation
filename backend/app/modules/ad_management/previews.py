@@ -121,7 +121,16 @@ def prepare_preview(
         action="ads_manage",
     )
     record, selection = _selection_record(session, context, selection_id, bc_id)
-    route = freeze_route(session, context=context, bc_id=bc_id)
+    try:
+        route = freeze_route(session, context=context, bc_id=bc_id)
+    except DomainError as exc:
+        # 未指定连接时冻结的是 BC 默认执行连接；它停用时提示去切换默认连接，
+        # 不自动改用同 BC 的其他连接。其他调用方仍沿用原错误码判断重试。
+        if exc.code == "connection_unavailable":
+            raise DomainError(
+                "bc_default_connection_unavailable", "该 BC 的默认执行连接已停用"
+            ) from exc
+        raise
     expansion = _expand(
         session,
         context,

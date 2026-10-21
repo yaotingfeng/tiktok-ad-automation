@@ -500,3 +500,32 @@ def test_bounds_never_reverse_direction():
     assert _final_value(Decimal("150"), up) == Decimal("150")
     down = MutationSpec(field="budget", mode="subtract", value=Decimal("10"), min_value=Decimal("80"))
     assert _final_value(Decimal("50"), down) == Decimal("50")
+
+
+def test_disabled_default_connection_asks_to_switch_default(session, management_env):
+    """默认执行连接停用时提示切换默认连接，而不是笼统的“资源版本或请求标识冲突”。"""
+    from app.core.errors import ERROR_HTTP_STATUS, ERROR_PUBLIC_MESSAGES
+    from app.modules.accounts.connection_models import (
+        BCConnectionBinding,
+        BCDefaultRoute,
+    )
+    from app.modules.accounts.models import TikTokConnection
+
+    context, bc, account, route, selection = management_env
+    group = EntityRef(context.tenant_id, account.advertiser_id, "adgroup", "group-a")
+    session.add(_row(group, configuration={"roas_bid": "1.20"}, connection_id=route.connection_id))
+    _set_selection(selection, [group])
+    # 生产现场：报表读取仍走可用连接，默认执行连接指向另一个已停用的连接。
+    disabled = TikTokConnection(tenant_id=context.tenant_id, status="DISABLED", kind="OFFICIAL_MCP")
+    session.add(disabled)
+    session.flush()
+    session.add(BCConnectionBinding(tenant_id=context.tenant_id, bc_id=bc.bc_id, connection_id=disabled.id, kind=disabled.kind))
+    default = session.get(BCDefaultRoute, (context.tenant_id, bc.bc_id))
+    default.connection_id = disabled.id
+    session.add(default)
+    session.flush()
+    with pytest.raises(DomainError) as error:
+        prepare_preview(session, context, bc.bc_id, selection.id, MutationSpec(field="roas", mode="set", value=Decimal("1.03")))
+    assert error.value.code == "bc_default_connection_unavailable"
+    assert ERROR_HTTP_STATUS[error.value.code] == 409
+    assert "切换" in ERROR_PUBLIC_MESSAGES[error.value.code]
