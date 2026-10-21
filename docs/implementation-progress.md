@@ -3385,3 +3385,4 @@ CI affected后端1017项通过、0失败/0并行不稳定，Ruff/ty通过；前�
 - 生产心语租户报表页看不到数据：创建快照时按 `advertiser_id IN (...) AND campaign_remote_id IN (...)` 读取全部结果系列的名称修订，788 个账户 + 69,228 个历史系列共 70,016 个绑定参数，超过 PostgreSQL 65535 上限，接口直接失败（日志 11 次同错）。与此前同步修复无关。
 - 修复：快照名称版本改为两个数组参数 `unnest` 按精确 (账户, 系列) 对关联，库内 `DISTINCT ON` 取最新修订（排序同 `latest_projections`），不再做账户×系列交叉读取。分页读取中来自结果集的系列/广告/素材身份列表（`_aggregate`、`_page_objects`、系列名称投影、素材引用）统一改为 `= ANY(:ids)` 单参数，避免剧名等维度一页涉及数万系列时同样失败。不需要重新拉取报表数据。
 - 验证：临时 PostgreSQL 18/Redis 8 容器；新增两个 70,000 规模回归用例，原逻辑精确复现 `number of parameters must be between 0 and 65535`，修复后通过；报表与广告管理 802 项通过；Ruff/格式通过，mypy 无新增。尚未发布与生产验证。
+- 已发布：推送 GitHub 与公司 main 后 Jenkins #104 正常发布成功，北京时间 16:14 完成，11 角色 d195f70e Ready。生产 xingyu 回滚事务实测：系列当天/近30天、账户维度由参数上限错误变为成功（69,977 / 70,745 / 872 行），系列首屏仍需 15–23 秒未优化。详见[验收记录](validation/2026-10-21-report-param-limit.md)；记录提交仅推送 GitHub。
