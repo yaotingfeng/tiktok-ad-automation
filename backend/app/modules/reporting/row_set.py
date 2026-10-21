@@ -777,6 +777,75 @@ def _dimension_rows(
     return ",\n".join([_common_ctes("ad_day"), *ctes]), "base"
 
 
+_USE_COLUMNS = """u.id, u.advertiser_id AS adv, u.ad_remote_id, u.platform_material_id,
+                u.ad_material_id, u.material_type, NULLIF(u.name, '') AS name"""
+# 目录对同一广告同一视频可能另有一条不带广告内素材 ID 的记录：
+# 有带 ID 的记录时只保留它，只有它能单独启停。
+_USE_DEDUP = """u.complete AND NOT (u.ad_material_id IS NULL AND EXISTS (
+                SELECT 1 FROM ad_material_reference o
+                WHERE o.tenant_id = u.tenant_id AND o.advertiser_id = u.advertiser_id
+                  AND o.ad_remote_id = u.ad_remote_id
+                  AND o.platform_material_id = u.platform_material_id
+                  AND o.ad_material_id IS NOT NULL AND o.complete))"""
+
+
+def _material_identity_ctes(
+    filters: ReportingFilter, *, video_key: str, post_key: str
+) -> list[str]:
+    """素材维度的帖子归属 fk 与目录使用位置 uses。
+
+    列出无数据视频时读取全部使用位置与帖子对照。默认只列有数据的帖子/视频：
+    帖子按主键逐条查对照的视频，使用位置只读这些视频（ix_ad_material_video）
+    与对不上视频的帖子所对照的广告位置，避免每次整租户扫描数百万条使用记录。
+    """
+    fk_head = f"""fk AS (
+            -- 每条帖子事实归到唯一行：对上视频按视频，否则按“账户 + 帖子”。
+            SELECT f.adv, f.rid, f.main_material_type AS mtype,
+                CASE WHEN v.vid IS NOT NULL THEN {video_key.format(vid="v.vid")}
+                    ELSE {post_key.format(adv="f.adv", mid="f.rid")} END AS row_key,
+                COALESCE(v.vid, f.rid) AS mid, v.vid
+            FROM (SELECT DISTINCT adv, rid, main_material_type FROM facts) f"""
+    if filters.include_empty:
+        return [
+            f"""uses AS (
+            SELECT {_USE_COLUMNS}
+            FROM ad_material_reference u
+            WHERE u.tenant_id = :tenant AND u.advertiser_id = ANY(:advs) AND {_USE_DEDUP}
+        )""",
+            f"""pv AS ({POST_VIDEO_SQL})""",
+            f"""{fk_head}
+            LEFT JOIN pv v ON v.adv = f.adv AND v.mid = f.rid
+        )""",
+        ]
+    # 与 POST_VIDEO_SQL 相同的取法：同一帖子对照多个视频时取 ID 最小者。
+    return [
+        f"""{fk_head}
+            LEFT JOIN LATERAL (
+                SELECT l.platform_material_id AS vid FROM material_post_link l
+                WHERE l.tenant_id = :tenant AND l.advertiser_id = f.adv
+                  AND l.main_material_id = f.rid AND l.platform_material_id IS NOT NULL
+                ORDER BY l.platform_material_id COLLATE "C" LIMIT 1
+            ) v ON TRUE
+        )""",
+        f"""uses AS (
+            SELECT {_USE_COLUMNS}
+            FROM (SELECT DISTINCT vid FROM fk WHERE vid IS NOT NULL) k
+            JOIN ad_material_reference u ON u.tenant_id = :tenant
+                AND u.platform_material_id = k.vid AND u.advertiser_id = ANY(:advs)
+            WHERE {_USE_DEDUP}
+            UNION
+            SELECT {_USE_COLUMNS}
+            FROM (SELECT DISTINCT adv, rid FROM fk WHERE vid IS NULL) k
+            JOIN material_post_link l ON l.tenant_id = :tenant AND l.advertiser_id = k.adv
+                AND l.main_material_id = k.rid
+            JOIN ad_material_reference u ON u.tenant_id = :tenant
+                AND u.advertiser_id = l.advertiser_id AND u.ad_remote_id = l.ad_remote_id
+                AND u.ad_material_id = l.ad_material_id
+            WHERE {_USE_DEDUP}
+        )""",
+    ]
+
+
 def _material_rows(filters: ReportingFilter, params: _Params) -> tuple[str, str]:
     """素材维度：一个素材库视频一行，跨账户、跨广告合计。
 
@@ -825,30 +894,7 @@ def _material_rows(filters: ReportingFilter, params: _Params) -> tuple[str, str]
             "main_material_id",
             extra_group=("main_material_type",),
         ),
-        """uses AS (
-            SELECT u.id, u.advertiser_id AS adv, u.ad_remote_id, u.platform_material_id, u.ad_material_id,
-                u.material_type, NULLIF(u.name, '') AS name
-            FROM ad_material_reference u
-            WHERE u.tenant_id = :tenant AND u.advertiser_id = ANY(:advs) AND u.complete
-              -- 目录对同一广告同一视频可能另有一条不带广告内素材 ID 的记录：
-              -- 有带 ID 的记录时只保留它，只有它能单独启停。
-              AND NOT (u.ad_material_id IS NULL AND EXISTS (
-                SELECT 1 FROM ad_material_reference o
-                WHERE o.tenant_id = u.tenant_id AND o.advertiser_id = u.advertiser_id
-                  AND o.ad_remote_id = u.ad_remote_id
-                  AND o.platform_material_id = u.platform_material_id
-                  AND o.ad_material_id IS NOT NULL AND o.complete))
-        )""",
-        f"""pv AS ({POST_VIDEO_SQL})""",
-        f"""fk AS (
-            -- 每条帖子事实归到唯一行：对上视频按视频，否则按“账户 + 帖子”。
-            SELECT f.adv, f.rid, f.main_material_type AS mtype,
-                CASE WHEN v.vid IS NOT NULL THEN {video_key.format(vid="v.vid")}
-                    ELSE {post_key.format(adv="f.adv", mid="f.rid")} END AS row_key,
-                COALESCE(v.vid, f.rid) AS mid
-            FROM (SELECT DISTINCT adv, rid, main_material_type FROM facts) f
-            LEFT JOIN pv v ON v.adv = f.adv AND v.mid = f.rid
-        )""",
+        *_material_identity_ctes(filters, video_key=video_key, post_key=post_key),
         f"""mkey AS (
             SELECT row_key, min(mid) AS mid FROM (
                 SELECT row_key, mid FROM fk
