@@ -269,3 +269,55 @@ def test_duplicate_directory_row_without_ad_material_id_is_hidden(session, sync_
     session.flush()
     (row,) = query(session, sync_seed)
     assert [u.ad_material_id for u in row.material_uses] == ["m1"]
+
+
+def test_default_material_rows_match_full_listing_for_videos_with_facts(
+    session, sync_seed
+):
+    """默认口径只为有事实的帖子查视频对照；有数据的视频行与列出全部对象时一致。"""
+    publish(session, sync_seed, "acc-1", [material_row("p1", "10", "视频一")])
+    use(
+        session,
+        sync_seed,
+        adv="acc-1",
+        ad="a1",
+        video="v1",
+        ad_material="m1",
+        post="p1",
+    )
+    # 同一视频在另一账户的帖子当天没有事实：不贡献金额，使用位置仍归该视频行。
+    use(
+        session,
+        sync_seed,
+        adv="acc-2",
+        ad="b1",
+        video="v1",
+        ad_material="m3",
+        post="p9",
+    )
+    # 另一个只在目录里、当天没有数据的视频：默认不列出。
+    use(
+        session,
+        sync_seed,
+        adv="acc-1",
+        ad="a3",
+        video="v2",
+        ad_material="m4",
+        post="p8",
+    )
+
+    def rows(include_empty):
+        return {
+            r.row_key: (r.display, r.metric_buckets, r.material_uses)
+            for r in query(session, sync_seed, include_empty=include_empty)
+        }
+
+    default, full = rows(False), rows(True)
+    assert list(default) == ['["material", "v1"]']
+    assert default['["material", "v1"]'] == full['["material", "v1"]']
+    display, buckets, uses = default['["material", "v1"]']
+    assert buckets[0].values["spend"] == Decimal(10)
+    assert {(u.ad_ref.advertiser_id, u.ad_ref.remote_id) for u in uses} == {
+        ("acc-1", "a1"),
+        ("acc-2", "b1"),
+    }

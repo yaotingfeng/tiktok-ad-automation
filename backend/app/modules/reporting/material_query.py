@@ -61,7 +61,13 @@ def materialize_material_rows(
     视频行合计该视频在全部账户、全部广告的帖子事实；帖子行只合计这一条帖子。
     """
     scope = sorted(set(advertisers))
-    video_of = post_video_map(session, tenant_id=tenant_id, advertisers=scope)
+    video_of = post_video_map(
+        session,
+        tenant_id=tenant_id,
+        advertisers=scope,
+        start=filters.start_date,
+        end=filters.end_date,
+    )
     keys = {member.row_key: json.loads(member.row_key) for member in members}
     videos = {key[1] for key in keys.values() if key[0] == "material"}
     # 每行包含的帖子事实身份 (账户, 帖子)。
@@ -78,7 +84,9 @@ def materialize_material_rows(
             select(AdMaterialReference).where(
                 AdMaterialReference.tenant_id == tenant_id,
                 col(AdMaterialReference.advertiser_id).in_(scope),
-                col(AdMaterialReference.complete).is_(True),
+                # 必须写成布尔列本身才能命中部分索引 ix_ad_material_video（WHERE complete）；
+                # 写成 IS true 规划器不认，会退回逐账户扫描全部使用记录。
+                col(AdMaterialReference.complete),
                 any_of(col(AdMaterialReference.platform_material_id), videos),
             )
         ).all()

@@ -57,10 +57,37 @@ def material_row_key(adv: str, mid: str, vid: str | None) -> str:
 
 
 def post_video_map(
-    session: Session, *, tenant_id: UUID, advertisers: Sequence[str]
+    session: Session,
+    *,
+    tenant_id: UUID,
+    advertisers: Sequence[str],
+    start: date,
+    end: date,
 ) -> dict[tuple[str, str], str]:
+    """所选日期有素材日报事实的帖子 → 视频（取法同 POST_VIDEO_SQL）。
+
+    没有事实的帖子不贡献金额，也不计入快照的行账户（row_set fk 只取有事实的帖子）。
+    逐条按主键查对照，不整租户读取：大租户帖子对照有数百万条。
+    """
     rows = session.connection().execute(
-        text(POST_VIDEO_SQL), {"tenant": tenant_id, "advs": sorted(advertisers)}
+        text(
+            """
+            SELECT f.adv, f.mid, v.vid
+            FROM (
+                SELECT DISTINCT advertiser_id AS adv, main_material_id AS mid
+                FROM material_report_day
+                WHERE tenant_id = :tenant AND advertiser_id = ANY(:advs)
+                  AND stat_date BETWEEN :start AND :end
+            ) f
+            CROSS JOIN LATERAL (
+                SELECT l.platform_material_id AS vid FROM material_post_link l
+                WHERE l.tenant_id = :tenant AND l.advertiser_id = f.adv
+                  AND l.main_material_id = f.mid AND l.platform_material_id IS NOT NULL
+                ORDER BY l.platform_material_id COLLATE "C" LIMIT 1
+            ) v
+            """
+        ),
+        {"tenant": tenant_id, "advs": sorted(advertisers), "start": start, "end": end},
     )
     return {(r.adv, r.mid): r.vid for r in rows}
 
