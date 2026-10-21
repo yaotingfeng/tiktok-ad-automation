@@ -754,11 +754,12 @@ def test_workspace_capacity_has_no_n_plus_one(
     event.listen(engine, "before_cursor_execute", count_sql)
     started = time.perf_counter()
     try:
+        # 合成对象大多没有报表事实；容量证据针对列出目录全部对象的路径。
         rows = build_rows(
             session,
             context=scope.context,
             bc_id=scope.bc_id,
-            filters=_filters("campaign"),
+            filters=_filters("campaign").model_copy(update={"include_empty": True}),
         )
     finally:
         event.remove(engine, "before_cursor_execute", count_sql)
