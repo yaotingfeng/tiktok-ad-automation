@@ -1,4 +1,5 @@
 import { Button } from "@/components/ui/button"
+import { Checkbox } from "@/components/ui/checkbox"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import type { AdsSearch } from "./search"
@@ -54,6 +55,20 @@ export function AdsFilters({
           onChange={(event) => onChange({ query: event.target.value })}
           placeholder="名称、剧名、版权方或 ID（多关键词 AND）"
         />
+      </div>
+      {/* 默认只列所选日期有数据的对象；大租户目录有数万个无数据对象，全部列出会明显变慢。
+          账户维度始终列出全部账户。 */}
+      <div className="flex h-9 items-center gap-2">
+        <Checkbox
+          id="ads-include-empty"
+          checked={search.include_empty ?? false}
+          onCheckedChange={(checked) =>
+            onChange({ include_empty: checked === true })
+          }
+        />
+        <Label htmlFor="ads-include-empty" className="font-normal">
+          显示无数据对象
+        </Label>
       </div>
       <Button type="submit" aria-label="应用筛选">
         应用筛选

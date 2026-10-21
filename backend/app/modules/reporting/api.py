@@ -120,6 +120,7 @@ def _filters(
     created_to: date | None,
     sort_by: str,
     sort_direction: Literal["asc", "desc"],
+    include_empty: bool,
 ) -> ReportingFilter:
     return ReportingFilter(
         dimension=dimension,
@@ -143,6 +144,7 @@ def _filters(
         created_to=created_to,
         sort_by=sort_by,
         sort_direction=sort_direction,
+        include_empty=include_empty,
     )
 
 
@@ -183,6 +185,7 @@ def query_ads_route(
     created_to: date | None = None,
     sort_by: str = Query(default="row_key", max_length=64),
     sort_direction: Literal["asc", "desc"] = "asc",
+    include_empty: bool = False,
     snapshot_id: UUID | None = None,
     cursor: Annotated[str | None, Query(max_length=8192)] = None,
     limit: Annotated[int, Query(ge=1, le=100)] = 50,
@@ -212,6 +215,7 @@ def query_ads_route(
         created_to=created_to,
         sort_by=sort_by,
         sort_direction=sort_direction,
+        include_empty=include_empty,
     )
     result = query_ads(
         session,

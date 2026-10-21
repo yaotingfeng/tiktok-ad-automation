@@ -285,21 +285,90 @@ def _common_ctes(cov_kind: str) -> str:
           ON s.tenant_id = :tenant AND s.advertiser_id = a.adv AND s.report_kind = '{cov_kind}'
          AND s.stat_date BETWEEN :start AND :end
         GROUP BY a.adv
-    ),
-    proj AS (
+    )"""
+
+
+_PROJ_COLUMNS = "provider_label, drama_name, status"
+_PROJ_ORDER = "grouping_revision DESC, name_revision DESC, observed_at DESC"
+
+
+def _proj_cte(*, full: bool, fact_campaigns: str | None) -> str:
+    """系列最新名称投影 proj（剧名、版权方、命名状态）。
+
+    默认只为页面涉及的系列（目录系列、广告组的父系列、事实里的系列）逐个按主键取最新一条；
+    full（列出无数据对象或账户维度）时整租户读取。fact_campaigns 为事实中系列 ID 的 SQL。
+    """
+    if full:
+        return f"""proj AS (
         SELECT DISTINCT ON (advertiser_id, campaign_remote_id)
-            advertiser_id AS adv, campaign_remote_id AS cid, provider_label, drama_name, status
+            advertiser_id AS adv, campaign_remote_id AS cid, {_PROJ_COLUMNS}
         FROM campaign_name_projection
         WHERE tenant_id = :tenant AND advertiser_id = ANY(:advs)
-        ORDER BY advertiser_id, campaign_remote_id, grouping_revision DESC, name_revision DESC, observed_at DESC
-    ),
-    obj AS (
-        SELECT advertiser_id AS adv, kind, remote_id AS rid, parent_remote_id AS parent,
+        ORDER BY advertiser_id, campaign_remote_id, {_PROJ_ORDER}
+    )"""
+    keys = " UNION ".join(
+        sql
+        for sql in (
+            "SELECT adv, rid FROM obj WHERE kind = 'campaign'",
+            "SELECT adv, parent FROM obj WHERE kind = 'adgroup' AND parent IS NOT NULL",
+            fact_campaigns,
+        )
+        if sql
+    )
+    return f"""proj AS (
+        SELECT k.adv, k.cid, p.provider_label, p.drama_name, p.status
+        FROM (SELECT DISTINCT adv, cid FROM ({keys}) x(adv, cid) WHERE cid IS NOT NULL) k
+        CROSS JOIN LATERAL (
+            SELECT {_PROJ_COLUMNS} FROM campaign_name_projection
+            WHERE tenant_id = :tenant AND advertiser_id = k.adv AND campaign_remote_id = k.cid
+            ORDER BY {_PROJ_ORDER} LIMIT 1
+        ) p
+    )"""
+
+
+def _obj_select(condition: str) -> str:
+    return f"""SELECT advertiser_id AS adv, kind, remote_id AS rid, parent_remote_id AS parent,
             NULLIF(name, '') AS name, ad_type, operation_status, review_status, delivery_status,
             configuration AS cfg
         FROM ad_object
-        WHERE tenant_id = :tenant AND advertiser_id = ANY(:advs) AND kind = ANY(:kinds)
-    )"""
+        WHERE tenant_id = :tenant AND {condition}"""
+
+
+def _obj_ctes(filters: ReportingFilter, chain: Sequence[tuple[str, str | None]]) -> str:
+    """目录对象 obj。
+
+    列出无数据对象时读取所需层级的全部目录对象；默认只列有数据的对象，
+    此时只按身份逐个按主键读取页面行涉及的对象及其上级。不能写成
+    (账户, ID) IN (子查询)：规划器会把它做成整租户目录扫描再半连接，
+    大租户十几万条广告仍要十几秒。
+    chain 自下而上，每级为 (层级, 额外身份 SQL)；上一级对象的父 ID 自动并入下一级。
+    """
+    if filters.include_empty:
+        return f"obj AS ({_obj_select('advertiser_id = ANY(:advs) AND kind = ANY(:kinds)')})"
+    parts: list[str] = []
+    previous: str | None = None
+    for kind, seeds in chain:
+        name = f"obj_{kind}"
+        ids = " UNION ".join(
+            sql
+            for sql in (
+                seeds,
+                f"SELECT adv, parent FROM {previous} WHERE parent IS NOT NULL"
+                if previous
+                else None,
+            )
+            if sql
+        )
+        lookup = _obj_select(
+            f"advertiser_id = k.adv AND kind = '{kind}' AND remote_id = k.rid"
+        )
+        parts.append(f"""{name} AS (
+        SELECT o.* FROM (SELECT DISTINCT adv, rid FROM ({ids}) x(adv, rid) WHERE rid IS NOT NULL) k
+        CROSS JOIN LATERAL ({lookup}) o
+    )""")
+        previous = name
+    union = " UNION ALL ".join(f"SELECT * FROM obj_{kind}" for kind, _ in chain)
+    return ",\n".join([*parts, f"obj AS ({union})"])
 
 
 def _member_buckets(members: str, *, unsupported: frozenset[str]) -> str:
@@ -450,9 +519,14 @@ def _dimension_rows(
             WHERE {where}
         )"""
     else:
-        idn = f"""idn AS (
+        idn = (
+            f"""idn AS (
             SELECT adv, rid FROM facts UNION SELECT adv, rid FROM obj WHERE kind = '{kind}'
         )"""
+            if filters.include_empty
+            # 默认只列所选日期有数据的对象，不把目录里无数据的历史对象逐一补 0。
+            else "idn AS (SELECT DISTINCT adv, rid FROM facts)"
+        )
         target = _first_truthy_num("e.cfg", ("roas_bid", "target_roas"))
         budget = _first_truthy_num(
             "e.cfg", ("budget", "daily_budget", "campaign_daily_budget")
@@ -511,7 +585,38 @@ def _dimension_rows(
             {joins}
             WHERE {where}{deleted}
         )"""
-    ctes = [_facts_cte(table, id_column), fact_meta, idn, ent]
+    # 账户维度要冻结账户下全部系列（跨页选择展开），始终读取完整系列目录。
+    chain: tuple[tuple[str, str | None], ...] = {
+        "account": (),
+        "campaign": (("campaign", "SELECT adv, rid FROM facts"),),
+        "drama": (("campaign", "SELECT adv, rid FROM facts"),),
+        "adgroup": (
+            ("adgroup", "SELECT adv, rid FROM facts"),
+            ("campaign", "SELECT adv, f_campaign_id FROM facts"),
+        ),
+        "ad": (
+            ("ad", "SELECT adv, rid FROM facts"),
+            ("adgroup", "SELECT adv, f_adgroup_id FROM facts"),
+            ("campaign", "SELECT adv, f_campaign_id FROM facts"),
+        ),
+    }[dim]
+    obj = (
+        f"obj AS ({_obj_select('advertiser_id = ANY(:advs) AND kind = ANY(:kinds)')})"
+        if dim == "account"
+        else _obj_ctes(filters, chain)
+    )
+    # 账户维度按账户的首个事实系列取版权方，整租户读取（账户数有限、行数小）。
+    proj = (
+        _proj_cte(full=True, fact_campaigns=None)
+        if dim == "account"
+        else _proj_cte(
+            full=filters.include_empty,
+            fact_campaigns="SELECT adv, rid FROM facts"
+            if table == "campaign_report_day"
+            else "SELECT adv, f_campaign_id FROM facts",
+        )
+    )
+    ctes = [_facts_cte(table, id_column), obj, proj, fact_meta, idn, ent]
     if dim == "account":
         ctes.append("""members AS (
             SELECT e.adv || ':account:' || e.adv AS row_key, e.adv, e.rid FROM ent e
@@ -594,8 +699,8 @@ def _material_rows(filters: ReportingFilter, params: _Params) -> tuple[str, str]
     """素材维度：一个素材库视频一行，跨账户、跨广告合计。
 
     素材日报的主素材是帖子（Spark 每条广告一条），先经 material_post_link 与广告目录
-    归到视频；对不上的帖子各自一行，保证金额不丢。目录里有、所选日期无数据的视频
-    也列出，按账户覆盖填 0 或空。
+    归到视频；对不上的帖子各自一行，保证金额不丢。勾选“显示无数据对象”时，
+    目录里有、所选日期无数据的视频也列出，按账户覆盖填 0 或空。
     """
     params.add("kinds", ["campaign", "adgroup", "ad"])
     entity_filter = _entity_conditions(filters, params, e="ae", p="p", tz="a.tz")
@@ -665,8 +770,11 @@ def _material_rows(filters: ReportingFilter, params: _Params) -> tuple[str, str]
         f"""mkey AS (
             SELECT row_key, min(mid) AS mid FROM (
                 SELECT row_key, mid FROM fk
-                UNION ALL
-                SELECT {video_key.format(vid="u.platform_material_id")}, u.platform_material_id FROM uses u
+                {
+            ""
+            if not filters.include_empty
+            else f"UNION ALL SELECT {video_key.format(vid='u.platform_material_id')}, u.platform_material_id FROM uses u"
+        }
             ) k GROUP BY row_key
         )""",
         """fname AS (
@@ -679,6 +787,8 @@ def _material_rows(filters: ReportingFilter, params: _Params) -> tuple[str, str]
             -- 视频行管理该视频的全部使用位置；帖子行只有对照上的那条广告位置。
             SELECT {video_key.format(vid="u.platform_material_id")} AS row_key, u.*
             FROM uses u
+            -- 默认只列有数据的视频：视频行只带出本次有事实的视频的使用位置。
+            {"" if filters.include_empty else "WHERE u.platform_material_id IN (SELECT mid FROM fk)"}
             UNION ALL
             SELECT k.row_key, u.*
             FROM fk k
@@ -688,6 +798,15 @@ def _material_rows(filters: ReportingFilter, params: _Params) -> tuple[str, str]
                 AND u.ad_material_id = l.ad_material_id
             WHERE k.row_key LIKE '["post"%'
         )""",
+        _obj_ctes(
+            filters,
+            (
+                ("ad", "SELECT adv, ad_remote_id FROM cand_raw"),
+                ("adgroup", None),
+                ("campaign", None),
+            ),
+        ),
+        _proj_cte(full=filters.include_empty, fact_campaigns=None),
         f"""cand AS (
             SELECT DISTINCT ON (u.row_key, u.adv, u.ad_remote_id, u.platform_material_id, u.ad_material_id, u.material_type)
                 u.*, g.parent AS campaign_id, ae.parent AS adgroup_id,

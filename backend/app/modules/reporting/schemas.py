@@ -77,6 +77,9 @@ class ReportingFilter(BaseModel):
     max_target_roas: Decimal | None = None
     sort_by: str = "row_key"
     sort_direction: Literal["asc", "desc"] = "asc"
+    # 默认只列所选日期有数据的对象；大租户目录有数万个无数据的历史对象，
+    # 逐一补 0 会让首屏查询慢到几十秒。勾选后才列出目录全部对象（账户维度始终全部列出）。
+    include_empty: bool = False
 
     @field_validator(
         "min_spend",

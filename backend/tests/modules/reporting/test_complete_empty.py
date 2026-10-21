@@ -61,8 +61,13 @@ def rows(session, seed, dimension="campaign", start=D):
         session,
         context=seed.context,
         bc_id="bc-a",
+        # 本文件验证目录内无数据对象的补 0/空值口径，需显式列出无数据对象。
         filters=ReportingFilter(
-            dimension=dimension, start_date=start, end_date=D, advertiser_ids=("acc-1",)
+            dimension=dimension,
+            start_date=start,
+            end_date=D,
+            advertiser_ids=("acc-1",),
+            include_empty=True,
         ),
     )
 
@@ -213,6 +218,7 @@ def test_drama_row_partial_when_member_account_incomplete(session, sync_seed):
             start_date=D,
             end_date=D,
             advertiser_ids=("acc-1", "acc-2"),
+            include_empty=True,
         ),
     )
     assert len(result) == 1
@@ -238,7 +244,97 @@ def test_drama_ids_filter_matches_member_campaign(session, sync_seed):
             end_date=D,
             advertiser_ids=("acc-1",),
             ids=("c2",),
+            include_empty=True,
         ),
     )
     assert len(result) == 1
     assert {ref.remote_id for ref in result[0].refs} == {"c1", "c2"}
+
+
+@pytest.mark.parametrize("dimension", ["campaign", "drama", "adgroup", "ad"])
+def test_default_lists_only_objects_with_facts(session, sync_seed, dimension):
+    """默认只列所选日期有数据的对象；勾选显示无数据对象后才补出目录里的无数据对象。"""
+    seed_empty(session, sync_seed)
+    session.add_all(
+        [
+            AdObject(
+                tenant_id=sync_seed.tenant_id,
+                advertiser_id="acc-1",
+                kind=kind,
+                remote_id=rid,
+                parent_kind=parent_kind,
+                parent_remote_id=parent,
+                ad_type="SMART_PLUS",
+                name=name,
+                observed_at=datetime.now(UTC),
+                published_version=1,
+            )
+            for kind, rid, parent_kind, parent, name in (
+                ("adgroup", "g1", "campaign", "c1", "组一"),
+                ("adgroup", "g2", "campaign", "c2", "组二"),
+                ("ad", "a", "adgroup", "g1", "广告一"),
+                ("ad", "a2", "adgroup", "g2", "广告二"),
+            )
+        ]
+    )
+    publish_ad_day(
+        session,
+        tenant_id=sync_seed.tenant_id,
+        job_id=uuid4(),
+        accounts={"acc-1": AccountMeta("USD", "UTC")},
+        start=D,
+        end=D,
+        rows=[ad_row("a", D, campaign="c1", adgroup="g1", spend="10", d0="5")],
+    )
+    session.flush()
+
+    def query(include_empty):
+        return build_rows(
+            session,
+            context=sync_seed.context,
+            bc_id="bc-a",
+            filters=ReportingFilter(
+                dimension=dimension,
+                start_date=D,
+                end_date=D,
+                advertiser_ids=("acc-1",),
+                include_empty=include_empty,
+            ),
+        )
+
+    only = query(False)
+    assert len(only) == 1
+    assert only[0].metric_buckets[0].values["spend"] == Decimal("10")
+    # 只按身份读取目录时，上级名称仍来自目录对象。
+    if dimension in ("adgroup", "ad"):
+        assert only[0].display["campaign_name"] == "嘉书-同剧"
+    if dimension == "ad":
+        assert only[0].display["adgroup_name"] == "组一"
+        assert only[0].display["name"] == "广告一"
+    full = query(True)
+    # 剧维度两个系列同剧，始终一行；其他维度补出无数据对象。
+    assert len(full) == (1 if dimension == "drama" else 2)
+
+
+def test_default_material_lists_only_videos_with_facts(session, sync_seed):
+    session.add(
+        AdMaterialReference(
+            tenant_id=sync_seed.tenant_id,
+            advertiser_id="acc-1",
+            ad_remote_id="a",
+            platform_material_id="p",
+            main_material_id="m",
+            main_material_type="VIDEO",
+            material_type="VIDEO",
+            complete=True,
+            published_version=1,
+        )
+    )
+    session.flush()
+    filters = ReportingFilter(
+        dimension="material", start_date=D, end_date=D, advertiser_ids=("acc-1",)
+    )
+    assert (
+        build_rows(session, context=sync_seed.context, bc_id="bc-a", filters=filters)
+        == ()
+    )

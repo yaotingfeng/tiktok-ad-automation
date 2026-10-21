@@ -5744,6 +5744,10 @@ export type ReportingFilter_Input = {
      * Sort Direction
      */
     sort_direction?: 'asc' | 'desc';
+    /**
+     * Include Empty
+     */
+    include_empty?: boolean;
 };
 
 /**
@@ -5834,6 +5838,10 @@ export type ReportingFilter_Output = {
      * Sort Direction
      */
     sort_direction?: 'asc' | 'desc';
+    /**
+     * Include Empty
+     */
+    include_empty?: boolean;
 };
 
 /**
@@ -11889,6 +11897,10 @@ export type adsReportingQueryAdsData = {
          * Sort Direction
          */
         sort_direction?: 'asc' | 'desc';
+        /**
+         * Include Empty
+         */
+        include_empty?: boolean;
         /**
          * Snapshot Id
          */

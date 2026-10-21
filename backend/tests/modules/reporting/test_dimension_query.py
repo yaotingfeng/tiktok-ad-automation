@@ -266,7 +266,7 @@ def test_summary_counts_incomplete_advertisers_and_dates(session, sync_seed):
         end=D,
         rows=[ad_row("a1", D, campaign="c1", spend="10", d0="5")],
     )
-    summary = _summary(session, sync_seed, _filters("campaign"))
+    summary = _summary(session, sync_seed, _filters("campaign", include_empty=True))
     assert summary["row_count"] == 2
     assert summary["incomplete_advertiser_count"] == 1
     assert summary["incomplete_dates"] == [D.isoformat()]

@@ -93,7 +93,12 @@ def query(session, seed, **kw):
         session,
         context=seed.context,
         bc_id="bc-a",
-        filters=ReportingFilter(dimension="material", start_date=D, end_date=D, **kw),
+        filters=ReportingFilter(
+            dimension="material",
+            start_date=D,
+            end_date=D,
+            **({"include_empty": True} | kw),
+        ),
     )
 
 
