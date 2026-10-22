@@ -33,7 +33,7 @@ export interface TourStep {
   readyWhen?: () => boolean
   /** 等待就绪时卡片上的说明。 */
   waitingText?: string
-  /** 卡片上的辅助按钮，例如“使用示例视频”“帮我填写”。 */
+  /** 卡片上的辅助按钮，例如“帮我填写”。 */
   action?: {
     label: string
     run: (context: TourContext) => void | Promise<void>

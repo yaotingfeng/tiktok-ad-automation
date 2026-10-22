@@ -1,6 +1,5 @@
 import { chooseOptions, fillField } from "../tour/actions"
 import { fieldInput, topDialog } from "../tour/find"
-import { chooseSampleVideo } from "../tour/sample-file"
 
 // 体验版示例数据：需要输入的地方都能一键填好，自由体验时也不用自己找剧名、账户 ID。
 // 剧名和账户来自演示数据（fixtures/world.ts），能被搭建、素材匹配等接口识别。
@@ -48,18 +47,6 @@ const dialogTitle = () =>
 
 // 按当前页面或弹窗判断能填什么；越具体的放越前面（弹窗优先于页面）。
 const FILLERS: SampleFiller[] = [
-  {
-    label: "使用示例视频",
-    applies: () =>
-      visible(
-        document
-          .querySelector("input#material-files")
-          ?.closest('[role="dialog"]'),
-      ),
-    run: () => {
-      chooseSampleVideo()
-    },
-  },
   {
     label: "填入示例新值",
     applies: () => visible(document.getElementById("management-value")),

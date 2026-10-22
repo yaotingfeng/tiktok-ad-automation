@@ -143,7 +143,7 @@ test("完整引导每一步都能定位并跑通", async ({ page, baseURL }) => 
     })
     await expect(card.getByText("正在定位")).toHaveCount(0, { timeout: 15_000 })
     const title = await card.locator("h2").innerText()
-    // 卡片上的辅助按钮（使用示例视频、填入示例…）照着点，就像体验者那样。
+    // 卡片上的辅助按钮（填入示例…）照着点，就像体验者那样。
     for (const action of await card.getByRole("button").all()) {
       const label = (await action.innerText()).trim()
       if (!fixed.has(label) && label !== "处理中…") {
@@ -205,10 +205,14 @@ test("自由体验时搭建页自动填好示例数据，其他输入可一键�
   const leave = page.getByRole("button", { name: /丢弃未保存修改/ })
   if (await leave.count()) await leave.click()
   await page.getByRole("button", { name: "批量上传" }).click()
-  await page.locator("[data-demo-fill]", { hasText: "使用示例视频" }).click()
+  // 体验版不弹系统文件框，直接放入示例视频。
+  await page.getByRole("button", { name: "选择本地素材" }).click()
+  const start = page.getByRole("button", { name: /开始上传 3 个文件/ })
+  await expect(start).toBeVisible()
+  await start.click()
   await expect(
-    page.getByRole("button", { name: /开始上传 1 个文件/ }),
-  ).toBeVisible()
+    page.locator("main tbody tr").filter({ hasText: "账户素材可用" }).first(),
+  ).toBeVisible({ timeout: 30_000 })
 })
 
 test("素材制作在新标签页打开君博租户的生产直达页", async ({

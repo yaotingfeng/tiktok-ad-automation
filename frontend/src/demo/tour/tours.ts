@@ -13,7 +13,6 @@ import {
   navItem,
   tableRow,
 } from "./find"
-import { chooseSampleVideo } from "./sample-file"
 import type { Tour, TourChapter, TourContext, TourStep } from "./types"
 
 // 体验版引导内容：按日常工作顺序分成 7 章，每一步都对应页面上一个具体按钮或区域，
@@ -180,20 +179,17 @@ const materials: TourChapter = {
       button("批量上传", true),
       { settleMs: 800 },
     ),
-    look(
+    click(
       "选择素材文件",
-      "体验版不需要准备视频：点下面的“使用示例视频”，用示例文件“Love After the Storm_01.mp4”。",
+      "选择本地素材",
+      "正式使用时这里会打开电脑的文件选择框，一次最多选 2 万个视频。体验版不需要准备视频，点一下会直接放入 3 个示例视频。",
       inDialog("button", "选择本地素材"),
-      {
-        action: { label: "使用示例视频", run: () => void chooseSampleVideo() },
-        readyWhen: () => !!inDialog("button", /开始上传/)(),
-        waitingText: "点上面的“使用示例视频”选好文件。",
-      },
+      { settleMs: 800 },
     ),
     click(
       "开始上传",
       "开始上传",
-      "确认文件后开始上传。",
+      "已选好 3 个示例视频，文件名里带着完整剧名。点“开始上传”。",
       inDialog("button", /开始上传/),
       { settleMs: 1500 },
     ),
@@ -214,7 +210,7 @@ const materials: TourChapter = {
     ),
     look(
       "新素材已入库",
-      "刚上传的素材已经入库，可以用于搭建。",
+      "刚上传的示例素材已经入库，可以用于搭建。",
       tableRow(0, "Love After the Storm"),
     ),
   ],

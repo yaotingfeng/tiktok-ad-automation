@@ -1,8 +1,11 @@
 import { installDemoIsolation } from "./runtime/isolation"
+import { installSampleVideoPicker } from "./tour/sample-file"
 
 // 体验版入口。顺序很重要：先隔离存储和网络，再动态加载应用代码，
 // 保证任何模块在初始化时都读不到生产凭证、也发不出真实请求。
 const isolated = installDemoIsolation()
+// 上传素材不用真实视频：选择文件时直接放入示例视频。
+installSampleVideoPicker()
 
 function renderFailure(error: unknown) {
   console.error("[demo] boot failed", error)
