@@ -3422,3 +3422,10 @@ CI affected后端1017项通过、0失败/0并行不稳定，Ruff/ty通过；前�
 - 素材制作：生产新增 `/material-production?tenant=<名称>` 直达页，按名称（完整匹配，或唯一包含匹配）找当前账号可用的租户后自动免密登录；体验版点“素材制作”新开 `/material-production?tenant=junbo`，体验版不持有任何凭证，没有权限的账号看到无权限提示。
 - 验证：体验版 Playwright 5 项通过（含 82 步引导逐步定位并跑通、自由体验自动填写、素材制作新标签页）；1440×900 与 1280×720 均跑通；生产工作台 593 项 592 通过（同一已知偶发项），新增直达页 2 项通过；生产产物无体验版标识。直达页在生产 junbo 的真实免密登录未验证（需发布后用有权限账号实测）。未发布。
 
+
+### 2026-10-22 Smart+ 系列改预算未发送（management_contract_unsupported）
+
+- 生产 junbo 任务 `420310ba`（BC 7683817908149272592，Smart+ 系列 `1879323898872113` 预算 10000 → 20000）FAILED，单条 NOT_SENT，原因 `management_contract_unsupported`，无平台 request_id，请求未发出。
+- 根因：管理适配器 `_smart_plus()` 把 `campaign_type` 当作 Smart+ 类型标识。该字段是平台普通/iOS 专属系列区分，系列目录恒带 `REGULAR_CAMPAIGN`，不在任何白名单内，所有系列层的预算、状态、改名都被闭合拒绝；广告组和广告目录无此字段，不受影响（此前开关状态操作均为广告层）。
+- 修复：标识只认 `ad_type`/`platform_ad_type`/`is_smart_plus`；缺失或冲突仍闭合拒绝。系列更新用例改用带 `campaign_type: REGULAR_CAMPAIGN` 的真实目录形状（旧逻辑下 4 项失败）。
+- 验证：本地 PG18/Redis8 上管理适配器与 ad_management 167 项通过，Ruff 通过。发布后需用户重新提交该预算修改。

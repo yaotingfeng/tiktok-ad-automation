@@ -397,7 +397,11 @@ def test_sdk_campaign_update_uses_matching_campaign_method(
     command = ManagementCommand(
         ref=EntityRef(uuid4(), "adv-1", "campaign", "campaign-1"),
         field=field,
-        original={"ad_type": "SMART_PLUS" if smart_plus else "REGULAR"},
+        # 真实系列目录总带 campaign_type（普通/iOS 专属系列），它不是 Smart+ 标识。
+        original={
+            "ad_type": "SMART_PLUS" if smart_plus else "REGULAR",
+            "campaign_type": "REGULAR_CAMPAIGN",
+        },
         desired=desired,
     )
     deadline = datetime.now(UTC) + timedelta(seconds=30)

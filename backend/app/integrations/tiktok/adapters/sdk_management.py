@@ -31,8 +31,12 @@ ManagementScope = Callable[[str, str, str, datetime], Any]
 
 
 def _smart_plus(command: ManagementCommand) -> bool:
-    """只接受目录明确给出的广告类型；缺失或冲突必须闭合拒绝。"""
-    marker_names = ("ad_type", "platform_ad_type", "is_smart_plus", "campaign_type")
+    """只接受目录明确给出的广告类型；缺失或冲突必须闭合拒绝。
+
+    campaign_type 是平台的普通/iOS 专属系列区分（目录恒为 REGULAR_CAMPAIGN 等），
+    与是否 Smart+ 无关，不能作为类型标识，否则所有系列层修改都会被误拒。
+    """
+    marker_names = ("ad_type", "platform_ad_type", "is_smart_plus")
 
     def parse_markers(values: dict[str, Any]) -> bool | None:
         parsed: set[bool] = set()
