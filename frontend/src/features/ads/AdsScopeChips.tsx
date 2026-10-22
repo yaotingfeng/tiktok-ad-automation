@@ -2,7 +2,8 @@ import { X } from "lucide-react"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 
-export type ScopeKind = "account" | "campaign" | "adgroup" | "ad"
+// drama：从剧维度跳到该剧关联的系列，筛选的是一组系列 ID，标签显示剧名。
+export type ScopeKind = "account" | "campaign" | "adgroup" | "ad" | "drama"
 
 /** 下钻或点上级路径时记下的筛选对象名称，只用于标签显示，筛选本身仍以 ID 为准。 */
 export type ScopeLabels = {
@@ -15,6 +16,7 @@ const KIND_LABEL: Record<ScopeKind, string> = {
   campaign: "系列",
   adgroup: "广告组",
   ad: "广告",
+  drama: "剧",
 }
 
 function Chip({ text, onRemove }: { text: string; onRemove: () => void }) {

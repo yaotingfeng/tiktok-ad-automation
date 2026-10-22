@@ -276,3 +276,80 @@ def read_remote_source(
         route=route,
         deadline=deadline,
     )
+
+
+def read_account_video_preview(
+    *,
+    database_engine: Any,
+    redis_client: Any,
+    context: TenantContext,
+    bc_id: str,
+    video_id: str,
+    advertiser_ids: tuple[str, ...],
+) -> material_types.SourcePreview:
+    """按"账户 + 平台视频 ID"读取成片预览，供广告报表素材详情使用。
+
+    报表里的素材可能是在 TikTok 后台直接上传、不在本工具素材库里的外部视频，
+    因此不依赖 MaterialFile 记录，也没有已知 MD5 可比对；只校验返回的就是请求的
+    账户与视频。候选账户取自素材的使用位置，按入参顺序只读取第一个当前租户在该 BC
+    下有读授权的账户，一次请求最多一次平台读取。
+    """
+    from .source_uploads import READ_HARD_LIMIT
+
+    deadline = datetime.now(UTC) + timedelta(seconds=READ_HARD_LIMIT - 5)
+    policy = admission_policy("materials.get_videos")
+    budget = material_types.RemoteCallBudget(
+        deadline=deadline, hard_limit_seconds=READ_HARD_LIMIT, lease_ms=policy.lease_ms
+    )
+    budget.timeout(upload=False)
+    with bounded_session(database_engine, task_deadline=deadline) as db:
+        grants = db.exec(
+            usable_grants(
+                tenant_id=context.tenant_id, bc_id=bc_id, action="read"
+            ).where(col(BCAccountAccess.advertiser_id).in_(advertiser_ids))
+        ).all()
+        # 同一账户可能有多条连接授权；取连接 ID 最小者，保证同样的输入选同一条路由。
+        by_account: dict[str, UUID] = {}
+        for grant in sorted(grants, key=lambda item: str(item.connection_id)):
+            by_account.setdefault(grant.advertiser_id, grant.connection_id)
+        advertiser_id = next((a for a in advertiser_ids if a in by_account), None)
+        if advertiser_id is None:
+            raise DomainError(
+                "material_preview_account_unavailable",
+                "当前没有可读取该素材的广告账户授权",
+            )
+        route = freeze_route(
+            db, context=context, bc_id=bc_id, connection_id=by_account[advertiser_id]
+        )
+        verify_route(
+            db,
+            context=context,
+            route=route,
+            advertiser_id=advertiser_id,
+            capability="read",
+        )
+    with open_tiktok_gateway(
+        database_engine=database_engine,
+        redis_client=redis_client,
+        context=context,
+        route=route,
+        task_deadline=deadline,
+    ) as gateway:
+        preview = gateway.materials.read_source_preview(
+            advertiser_id=advertiser_id, video_id=video_id, budget=budget
+        )
+    with bounded_session(database_engine, task_deadline=deadline) as db:
+        # 返回临时预览地址前重新核验授权：读取期间被撤销的账户不能再拿到地址。
+        verify_route(
+            db,
+            context=context,
+            route=route,
+            advertiser_id=advertiser_id,
+            capability="read",
+        )
+    if (preview.advertiser_id, preview.video_id) != (
+        advertiser_id,
+        video_id,
+    ) or datetime.now(UTC) >= deadline:
+        raise DomainError("material_preview_unverified", "素材预览无法核实")
+    return preview

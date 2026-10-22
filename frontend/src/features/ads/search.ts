@@ -130,12 +130,13 @@ const ID_KEY: Partial<Record<AdsDimension, string>> = {
   ad: "ad_id",
   material: "main_material_id",
 }
-// 逐级下钻：账户 → 系列 → 广告组 → 广告。广告下的素材在详情的“素材”页签里看本广告数据，
-// 不跳到素材维度（素材维度是一个视频跨广告的合计）。
+// 逐级下钻：账户 → 系列 → 广告组 → 广告；剧 → 该剧关联的系列。广告下的素材在详情的
+// “素材”页签里看本广告数据，不跳到素材维度（素材维度是一个视频跨广告的合计）。
 const CHILD: Partial<Record<AdsDimension, AdsDimension>> = {
   account: "campaign",
   campaign: "adgroup",
   adgroup: "ad",
+  drama: "campaign",
 }
 export const nameKeyFor = (dimension: AdsDimension) => NAME_KEY[dimension]
 export const childDimension = (dimension: AdsDimension) =>
@@ -207,25 +208,14 @@ export function rowAdvertiserId(row: ReportRow): string {
     ""
   )
 }
-/**
- * 由上级路径或剧的关联系列构造详情用的行：只有身份字段，没有指标，
- * 也不在当前快照里，因此不能作为冻结选择的行键。
- */
-export function detailRowFor(
-  link: ParentLink,
-  advertiserId: string,
-): ReportRow {
-  return {
-    row_key: `detail:${link.kind}:${advertiserId}:${link.id}`,
-    display: {
-      name: link.name,
-      [`${link.kind}_name`]: link.name,
-      [`${link.kind}_id`]: link.id,
-      remote_id: link.id,
-      account_id: advertiserId,
-      advertiser_id: advertiserId,
-    },
-    refs: [],
-    metric_buckets: [],
-  }
+// 报表 ids 参数是逗号拼接的查询串，后端上限 4096 字符；系列 ID 约 19 位，取 200 个留足余量。
+export const MAX_LINKED_IDS = 200
+/** 剧行关联的系列（剧不属于单个账户，系列可能分布在多个账户）。 */
+export function dramaCampaignRefs(row: ReportRow) {
+  const seen = new Set<string>()
+  return (row.refs ?? []).filter((ref) => {
+    if (ref.kind !== "campaign" || seen.has(ref.remote_id)) return false
+    seen.add(ref.remote_id)
+    return true
+  })
 }

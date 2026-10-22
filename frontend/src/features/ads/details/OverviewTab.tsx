@@ -6,13 +6,16 @@ import { Skeleton } from "@/components/ui/skeleton"
 import { type ColumnDef, formatMetric } from "../metricCatalog"
 import {
   type AdsDimension,
+  dramaCampaignRefs,
+  MAX_LINKED_IDS,
   metricOf,
-  type ParentLink,
   parentPath,
   rowAdvertiserId,
   rowObjectId,
 } from "../search"
 import { statusLabel } from "../statusLabel"
+import { MaterialVideoPreview } from "./MaterialVideoPreview"
+import { type LinkedTarget, useLinkedRows } from "./useLinkedRows"
 
 const PARENT_KIND: Record<string, string> = {
   campaign: "系列",
@@ -115,7 +118,9 @@ export function OverviewTab({
   detail,
   loading,
   columns,
-  onOpenParent,
+  startDate,
+  endDate,
+  onOpenLinked,
 }: {
   row: ReportRow
   dimension: AdsDimension
@@ -123,7 +128,9 @@ export function OverviewTab({
   detail: AdDetailPublic | undefined
   loading: boolean
   columns: ColumnDef[]
-  onOpenParent: (link: ParentLink, advertiserId: string) => void
+  startDate: string
+  endDate: string
+  onOpenLinked: (target: LinkedTarget) => void
 }) {
   const display = row.display ?? {}
   const advertiserId = rowAdvertiserId(row)
@@ -131,9 +138,6 @@ export function OverviewTab({
   const naming = namingParts(row, name)
   const status = statusLabel(display)
   const firstBucket = row.metric_buckets?.[0]
-  const relatedCampaigns = (row.refs ?? []).filter(
-    (ref) => ref.kind === "campaign",
-  )
   return (
     <div className="flex flex-col gap-5 text-sm">
       <dl className="grid grid-cols-2 gap-3 md:grid-cols-3">
@@ -157,7 +161,14 @@ export function OverviewTab({
                     size="sm"
                     className="h-auto p-0"
                     title={`${PARENT_KIND[link.kind]} ${link.id}`}
-                    onClick={() => onOpenParent(link, advertiserId)}
+                    onClick={() =>
+                      onOpenLinked({
+                        dimension: link.kind,
+                        id: link.id,
+                        advertiserId,
+                        name: link.name,
+                      })
+                    }
                   >
                     {link.name}
                   </Button>
@@ -264,44 +275,15 @@ export function OverviewTab({
       )}
 
       {dimension === "drama" && (
-        <section className="flex flex-col gap-2">
-          <h3 className="font-medium">关联系列</h3>
-          {relatedCampaigns.length ? (
-            <ul className="flex flex-col gap-1">
-              {relatedCampaigns.map((ref) => (
-                <li
-                  key={`${ref.advertiser_id}:${ref.remote_id}`}
-                  className="flex items-center gap-2"
-                >
-                  <Button
-                    type="button"
-                    variant="link"
-                    size="sm"
-                    className="h-auto p-0"
-                    onClick={() =>
-                      onOpenParent(
-                        {
-                          kind: "campaign",
-                          id: ref.remote_id,
-                          name: ref.remote_id,
-                        },
-                        ref.advertiser_id,
-                      )
-                    }
-                  >
-                    {ref.remote_id}
-                  </Button>
-                  <span className="text-xs text-muted-foreground">
-                    账户 {ref.advertiser_id}
-                  </span>
-                </li>
-              ))}
-            </ul>
-          ) : (
-            <p className="text-muted-foreground">暂无关联系列</p>
-          )}
-        </section>
+        <RelatedCampaigns
+          row={row}
+          startDate={startDate}
+          endDate={endDate}
+          onOpenLinked={onOpenLinked}
+        />
       )}
+
+      {dimension === "material" && <MaterialVideoPreview row={row} />}
 
       <section className="flex flex-col gap-2">
         <h3 className="font-medium">所选日期核心指标</h3>
@@ -322,5 +304,80 @@ export function OverviewTab({
         </dl>
       </section>
     </div>
+  )
+}
+
+/** 剧详情的关联系列：按系列 ID 查一次系列维度，显示系列名，点击进入系列详情。 */
+function RelatedCampaigns({
+  row,
+  startDate,
+  endDate,
+  onOpenLinked,
+}: {
+  row: ReportRow
+  startDate: string
+  endDate: string
+  onOpenLinked: (target: LinkedTarget) => void
+}) {
+  const refs = dramaCampaignRefs(row)
+  const campaigns = useLinkedRows({
+    dimension: "campaign",
+    ids: refs.map((ref) => ref.remote_id),
+    startDate,
+    endDate,
+  })
+  const names = new Map(
+    (campaigns.data?.items ?? []).map((item) => [
+      `${rowAdvertiserId(item)}:${rowObjectId(item, "campaign")}`,
+      {
+        name: item.display?.campaign_name ?? item.display?.name ?? null,
+        account: item.display?.account_name ?? null,
+      },
+    ]),
+  )
+  return (
+    <section className="flex flex-col gap-2">
+      <h3 className="font-medium">关联系列</h3>
+      {refs.length ? (
+        <ul className="flex flex-col gap-2">
+          {refs.slice(0, MAX_LINKED_IDS).map((ref) => {
+            const found = names.get(`${ref.advertiser_id}:${ref.remote_id}`)
+            const name = found?.name ?? ref.remote_id
+            return (
+              <li
+                key={`${ref.advertiser_id}:${ref.remote_id}`}
+                className="flex flex-col"
+              >
+                <Button
+                  type="button"
+                  variant="link"
+                  size="sm"
+                  className="h-auto justify-start p-0 text-left whitespace-normal break-words"
+                  onClick={() =>
+                    onOpenLinked({
+                      dimension: "campaign",
+                      id: ref.remote_id,
+                      advertiserId: ref.advertiser_id,
+                      name,
+                    })
+                  }
+                >
+                  {campaigns.isLoading ? (
+                    <Skeleton className="h-4 w-48" />
+                  ) : (
+                    name
+                  )}
+                </Button>
+                <span className="text-xs text-muted-foreground">
+                  {ref.remote_id} · 账户 {found?.account ?? ref.advertiser_id}
+                </span>
+              </li>
+            )
+          })}
+        </ul>
+      ) : (
+        <p className="text-muted-foreground">暂无关联系列</p>
+      )}
+    </section>
   )
 }

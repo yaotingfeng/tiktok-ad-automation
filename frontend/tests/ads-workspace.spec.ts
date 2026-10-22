@@ -98,8 +98,9 @@ test.describe("ads workspace", () => {
     await page.getByRole("textbox", { name: "搜索广告" }).fill("嘉书 总裁归来")
     await page.getByRole("button", { name: "应用筛选" }).click()
     await page.getByRole("tab", { name: "剧" }).click()
+    // 剧名单元格里还有跳转到关联系列的按钮，按名称按钮定位。
     await expect(
-      page.getByRole("cell", { name: "总裁归来", exact: true }),
+      page.getByRole("button", { name: "总裁归来", exact: true }),
     ).toBeVisible()
     for (const column of [
       "消耗",

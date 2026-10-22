@@ -34,7 +34,11 @@ import {
   loadColumnPrefs,
   saveColumnPrefs,
 } from "./columnPrefs"
-import { AdsDetailSheet } from "./details/AdsDetailSheet"
+import {
+  AdsDetailSheet,
+  type DetailActionScope,
+  type DetailEntry,
+} from "./details/AdsDetailSheet"
 import { columnsFor, useMetricCatalog } from "./metricCatalog"
 import { ReportStatusBar } from "./ReportStatusBar"
 import {
@@ -42,7 +46,8 @@ import {
   childDimension,
   DIMENSIONS,
   defaultAdsSearch,
-  detailRowFor,
+  dramaCampaignRefs,
+  MAX_LINKED_IDS,
   type ParentLink,
   rowAdvertiserId,
   rowObjectId,
@@ -56,15 +61,13 @@ export function AdsWorkspace() {
   const navigate = useNavigate()
   const queryClient = useQueryClient()
   const [search, setSearch] = useState<AdsSearch>(() => defaultAdsSearch())
-  // 详情面板目标：表格行，或由上级路径/剧关联系列构造的对象行（不在快照内，不可直接操作）。
-  const [detail, setDetail] = useState<{
-    row: ReportRow
-    dimension: AdsSearch["dimension"]
-    fromSnapshot: boolean
-  } | null>(null)
+  // 详情抽屉的访问栈：底层是表格里点开的行，之后每点一个关联对象压一层，
+  // “返回”逐层弹出（如 剧 → 系列 → 账户），关闭抽屉清空整个栈。
+  const [detailStack, setDetailStack] = useState<DetailEntry[]>([])
+  const detail = detailStack[detailStack.length - 1] ?? null
   const openDetail = (row: ReportRow, dimension: AdsSearch["dimension"]) =>
-    setDetail({ row, dimension, fromSnapshot: true })
-  const closeDetail = useCallback(() => setDetail(null), [])
+    setDetailStack([{ source: "table", row, dimension }])
+  const closeDetail = useCallback(() => setDetailStack([]), [])
   const [applied, setApplied] = useState<AdsSearch>(search)
   const [cursorHistory, setCursorHistory] = useState<Array<string | null>>([])
   const [queryRevision, setQueryRevision] = useState(0)
@@ -187,8 +190,9 @@ export function AdsWorkspace() {
     void queryClient.invalidateQueries({
       queryKey: ["tenant", tenantId, "ads"],
       predicate: (query) =>
-        ["detail", "ad-materials"].includes(String(query.queryKey[3])) &&
-        query.queryKey[4] === currentBcId,
+        ["detail", "ad-materials", "linked"].includes(
+          String(query.queryKey[3]),
+        ) && query.queryKey[4] === currentBcId,
     })
   }, [refetchRows, queryClient, tenantId, currentBcId])
   const syncMutation = useMutation({
@@ -234,22 +238,25 @@ export function AdsWorkspace() {
       ).data,
   })
   const selectionMutation = useMutation({
-    // rowKeys 用于详情里的单对象操作：只冻结这一行，不受表格勾选影响。
-    mutationFn: async (rowKeys?: string[]) => {
-      if (!ads.snapshot) throw new Error("当前报表没有可操作的快照")
+    // single 用于详情里的单对象操作：只冻结这一行，不受表格勾选影响。关联对象的行
+    // 来自它自己的查询快照，因此冻结时用该行所属的快照，而不是表格当前快照。
+    mutationFn: async (
+      single?: { rowKey: string; snapshotId: string } | undefined,
+    ) => {
+      if (!single && !ads.snapshot) throw new Error("当前报表没有可操作的快照")
       return (
         await AdsReportingService.freezeAdSelection({
           path: { tenant_id: tenantId! },
           query: { bc_id: bc!.bc_id },
-          body: rowKeys
+          body: single
             ? {
-                snapshot_id: ads.snapshot.snapshot_id,
+                snapshot_id: single.snapshotId,
                 mode: "EXPLICIT",
-                row_keys: rowKeys,
+                row_keys: [single.rowKey],
                 excluded_row_keys: [],
               }
             : {
-                snapshot_id: ads.snapshot.snapshot_id,
+                snapshot_id: ads.snapshot!.snapshot_id,
                 mode: ads.selection.allMatching ? "ALL_MATCHING" : "EXPLICIT",
                 row_keys: [...ads.selection.selected],
                 excluded_row_keys: [...ads.selection.excluded],
@@ -387,10 +394,38 @@ export function AdsWorkspace() {
     setScopeLabels((current) => ({ accountName: current.accountName }))
     applyScope({ ids: [] })
   }
+  // 剧 → 该剧关联的系列：系列可能分布在多个账户，只按系列 ID 筛选，不限定账户。
+  const navigateToDramaCampaigns = (row: ReportRow) => {
+    const refs = dramaCampaignRefs(row)
+    if (!refs.length) {
+      setActionError("这部剧暂无关联系列")
+      return
+    }
+    setScopeLabels({
+      parent: {
+        kind: "drama",
+        id: refs[0].remote_id,
+        name: rowDisplayName(row, "drama"),
+      },
+    })
+    applyScope({
+      dimension: "campaign",
+      advertiser_ids: [],
+      ids: refs.slice(0, MAX_LINKED_IDS).map((ref) => ref.remote_id),
+    })
+    if (refs.length > MAX_LINKED_IDS)
+      setActionError(
+        `这部剧关联 ${refs.length} 个系列，列表只显示前 ${MAX_LINKED_IDS} 个`,
+      )
+  }
   const navigateToChild = (row: ReportRow) => {
     const dimension = childDimension(applied.dimension)
     if (!dimension) {
       openDetail(row, applied.dimension)
+      return
+    }
+    if (applied.dimension === "drama") {
+      navigateToDramaCampaigns(row)
       return
     }
     const parentId = rowObjectId(row, applied.dimension)
@@ -440,12 +475,17 @@ export function AdsWorkspace() {
   const [previewSession, setPreviewSession] = useState(0)
   const startManagementAction = (
     next: ManagementAction,
-    rowKeys?: string[],
+    single?: { row: ReportRow; scope: DetailActionScope },
   ) => {
     if (roleReadonly) return
+    if (single && !single.scope.snapshotId) {
+      setActionError("该对象没有可操作的报表快照，请刷新后重试")
+      return
+    }
     runAction(() => {
       setManagementAction(next)
-      setManagementDimension(applied.dimension)
+      // 详情里的操作按该对象自身的维度说明修改层级（可能不同于表格当前维度）。
+      setManagementDimension(single?.scope.dimension ?? applied.dimension)
       setPreviewSession((current) => current + 1)
       // 按表格改名的目标来自粘贴的推广系列 ID，不冻结列表勾选，直接打开面板。
       if (next.field === "name" && next.entry === "paste") {
@@ -455,9 +495,14 @@ export function AdsWorkspace() {
         return
       }
       selectionRequestScopeRef.current = scopeRef.current
-      selectionMutation.mutate(rowKeys, {
-        onError: (error) => setActionError(String(error)),
-      })
+      selectionMutation.mutate(
+        single
+          ? { rowKey: single.row.row_key, snapshotId: single.scope.snapshotId! }
+          : undefined,
+        {
+          onError: (error) => setActionError(String(error)),
+        },
+      )
     })
   }
   // 广告详情里的素材启停：只冻结这条广告的指定素材，预览与提交复用广告管理流程。
@@ -789,33 +834,39 @@ export function AdsWorkspace() {
         </p>
       )}
       <AdsDetailSheet
-        row={
-          detail?.fromSnapshot && detail.dimension === applied.dimension
-            ? (items.find((row) => row.row_key === detail.row.row_key) ??
-              detail.row)
-            : (detail?.row ?? null)
+        entry={detail}
+        // 表格来源的行换成当前表格里的最新数据（操作回读后状态会更新）。
+        tableRow={
+          detail?.source === "table"
+            ? detail.dimension === applied.dimension
+              ? (items.find((row) => row.row_key === detail.row.row_key) ??
+                detail.row)
+              : detail.row
+            : null
         }
-        dimension={detail?.dimension ?? applied.dimension}
+        canGoBack={detailStack.length > 1}
         startDate={applied.start_date}
         endDate={applied.end_date}
-        readonly={roleReadonly || !detail?.fromSnapshot}
-        snapshotId={ads.snapshot?.snapshot_id}
+        readonly={roleReadonly}
+        // 表格行属于表格快照；维度已切换时旧行不再在当前快照里，不能据此冻结。
+        snapshotId={
+          detail?.source === "table" && detail.dimension === applied.dimension
+            ? ads.snapshot?.snapshot_id
+            : null
+        }
+        onBack={() => setDetailStack((stack) => stack.slice(0, -1))}
         onClose={closeDetail}
-        onAction={(row, action) => {
+        onAction={(row, action, scope) => {
           // 单对象操作只冻结该行；先关闭详情，避免两个抽屉叠在一起。
           closeDetail()
-          startManagementAction(action, [row.row_key])
+          startManagementAction(action, { row, scope })
         }}
         onAdMaterialAction={(advertiserId, adId, adMaterialIds, value) => {
           closeDetail()
           startAdMaterialAction(advertiserId, adId, adMaterialIds, value)
         }}
-        onOpenParent={(link, advertiserId) =>
-          setDetail({
-            row: detailRowFor(link, advertiserId),
-            dimension: link.kind,
-            fromSnapshot: false,
-          })
+        onOpenLinked={(target) =>
+          setDetailStack((stack) => [...stack, { source: "linked", target }])
         }
       />
       {tenantId && bc?.bc_id && (

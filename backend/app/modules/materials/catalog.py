@@ -240,3 +240,35 @@ def original_preview(
     return SignedPreview(
         url=sign_original_preview(key=file.object_key, mime_type=file.mime_type)
     )
+
+
+def account_video_preview(
+    *,
+    database_engine: Any,
+    redis_client: Any,
+    context: TenantContext,
+    bc_id: str,
+    video_id: str,
+    advertiser_ids: tuple[str, ...],
+) -> RemoteMaterialPreview:
+    """广告报表素材详情的成片预览：按账户与平台视频 ID 读取，不要求素材在素材库里。"""
+    from .remote_sources import read_account_video_preview
+
+    preview = read_account_video_preview(
+        database_engine=database_engine,
+        redis_client=redis_client,
+        context=context,
+        bc_id=bc_id,
+        video_id=video_id,
+        advertiser_ids=advertiser_ids,
+    )
+    return RemoteMaterialPreview(
+        bc_id=bc_id,
+        url=preview.url,
+        advertiser_id=preview.advertiser_id,
+        video_id=preview.video_id,
+        width=preview.width,
+        height=preview.height,
+        duration=preview.duration,
+        format=preview.format,
+    )

@@ -12,6 +12,7 @@ from app.api.deps import CurrentUser, SessionDep
 from app.core.config import settings
 from app.core.context import TenantContext
 from app.core.db import engine
+from app.core.errors import DomainError
 from app.core.pagination import Page, count_rows
 from app.modules.materials import catalog
 from app.modules.materials.content_identity import content_key
@@ -148,6 +149,45 @@ def read_remote_preview(
             redis_client=redis_client,
             context=context,
             material_id=material_id,
+        )
+    response.headers["Cache-Control"] = "no-store"
+    return result
+
+
+# 静态路径须注册在 /{material_id} 之前，否则会被素材 ID 参数段先匹配。
+@router.get("/account-video-preview", response_model=RemoteMaterialPreview)
+def read_account_video_preview(
+    tenant_id: UUID,
+    response: Response,
+    session: SessionDep,
+    user: CurrentUser,
+    bc_id: Annotated[str, Query(min_length=1, max_length=128)],
+    video_id: Annotated[str, Query(min_length=1, max_length=128)],
+    advertiser_ids: Annotated[str, Query(min_length=1, max_length=2600)],
+) -> RemoteMaterialPreview:
+    """广告报表素材详情点"预览成片"时调用；候选账户来自该素材的使用位置。"""
+    context = require_tenant(
+        session, actor_id=user.id, tenant_id=tenant_id, action="read"
+    )
+    candidates = tuple(
+        dict.fromkeys(
+            item.strip() for item in advertiser_ids.split(",") if item.strip()
+        )
+    )
+    # 候选账户数量有上限：只是为了在其中挑一个有授权的账户，不需要无限列表。
+    if not candidates or len(candidates) > 20:
+        raise DomainError("material_request_invalid", "候选账户数量须为 1 到 20 个")
+    # 先结束请求鉴权的事务，再进入受准入控制的平台读取。
+    session.commit()
+    session.close()
+    with Redis.from_url(settings.REDIS_URL) as redis_client:
+        result = catalog.account_video_preview(
+            database_engine=engine,
+            redis_client=redis_client,
+            context=context,
+            bc_id=bc_id,
+            video_id=video_id,
+            advertiser_ids=candidates,
         )
     response.headers["Cache-Control"] = "no-store"
     return result
@@ -356,7 +396,9 @@ def get_materials(
     statement = deduplicate_material_statement(statement)
     total = count_rows(session, statement)
     if cursor:
-        created_at_value, name, identity = decode_material_created_cursor(cursor, scope=scope)
+        created_at_value, name, identity = decode_material_created_cursor(
+            cursor, scope=scope
+        )
         name_order = col(MaterialFile.file_name).collate("C")
         statement = statement.where(
             or_(

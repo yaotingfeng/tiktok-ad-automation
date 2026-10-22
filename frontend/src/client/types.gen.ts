@@ -10793,6 +10793,49 @@ export type materialsReadRemotePreviewResponses = {
 
 export type materialsReadRemotePreviewResponse = materialsReadRemotePreviewResponses[keyof materialsReadRemotePreviewResponses];
 
+export type materialsReadAccountVideoPreviewData = {
+    body?: never;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+    };
+    query: {
+        /**
+         * Bc Id
+         */
+        bc_id: string;
+        /**
+         * Video Id
+         */
+        video_id: string;
+        /**
+         * Advertiser Ids
+         */
+        advertiser_ids: string;
+    };
+    url: '/api/tenants/{tenant_id}/materials/account-video-preview';
+};
+
+export type materialsReadAccountVideoPreviewErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type materialsReadAccountVideoPreviewError = materialsReadAccountVideoPreviewErrors[keyof materialsReadAccountVideoPreviewErrors];
+
+export type materialsReadAccountVideoPreviewResponses = {
+    /**
+     * Successful Response
+     */
+    200: RemoteMaterialPreview;
+};
+
+export type materialsReadAccountVideoPreviewResponse = materialsReadAccountVideoPreviewResponses[keyof materialsReadAccountVideoPreviewResponses];
+
 export type materialsReadUploadBatchData = {
     body?: never;
     path: {

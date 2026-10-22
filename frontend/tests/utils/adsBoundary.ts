@@ -306,7 +306,23 @@ export async function adsBoundary(
                         remote_id: "campaign-1",
                       },
                     ],
-              material_uses: [],
+              // 素材行带一个使用位置，详情的成片预览据此选视频与候选账户。
+              material_uses:
+                dimension === "material"
+                  ? [
+                      {
+                        ad_ref: {
+                          tenant_id: TENANT,
+                          advertiser_id: ADVERTISER,
+                          kind: "ad",
+                          remote_id: "ad-1",
+                        },
+                        platform_material_id: "vid-1",
+                        ad_material_id: "am-1",
+                        material_type: "VIDEO",
+                      },
+                    ]
+                  : [],
               metric_buckets: [
                 {
                   currency: "USD",

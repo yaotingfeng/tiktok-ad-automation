@@ -3436,3 +3436,11 @@ CI affected后端1017项通过、0失败/0并行不稳定，Ruff/ty通过；前�
 - 根因：巡检按 `payload->>'operation_id'` 关联 `pending_dispatch`（540 万行、3 GB），没有可用索引，只能顺序扫描；关联条件里有类型转换，又退化成 784×15206 的嵌套循环。生产只读 EXPLAIN ANALYZE 实测 14.4 秒。
 - 修复：改为从上传记录（约 2.5 万行）出发，按 `enqueue_source_cover` 固定的 `task_key = source-cover:{operation_id}` 走 `(tenant_id, task_key)` 唯一索引查找，payload 一致性仍作为条件保留。生产只读核对：784 条事件的 task_key 全部与 payload 一致，新旧写法覆盖同一批；同等改写的查询 61 毫秒。无迁移。
 - 验证：materials 测试 448 通过、1 失败（`test_distribution.py::test_two_submissions_share_durable_distribution_not_message_id`，在原代码上同样失败，与本次无关）；source cover 相关 50 项通过；Ruff、mypy 通过。投递器单独拆队列（改部署清单）用户决定暂不做。
+
+### 2026-10-23 广告报表：剧→系列跳转、详情关联对象可操作并可返回、素材成片预览
+
+- 设计：`docs/superpowers/specs/2026-10-22-ads-report-cross-navigation-design.md`（用户授权实施者自定细节并直接实施、发布）。
+- 剧维度名称格子新增“›”：切到系列维度，只按该剧关联系列 ID 筛选（不限账户，最多 200 个），筛选标签显示“剧：剧名”。
+- 详情抽屉改为访问栈：从剧详情的关联系列、层级路径点进去的对象，按“维度 + 账户 + ID + 当前日期”重新查询真实报表行（`include_empty=true`），操作按钮、页签、指标与本维度打开的详情一致；单对象操作用该行所属快照冻结，预览按对象自身层级说明。“返回”逐层退回。删除了前端拼假行的 `detailRowFor`。剧详情关联系列显示系列名、ID 与账户名。
+- 素材成片：新接口 `GET /tenants/{id}/materials/account-video-preview?bc_id&video_id&advertiser_ids`，候选账户 1–20 个，SQL 内筛出当前租户在该 BC 有读授权的账户，只读取第一个；不依赖素材库记录（外部素材也可看），返回前复核授权、校验视频与账户一致、地址须在预览域名白名单内，`Cache-Control: no-store`。素材详情点击“预览成片”才读取。体验版返回封面。
+- 验证：本地 PG/Redis 上新增后端用例 4 项及原远端预览用例 36 项通过；mypy、ty、Ruff 通过（本机 Ruff 0.16.4 对 main 上 43 个既有文件报格式差异，与本次无关，未改动）。Playwright 全量 634 通过、1 失败（`auth.setup` 需真实后端登录，本机未起后端）；新增详情用例 4 项；剧名单元格多了跳转按钮，`外部广告六维切换保留筛选` 改按名称按钮定位。tsc、Biome、生产与体验版构建、体验版接口覆盖检查（203 个）通过。

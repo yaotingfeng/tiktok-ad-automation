@@ -172,6 +172,24 @@ handle("materials-read_remote_preview", (req) => {
   }
 })
 
+// 广告报表素材详情的成片预览：按视频 ID 找示例素材，没有就退回第一个示例素材的封面。
+handle("materials-read_account_video_preview", (req) => {
+  const { video_id, advertiser_ids } = req.query
+  const material =
+    DEMO_MATERIALS.find((m) => m.video_id === video_id) ?? DEMO_MATERIALS[0]
+  if (!material) return demoError(404, "MATERIAL_NOT_FOUND", "素材不存在")
+  return {
+    bc_id: MAIN_BC_ID,
+    url: material.cover_url,
+    advertiser_id: String(advertiser_ids ?? "").split(",")[0] ?? "",
+    video_id: String(video_id ?? material.video_id),
+    width: 1080,
+    height: 1920,
+    duration: material.duration_seconds,
+    format: "mp4",
+  }
+})
+
 // 上传批次列表（遗留接口）
 handle("materials-read_upload_batches", () => {
   return { items: [], next_cursor: null, total: 0 }

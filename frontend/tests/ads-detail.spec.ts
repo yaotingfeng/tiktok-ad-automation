@@ -287,19 +287,153 @@ test.describe("ads detail", () => {
     expect(detailCalls).toHaveLength(0)
   })
 
-  test("剧详情列出关联系列并可切换到系列详情", async ({ page }) => {
+  test("剧详情点关联系列：与系列维度详情一致、可操作并可返回", async ({
+    page,
+  }) => {
+    const queries: URL[] = []
+    page.on("request", (r) => {
+      const url = new URL(r.url())
+      if (url.pathname.endsWith(`/tenants/${TENANT}/ads`)) queries.push(url)
+    })
     await adsBoundary(page)
     await page.goto(`/tenants/${TENANT}/ads?bc_id=${BC_A}`)
     await page.getByRole("tab", { name: "剧" }).click()
     await page.getByRole("button", { name: "总裁归来", exact: true }).click()
     const sheet = page.getByRole("dialog")
     await expect(sheet.getByText("关联系列")).toBeVisible()
+    // 关联系列显示系列名，ID 与账户放在下一行。
+    const campaign = sheet.getByRole("button", {
+      name: "嘉书-总裁归来-测试",
+      exact: true,
+    })
+    await expect(campaign).toBeVisible()
+    await expect(sheet.getByText("campaign-1 · 账户 甲账户")).toBeVisible()
     const detail = page.waitForRequest((r) =>
       r.url().includes("/ads/campaign/campaign-1"),
     )
-    await sheet.getByRole("button", { name: "campaign-1" }).click()
+    await campaign.click()
     await detail
+    // 关联对象按账户 + ID 查询真实报表行，零消耗也能找到。
+    const linked = queries.at(-1)!
+    expect(linked.searchParams.get("dimension")).toBe("campaign")
+    expect(linked.searchParams.get("ids")).toBe("campaign-1")
+    expect(linked.searchParams.get("advertiser_id")).toBe("adv-1")
+    expect(linked.searchParams.get("include_empty")).toBe("true")
+    const header = sheet.getByTestId("ads-detail-header")
+    for (const name of ["启用", "暂停", "修改目标 ROAS", "修改预算"])
+      await expect(
+        header.getByRole("button", { name, exact: true }),
+      ).toBeVisible()
     await expect(sheet.getByRole("tab", { name: "设置" })).toBeVisible()
+    await expect(sheet.getByRole("tab", { name: "操作记录" })).toBeVisible()
+    // 返回回到剧详情。
+    await sheet.getByRole("button", { name: "返回" }).click()
+    await expect(sheet.getByText("关联系列")).toBeVisible()
+    await expect(sheet.getByRole("button", { name: "返回" })).toHaveCount(0)
+    // 再进系列详情发起暂停：冻结的是关联查询快照里的这一行，预览按系列层级说明。
+    await campaign.click()
+    const freeze = page.waitForRequest((r) =>
+      r.url().includes("/ad-selections"),
+    )
+    await header.getByRole("button", { name: "暂停", exact: true }).click()
+    expect((await freeze).postDataJSON()).toMatchObject({
+      snapshot_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      mode: "EXPLICIT",
+      row_keys: [`${BC_A}-campaign-1`],
+    })
+    await expect(page.getByRole("heading", { name: "批量暂停" })).toBeVisible()
+  })
+
+  test("层级路径可多层跳转并逐层返回", async ({ page }) => {
+    await adsBoundary(page)
+    await page.goto(`/tenants/${TENANT}/ads?bc_id=${BC_A}`)
+    await page.getByRole("tab", { name: "广告组" }).click()
+    await page
+      .getByRole("button", { name: /嘉书-总裁归来/ })
+      .first()
+      .click()
+    const sheet = page.getByRole("dialog")
+    const path = sheet.getByText("层级路径").locator("..")
+    await path.getByRole("button", { name: "嘉书-总裁归来-测试" }).click()
+    await expect(
+      sheet.getByTestId("ads-detail-header").getByText("系列"),
+    ).toBeVisible()
+    await sheet
+      .getByText("层级路径")
+      .locator("..")
+      .getByRole("button", { name: "甲账户" })
+      .click()
+    await expect(sheet.getByText("余额")).toBeVisible()
+    await sheet.getByRole("button", { name: "返回" }).click()
+    await expect(
+      sheet.getByTestId("ads-detail-header").getByText("系列"),
+    ).toBeVisible()
+    await sheet.getByRole("button", { name: "返回" }).click()
+    await expect(
+      sheet.getByTestId("ads-detail-header").getByText("广告组"),
+    ).toBeVisible()
+    await expect(sheet.getByRole("button", { name: "返回" })).toHaveCount(0)
+  })
+
+  test("剧维度跳转到该剧关联的系列，筛选标签显示剧名", async ({ page }) => {
+    await adsBoundary(page)
+    await page.goto(`/tenants/${TENANT}/ads?bc_id=${BC_A}`)
+    await page.getByRole("tab", { name: "剧" }).click()
+    const query = page.waitForRequest((r) => {
+      const url = new URL(r.url())
+      return (
+        url.pathname.endsWith(`/tenants/${TENANT}/ads`) &&
+        url.searchParams.get("dimension") === "campaign"
+      )
+    })
+    await page.getByRole("button", { name: "查看 总裁归来 的下级" }).click()
+    const url = new URL((await query).url())
+    expect(url.searchParams.get("ids")).toBe("campaign-1")
+    // 系列可能分布在多个账户：不限定账户。
+    expect(url.searchParams.get("advertiser_id")).toBeNull()
+    await expect(
+      page.getByRole("tab", { name: "系列", exact: true }),
+    ).toHaveAttribute("data-state", "active")
+    await expect(page.getByText("剧：总裁归来")).toBeVisible()
+    await page.getByRole("button", { name: "取消筛选 剧：总裁归来" }).click()
+    await expect(page.getByText("剧：总裁归来")).toHaveCount(0)
+  })
+
+  test("素材详情可预览成片，按视频与使用位置账户读取", async ({ page }) => {
+    await adsBoundary(page)
+    await page.route("**/materials/account-video-preview{,?*}", (route) =>
+      route.fulfill({
+        headers: { "Access-Control-Allow-Origin": "*" },
+        json: {
+          bc_id: BC_A,
+          url: "https://video.test/preview?signature=report-preview",
+          advertiser_id: "adv-1",
+          video_id: "vid-1",
+          width: 1080,
+          height: 1920,
+          duration: 12.5,
+          format: "mp4",
+        },
+      }),
+    )
+    await page.goto(`/tenants/${TENANT}/ads?bc_id=${BC_A}`)
+    await page.getByRole("tab", { name: "素材" }).click()
+    await page.getByRole("button", { name: "素材-测试", exact: true }).click()
+    const sheet = page.getByRole("dialog")
+    // 打开详情不自动读取，点击才读取。
+    await expect(sheet.locator("video")).toHaveCount(0)
+    const preview = page.waitForRequest((r) =>
+      r.url().includes("/materials/account-video-preview"),
+    )
+    await sheet.getByRole("button", { name: "预览成片" }).click()
+    const url = new URL((await preview).url())
+    expect(url.searchParams.get("video_id")).toBe("vid-1")
+    expect(url.searchParams.get("advertiser_ids")).toBe("adv-1")
+    await expect(sheet.getByLabel("素材成片预览")).toHaveAttribute(
+      "src",
+      /report-preview/,
+    )
+    await expect(sheet.getByText(/来源账户 adv-1/)).toBeVisible()
   })
 
   for (const [timezone, zone, first] of [

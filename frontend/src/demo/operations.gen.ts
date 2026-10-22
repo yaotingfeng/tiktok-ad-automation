@@ -284,6 +284,8 @@ import type {
   materialsPostPartSignatureResponse,
   materialsPostUploadBatchData,
   materialsPostUploadBatchResponse,
+  materialsReadAccountVideoPreviewData,
+  materialsReadAccountVideoPreviewResponse,
   materialsReadOriginalPreviewData,
   materialsReadOriginalPreviewResponse,
   materialsReadRemotePreviewData,
@@ -547,6 +549,7 @@ export const DEMO_OPERATIONS = {
   "materials-post_object_retry": { method: "POST", path: "/api/tenants/{tenant_id}/materials/{material_id}/retry", query: {} },
   "materials-post_part_signature": { method: "POST", path: "/api/tenants/{tenant_id}/materials/{material_id}/upload-parts/{part_number}/sign", query: {} },
   "materials-post_upload_batch": { method: "POST", path: "/api/tenants/{tenant_id}/materials/upload-batches", query: {} },
+  "materials-read_account_video_preview": { method: "GET", path: "/api/tenants/{tenant_id}/materials/account-video-preview", query: {} },
   "materials-read_original_preview": { method: "GET", path: "/api/tenants/{tenant_id}/materials/{material_id}/preview", query: {} },
   "materials-read_remote_preview": { method: "GET", path: "/api/tenants/{tenant_id}/materials/{material_id}/remote-preview", query: {} },
   "materials-read_upload_batch": { method: "GET", path: "/api/tenants/{tenant_id}/materials/upload-batches/{batch_id}", query: {} },
@@ -752,6 +755,7 @@ export interface DemoOperationTypes {
   "materials-post_object_retry": { data: materialsPostObjectRetryData; response: materialsPostObjectRetryResponse }
   "materials-post_part_signature": { data: materialsPostPartSignatureData; response: materialsPostPartSignatureResponse }
   "materials-post_upload_batch": { data: materialsPostUploadBatchData; response: materialsPostUploadBatchResponse }
+  "materials-read_account_video_preview": { data: materialsReadAccountVideoPreviewData; response: materialsReadAccountVideoPreviewResponse }
   "materials-read_original_preview": { data: materialsReadOriginalPreviewData; response: materialsReadOriginalPreviewResponse }
   "materials-read_remote_preview": { data: materialsReadRemotePreviewData; response: materialsReadRemotePreviewResponse }
   "materials-read_upload_batch": { data: materialsReadUploadBatchData; response: materialsReadUploadBatchResponse }
