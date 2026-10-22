@@ -3429,3 +3429,10 @@ CI affected后端1017项通过、0失败/0并行不稳定，Ruff/ty通过；前�
 - 根因：管理适配器 `_smart_plus()` 把 `campaign_type` 当作 Smart+ 类型标识。该字段是平台普通/iOS 专属系列区分，系列目录恒带 `REGULAR_CAMPAIGN`，不在任何白名单内，所有系列层的预算、状态、改名都被闭合拒绝；广告组和广告目录无此字段，不受影响（此前开关状态操作均为广告层）。
 - 修复：标识只认 `ad_type`/`platform_ad_type`/`is_smart_plus`；缺失或冲突仍闭合拒绝。系列更新用例改用带 `campaign_type: REGULAR_CAMPAIGN` 的真实目录形状（旧逻辑下 4 项失败）。
 - 验证：本地 PG18/Redis8 上管理适配器与 ad_management 167 项通过，Ruff 通过。发布后需用户重新提交该预算修改。
+
+### 2026-10-23 素材封面巡检顺序扫描全局 outbox，堵住 control 队列投递
+
+- 现象：广告管理任务提交后排队 13 秒才执行。control 只有 2 个进程，`materials.repair_source_cover_starts` 每分钟一次、每次约 20 秒（最长 28.6 秒），与报表规划同时占满时，每秒一次的 `jobs.flush_dispatch` 全部过期丢弃。最近 2 小时投递中断超过 10 秒的有 34 次，最长 23.6 秒。
+- 根因：巡检按 `payload->>'operation_id'` 关联 `pending_dispatch`（540 万行、3 GB），没有可用索引，只能顺序扫描；关联条件里有类型转换，又退化成 784×15206 的嵌套循环。生产只读 EXPLAIN ANALYZE 实测 14.4 秒。
+- 修复：改为从上传记录（约 2.5 万行）出发，按 `enqueue_source_cover` 固定的 `task_key = source-cover:{operation_id}` 走 `(tenant_id, task_key)` 唯一索引查找，payload 一致性仍作为条件保留。生产只读核对：784 条事件的 task_key 全部与 payload 一致，新旧写法覆盖同一批；同等改写的查询 61 毫秒。无迁移。
+- 验证：materials 测试 448 通过、1 失败（`test_distribution.py::test_two_submissions_share_durable_distribution_not_message_id`，在原代码上同样失败，与本次无关）；source cover 相关 50 项通过；Ruff、mypy 通过。投递器单独拆队列（改部署清单）用户决定暂不做。

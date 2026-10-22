@@ -123,17 +123,20 @@ def repair_source_cover_starts(session: Session, *, limit: int = 100) -> int:
     acknowledged = col(MaterialAssetOperation.remote_response)[
         "source_cover_dispatch_id"
     ].as_string()
+    operation_id = cast(col(MaterialAssetOperation.id), String)
+    # 从体量很小的上传记录出发，按 enqueue_source_cover 固定的 task_key 走
+    # (tenant_id, task_key) 唯一索引找事件。若按 payload 关联，就得顺序扫描
+    # 数百万行的全局 outbox：每分钟一次、每次约 20 秒，会堵住 control 队列的投递。
     rows = session.exec(
         select(PendingDispatch)
+        .select_from(MaterialAssetOperation)
         .join(
-            MaterialAssetOperation,
-            (MaterialAssetOperation.tenant_id == PendingDispatch.tenant_id)
-            & (
-                col(PendingDispatch.payload)["operation_id"].as_string()
-                == cast(col(MaterialAssetOperation.id), String)
-            ),
+            PendingDispatch,
+            (col(PendingDispatch.tenant_id) == col(MaterialAssetOperation.tenant_id))
+            & (col(PendingDispatch.task_key) == "source-cover:" + operation_id),
         )
         .where(
+            col(PendingDispatch.payload)["operation_id"].as_string() == operation_id,
             PendingDispatch.task_name == TASK,
             col(PendingDispatch.published_at)
             <= datetime.now(UTC) - timedelta(seconds=60),
