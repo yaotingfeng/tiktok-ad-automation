@@ -66,10 +66,25 @@ def stage(args, cwd, env, log, abort_if=None):
     require(returncode == 0, f"Step failed ({returncode}); private log: {log}")
 
 
+# 测试框架的失败用例行只有用例名与断言摘要，不含环境配置；转到控制台后，
+# 在 Jenkins 上就能看到是哪个用例失败，不必登录节点读私有日志。
+FAILED_TEST_LINE = re.compile(
+    r"^(FAILED|ERROR) tests|^\s+✘ |^\s+\d+\) \[[\w-]+\] › |^\s+Error: "
+)
+FAILED_TEST_LIMIT = 60
+
+
 def lane_summary(log):
     """检查线的启动/结束与耗时行不含配置，原样转到控制台，便于在 Jenkins 上看各线耗时。"""
+    failures = []
     for line in log.read_text(errors="replace").splitlines():
         if line.startswith("检查线"):
+            print(line, flush=True)
+        elif FAILED_TEST_LINE.search(line):
+            failures.append(line[:300])
+    if failures:
+        print("失败用例：", flush=True)
+        for line in dict.fromkeys(failures[:FAILED_TEST_LIMIT]):
             print(line, flush=True)
 
 
