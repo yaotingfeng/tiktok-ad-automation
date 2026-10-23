@@ -438,6 +438,52 @@ test.describe("ads detail", () => {
     await expect(sheet.getByText(/来源账户 adv-1/)).toBeVisible()
   })
 
+  test("广告详情的素材页签可逐个预览成片，按本广告账户读取", async ({
+    page,
+  }) => {
+    await adsBoundary(page)
+    await page.route("**/materials/account-video-preview{,?*}", (route) => {
+      const url = new URL(route.request().url())
+      return route.fulfill({
+        headers: { "Access-Control-Allow-Origin": "*" },
+        json: {
+          bc_id: BC_A,
+          url: `https://video.test/${url.searchParams.get("video_id")}`,
+          advertiser_id: url.searchParams.get("advertiser_ids"),
+          video_id: url.searchParams.get("video_id"),
+          width: 1080,
+          height: 1920,
+          duration: 12.5,
+          format: "mp4",
+        },
+      })
+    })
+    await page.route("https://video.test/**", () => {})
+    await page.goto(`/tenants/${TENANT}/ads?bc_id=${BC_A}`)
+    await page.getByRole("tab", { name: "广告", exact: true }).click()
+    await page
+      .getByRole("button", { name: /嘉书-总裁归来/ })
+      .first()
+      .click()
+    const sheet = page.getByRole("dialog")
+    await sheet.getByRole("tab", { name: "素材" }).click()
+    await expect(sheet.locator("video")).toHaveCount(0)
+    const preview = page.waitForRequest((r) =>
+      r.url().includes("/materials/account-video-preview"),
+    )
+    await sheet.getByRole("button", { name: "预览 ep2.mp4" }).click()
+    const url = new URL((await preview).url())
+    expect(url.searchParams.get("advertiser_ids")).toBe("adv-1")
+    const video = url.searchParams.get("video_id")!
+    await expect(sheet.getByText("成片：ep2.mp4")).toBeVisible()
+    await expect(sheet.getByLabel("素材成片预览")).toHaveAttribute(
+      "src",
+      new RegExp(video),
+    )
+    await sheet.getByRole("button", { name: "收起" }).click()
+    await expect(sheet.locator("video")).toHaveCount(0)
+  })
+
   test("素材成片地址失效时提示重新读取", async ({ page }) => {
     await adsBoundary(page)
     await page.route("**/materials/account-video-preview{,?*}", (route) =>

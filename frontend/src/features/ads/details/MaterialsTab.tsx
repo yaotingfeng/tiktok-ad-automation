@@ -20,6 +20,7 @@ import {
 import { useTenantScope } from "@/features/tenants/TenantScope"
 import { type ColumnDef, formatMetric } from "../metricCatalog"
 import { SortableHead } from "../SortableHead"
+import { useVideoPreview, VideoPreviewPlayer } from "./MaterialVideoPreview"
 
 const STATUS: Record<string, string> = {
   ENABLE: "已开启",
@@ -107,6 +108,16 @@ export function AdMaterialsTab({
   const { tenantId, bc } = useTenantScope()
   const bcId = bc?.bc_id
   const [selected, setSelected] = useState<Set<string>>(new Set())
+  // 正在预览的素材：本广告所在账户就是读取成片的账户，不需要再找候选账户。
+  const preview = useVideoPreview()
+  const [previewing, setPreviewing] = useState<AdMaterialPublic | null>(null)
+  const startPreview = (item: AdMaterialPublic) => {
+    setPreviewing(item)
+    preview.mutation.mutate({
+      videoId: item.use_ref.platform_material_id,
+      advertiserIds: [advertiserId],
+    })
+  }
   const [sort, setSort] = useState<{ by: string; direction: "asc" | "desc" }>({
     by: "spend",
     direction: "desc",
@@ -195,6 +206,34 @@ export function AdMaterialsTab({
     })
   return (
     <div className="space-y-3">
+      {previewing && (
+        <section className="flex flex-col gap-2 rounded-md border p-3">
+          <div className="flex items-center justify-between gap-2">
+            <h3
+              className="truncate text-sm font-medium"
+              title={previewing.name}
+            >
+              成片：
+              {previewing.name || previewing.use_ref.platform_material_id}
+            </h3>
+            <Button
+              type="button"
+              size="sm"
+              variant="ghost"
+              onClick={() => {
+                setPreviewing(null)
+                preview.mutation.reset()
+              }}
+            >
+              收起
+            </Button>
+          </div>
+          {preview.mutation.isPending && (
+            <p className="text-sm text-muted-foreground">正在读取预览…</p>
+          )}
+          <VideoPreviewPlayer preview={preview} />
+        </section>
+      )}
       {!readonly && (
         <div className="flex flex-wrap items-center gap-2 text-sm">
           <span className="text-muted-foreground">
@@ -239,6 +278,7 @@ export function AdMaterialsTab({
               )}
               <TableHead>名称</TableHead>
               <TableHead>状态</TableHead>
+              <TableHead>成片</TableHead>
               {shown.map((column) => (
                 <TableHead
                   key={column.key}
@@ -291,6 +331,21 @@ export function AdMaterialsTab({
                     )}
                   </TableCell>
                   <TableCell>{statusText(item.operation_status)}</TableCell>
+                  <TableCell>
+                    {/* 图片素材没有成片可播放。 */}
+                    {isVideo(item) && preview.ready && (
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        aria-label={`预览 ${item.name || item.use_ref.platform_material_id}`}
+                        disabled={preview.mutation.isPending}
+                        onClick={() => startPreview(item)}
+                      >
+                        预览
+                      </Button>
+                    )}
+                  </TableCell>
                   {shown.map((column) => (
                     <TableCell key={column.key} className="tabular-nums">
                       {formatMetric(
@@ -307,4 +362,8 @@ export function AdMaterialsTab({
       </div>
     </div>
   )
+}
+
+function isVideo(item: AdMaterialPublic) {
+  return item.use_ref.material_type.toUpperCase().includes("VIDEO")
 }
