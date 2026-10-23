@@ -3450,8 +3450,9 @@ CI affected后端1017项通过、0失败/0并行不稳定，Ruff/ty通过；前�
 
 ### 2026-10-23 授权后账户发现卡在“正在发现”：大 BC 目录发布超时
 
-- 现象：生产租户 xuyin 授权成功（北京时间 16:27）后一直显示“正在发现账户”。发现任务已读完 1 个 BC、4,891 个账户的全部分页，卡在 FINALIZE，`ADMISSION_WAIT / tiktok_local_resources_unavailable`，到 17:16 已重试 506 次；每次约 5.18 秒后 `statement timeout` 整体回滚，5 秒后再试，同时占用 `worker-results`。
-- 根因：FINALIZE 在 5 秒共享期限的 `bounded_session` 内发布整份目录；`directory_capabilities.py` 的权限回写 UPDATE 用 CTE 自关联 `bc_account_access`，同事务刚写入的行无统计信息，计划退化为嵌套循环（4,891 行时过滤掉约 1,196 万行），耗时随账户数平方增长。junbo 全部约 1,086 账户，未触发。
-- 修复：改为单条 UPDATE 按主键关联 `advertiser_account` 与本次角色表，去掉自关联，判定条件不变。本地 4,891 账户：该语句 2.98 秒 → 0.13 秒，FINALIZE 3.46 秒 → 0.57 秒。新增 `test_large_bc_directory_finalizes_within_worker_deadline`（资源期限收紧到 2 秒；修复前失败为同样的 ADMISSION_WAIT，修复后通过，已登记慢用例）。
-- 验证：本地 PG18/Redis 上 accounts 模块快速层 653 通过；Ruff、ty 通过（mypy 全量存在既有错误，改动行无新增）。
-- 未做：该类确定性超时仍会无限重试，没有次数上限，需要另行设计重试上限与错误呈现。暂存的目录在读取后 24 小时内有效，发布后卡住的任务会自动完成，无需重新授权。
+- 现象：生产租户 xuyin 授权成功（北京时间 16:27）后一直显示“正在发现账户”。发现任务已读完 1 个 BC、4,891 个账户的全部分页，卡在 FINALIZE，`ADMISSION_WAIT / tiktok_local_resources_unavailable`；每次约 5.18 秒后 `statement timeout` 整体回滚，5 秒后再试，无上限，同时占用 `worker-results`。
+- 根因：FINALIZE 在 5 秒共享期限的 `bounded_session` 内发布整份目录。`directory_capabilities.py` 的权限回写 UPDATE 关联本事务刚写入的账户、授权、角色行，这些行不在统计信息里（生产统计为本租户 0 行），计划器把关联规划成只按 `tenant_id` 扫索引的嵌套循环，生产实测单条 13.7 秒（过滤约 1,196 万行）。junbo 约 1,086 账户，未触发。
+- 第一次修复 e2790a00（Jenkins #127 已发布）只去掉 `bc_account_access` 自关联，仍是表间关联；本地测试库没做过 ANALYZE，计划器用默认估算，复现不出，生产上照旧超时。
+- 第二次修复：改为对目标行按完整主键逐行取账户和角色（`SET (...) = (SELECT ...)`），不做表间关联，判定条件不变；外键保证每条授权行都有账户。生产库只读诊断（事务内执行后回滚）：新语句 0.33 秒，其余发布语句合计约 0.6 秒。回归用例 `test_large_bc_directory_finalizes_within_worker_deadline` 先 ANALYZE 复现生产统计、资源期限收紧到 2 秒：e2790a00 失败（同样 ADMISSION_WAIT），新版本通过；已登记慢用例。
+- 验证：本地 PG18/Redis 上 accounts 模块快速层 653 通过；Ruff、ty 通过。
+- 未做：确定性超时仍无限重试，没有次数上限，需另行设计重试上限与错误呈现。暂存目录读取后 24 小时内有效，发布后卡住的任务会自动完成，无需重新授权。

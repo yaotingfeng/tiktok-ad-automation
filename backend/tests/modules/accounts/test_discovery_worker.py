@@ -1010,6 +1010,11 @@ def test_large_bc_directory_finalizes_within_worker_deadline(
         )
 
     monkeypatch.setattr("urllib3.PoolManager.request", request)
+    # 复现生产统计：表已分析过且本租户 0 行；发布事务内新写入的行不在统计里。
+    with engine.connect() as connection:
+        connection.exec_driver_sql(
+            "ANALYZE bc_account_access, advertiser_account, account_capability_asset"
+        )
     for _ in range(400):
         with Session(engine) as session:
             run = session.get(DiscoveryRun, runs[0])
