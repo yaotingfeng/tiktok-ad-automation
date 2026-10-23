@@ -19,6 +19,7 @@ celery_app.conf.update(
         "app.modules.accounts.capability_tasks",
         "app.modules.accounts.refresh_tasks",
         "app.modules.accounts.runtime_directory_tasks",
+        "app.modules.accounts.discovery_recovery",
         "app.modules.providers.tasks",
         "app.modules.materials.tasks",
         "app.modules.materials.cover_tasks",
@@ -128,6 +129,12 @@ celery_app.conf.update(
         },
         "repair-material-covers": {
             "task": "materials.repair_covers",
+            "schedule": 60.0,
+            "options": {"queue": "control"},
+        },
+        # 目录发现每步只靠一条消息推进；丢失或领取前出错时由这里补派，避免永久“正在发现”。
+        "repair-account-discoveries": {
+            "task": "accounts.repair_discoveries",
             "schedule": 60.0,
             "options": {"queue": "control"},
         },

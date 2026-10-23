@@ -19,6 +19,10 @@ from app.integrations.tiktok.gateway import open_tiktok_gateway
 from app.integrations.tiktok.sdk import AccountAdmissionDeferred
 from app.jobs.celery_app import celery_app
 from app.modules.accounts.capability_models import CapabilityJob
+from app.modules.accounts.discovery_recovery import (
+    LOCAL_RESOURCE_ERROR,
+    local_retry_delay_ms,
+)
 from app.modules.accounts.mcp_discovery_tasks import (
     _detail_ids,
     advance_discovery_stage,
@@ -88,20 +92,24 @@ def _failure(
             return
         run.claim_id = run.claimed_until = None
         run.error_code = code
-        if isinstance(error, AccountAdmissionDeferred) or code in {
-            "admission_unavailable",
-            "tiktok_local_resources_unavailable",
-            "gateway_credentials_changed",
-            "mcp_refresh_pending",
-        }:
+        delay = (
+            error.retry_after_ms
+            if isinstance(error, AccountAdmissionDeferred)
+            else local_retry_delay_ms(run)
+            if code == LOCAL_RESOURCE_ERROR
+            else 5000
+            if code
+            in {
+                "admission_unavailable",
+                "gateway_credentials_changed",
+                "mcp_refresh_pending",
+            }
+            else None
+        )
+        if delay is not None:
             run.status = "ADMISSION_WAIT"
             run.next_attempt_at = datetime.now(UTC) + timedelta(
-                milliseconds=max(
-                    1,
-                    error.retry_after_ms
-                    if isinstance(error, AccountAdmissionDeferred)
-                    else 5000,
-                )
+                milliseconds=max(1, delay)
             )
             run.revision += 1
             queue_runtime(session, run, due=run.next_attempt_at)
@@ -273,7 +281,9 @@ def process_runtime_directory(
                 else 1000,
             )
             advance_discovery_stage(run, results)
-            run.claim_id = run.claimed_until = run.next_attempt_at = None
+            # 到期时间记为现在：补派兜底据此判断这一步是否已久无人领取。
+            run.claim_id = run.claimed_until = None
+            run.next_attempt_at = datetime.now(UTC)
             run.revision += 1
             run.status = "RUNNING"
             run.error_code = None

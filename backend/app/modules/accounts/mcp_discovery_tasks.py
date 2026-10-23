@@ -29,6 +29,11 @@ from app.jobs.models import PendingDispatch
 from app.jobs.outbox import enqueue_after_commit
 from app.jobs.tasks import register_dispatch_task
 from app.modules.accounts.discovery_models import DiscoveryStagedPage
+from app.modules.accounts.discovery_recovery import (
+    LOCAL_RESOURCE_ERROR,
+    clear_local_failures,
+    local_retry_delay_ms,
+)
 from app.modules.accounts.mcp_discovery import (
     incomplete,
     locked_mcp_run,
@@ -350,6 +355,7 @@ def _save_results(
 
 def advance_discovery_stage(run: DiscoveryRun, rows: list[dict[str, Any]]) -> None:
     work = copy.deepcopy(run.work)
+    clear_local_failures(work)
     result = rows[-1]
     stage = result["stage"]
     if stage == "SUBJECT":
@@ -486,7 +492,8 @@ def process_mcp_discovery(
             _save_results(session, run=run, rows=results)
             run.claim_id = None
             run.claimed_until = None
-            run.next_attempt_at = None
+            # 到期时间记为现在：补派兜底据此判断这一步是否已久无人领取。
+            run.next_attempt_at = datetime.now(UTC)
             run.revision += 1
             run.status = "RUNNING"
             session.add(run)
@@ -514,21 +521,25 @@ def process_mcp_discovery(
             failed_run.claim_id = None
             failed_run.claimed_until = None
             failed_run.error_code = code
-            if isinstance(error, AccountAdmissionDeferred) or code in {
-                "admission_unavailable",
-                "tiktok_local_resources_unavailable",
-                # 兄弟 BC 轮换共享令牌时只重开读取会话，不让当前任务失效。
-                "gateway_credentials_changed",
-                "mcp_refresh_pending",
-            }:
+            delay = (
+                error.retry_after_ms
+                if isinstance(error, AccountAdmissionDeferred)
+                else local_retry_delay_ms(failed_run)
+                if code == LOCAL_RESOURCE_ERROR
+                else 5000
+                if code
+                in {
+                    "admission_unavailable",
+                    # 兄弟 BC 轮换共享令牌时只重开读取会话，不让当前任务失效。
+                    "gateway_credentials_changed",
+                    "mcp_refresh_pending",
+                }
+                else None
+            )
+            if delay is not None:
                 failed_run.status = "ADMISSION_WAIT"
                 failed_run.next_attempt_at = datetime.now(UTC) + timedelta(
-                    milliseconds=max(
-                        1,
-                        error.retry_after_ms
-                        if isinstance(error, AccountAdmissionDeferred)
-                        else 5000,
-                    )
+                    milliseconds=max(1, delay)
                 )
                 failed_run.revision += 1
                 _queue(session, run=failed_run, due=failed_run.next_attempt_at)

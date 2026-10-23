@@ -34,6 +34,11 @@ from .discovery import (
     locked_run,
     validate_run,
 )
+from .discovery_recovery import (
+    LOCAL_RESOURCE_ERROR,
+    clear_local_failures,
+    local_retry_delay_ms,
+)
 from .mcp_discovery_tasks import _detail_ids, read_discovery_stage, stage_results
 from .models import (
     AuthorizationAttempt,
@@ -150,6 +155,7 @@ def start_discovery(session: Session, *, attempt_id: UUID) -> DiscoveryRun:
         run = previous
         run.status = "RUNNING"
         run.error_code = None
+        run.next_attempt_at = datetime.now(UTC)
         run.revision += 1
     else:
         run = DiscoveryRun(
@@ -181,6 +187,7 @@ def _next_bc(session: Session, run: DiscoveryRun, after: str = "") -> str | None
 def _apply(session: Session, run: DiscoveryRun, results: list[dict[str, Any]]) -> None:
     stage_results(session, run=run, rows=results, schema_digest=SCHEMA_DIGEST)
     work = copy.deepcopy(run.work)
+    clear_local_failures(work)
     result = results[-1]
     stage = result["stage"]
     if stage == "SUBJECT":
@@ -259,7 +266,9 @@ def process_discovery(
         try:
             connection = validate_run(session, run)
             if connection.kind != "OFFICIAL_API":
-                raise DomainError("connection_channel_mismatch", "目录任务不属于官方 API")
+                raise DomainError(
+                    "connection_channel_mismatch", "目录任务不属于官方 API"
+                )
         except DomainError as error:
             run.status, run.error_code = "ERROR", error.code
             session.add(run)
@@ -304,7 +313,9 @@ def process_discovery(
                 return
             validate_run(session, run)
             _apply(session, run, results)
-            run.claim_id = run.claimed_until = run.next_attempt_at = None
+            # 到期时间记为现在：补派兜底据此判断这一步是否已久无人领取。
+            run.claim_id = run.claimed_until = None
+            run.next_attempt_at = datetime.now(UTC)
             run.revision += 1
             run.status = "RUNNING"
             session.add(run)
@@ -323,15 +334,16 @@ def process_discovery(
                 if isinstance(error, DomainError)
                 else "tiktok_response_error"
             )
-            if isinstance(error, AccountAdmissionDeferred) or run.error_code in {
-                "admission_unavailable",
-                "tiktok_local_resources_unavailable",
-            }:
-                delay = (
-                    error.retry_after_ms
-                    if isinstance(error, AccountAdmissionDeferred)
-                    else 5000
-                )
+            delay = (
+                error.retry_after_ms
+                if isinstance(error, AccountAdmissionDeferred)
+                else 5000
+                if run.error_code == "admission_unavailable"
+                else local_retry_delay_ms(run)
+                if run.error_code == LOCAL_RESOURCE_ERROR
+                else None
+            )
+            if delay is not None:
                 run.status = "ADMISSION_WAIT"
                 run.next_attempt_at = datetime.now(UTC) + timedelta(
                     milliseconds=max(1, delay)

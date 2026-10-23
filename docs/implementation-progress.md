@@ -3455,4 +3455,12 @@ CI affected后端1017项通过、0失败/0并行不稳定，Ruff/ty通过；前�
 - 第一次修复 e2790a00（Jenkins #127 已发布）只去掉 `bc_account_access` 自关联，仍是表间关联；本地测试库没做过 ANALYZE，计划器用默认估算，复现不出，生产上照旧超时。
 - 第二次修复：改为对目标行按完整主键逐行取账户和角色（`SET (...) = (SELECT ...)`），不做表间关联，判定条件不变；外键保证每条授权行都有账户。生产库只读诊断（事务内执行后回滚）：新语句 0.33 秒，其余发布语句合计约 0.6 秒。回归用例 `test_large_bc_directory_finalizes_within_worker_deadline` 先 ANALYZE 复现生产统计、资源期限收紧到 2 秒：e2790a00 失败（同样 ADMISSION_WAIT），新版本通过；已登记慢用例。
 - 验证：本地 PG18/Redis 上 accounts 模块快速层 653 通过；Ruff、ty 通过。
-- 未做：确定性超时仍无限重试，没有次数上限，需另行设计重试上限与错误呈现。暂存目录读取后 24 小时内有效，发布后卡住的任务会自动完成，无需重新授权。
+- 595acefd（Jenkins #128）上线后任务仍未动：rev 771 的派发 18:07:02 已发出，之后再无领取。`resource-results` 同时被 `worker-resource`（并发 4）与 `worker-results` 消费，旧 Pod 已随发布替换，日志无法确认消息落在哪一步；各 Pod 与数据库时钟偏差 <1 ms，排除时钟原因。18:52 用 `queue_run` 手动补派一条重试，任务 1.9 秒完成：4,891 账户写入，4,859 权限 VERIFIED，32 个为 TikTok `STATUS_LIMIT` 账户按规则不可用。
+
+### 2026-10-24 目录发现不再永久停在“正在发现”：补派兜底与本地失败重试上限
+
+- 用户要求彻底解决并发布。问题：三类发现任务（官方 API 授权发现、MCP 发现、运行目录再观察）每步只靠一条派发消息推进。消息丢失、被即将停止的工作进程取走，或领取前的数据库/Redis 短期会话出错（API 与 MCP 消费者此时直接抛出，不改状态也不重派），任务就永久停在 RUNNING/ADMISSION_WAIT。另外 `tiktok_local_resources_unavailable` 固定 5 秒无限重试。
+- 修复：新增 `accounts/discovery_recovery.py`。Beat 每 60 秒运行 `accounts.repair_discoveries`（control 队列），找出活动任务中“到期（`next_attempt_at`，无则 `created_at`）超过 120 秒、且无未过期领取（领取过期也超过 120 秒）”的任务，按种类用各自的派发函数补派（键后缀 `repair:<uuid>`），并把 `next_attempt_at` 记为补派时间，宽限期内不重复补派。重复派发由各消费者的代数与领取校验去重。三类消费者成功推进一步时 `next_attempt_at` 改记为当时时间（原为 NULL），API 发现恢复旧任务时同样记录，供兜底判断空闲时长。
+- 本地资源失败：计数存于 `work.local_failures`，5 秒起翻倍、单次最多 5 分钟，超过 12 次（累计约 35 分钟）落 ERROR（错误码仍为 `tiktok_local_resources_unavailable`），界面显示“发现失败”，可重新授权/同步；任一步成功推进即清零。配额等待（`AccountAdmissionDeferred`、`admission_unavailable`）及 MCP 令牌轮换等待不计数，保持原行为。
+- 无数据库迁移；改动 `jobs/celery_app.py`（新增 Beat 任务），发布自动走完整冻结备份流程。生产 `discovery_run` 共 38 行、当前无活动任务，首轮兜底为空操作。
+- 验证：accounts、jobs、core 共 853 通过；唯一失败为大 BC 用例在整套负载下触发 30 秒任务期限（`tiktok_call_deadline_exceeded`），单独运行通过，与本次无关。新增 `test_discovery_recovery.py` 5 项（丢失消息补派后完成、未过期领取/刚到期/终态不补派、本地失败退避后落 ERROR 且不再补派、成功清零计数、三类任务各自派发到对应消费者）；还原 `tasks.py` 时重试相关 2 项失败。
