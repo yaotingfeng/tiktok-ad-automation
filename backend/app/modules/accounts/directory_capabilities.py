@@ -86,26 +86,29 @@ def publish_directory_capabilities(
         params,
     )
     # 缺角色、只读角色、缺元数据和非正常账户仍不能写。每个 BC 一次 SQL，无逐账户循环。
+    # 直接更新目标行并按主键关联账户与角色，不再自关联 bc_account_access：
+    # 同一事务刚写入的授权行没有统计信息，自关联会退化成按账户数平方增长的嵌套循环，
+    # 近 5 千账户的 BC 会超出发布事务期限并反复回滚。
     result = SASession.execute(
         session,
         text("""
-        WITH checked AS (
-          SELECT g.advertiser_id,
-            :known AND a.role IS NOT NULL AND g.in_bc AND g.authorized AND g.active
+        UPDATE bc_account_access g SET
+          can_upload=COALESCE(g.in_bc AND g.authorized AND g.active
+            AND c.known AND c.operate AND :upload,false),
+          can_build=COALESCE(g.in_bc AND g.authorized AND g.active
+            AND c.known AND c.operate AND :build,false),
+          permission_state=CASE WHEN g.in_bc AND g.authorized AND g.active AND c.known THEN 'VERIFIED'
+            WHEN g.permission_state='METADATA_INCOMPLETE' THEN 'METADATA_INCOMPLETE' ELSE 'UNKNOWN' END
+        FROM advertiser_account x
+        LEFT JOIN account_capability_asset a ON a.job_id=:job_id AND a.advertiser_id=x.advertiser_id
+        -- 账户与角色部分；目标行自身的 in_bc/authorized/active 只能在 SET 中引用。
+        CROSS JOIN LATERAL (SELECT
+            :known AND a.role IS NOT NULL
               AND NOT x.ownership_conflict AND x.currency<>'' AND x.timezone<>'' AS known,
             a.role IN ('ADMIN','OPERATOR') AND x.remote_status IN ('ENABLE','STATUS_ENABLE') AS operate
-          FROM bc_account_access g JOIN advertiser_account x
-            ON x.tenant_id=g.tenant_id AND x.advertiser_id=g.advertiser_id
-          LEFT JOIN account_capability_asset a ON a.job_id=:job_id AND a.advertiser_id=g.advertiser_id
-          WHERE g.tenant_id=:tenant_id AND g.bc_id=:bc_id AND g.connection_id=:connection_id
-        )
-        UPDATE bc_account_access g SET
-          can_upload=COALESCE(c.known AND c.operate AND :upload,false),
-          can_build=COALESCE(c.known AND c.operate AND :build,false),
-          permission_state=CASE WHEN c.known THEN 'VERIFIED'
-            WHEN g.permission_state='METADATA_INCOMPLETE' THEN 'METADATA_INCOMPLETE' ELSE 'UNKNOWN' END
-        FROM checked c WHERE g.tenant_id=:tenant_id AND g.bc_id=:bc_id
-          AND g.connection_id=:connection_id AND g.advertiser_id=c.advertiser_id
+        ) c
+        WHERE g.tenant_id=:tenant_id AND g.bc_id=:bc_id AND g.connection_id=:connection_id
+          AND x.tenant_id=g.tenant_id AND x.advertiser_id=g.advertiser_id
     """),
         params,
     )

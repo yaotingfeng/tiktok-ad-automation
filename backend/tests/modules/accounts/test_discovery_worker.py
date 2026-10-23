@@ -937,3 +937,96 @@ def test_sdk_authorized_response_capacity_is_checked_before_parsing(
         run = session.get(DiscoveryRun, runs[0])
         assert (run.status, run.error_code) == ("ERROR", "tiktok_response_error")
         assert not session.get(DiscoveryStagedPage, (run.id, "", "AUTHORIZED", 1))
+
+
+def test_large_bc_directory_finalizes_within_worker_deadline(
+    committed_runs,
+    redis_client,
+    monkeypatch,
+    sdk_transport,  # noqa: ARG001
+):
+    """近 5 千账户的单 BC 必须一次完成发布，不能因短资源期限反复回滚重试。
+
+    生产事务期限为 5 秒且库更慢；这里收紧到 2 秒，平方级的发布 SQL 会超时。
+    """
+    monkeypatch.setattr(
+        "app.integrations.tiktok.bounded_resources.MAX_RESOURCE_SECONDS", 2.0
+    )
+    contexts, runs = committed_runs
+    bc = f"bc-{uuid4()}"
+    advertisers = [f"account-{uuid4()}" for _ in range(4891)]
+
+    def request(_pool, _method, url, **kwargs):
+        fields = dict(kwargs["fields"])
+        if url.endswith("/oauth2/advertiser/get/"):
+            data = {"list": [{"advertiser_id": a} for a in advertisers]}
+        elif url.endswith("/bc/get/"):
+            data = {
+                "list": [{"bc_info": {"bc_id": bc, "name": "BC"}}],
+                "page_info": {
+                    "page": 1,
+                    "page_size": 50,
+                    "total_page": 1,
+                    "total_number": 1,
+                },
+            }
+        elif url.endswith("/bc/asset/get/"):
+            page = int(fields["page"])
+            size = int(fields["page_size"])
+            data = {
+                "list": [
+                    {
+                        "asset_id": a,
+                        "asset_name": "Account",
+                        "asset_type": "ADVERTISER",
+                        "advertiser_role": "OPERATOR",
+                    }
+                    for a in advertisers[(page - 1) * size : page * size]
+                ],
+                "page_info": {
+                    "page": page,
+                    "page_size": size,
+                    "total_page": (len(advertisers) + size - 1) // size,
+                    "total_number": len(advertisers),
+                },
+            }
+        else:
+            data = {
+                "list": [
+                    {
+                        "advertiser_id": a,
+                        "name": "Account",
+                        "currency": "USD",
+                        "timezone": "UTC",
+                        "status": "STATUS_ENABLE",
+                    }
+                    for a in json.loads(fields["advertiser_ids"])
+                ]
+            }
+        return HTTPResponse(
+            body=json.dumps({"code": 0, "request_id": "r", "data": data}).encode(),
+            status=200,
+            headers={"Content-Type": "application/json"},
+        )
+
+    monkeypatch.setattr("urllib3.PoolManager.request", request)
+    for _ in range(400):
+        with Session(engine) as session:
+            run = session.get(DiscoveryRun, runs[0])
+            if run.status not in {"RUNNING", "ADMISSION_WAIT"}:
+                break
+            if run.next_attempt_at:
+                run.next_attempt_at = None
+                session.add(run)
+                session.commit()
+        step(contexts[0], runs[0], redis_client)
+    with Session(engine) as session:
+        run = session.get(DiscoveryRun, runs[0])
+        assert (run.status, run.error_code) == ("COMPLETE", None)
+        verified = session.exec(
+            select(BCAccountAccess).where(
+                BCAccountAccess.tenant_id == run.tenant_id,
+                BCAccountAccess.permission_state == "VERIFIED",
+            )
+        ).all()
+        assert len(verified) == len(advertisers)
