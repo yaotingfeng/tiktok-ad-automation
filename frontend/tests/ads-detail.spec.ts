@@ -416,6 +416,8 @@ test.describe("ads detail", () => {
         },
       }),
     )
+    // 假的视频地址保持挂起，不让播放器因加载失败进入错误状态（与素材库用例一致）。
+    await page.route("https://video.test/**", () => {})
     await page.goto(`/tenants/${TENANT}/ads?bc_id=${BC_A}`)
     await page.getByRole("tab", { name: "素材" }).click()
     await page.getByRole("button", { name: "素材-测试", exact: true }).click()
@@ -434,6 +436,36 @@ test.describe("ads detail", () => {
       /report-preview/,
     )
     await expect(sheet.getByText(/来源账户 adv-1/)).toBeVisible()
+  })
+
+  test("素材成片地址失效时提示重新读取", async ({ page }) => {
+    await adsBoundary(page)
+    await page.route("**/materials/account-video-preview{,?*}", (route) =>
+      route.fulfill({
+        headers: { "Access-Control-Allow-Origin": "*" },
+        json: {
+          bc_id: BC_A,
+          url: "https://video.test/expired",
+          advertiser_id: "adv-1",
+          video_id: "vid-1",
+          width: 1080,
+          height: 1920,
+          duration: 12.5,
+          format: "mp4",
+        },
+      }),
+    )
+    await page.route("https://video.test/**", (route) => route.abort())
+    await page.goto(`/tenants/${TENANT}/ads?bc_id=${BC_A}`)
+    await page.getByRole("tab", { name: "素材" }).click()
+    await page.getByRole("button", { name: "素材-测试", exact: true }).click()
+    const sheet = page.getByRole("dialog")
+    await sheet.getByRole("button", { name: "预览成片" }).click()
+    await expect(
+      sheet.getByText("视频加载失败，预览地址可能已过期，请重新读取。"),
+    ).toBeVisible()
+    await expect(sheet.locator("video")).toHaveCount(0)
+    await expect(sheet.getByRole("button", { name: "重新读取" })).toBeVisible()
   })
 
   for (const [timezone, zone, first] of [

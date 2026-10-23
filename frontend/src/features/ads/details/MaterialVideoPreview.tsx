@@ -1,5 +1,6 @@
 import { useMutation } from "@tanstack/react-query"
 import { AxiosError } from "axios"
+import { useState } from "react"
 import { MaterialsService, type ReportRow } from "@/client"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
@@ -26,7 +27,10 @@ export function MaterialVideoPreview({ row }: { row: ReportRow }) {
         .map((use) => use.ad_ref.advertiser_id),
     ),
   ].slice(0, MAX_CANDIDATES)
+  // 预览地址已拿到但视频加载失败（多为平台地址过期），需提示用户重新读取。
+  const [videoFailed, setVideoFailed] = useState(false)
   const preview = useMutation({
+    onMutate: () => setVideoFailed(false),
     mutationFn: async () =>
       (
         await MaterialsService.readAccountVideoPreview({
@@ -71,7 +75,14 @@ export function MaterialVideoPreview({ row }: { row: ReportRow }) {
               </AlertDescription>
             </Alert>
           )}
-          {preview.data && (
+          {videoFailed && (
+            <Alert variant="destructive">
+              <AlertDescription>
+                视频加载失败，预览地址可能已过期，请重新读取。
+              </AlertDescription>
+            </Alert>
+          )}
+          {preview.data && !videoFailed && (
             <>
               <p className="text-xs text-muted-foreground">
                 来源账户 {preview.data.advertiser_id} · {preview.data.width} ×{" "}
@@ -85,7 +96,7 @@ export function MaterialVideoPreview({ row }: { row: ReportRow }) {
                 preload="metadata"
                 className="max-h-96 w-full rounded-lg bg-black"
                 // 平台预览地址有时效，失效后提示重新读取。
-                onError={() => preview.reset()}
+                onError={() => setVideoFailed(true)}
               >
                 <track kind="captions" />
               </video>
