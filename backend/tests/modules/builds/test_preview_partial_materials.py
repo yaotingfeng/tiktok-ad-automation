@@ -70,6 +70,9 @@ def test_partial_materials_keep_valid_groups_and_frozen_selection(
     assert summary.campaign_count == (3 if failed_count == 23 else 6)
     assert summary.daily_budget_sum == (300 if failed_count == 23 else 600)
     assert summary.skipped_material_count == failed_count
+    # 整部剧的素材全部不可用：在全部账户都被排除，必须按剧名单独列出。
+    excluded = [drama.drama_id for drama in summary.excluded_dramas]
+    assert excluded == ([drama_id] if failed_count == 23 else [])
 
 
 def test_account_permission_failure_is_not_downgraded_to_material_warning(

@@ -1779,6 +1779,26 @@ export type EntityRef = {
 };
 
 /**
+ * ExcludedDramaPublic
+ *
+ * 整部剧在所有账户上都被排除（例如没有匹配到素材），本次不会搭建。
+ */
+export type ExcludedDramaPublic = {
+    /**
+     * Drama Id
+     */
+    drama_id: string;
+    /**
+     * Title
+     */
+    title: string;
+    /**
+     * Reason Codes
+     */
+    reason_codes?: Array<string>;
+};
+
+/**
  * ExecutionRoutePublic
  */
 export type ExecutionRoutePublic = {
@@ -4812,6 +4832,10 @@ export type PreviewRequest = {
  */
 export type PreviewSummary = {
     targeting?: AudienceTargeting | null;
+    /**
+     * Excluded Dramas
+     */
+    excluded_dramas?: Array<ExcludedDramaPublic>;
     /**
      * Targeting Region Codes
      */

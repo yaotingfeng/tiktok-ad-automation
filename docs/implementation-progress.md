@@ -3484,3 +3484,23 @@ CI affected后端1017项通过、0失败/0并行不稳定，Ruff/ty通过；前�
   - 嘉书：见上一节（10004、`config=null`）。
 - 测试替身改为生产实测格式（兑吧记录只有 `miniappAppId`、刚刚好详情缺字段、容量剧集为裸数组）后，三家工作流用例复现失败；修复后 providers 346 通过，改动文件 Ruff 通过，mypy 告警数与改动前相同。
 - 未覆盖：建链写接口（兑吧/刚刚好/容量 create、嘉书 generate/save）的真实返回无法只读验证。刚刚好建链返回是否带 id 未证实；若缺 id，会进入“结果待核实”，由查重和读链接恢复（这两步已按真实返回修好）。需用户首次真实取链后复核。
+
+### 2026-10-24 搭建链路卡点修复：广告不再因本地拥塞失败，素材/封面推进提速
+
+- 背景：生产（租户 97323db6，小 BC 7683817908149272592）当天两批搭建。17:36 批（1 剧 × 8 账户）素材中途停 43 分钟，广告 19 次本地失败，靠 3 次手动重试 + 1 次对账才建出 7/8；20:37 批（8 剧 × 9 账户）4 部剧因无素材整剧被排除，截至 21:33 广告 48 条 `tiktok_call_deadline_exceeded`、14 条 `cover_result_unknown` 终态失败，仅 4 条成功。
+- 只读诊断（`.runtime/build-review-20261024/q*.py`，不进 Git）结论：
+  1. 广告等待封面期间每 15 秒重试一次，每次都对整组 40–48 条素材逐条 `ensure_target_asset`/`ensure_cover` 并持有素材与封面行锁（单次 8–15 秒）。builds Worker 仅 1 个子进程，被这些重试占满；封面 Worker 的 5 秒短事务在同一批行锁上等待超时（resource 日志 40 分钟内 87 次 `statement timeout`，集中在 `cover_sharing._prepare` 锁素材行）。
+  2. 封面领取阶段的本地超时（`tiktok_call_deadline_exceeded` / `tiktok_local_resources_unavailable`，请求尚未发出）被当成终态 BLOCKED；UNKNOWN 封面只有人工“重试”才接续。广告看到 BLOCKED/UNKNOWN 封面直接 FAILED。
+  3. 执行窗口（10 个组合）要等组合内所有步骤（含广告）成功才让出，素材已完成但广告在等封面的组合长期占位，后续组合素材排队 `execution_window_wait`。
+  4. 素材落定/下一片规划只挂在每 60 秒的 `repair_execution`（生产单次 10–27 秒）上；封面要等广告步骤首次执行才登记，成为广告组之后的串行阶段。
+- 修复：
+  - `builds/execution.py`：广告新增无锁快路径 `_ready_ad_mappings`——目标素材与封面全部就绪时直接编译；所有缺口已有任务在推进时直接等待；只有需要登记新任务才进入原加锁准备 `_prepare_ad_mappings`。发送前仍由 `validate_ad_assets` 复核。近期（2 小时内）UNKNOWN 或发送前瞬时 BLOCKED 的封面让广告等待而不是失败。
+  - `materials/covers.py`、`cover_sharing.py`：发送前的本地锁等待/期限耗尽按指数退避重排（每任务最多 8 次，约 6 分钟），不再落成终态；新增 `recover_stalled_covers`，随 `materials.repair_covers`（60→15 秒）自动接续近期 UNKNOWN（只读核查，绝不重发）与发送前瞬时 BLOCKED 封面。等待来源封面的复查间隔 60→15 秒。
+  - `builds/execution_window.py`：窗口只计未完成的 MATERIAL 步骤，素材落定即让出名额。
+  - `builds/material_execution.py`：素材一落定就登记该账户封面，与系列/广告组并行；切片规划被跳过时记 warning（原先静默）。
+  - `builds/dispatch.py`、`tasks.py`、`jobs/celery_app.py`：素材/封面落定与下一片规划拆成 `builds.advance_execution`，Beat 每 5 秒（过期丢弃）；`repair_execution` 保留兜底。
+  - `deploy/k8s/tk-ada-workloads.yaml`：builds Worker 并发 1→3（CPU 上限 1→2，内存不变；单进程约 400Mi；数据库连接约 +6，生产 PG 当前本项目约 53/200）。
+  - 预览摘要新增 `excluded_dramas`：整部剧在所有账户都被排除时，预览页以红色提示列出剧名与原因，避免只看到“排除 N 个组合”。
+- 本地验证（PG18 + Redis 8 临时容器）：新增 `test_build_pipeline_speed.py` 12 项（在旧代码上 11 项失败）；builds/materials/jobs/core 快速层 2043 项中 2041 通过，2 项锁序用例改为强制走加锁路径后通过；`test_cover_execution.py` 两项按新行为更新断言。前端构建通过，`build-preview.spec.ts` 45 项通过（新增 1 项）。
+- 本地搭建耗时剖面（新增 `ACCEPTANCE_SCALE=speed`：2 剧 × 6 账户 × 20 素材，真实调度间隔，`tests/acceptance/test_build_timeline.py`）：总时长 318.6 秒 → 180.3 秒；素材全部就绪 279 秒 → 100 秒。合成环境不含生产的 TikTok 延迟和锁竞争，生产效果需上线后按同样口径复核。
+- 未改：TikTok 调用额度（`endpoint_calls_per_window=3`、`app_calls_per_window=10`）不变；手动 SweetReel 批空广告组、20:37 批失败的广告需上线后用页面“重试”接回（新代码下不会再因本地拥塞失败）。

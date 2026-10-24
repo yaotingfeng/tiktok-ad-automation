@@ -72,6 +72,28 @@ test("部分素材被跳过仍可搭建，详情显示冻结文件及原因", as
   expect(api.requests.filter((r) => r.method !== "GET")).toHaveLength(0)
 })
 
+test("整部剧未匹配到素材时列出剧名，其余剧仍可提交", async ({ page }) => {
+  const api = await buildsBoundary(page)
+  api.preview.blocked_count = 9
+  api.preview.excluded_dramas = [
+    {
+      drama_id: "00000000-0000-4000-8000-0000000000e1",
+      title: "Fake Heiress: Five Princes Back Her Up",
+      reason_codes: ["materials_missing"],
+    },
+  ]
+  await page.goto(`/tenants/${T}/build-previews/${P}?bc_id=${BC}`)
+  await expect(page.getByText("1 部剧本次不会搭建")).toBeVisible()
+  await expect(
+    page.getByText(
+      "Fake Heiress: Five Princes Back Her Up（未匹配到可用素材）",
+    ),
+  ).toBeVisible()
+  await expect(
+    page.getByRole("button", { name: "创建并立即启用" }),
+  ).toBeEnabled()
+})
+
 test("全部素材不可用时不提示其余素材继续搭建", async ({ page }) => {
   const api = await buildsBoundary(page, { skippedMaterials: true })
   api.preview.campaign_count = 0

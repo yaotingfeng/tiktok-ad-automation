@@ -257,6 +257,32 @@ export function BuildPreviewPanel({
         </Card>
       ) : (
         <>
+          {(current.excluded_dramas?.length ?? 0) > 0 && (
+            <Alert variant="destructive">
+              <AlertTitle>
+                {current.excluded_dramas?.length} 部剧本次不会搭建
+              </AlertTitle>
+              <AlertDescription>
+                <p>以下剧在所有账户上都被排除，提交后不会创建任何系列：</p>
+                <ul className="mt-1 list-disc pl-5">
+                  {current.excluded_dramas?.map((drama) => (
+                    <li key={drama.drama_id} className="break-all">
+                      {drama.title}
+                      {(drama.reason_codes?.length ?? 0) > 0 &&
+                        `（${drama.reason_codes
+                          ?.map((code) => reasonLabels[code] || code)
+                          .join("、")}）`}
+                    </li>
+                  ))}
+                </ul>
+                {!readOnly && (
+                  <p className="mt-1">
+                    如需一并搭建，请先补充素材后重新生成预览；直接提交只会搭建其余剧。
+                  </p>
+                )}
+              </AlertDescription>
+            </Alert>
+          )}
           {(current.blocked_count > 0 || current.input_issue_count > 0) && (
             <Alert>
               <AlertDescription>

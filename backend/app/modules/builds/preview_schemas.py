@@ -41,8 +41,16 @@ def build_structure_summary(
     unique_material_count: int,
 ) -> str:
     """生成预览和提交页共用的业务摘要，不暴露内部 base_ad_no。"""
-    per_group = f"每组 {ad_count // group_count} 个广告" if group_count and ad_count % group_count == 0 else "各组广告数量按策略生成"
-    per_ad = f"每个广告 {material_allocation_count // ad_count} 个素材" if ad_count and material_allocation_count % ad_count == 0 else "每个广告素材数量按策略生成"
+    per_group = (
+        f"每组 {ad_count // group_count} 个广告"
+        if group_count and ad_count % group_count == 0
+        else "各组广告数量按策略生成"
+    )
+    per_ad = (
+        f"每个广告 {material_allocation_count // ad_count} 个素材"
+        if ad_count and material_allocation_count % ad_count == 0
+        else "每个广告素材数量按策略生成"
+    )
     return (
         f"{campaign_count} 个系列、{group_count} 个广告组、{per_group}、"
         f"创意数量 {creative_count}、最终 {ad_count} 个广告、{per_ad}；"
@@ -86,8 +94,17 @@ class PreviewGenerationProgress(BaseModel):
     updated_at: datetime
 
 
+class ExcludedDramaPublic(BaseModel):
+    """整部剧在所有账户上都被排除（例如没有匹配到素材），本次不会搭建。"""
+
+    drama_id: UUID
+    title: str
+    reason_codes: list[str] = Field(default_factory=list)
+
+
 class PreviewSummary(BaseModel):
     targeting: AudienceTargeting | None = None
+    excluded_dramas: list[ExcludedDramaPublic] = Field(default_factory=list)
     targeting_region_codes: list[str] = Field(default_factory=list)
     skipped_material_count: int = 0
     generation_progress: PreviewGenerationProgress
@@ -111,7 +128,9 @@ class PreviewSummary(BaseModel):
     budget_strategy: Literal["SERIES", "ADGROUP"] = "SERIES"
     bid_strategy: Literal["HIGHEST_VALUE", "TARGET_ROAS"] = "HIGHEST_VALUE"
     creation_status: Literal["ENABLE", "DISABLE"] = "ENABLE"
-    schedule_type: Literal["SCHEDULE_FROM_NOW", "SCHEDULE_START_END"] = "SCHEDULE_FROM_NOW"
+    schedule_type: Literal["SCHEDULE_FROM_NOW", "SCHEDULE_START_END"] = (
+        "SCHEDULE_FROM_NOW"
+    )
     schedule_start_time: str | None = None
     schedule_end_time: str | None = None
     group_generation_mode: Literal["FIXED", "BY_MATERIAL"] = "FIXED"
@@ -171,7 +190,9 @@ class FrozenUnit(BaseModel):
     budget_strategy: Literal["SERIES", "ADGROUP"] = "SERIES"
     bid_strategy: Literal["HIGHEST_VALUE", "TARGET_ROAS"] = "HIGHEST_VALUE"
     creation_status: Literal["ENABLE", "DISABLE"] = "ENABLE"
-    schedule_type: Literal["SCHEDULE_FROM_NOW", "SCHEDULE_START_END"] = "SCHEDULE_FROM_NOW"
+    schedule_type: Literal["SCHEDULE_FROM_NOW", "SCHEDULE_START_END"] = (
+        "SCHEDULE_FROM_NOW"
+    )
     schedule_start_time: str | None = None
     schedule_end_time: str | None = None
     readiness: Readiness

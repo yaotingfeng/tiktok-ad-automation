@@ -50,6 +50,7 @@ from app.modules.builds.preview_models import (
     PreviewSkippedMaterial,
 )
 from app.modules.builds.preview_schemas import (
+    ExcludedDramaPublic,
     FrozenAd,
     FrozenGroup,
     FrozenUnit,
@@ -971,6 +972,49 @@ def continue_preview(
     return preview.status != "BUILDING"
 
 
+def _excluded_dramas(
+    session: Session, context: TenantContext, preview_id: UUID
+) -> list[ExcludedDramaPublic]:
+    """整部剧在全部账户都被阻断时单独列出，避免只显示“排除 N 个组合”而漏看整剧未搭建。"""
+    blocked = (
+        select(BuildUnit.drama_id)
+        .where(
+            BuildUnit.tenant_id == context.tenant_id,
+            BuildUnit.preview_id == preview_id,
+            col(BuildUnit.complete).is_(True),
+        )
+        .group_by(col(BuildUnit.drama_id))
+        .having(func.bool_and(BuildUnit.readiness == "BLOCKED"))
+    )
+    dramas = session.exec(
+        select(PreviewDrama.drama_id, PreviewDrama.title)
+        .where(
+            PreviewDrama.tenant_id == context.tenant_id,
+            PreviewDrama.preview_id == preview_id,
+            col(PreviewDrama.drama_id).in_(blocked),
+        )
+        .order_by(col(PreviewDrama.title))
+        .limit(100)
+    ).all()
+    if not dramas:
+        return []
+    reasons: dict[UUID, set[str]] = {drama_id: set() for drama_id, _ in dramas}
+    for drama_id, codes in session.exec(
+        select(BuildUnit.drama_id, BuildUnit.reason_codes).where(
+            BuildUnit.tenant_id == context.tenant_id,
+            BuildUnit.preview_id == preview_id,
+            col(BuildUnit.drama_id).in_(reasons),
+        )
+    ).all():
+        reasons[drama_id].update(codes or [])
+    return [
+        ExcludedDramaPublic(
+            drama_id=drama_id, title=title, reason_codes=sorted(reasons[drama_id])
+        )
+        for drama_id, title in dramas
+    ]
+
+
 def get_preview_summary(
     session: Session, *, context: TenantContext, preview_id: UUID
 ) -> PreviewSummary:
@@ -1061,6 +1105,7 @@ def get_preview_summary(
         )
     ).one()
     return PreviewSummary(
+        excluded_dramas=_excluded_dramas(session, context, preview_id),
         targeting=preview.config.get("targeting"),
         targeting_region_codes=preview.progress.get("targeting_region_codes", []),
         skipped_material_count=session.exec(
@@ -1646,9 +1691,7 @@ def get_frozen_groups(
             )
         ).all()
         for row in ad_material_rows:
-            ad_material_map.setdefault((row[0], row[1]), []).append(
-                row[3]
-            )
+            ad_material_map.setdefault((row[0], row[1]), []).append(row[3])
     filtered_group_materials = {
         group_no: list(material_ids)
         for group_no, material_ids in group_material_map.items()
