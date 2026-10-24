@@ -495,6 +495,21 @@ def prepare_draft(
                 for number, value in enumerate(lines, 1)
             ):
                 previous_provider = candidate.id
+    if (
+        previous_provider is not None
+        and session.exec(
+            select(LinkPreparationItem.id)
+            .where(
+                LinkPreparationItem.tenant_id == context.tenant_id,
+                LinkPreparationItem.preparation_id == previous_provider,
+                LinkPreparationItem.status == "failed",
+            )
+            .limit(1)
+        ).first()
+    ):
+        # 上次取链有剧明确失败（如版权方接入问题修复前的失败）时，重新准备要真正重新取链，
+        # 不能把失败结果原样带回。各版权方建链前都会先查已有链接，重新取链不会重复建链。
+        previous_provider = None
     prep.provider_task_id = (
         (
             previous_provider
