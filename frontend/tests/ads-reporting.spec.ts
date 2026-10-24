@@ -337,6 +337,13 @@ for (const busy of ["详情", "第二页"] as const) {
         .getByRole("button", { name: "嘉书-总裁归来-测试", exact: true })
         .click()
     else await page.getByRole("button", { name: "下一页" }).click()
+    // 先确认已进入“正在查看”的状态，再推进时钟；否则慢机器上第二页/详情
+    // 尚未加载完成，页面仍算空闲，会提前自动更新。
+    if (busy === "详情") await expect(page.getByRole("dialog")).toBeVisible()
+    else
+      await expect(
+        page.getByText("嘉书-第二页-测试", { exact: true }),
+      ).toBeVisible()
     options.lastSuccess = "2026-10-05T05:01:00Z"
     options.reportSpend = "240"
     await page.clock.fastForward(31_000)
