@@ -176,6 +176,8 @@ class ScaleProfile:
 SCALES = {
     "full": ScaleProfile("full", 3, 23, 10),
     "compact": ScaleProfile("compact", 2, 5, 2, timer_scale=0.1),
+    # 搭建耗时剖面：接近生产形态（每系列 1 组 1 广告、组内多素材），真实等待计时。
+    "speed": ScaleProfile("speed", 6, 20, 50, creative_count=1),
 }
 # 只缩放纯等待阈值：搭建步骤被修复任务接手前的静置时间与修复任务间隔。二者不参与
 # 任何执行期限或租约计算；进行中调用的租约与硬时限保持原值。

@@ -48,6 +48,7 @@ from .schemas import AssetPreparation
 HARD_LIMIT = 45
 SOFT_LIMIT = 40
 CLAIM_SECONDS = 60
+SOURCE_WAIT_SECONDS = 15
 register_dispatch_task("materials.prepare_cover", "resources")
 register_dispatch_task("materials.verify_cover", "resources")
 
@@ -427,7 +428,9 @@ def _ensure_cover(
                 advertiser_id=advertiser_id,
                 capability="read",
             )
-            return AssetPreparation(state="ready", mapping=asset_public(current_mapping))
+            return AssetPreparation(
+                state="ready", mapping=asset_public(current_mapping)
+            )
         require_same_route(
             load_material_route(job.frozen_route, context=context, bc_id=bc_id), route
         )
@@ -1444,13 +1447,14 @@ def run_cover(
             if current.request_armed_at and not read:
                 current.error_code = "cover_result_unknown"
                 _queue(session, current, read=True)
-            elif read and _local_read_retryable(error) and current.failure_count < 3:
+            elif local_transient(error) and current.failure_count < LOCAL_RETRY_LIMIT:
+                # 走到这里时 upload 阶段必然尚未 armed（armed 已在上一分支转只读核查）。
                 current.error_code = code
                 _queue(
                     session,
                     current,
-                    read=True,
-                    delay=5 * 2 ** (current.failure_count - 1),
+                    read=read or bool(current.candidate_image_id),
+                    delay=local_retry_delay(current.failure_count),
                 )
             elif (
                 isinstance(error, RemoteCallError)
@@ -1491,14 +1495,26 @@ def run_cover(
                 _stop(current, code, unknown=bool(current.request_armed_at))
 
 
-def _local_read_retryable(error: Exception) -> bool:
-    # 本地短事务死锁/缓存瞬断没有远端发送结论，只能重试只读核验；
-    # 非瞬断合同错误与发送阶段不适用，且仍共用每job三次故障上限。
+# 本地短事务（锁等待、语句超时、任务期限在发送前耗尽）失败时请求从未发出，
+# 属于搭建高峰的瞬时拥塞，不是封面本身的问题。按指数退避重排，单个任务最多
+# LOCAL_RETRY_LIMIT 次（约 6 分钟）；不能像合同/权限错误一样落成需人工处理的终态。
+LOCAL_TRANSIENT_CODES = frozenset(
+    {"tiktok_local_resources_unavailable", "tiktok_call_deadline_exceeded"}
+)
+LOCAL_RETRY_LIMIT = 8
+
+
+def local_transient(error: Exception) -> bool:
+    # 已发送的调用一律由适配器转成 RemoteCallError；普通 DomainError 只来自发送前的本地检查。
     return (
         isinstance(error, DomainError)
-        and error.code == "tiktok_local_resources_unavailable"
-        and error.retryable
+        and not isinstance(error, RemoteCallError)
+        and error.code in LOCAL_TRANSIENT_CODES
     )
+
+
+def local_retry_delay(failures: int) -> int:
+    return min(60, 5 * 2 ** max(0, failures - 1))
 
 
 def _read_failure(
@@ -1526,11 +1542,14 @@ def _read_failure(
         if (
             isinstance(error, RemoteCallError)
             and error.code in TRANSIENT_NOT_SENT
-            or _local_read_retryable(error)
-        ) and current.failure_count < 3:
+            and current.failure_count < 3
+        ) or (local_transient(error) and current.failure_count < LOCAL_RETRY_LIMIT):
             current.error_code = code
             _queue(
-                session, current, read=True, delay=5 * 2 ** (current.failure_count - 1)
+                session,
+                current,
+                read=True,
+                delay=local_retry_delay(current.failure_count),
             )
         else:
             _stop(current, code, unknown=bool(current.request_armed_at))
@@ -1897,7 +1916,8 @@ def repair_cover_dispatches(session: Session, *, limit: int = 100) -> int:
                     .limit(1)
                 ).first()
                 if source is None and preparing is not None:
-                    job.repair_after = now + timedelta(seconds=CLAIM_SECONDS)
+                    # 来源封面通常几十秒内就绪；短间隔复查，避免目标封面多等一整分钟。
+                    job.repair_after = now + timedelta(seconds=SOURCE_WAIT_SECONDS)
                     continue
                 # 来源已就绪或已落定失败：重新走原执行器的权限/来源检查，
                 # 不把观察到的状态当成共享成功，也不重发已发送的来源上传。
@@ -1947,5 +1967,96 @@ def repair_cover_dispatches(session: Session, *, limit: int = 100) -> int:
             job.repair_after = max(
                 now, dispatch.available_at, dispatch.published_at or now
             ) + timedelta(seconds=CLAIM_SECONDS)
+        count += 1
+    return count
+
+
+# 自动接续只覆盖近期产生的卡住任务：再久的历史结果交给人工核查入口，
+# 避免对早已废弃的素材无限读取。
+AUTO_RECOVERY_AGE = timedelta(hours=2)
+AUTO_RECOVERY_BACKOFF = timedelta(minutes=2)
+AUTO_RETRY_BLOCKED_CODES = LOCAL_TRANSIENT_CODES | {"cover_claim_lost"}
+
+
+def recover_stalled_covers(session: Session, *, limit: int = 100) -> int:
+    """无人值守接续卡住的封面：UNKNOWN 只读核查，发送前瞬时失败的 BLOCKED 重新排队。
+
+    搭建中的广告依赖这些封面；此前只能靠人工点“重试”接回，整批广告因此停在
+    需要核查。这里沿用人工入口的同一规则：已 armed/有回执的只做只读核查，绝不重发。
+    """
+    if type(limit) is not int or not 1 <= limit <= 100:
+        raise ValueError("Cover recovery limit must be between 1 and 100")
+    now = _now()
+    candidates_query = (
+        select(MaterialCoverJob)
+        .where(
+            col(MaterialCoverJob.superseded_by_id).is_(None),
+            col(MaterialCoverJob.created_at) >= now - AUTO_RECOVERY_AGE,
+            MaterialCoverJob.repair_after <= now,
+            col(MaterialCoverJob.dispatch_id).is_(None),
+            or_(
+                col(MaterialCoverJob.claimed_until).is_(None),
+                col(MaterialCoverJob.claimed_until) <= now,
+            ),
+            or_(
+                and_(
+                    col(MaterialCoverJob.status) == "UNKNOWN",
+                    col(MaterialCoverJob.error_code).is_distinct_from(
+                        "cover_receipt_ambiguous"
+                    ),
+                ),
+                and_(
+                    col(MaterialCoverJob.status) == "BLOCKED",
+                    col(MaterialCoverJob.error_code).in_(AUTO_RETRY_BLOCKED_CODES),
+                ),
+            ),
+        )
+        .order_by(col(MaterialCoverJob.repair_after), col(MaterialCoverJob.id))
+        .limit(limit)
+    )
+    candidates = session.exec(candidates_query).all()
+    if not candidates:
+        return 0
+    # 与正式 repair 同一锁序：先素材后封面，忙碌的留给下一轮。
+    material_ids = session.exec(
+        select(MaterialFile.id)
+        .where(
+            tuple_(col(MaterialFile.tenant_id), col(MaterialFile.id)).in_(
+                {(job.tenant_id, job.material_id) for job in candidates}
+            )
+        )
+        .order_by(col(MaterialFile.id))
+        .with_for_update(skip_locked=True)
+    ).all()
+    if not material_ids:
+        return 0
+    jobs = session.exec(
+        candidates_query.where(
+            col(MaterialCoverJob.id).in_({job.id for job in candidates}),
+            col(MaterialCoverJob.material_id).in_(material_ids),
+        )
+        .execution_options(populate_existing=True)
+        .with_for_update(skip_locked=True)
+    ).all()
+    count = 0
+    for job in jobs:
+        context = TenantContext(
+            tenant_id=job.tenant_id, actor_id=job.actor_id, role="operator"
+        )
+        try:
+            with session.begin_nested():
+                if job.status == "UNKNOWN" or job.request_armed_at is not None:
+                    request_cover_reconciliation(
+                        session, context=context, job_id=job.id
+                    )
+                else:
+                    request_cover_retry(session, context=context, job_id=job.id)
+        except DomainError:
+            # 权限/内容已变化等确定性原因保留原状态，由人工入口处理。
+            pass
+        # 无论是否接续，都推后下一次自动检查，不在同一轮反复扫描同一任务。
+        current = session.get(MaterialCoverJob, job.id)
+        if current is not None and current.status in {"UNKNOWN", "BLOCKED"}:
+            current.repair_after = now + AUTO_RECOVERY_BACKOFF
         count += 1
     return count

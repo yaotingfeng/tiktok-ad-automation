@@ -26,7 +26,13 @@ def window_units():
         col(step.unit_id) == SubmissionUnit.unit_id,
         text("NOT " + obsolete_readback_sql("window_step")),
     )
-    unfinished = select(step.id).where(scope, col(step.status) != "SUCCEEDED").exists()
+    # 窗口只限制并发的素材准备；素材全部落定的组合立即让出名额，
+    # 其系列/广告组/广告与封面等待不再阻塞后续组合开始准备素材。
+    unfinished = (
+        select(step.id)
+        .where(scope, col(step.kind) == "MATERIAL", col(step.status) != "SUCCEEDED")
+        .exists()
+    )
     blocked = (
         select(step.id)
         .where(
@@ -42,7 +48,7 @@ def window_units():
         .exists()
     )
     # UNKNOWN/明确失败不占住其他组合的窗口；原恢复链路仍保留，核实后
-    # 自动重新参与排序。已完成组合自然退出，不改冻结意图或业务结果。
+    # 自动重新参与排序。素材已完成的组合自然退出，不改冻结意图或业务结果。
     ranked = (
         select(
             SubmissionUnit.tenant_id,

@@ -13,7 +13,13 @@ from app.core.errors import DomainError
 from app.jobs.celery_app import celery_app
 from app.jobs.task_routes import ensure_dispatch_queue
 
-from .covers import HARD_LIMIT, SOFT_LIMIT, repair_cover_dispatches, run_cover
+from .covers import (
+    HARD_LIMIT,
+    SOFT_LIMIT,
+    recover_stalled_covers,
+    repair_cover_dispatches,
+    run_cover,
+)
 from .tasks import require_bounded_worker
 
 
@@ -76,4 +82,6 @@ def verify_cover(
 )  # type: ignore[untyped-decorator]
 def repair_covers(limit: int = 100) -> int:
     with Session(engine) as session, session.begin():
-        return repair_cover_dispatches(session, limit=limit)
+        count = repair_cover_dispatches(session, limit=limit)
+    with Session(engine) as session, session.begin():
+        return count + recover_stalled_covers(session, limit=limit)

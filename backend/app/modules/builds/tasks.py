@@ -18,6 +18,7 @@ from app.modules.builds.dispatch import (
     READ_TASK,
     STEP_TASK,
     UNIT_TASK,
+    advance_execution,
     finalize_submission,
     payload_identity,
     process_unit,
@@ -252,3 +253,8 @@ def reconcile_step_task(
 @celery_app.task(name="builds.repair_execution", time_limit=60, soft_time_limit=55)  # type: ignore[untyped-decorator]
 def repair_execution_task() -> int:
     return repair_execution(database_engine=engine)
+
+
+@celery_app.task(name="builds.advance_execution", time_limit=60, soft_time_limit=55)  # type: ignore[untyped-decorator]
+def advance_execution_task() -> int:
+    return advance_execution(database_engine=engine)

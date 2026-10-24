@@ -235,8 +235,10 @@ spec:
           imagePullPolicy: IfNotPresent
           resources:
             requests: {cpu: "500m", memory: 1Gi}
-            limits: {cpu: "1", memory: 2Gi}
-          command: [celery, -A, "app.jobs.celery_app:celery_app", worker, -Q, builds, --pool, prefork, --concurrency, "1", --loglevel=INFO, --hostname, "builds@%h"]
+            limits: {cpu: "2", memory: 2Gi}
+          # 搭建步骤以等待 TikTok 为主（单进程约 400Mi）。3 个子进程与建单端点
+          # 并发上限 3 对齐，实际调用仍受共享额度准入约束；数据库连接 +6。
+          command: [celery, -A, "app.jobs.celery_app:celery_app", worker, -Q, builds, --pool, prefork, --concurrency, "3", --loglevel=INFO, --hostname, "builds@%h"]
           readinessProbe:
             exec:
               command: [python, -c, "import socket; from app.jobs.celery_app import celery_app; r=celery_app.control.ping(destination=['builds@'+socket.gethostname()], timeout=5); raise SystemExit(0 if r else 1)"]

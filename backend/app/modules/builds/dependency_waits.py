@@ -1,5 +1,6 @@
 """素材依赖落定才唤醒正常执行器，不为等待本身制造轮询消息。"""
 
+import logging
 from typing import Any
 
 from sqlalchemy import and_, func, or_, tuple_
@@ -17,6 +18,8 @@ from app.modules.builds.execution_window import material_unit_admitted, window_u
 from app.modules.builds.preview_models import BuildUnit
 from app.modules.materials.cover_models import MaterialCoverJob
 from app.modules.materials.models import AccountMaterial, MaterialDistribution
+
+logger = logging.getLogger(__name__)
 
 
 def waiting_dependency(step: ExecutionStep) -> bool:
@@ -175,9 +178,13 @@ def wake_material_dependencies(*, database_engine: Any, limit: int = 100) -> int
                 ),
                 unit_id=unit_id,
             )
-        except DomainError:
+        except DomainError as error:
             # 原执行器仍负责记录权限/冻结错误；本轮不能吞掉正式失败路径。
-            pass
+            logger.warning(
+                "material slice planning failed submission=%s code=%s",
+                submission_id,
+                error.code,
+            )
     count = 0
     for tenant_id, unit_id, step_id, _, _, _ in candidates:
         with Session(database_engine) as session, session.begin():

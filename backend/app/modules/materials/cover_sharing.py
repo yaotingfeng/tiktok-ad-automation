@@ -1470,6 +1470,22 @@ def run_shared_cover(
                     and all(job.failure_count < 3 for job in active.values())
                     and (unknown or error.effect == "NOT_SENT")
                 )
+                # 领取/登记阶段的锁等待与本地期限耗尽：批次尚未发送，退避后整体重排。
+                or (
+                    covers.local_transient(error)
+                    and not unknown
+                    and all(
+                        job.failure_count < covers.LOCAL_RETRY_LIMIT
+                        for job in active.values()
+                    )
+                )
+            )
+            delay = (
+                covers.local_retry_delay(
+                    max((job.failure_count for job in active.values()), default=1)
+                )
+                if covers.local_transient(error)
+                else 5
             )
             if current and active and (armed_this_turn or retry):
                 current.status = "UNKNOWN" if unknown else "PREPARING"
@@ -1478,13 +1494,13 @@ def run_shared_cover(
                     context,
                     current,
                     {identity: claims[identity] for identity in active},
-                    delay=5,
+                    delay=delay,
                 )
                 return
             if current:
                 current.scan_state = {}
             for job in active.values():
                 if retry:
-                    covers._queue(db, job, read=False, delay=5)
+                    covers._queue(db, job, read=False, delay=delay)
                 else:
                     covers._stop(job, code, unknown=unknown)

@@ -17,6 +17,15 @@ from app.modules.materials.models import MaterialFile
 from tests.modules.builds.test_execution import executable as executable
 
 
+@pytest.fixture(autouse=True)
+def locked_preparation(monkeypatch):
+    # 全部就绪的广告走无锁快路径（不加锁也就不会成环）。这里验证的是需要
+    # 登记依赖时的加锁准备路径，强制快路径让位，锁序保护仍然生效。
+    monkeypatch.setattr(
+        "app.modules.builds.execution._ready_ad_mappings", lambda *a, **k: None
+    )
+
+
 @pytest.fixture
 def descending_executable(monkeypatch, request):
     from tests.modules.materials import test_tenant_materials

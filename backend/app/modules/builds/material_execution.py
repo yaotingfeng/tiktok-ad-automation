@@ -1,5 +1,6 @@
 """Reflect verified material outcomes without blocking unrelated recovery work."""
 
+import logging
 from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID
@@ -24,6 +25,8 @@ from app.modules.materials.models import MaterialAssetOperation, MaterialDistrib
 from app.modules.materials.readiness import get_material_readiness
 from app.modules.materials.routes import load_material_route, require_same_route
 from app.modules.tenants.permissions import require_tenant
+
+logger = logging.getLogger(__name__)
 
 
 def material_needs_planning(
@@ -227,8 +230,15 @@ def plan_material_slice(
                         advertiser_id=frozen[unit.unit_id].advertiser_id,
                         route=route,
                     )
-            except DomainError:
+            except DomainError as error:
                 # 原步骤负责记录权限/内容错误；不得把一个目标失败扩散到其它账户。
+                # 但本片因此未登记必须可见，否则素材会无声停滞到下一次成功规划。
+                logger.warning(
+                    "material slice skipped unit=%s submission=%s code=%s",
+                    unit.unit_id,
+                    submission.id,
+                    error.code,
+                )
                 continue
             for step in all_steps:
                 assert step.material_id is not None
@@ -244,6 +254,41 @@ def plan_material_slice(
                     step.updated_at = datetime.now(UTC)
                     count += 1
         return count
+
+
+def _start_build_cover(
+    session: Session,
+    *,
+    context: TenantContext,
+    step: ExecutionStep,
+    route: Any,
+) -> None:
+    """目标视频一落定就登记该账户的封面任务，与系列/广告组创建并行推进。
+
+    原先封面要等广告步骤首次执行时才登记，整批封面成为广告组之后的串行阶段。
+    这里只登记任务（ensure_cover 幂等），失败不影响素材步骤本身的结论；广告步骤
+    仍会在发送前按原规则核实封面。
+    """
+    from app.modules.materials.covers import ensure_cover
+
+    if step.material_id is None:
+        return
+    unit = session.get(BuildUnit, step.unit_id)
+    if unit is None:
+        return
+    try:
+        with session.begin_nested():
+            ensure_cover(
+                session,
+                context=context,
+                bc_id=step.bc_id,
+                material_id=step.material_id,
+                advertiser_id=unit.advertiser_id,
+                task_key=f"build-cover:{step.id}",
+                route=route,
+            )
+    except DomainError:
+        pass
 
 
 def recover_material_results(*, database_engine: Any, limit: int = 100) -> int:
@@ -440,6 +485,7 @@ def recover_material_results(*, database_engine: Any, limit: int = 100) -> int:
                 }
                 step.dispatch_id = None
                 conclusion = "MATERIAL_VERIFIED"
+                _start_build_cover(session, context=context, step=step, route=route)
             else:
                 step.status, step.phase = "FAILED", "DONE"
                 step.error_code = denied or dist.reason_code or "material_blocked"

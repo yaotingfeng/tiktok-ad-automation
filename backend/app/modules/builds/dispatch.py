@@ -552,8 +552,6 @@ def _repair_message(
 
 
 def repair_execution(*, database_engine: Any, limit: int = 100) -> int:
-    from app.modules.builds.material_execution import recover_material_results
-
     if type(limit) is not int or not 1 <= limit <= 100:
         raise ValueError("invalid repair batch")
     now = datetime.now(UTC)
@@ -641,12 +639,24 @@ def repair_execution(*, database_engine: Any, limit: int = 100) -> int:
             unit.repair_after = now + timedelta(seconds=REPAIR_SECONDS)
             session.add(unit)
             count += 1
+    return count + advance_execution(database_engine=database_engine, limit=limit)
+
+
+def advance_execution(*, database_engine: Any, limit: int = 100) -> int:
+    """落定已完成的素材/封面依赖，并为执行窗口补下一片素材。
+
+    素材推进原先只挂在每 60 秒一次的 repair_execution 上：一片素材共享完成后
+    最多再等一分钟才被确认、再规划下一片，整批时长被轮询节奏放大。这里只做
+    无副作用的落定与规划，由 Beat 每 5 秒调用（repair_execution 仍保留兜底）。
+    """
     from app.modules.builds.cover_execution import recover_cover_results
     from app.modules.builds.dependency_waits import wake_material_dependencies
+    from app.modules.builds.material_execution import recover_material_results
 
+    if type(limit) is not int or not 1 <= limit <= 100:
+        raise ValueError("invalid advance batch")
     return (
-        count
-        + recover_material_results(database_engine=database_engine, limit=limit)
+        recover_material_results(database_engine=database_engine, limit=limit)
         + recover_cover_results(database_engine=database_engine, limit=limit)
         + wake_material_dependencies(database_engine=database_engine, limit=limit)
     )

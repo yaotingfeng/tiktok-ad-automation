@@ -127,10 +127,11 @@ celery_app.conf.update(
             "schedule": 60.0,
             "options": {"queue": "control"},
         },
+        # 封面接续（等待来源、卡住的 UNKNOWN/瞬时失败）直接决定广告能否发出，15 秒一轮。
         "repair-material-covers": {
             "task": "materials.repair_covers",
-            "schedule": 60.0,
-            "options": {"queue": "control"},
+            "schedule": 15.0,
+            "options": {"queue": "control", "expires": 14.0},
         },
         # 目录发现每步只靠一条消息推进；丢失或领取前出错时由这里补派，避免永久“正在发现”。
         "repair-account-discoveries": {
@@ -157,6 +158,12 @@ celery_app.conf.update(
             "task": "builds.repair_execution",
             "schedule": 60.0,
             "options": {"queue": "control"},
+        },
+        # 素材/封面落定后尽快推进下一片；过期的 tick 直接丢弃，不在积压时叠加。
+        "advance-build-execution": {
+            "task": "builds.advance_execution",
+            "schedule": 5.0,
+            "options": {"queue": "control", "expires": 4.0},
         },
         "repair-build-submissions": {
             "task": "builds.repair_submissions",

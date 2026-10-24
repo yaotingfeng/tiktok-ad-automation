@@ -300,7 +300,13 @@ def test_reconciled_video_completes_video_stage_then_ad_prepares_only_cover(
         assert recovered == 1, step.error_code
         assert step.distribution_id == dist_id and step.cover_job_id is None
         assert step.status == "SUCCEEDED"
-        assert not session.exec(select(MaterialCoverJob)).all()
+        # 视频一落定就登记封面，与系列/广告组并行；素材步骤本身不等待封面。
+        early = session.exec(select(MaterialCoverJob)).one()
+        assert early.request_armed_at is None
+        assert (
+            session.get(PendingDispatch, early.dispatch_id).task_name
+            == "materials.prepare_cover"
+        )
     with Session(db) as session, session.begin():
         for kind in ["MATERIAL", "CTA", "CAMPAIGN", "ADGROUP"]:
             for step_id in ids[kind]:
@@ -321,8 +327,9 @@ def test_reconciled_video_completes_video_stage_then_ad_prepares_only_cover(
     with Session(db) as session:
         step = session.get(ExecutionStep, identity)
         assert step.status == "SUCCEEDED" and step.distribution_id == dist_id
+        # 广告只等待已登记的封面任务，不重复登记。
         job = session.exec(select(MaterialCoverJob)).one()
-        assert job.request_armed_at is None
+        assert job.id == early.id and job.request_armed_at is None
         assert (
             session.get(PendingDispatch, job.dispatch_id).task_name
             == "materials.prepare_cover"
@@ -387,8 +394,15 @@ def test_new_video_ad_requires_verified_cover_without_reopening_completed_steps(
         "step_id": ad_id,
         "revision": 0,
     }
-    assert process_step(**args) == (
-        "SUCCEEDED" if cover_status == "READY" else "FAILED"
+    # 近期 UNKNOWN 封面由自动接续只读核查，广告等待而不是失败；
+    # 确定性 BLOCKED 仍按原规则让广告失败。
+    assert (
+        process_step(**args)
+        == {
+            "READY": "SUCCEEDED",
+            "UNKNOWN": "PENDING",
+            "BLOCKED": "FAILED",
+        }[cover_status]
     )
     with Session(db) as session, session.begin():
         job = session.get(MaterialCoverJob, job_id)
@@ -396,7 +410,10 @@ def test_new_video_ad_requires_verified_cover_without_reopening_completed_steps(
         assert len(session.exec(select(MaterialCoverJob)).all()) == 1
         if cover_status != "READY":
             assert not writes
-            assert session.get(ExecutionStep, ad_id).request_body is None
+            ad = session.get(ExecutionStep, ad_id)
+            assert ad.request_body is None
+            if cover_status == "UNKNOWN":
+                assert ad.error_code == "material_refresh_required"
             # 已发送但未知/阻塞的图片沿原任务保留，广告不能通过省略封面绕过。
             assert job.status == cover_status and job.dispatch_id is None
             return

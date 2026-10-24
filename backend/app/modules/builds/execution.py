@@ -368,101 +368,12 @@ def prepare_request(
         )[:51]
         if not 1 <= len(material_ids) <= 50:
             raise DomainError("invalid_material_group", "冻结素材组无效")
-        from app.modules.materials.cover_models import MaterialCoverJob
-        from app.modules.materials.models import AccountMaterial, MaterialFile
-        from app.modules.materials.readiness import load_material
-
-        # 批量素材核验按 ID 加锁。广告仍按冻结的创意顺序编译，但必须先按
-        # 同一 ID 顺序取得整组素材锁，避免逐项准备与核验形成相反锁序的死锁。
-        session.exec(
-            select(MaterialFile)
-            .where(
-                MaterialFile.tenant_id == context.tenant_id,
-                col(MaterialFile.id).in_(material_ids),
-            )
-            .order_by(col(MaterialFile.id))
-            .with_for_update()
-        ).all()
-        # 素材锁顺序不能代替封面锁顺序：创意排列与job.id无关。
-        # 先统一锁住当前目标VID的既有封面，再按原顺序编译；与批读及
-        # 广告刷新同序，且不锁历史VID、其他账户或其他租户的封面。
-        session.exec(
-            select(MaterialCoverJob)
-            .join(
-                AccountMaterial,
-                (col(AccountMaterial.id) == MaterialCoverJob.asset_id)
-                & (col(AccountMaterial.tenant_id) == MaterialCoverJob.tenant_id)
-                & (col(AccountMaterial.video_id) == MaterialCoverJob.video_id),
-            )
-            .where(
-                MaterialCoverJob.tenant_id == context.tenant_id,
-                MaterialCoverJob.bc_id == claim.bc_id,
-                MaterialCoverJob.advertiser_id == claim.advertiser_id,
-                MaterialCoverJob.connection_id == claim.route.connection_id,
-                col(MaterialCoverJob.material_id).in_(material_ids),
-            )
-            .order_by(col(MaterialCoverJob.id))
-            .with_for_update(of=MaterialCoverJob)
-        ).all()
-        mappings = []
-        waiting = False
-        for material_id in material_ids:
-            ready = ensure_target_asset(
-                session,
-                context=context,
-                bc_id=claim.bc_id,
-                material_id=material_id,
-                advertiser_id=claim.advertiser_id,
-                task_key=f"build:{claim.step_id}:{material_id}",
-                route=claim.route,
-            )
-            if ready.state == "blocked":
-                raise DomainError(
-                    ready.reason_code or "target_asset_unavailable", "目标素材不可用"
-                )
-            if ready.state != "ready" or not ready.mapping:
-                waiting = True
-                continue
-            # 当前 Smart+ 单视频接口要求恰好一张封面。目标账户素材已带
-            # 核实图片时直接复用；不要让历史封面任务的连接路由阻断消费。
-            if ready.mapping and ready.mapping.image_id:
-                cover = ready
-            else:
-                from app.modules.materials.covers import ensure_cover
-
-                cover = ensure_cover(
-                    session,
-                    context=context,
-                    bc_id=claim.bc_id,
-                    material_id=material_id,
-                    advertiser_id=claim.advertiser_id,
-                    task_key=f"build-cover:{claim.step_id}:{material_id}",
-                    route=claim.route,
-                )
-            if cover.state == "blocked":
-                raise DomainError(
-                    cover.reason_code or "target_asset_incomplete",
-                    "目标视频封面尚未核实",
-                )
-            if cover.state != "ready" or not cover.mapping:
-                waiting = True
-                continue
-            mappings.append(
-                {
-                    "video_id": cover.mapping.video_id,
-                    "file_name": load_material(
-                        session,
-                        context=context,
-                        bc_id=claim.bc_id,
-                        material_id=material_id,
-                    ).file_name,
-                    "image_id": cover.mapping.image_id or "",
-                }
-            )
-        if waiting:
-            # Caller commits the queued dependencies before waiting.
-            raise DomainError(
-                "material_refresh_required", "正在核实目标素材", retryable=True
+        mappings = _ready_ad_mappings(
+            session, context=context, claim=claim, material_ids=material_ids
+        )
+        if mappings is None:
+            mappings = _prepare_ad_mappings(
+                session, context=context, claim=claim, material_ids=material_ids
             )
         identity = {
             key: value
@@ -489,6 +400,253 @@ def prepare_request(
     else:
         raise DomainError("invalid_build_kind", "该步骤不是广告创建请求")
     return compile_request(step.kind.lower(), fixed=fixed, resolved=resolved)
+
+
+def _prepare_ad_mappings(
+    session: Session,
+    *,
+    context: TenantContext,
+    claim: StepClaim,
+    material_ids: list[UUID],
+) -> list[dict[str, Any]]:
+    """加锁准备：为缺失的目标素材/封面登记准备任务；全部就绪时返回创意素材。"""
+    from app.modules.materials.cover_models import MaterialCoverJob
+    from app.modules.materials.models import AccountMaterial, MaterialFile
+    from app.modules.materials.readiness import load_material
+
+    # 批量素材核验按 ID 加锁。广告仍按冻结的创意顺序编译，但必须先按
+    # 同一 ID 顺序取得整组素材锁，避免逐项准备与核验形成相反锁序的死锁。
+    session.exec(
+        select(MaterialFile)
+        .where(
+            MaterialFile.tenant_id == context.tenant_id,
+            col(MaterialFile.id).in_(material_ids),
+        )
+        .order_by(col(MaterialFile.id))
+        .with_for_update()
+    ).all()
+    # 素材锁顺序不能代替封面锁顺序：创意排列与job.id无关。
+    # 先统一锁住当前目标VID的既有封面，再按原顺序编译；与批读及
+    # 广告刷新同序，且不锁历史VID、其他账户或其他租户的封面。
+    session.exec(
+        select(MaterialCoverJob)
+        .join(
+            AccountMaterial,
+            (col(AccountMaterial.id) == MaterialCoverJob.asset_id)
+            & (col(AccountMaterial.tenant_id) == MaterialCoverJob.tenant_id)
+            & (col(AccountMaterial.video_id) == MaterialCoverJob.video_id),
+        )
+        .where(
+            MaterialCoverJob.tenant_id == context.tenant_id,
+            MaterialCoverJob.bc_id == claim.bc_id,
+            MaterialCoverJob.advertiser_id == claim.advertiser_id,
+            MaterialCoverJob.connection_id == claim.route.connection_id,
+            col(MaterialCoverJob.material_id).in_(material_ids),
+        )
+        .order_by(col(MaterialCoverJob.id))
+        .with_for_update(of=MaterialCoverJob)
+    ).all()
+    mappings = []
+    waiting = False
+    for material_id in material_ids:
+        ready = ensure_target_asset(
+            session,
+            context=context,
+            bc_id=claim.bc_id,
+            material_id=material_id,
+            advertiser_id=claim.advertiser_id,
+            task_key=f"build:{claim.step_id}:{material_id}",
+            route=claim.route,
+        )
+        if ready.state == "blocked":
+            raise DomainError(
+                ready.reason_code or "target_asset_unavailable", "目标素材不可用"
+            )
+        if ready.state != "ready" or not ready.mapping:
+            waiting = True
+            continue
+        # 当前 Smart+ 单视频接口要求恰好一张封面。目标账户素材已带
+        # 核实图片时直接复用；不要让历史封面任务的连接路由阻断消费。
+        if ready.mapping and ready.mapping.image_id:
+            cover = ready
+        else:
+            from app.modules.materials.covers import ensure_cover
+
+            cover = ensure_cover(
+                session,
+                context=context,
+                bc_id=claim.bc_id,
+                material_id=material_id,
+                advertiser_id=claim.advertiser_id,
+                task_key=f"build-cover:{claim.step_id}:{material_id}",
+                route=claim.route,
+            )
+        if cover.state == "blocked":
+            job = (
+                session.get(MaterialCoverJob, cover.task_id) if cover.task_id else None
+            )
+            # 结果未知或发送前瞬时失败的封面由自动接续核查/重排；广告等待，
+            # 不能把一次本地拥塞变成需要人工重试的广告失败。
+            if job is not None and _cover_recovering(job):
+                waiting = True
+                continue
+            raise DomainError(
+                cover.reason_code or "target_asset_incomplete",
+                "目标视频封面尚未核实",
+            )
+        if cover.state != "ready" or not cover.mapping:
+            waiting = True
+            continue
+        mappings.append(
+            {
+                "video_id": cover.mapping.video_id,
+                "file_name": load_material(
+                    session,
+                    context=context,
+                    bc_id=claim.bc_id,
+                    material_id=material_id,
+                ).file_name,
+                "image_id": cover.mapping.image_id or "",
+            }
+        )
+    if waiting:
+        # Caller commits the queued dependencies before waiting.
+        raise DomainError(
+            "material_refresh_required", "正在核实目标素材", retryable=True
+        )
+    return mappings
+
+
+# 封面任务仍在推进（排队/准备/核查中），或处于自动接续范围内的 UNKNOWN/瞬时 BLOCKED。
+_COVER_IN_PROGRESS = frozenset({"PENDING", "PREPARING", "VERIFYING"})
+
+
+def _cover_recovering(job: Any) -> bool:
+    from app.modules.materials.covers import (
+        AUTO_RECOVERY_AGE,
+        AUTO_RETRY_BLOCKED_CODES,
+    )
+
+    if job.superseded_by_id is not None:
+        return False
+    if job.status in _COVER_IN_PROGRESS:
+        return True
+    # 超出自动接续时长后按原规则落定失败，避免广告无限等待。
+    if job.created_at < datetime.now(UTC) - AUTO_RECOVERY_AGE:
+        return False
+    if job.status == "UNKNOWN":
+        return job.error_code != "cover_receipt_ambiguous"
+    return job.status == "BLOCKED" and job.error_code in AUTO_RETRY_BLOCKED_CODES
+
+
+def _ready_ad_mappings(
+    session: Session,
+    *,
+    context: TenantContext,
+    claim: StepClaim,
+    material_ids: list[UUID],
+) -> list[dict[str, Any]] | None:
+    """无锁快路径：目标素材与封面全部就绪时直接编译创意，不再逐条加锁准备。
+
+    广告在等待封面期间每 15 秒重试一次。旧实现每次都对整组 48 条素材逐条
+    ensure 并持有素材/封面行锁 8–15 秒，既占满单并发搭建 Worker，又让封面
+    Worker 5 秒的锁等待超时失败。这里只读：就绪则返回；所有缺口都已有任务在
+    推进时直接等待；只有确需登记新任务时才返回 None 进入加锁准备。最终发送前
+    仍由 validate_ad_assets 在同一冻结身份下复核。
+    """
+    from app.modules.materials.cover_models import MaterialCoverJob
+    from app.modules.materials.models import (
+        AccountMaterial,
+        MaterialDistribution,
+        MaterialFile,
+    )
+    from app.modules.materials.readiness import mapping_fresh
+    from app.modules.materials.routes import require_material_route
+
+    require_material_route(
+        session,
+        context=context,
+        route=claim.route,
+        bc_id=claim.bc_id,
+        advertiser_id=claim.advertiser_id,
+        capability="build",
+    )
+    assets = {
+        row.material_id: row
+        for row in session.exec(
+            select(AccountMaterial).where(
+                AccountMaterial.tenant_id == context.tenant_id,
+                AccountMaterial.bc_id == claim.bc_id,
+                AccountMaterial.advertiser_id == claim.advertiser_id,
+                col(AccountMaterial.material_id).in_(material_ids),
+            )
+        ).all()
+    }
+    missing = [
+        material_id
+        for material_id in material_ids
+        if not (
+            mapping_fresh(assets.get(material_id))
+            and (assets[material_id].image_id or "").strip()
+        )
+    ]
+    if not missing:
+        names = dict(
+            session.exec(
+                select(MaterialFile.id, MaterialFile.file_name).where(
+                    MaterialFile.tenant_id == context.tenant_id,
+                    col(MaterialFile.id).in_(material_ids),
+                )
+            ).all()
+        )
+        return [
+            {
+                "video_id": assets[material_id].video_id,
+                "file_name": names[material_id],
+                "image_id": assets[material_id].image_id,
+            }
+            for material_id in material_ids
+        ]
+    covers = session.exec(
+        select(MaterialCoverJob).where(
+            MaterialCoverJob.tenant_id == context.tenant_id,
+            MaterialCoverJob.bc_id == claim.bc_id,
+            MaterialCoverJob.advertiser_id == claim.advertiser_id,
+            col(MaterialCoverJob.material_id).in_(missing),
+            col(MaterialCoverJob.superseded_by_id).is_(None),
+        )
+    ).all()
+    covering = {
+        job.material_id
+        for job in covers
+        if (asset := assets.get(job.material_id)) is not None
+        and job.asset_id == asset.id
+        and job.video_id == asset.video_id
+        and _cover_recovering(job)
+    }
+    distributing = set(
+        session.exec(
+            select(MaterialDistribution.material_id).where(
+                MaterialDistribution.tenant_id == context.tenant_id,
+                MaterialDistribution.bc_id == claim.bc_id,
+                MaterialDistribution.advertiser_id == claim.advertiser_id,
+                col(MaterialDistribution.material_id).in_(missing),
+                col(MaterialDistribution.superseded_by_id).is_(None),
+                col(MaterialDistribution.status).in_(
+                    ["queued", "preparing", "verifying"]
+                ),
+            )
+        ).all()
+    )
+    if all(
+        material_id in covering
+        or (not mapping_fresh(assets.get(material_id)) and material_id in distributing)
+        for material_id in missing
+    ):
+        raise DomainError(
+            "material_refresh_required", "正在等待目标素材与封面就绪", retryable=True
+        )
+    return None
 
 
 def _local_result(
