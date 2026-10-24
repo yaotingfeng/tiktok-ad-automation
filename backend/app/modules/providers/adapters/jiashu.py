@@ -88,7 +88,9 @@ class JiashuClient:
                 "provider_result_unknown" if write else "provider_schema_unsupported"
             )
         code = str(raw_code)
-        if code == "10001":
+        # 嘉书会话失效除 10001 外还会返回 10004“会话过期，请重新登陆”（2026-10-24 生产实测），
+        # 两者都按会话过期处理才能触发自动重登，否则会被误报为版权方拒绝。
+        if code in {"10001", "10004"}:
             raise failure("provider_session_expired")
         if code == "10005":
             raise failure("provider_application_forbidden")

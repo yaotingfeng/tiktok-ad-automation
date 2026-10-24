@@ -68,6 +68,7 @@ def test_registry_returns_normalized_adapter_without_cross_provider_fallback():
     "code,want",
     [
         ("10001", "provider_session_expired"),
+        ("10004", "provider_session_expired"),
         ("10005", "provider_application_forbidden"),
         ("1234", "provider_rejected"),
     ],
