@@ -204,9 +204,13 @@ class JiashuClient:
 
     def read_link(self, remote_id: str) -> JsonDict:
         data = self.post(PREFIX + "getGuideUrl", {"channel": remote_id})
-        if not isinstance(data, dict) or not isinstance(data.get("config"), dict):
+        # 渠道号已建但还没生成推广链接时，嘉书返回 config=null（2026-10-24 生产实测），
+        # 视为空配置，由编排继续生成并保存链接；与本地 CLI 的 `config || {}` 一致。
+        if not isinstance(data, dict) or not isinstance(
+            data.get("config"), dict | None
+        ):
             raise failure("provider_schema_unsupported")
-        config = data["config"]
+        config = data["config"] or {}
         allowed = {
             key: config[key]
             for key in ("vid", "drama_num", "jump_url", "minis_path", "charge_level")

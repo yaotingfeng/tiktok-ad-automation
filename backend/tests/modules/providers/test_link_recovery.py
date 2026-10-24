@@ -130,7 +130,8 @@ class RemoteFixture:
             if self.fail == "read_crash":
                 self.fail = None
                 raise SimulatedCrash()
-            data = {"config": self.saved}
+            # 与嘉书实测一致：渠道号已建但尚未生成链接时 config 为 null。
+            data = {"config": self.saved or None, "show_mini_path": False}
         else:
             raise AssertionError(path)
         return httpx.Response(200, json={"code": "0000", "data": data})
