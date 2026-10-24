@@ -31,6 +31,24 @@ API_BASE = f"{AUTH_BASE}/management"
 PAGE_SIZE = 100
 COOKIE_DOMAIN = "distribution.wolftv.online"
 XLA_CI = os.getenv("RONG_LIANG_XLA_CI", "").strip()
+# 容量登录失效时返回码可能是 user-2/401/403；实测未登录是 HTTP 500 + code=403，
+# 所以必须先看返回码再看 HTTP 状态，否则会被当成“暂不可用”而不触发自动重登。
+SESSION_EXPIRED_CODES = {"user-2", 401, "401", 403, "403"}
+
+
+def _checked_body(status: int, body: Any, *, write: bool) -> JsonDict:
+    if status in {401, 403} or (
+        isinstance(body, dict) and body.get("code") in SESSION_EXPIRED_CODES
+    ):
+        raise failure("provider_session_expired")
+    if status >= 500 or status in {408, 429}:
+        raise failure(
+            "provider_result_unknown" if write else "provider_unavailable",
+            retryable=not write,
+        )
+    if not 200 <= status < 300 or not isinstance(body, dict):
+        raise failure("provider_rejected")
+    return body
 
 
 class _CurlSession:
@@ -104,13 +122,7 @@ class _CurlSession:
             body_value = response.json()
         except (TypeError, ValueError, jsonlib.JSONDecodeError):
             raise failure("provider_schema_unsupported") from None
-        if status in {401, 403}:
-            raise failure("provider_session_expired")
-        if status >= 500 or status in {408, 429}:
-            raise failure("provider_unavailable", retryable=True)
-        if not 200 <= status < 300 or not isinstance(body_value, dict):
-            raise failure("provider_rejected")
-        return body_value
+        return _checked_body(status, body_value, write=False)
 
 
 class RongliangClient:
@@ -183,17 +195,32 @@ class RongliangClient:
         if self._curl is not None:
             body = self._curl.request(method, API_BASE + path, params=query, json=json)
         else:
-            body, _ = request_json(
-                self.http,
-                method,
-                API_BASE + path,
-                params=query,
-                json=json,
-                write=write,
-            )
+            # 不走通用 request_json：它遇到 HTTP 500 会丢掉响应体，
+            # 看不到容量“未登录”的 code=403。
+            try:
+                response = self.http.request(
+                    method,
+                    API_BASE + path,
+                    params=query,
+                    json=json,
+                    timeout=30,
+                    follow_redirects=False,
+                )
+            except httpx.HTTPError:
+                raise failure(
+                    "provider_result_unknown" if write else "provider_unavailable",
+                    retryable=not write,
+                ) from None
+            try:
+                body_value = response.json()
+            except ValueError:
+                body_value = None
+            if body_value is None and 200 <= response.status_code < 300:
+                raise failure(
+                    "provider_result_unknown" if write else "provider_schema_unsupported"
+                )
+            body = _checked_body(response.status_code, body_value, write=write)
         code = body.get("code")
-        if code in {"user-2", 401, "401", 403, "403"}:
-            raise failure("provider_session_expired")
         if code not in (None, 0, "0"):
             raise failure("provider_rejected")
         return body.get("data", body)

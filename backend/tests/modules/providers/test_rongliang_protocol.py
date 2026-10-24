@@ -164,14 +164,33 @@ def test_rongliang_read_link_returns_verifiable_configuration():
     }
 
 
-def test_rongliang_token_expiry_is_stable():
+@pytest.mark.parametrize(
+    ("status", "body"),
+    [
+        (200, {"code": "user-2", "msg": "expired"}),
+        # 2026-10-24 实测：容量未登录返回 HTTP 500 + code=403。
+        (500, {"code": 403, "msg": "Unauthorized"}),
+        (401, {"code": "401"}),
+    ],
+)
+def test_rongliang_token_expiry_is_stable(status, body):
     with httpx.Client(
-        transport=httpx.MockTransport(lambda _: httpx.Response(200, json={"code": "user-2", "msg": "expired"}))
+        transport=httpx.MockTransport(lambda _: httpx.Response(status, json=body))
     ) as http:
         client = RongliangClient(http, token="expired")
         with pytest.raises(DomainError) as error:
             client.discover_applications()
     assert error.value.code == "provider_session_expired"
+
+
+def test_rongliang_server_error_without_auth_code_stays_retryable():
+    with httpx.Client(
+        transport=httpx.MockTransport(lambda _: httpx.Response(500, json={"code": 500}))
+    ) as http:
+        client = RongliangClient(http, token="valid")
+        with pytest.raises(DomainError) as error:
+            client.discover_applications()
+    assert error.value.code == "provider_unavailable" and error.value.retryable
 
 
 @pytest.mark.parametrize(
