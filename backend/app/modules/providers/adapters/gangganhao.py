@@ -295,10 +295,10 @@ class GangganhaoClient:
         if not isinstance(detail, dict):
             raise failure("provider_result_unknown")
         # 详情缺 id/authorizerAppId/seriesId，从列表行补齐；同名字段以详情为准。
-        data = {**self._link_row(remote_id, detail.get("name")), **detail}
+        data: JsonDict = {**self._link_row(remote_id, detail.get("name")), **detail}
         try:
-            free_episode_count = int(data.get("freeEpisodeCount"))
-        except (TypeError, ValueError):
+            free_episode_count = int(data["freeEpisodeCount"])
+        except (KeyError, TypeError, ValueError):
             raise failure("provider_result_unknown") from None
         if free_episode_count < 0:
             raise failure("provider_result_unknown")
