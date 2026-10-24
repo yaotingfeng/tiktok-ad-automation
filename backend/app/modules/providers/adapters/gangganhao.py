@@ -26,6 +26,8 @@ from .contract import (
 
 BASE = "https://gateway.dorareel.com/portal/distributor"
 PAGE_SIZE = 100
+# 读链接时按 id 在列表里找行的翻页上限（名称过滤失效时兜底）。
+MAX_LINK_PAGES = 50
 # 需要支付模板的变现方式：付费与混合应用建链必须选择支付模板。
 PAYMENT_TEMPLATE_MODES = frozenset({"iap", "mixed"})
 
@@ -226,8 +228,11 @@ class GangganhaoClient:
             detail = self._request("GET", f"/campaign-links/{external_id(link_id)}")
             if not isinstance(detail, dict):
                 raise failure("provider_schema_unsupported")
-            if self._matches(detail, normalized):
-                matched.append(detail)
+            # 详情不含 id/linkCode/authorizerAppId/seriesId（2026-10-24 生产实测），
+            # 只有列表行有；合并后再比对，详情里的免费集数、模板等以详情为准。
+            merged = {**row, **detail}
+            if self._matches(merged, normalized):
+                matched.append(merged)
         complete = page * PAGE_SIZE >= total
         return LinkLookupPage(items=matched, next_cursor=None if complete else str(page + 1), complete=complete)
 
@@ -266,10 +271,31 @@ class GangganhaoClient:
         data = self._request("POST", "/campaign-link", json=body, write=True)
         return self._receipt(data, normalized)
 
+    def _link_row(self, remote_id: str, name: Any) -> JsonDict:
+        """按链接 id 找列表行；列表按名称关键词过滤，名称为空时逐页查找。"""
+
+        query: JsonDict = {"size": PAGE_SIZE}
+        if isinstance(name, str) and name.strip():
+            query["keyword"] = name.strip()
+        for page in range(1, MAX_LINK_PAGES + 1):
+            data = self._request("GET", "/campaign-links", query={**query, "page": page})
+            if not isinstance(data, dict) or not isinstance(data.get("list"), list):
+                raise failure("provider_result_unknown")
+            for row in data["list"]:
+                if isinstance(row, dict) and str(row.get("id")) == remote_id:
+                    return row
+            total = data.get("total")
+            if type(total) is not int or page * PAGE_SIZE >= total:
+                break
+        raise failure("provider_result_unknown")
+
     def read_link(self, remote_id: str) -> LinkReceipt:
-        data = self._request("GET", f"/campaign-links/{external_id(remote_id)}")
-        if not isinstance(data, dict):
+        remote_id = external_id(remote_id)
+        detail = self._request("GET", f"/campaign-links/{remote_id}")
+        if not isinstance(detail, dict):
             raise failure("provider_result_unknown")
+        # 详情缺 id/authorizerAppId/seriesId，从列表行补齐；同名字段以详情为准。
+        data = {**self._link_row(remote_id, detail.get("name")), **detail}
         try:
             free_episode_count = int(data.get("freeEpisodeCount"))
         except (TypeError, ValueError):

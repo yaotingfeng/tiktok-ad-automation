@@ -193,25 +193,33 @@ def test_gangganhao_lookup_rejects_link_from_another_application():
 
 
 def test_gangganhao_read_link_returns_verifiable_configuration():
+    # 2026-10-24 生产实测：详情不含 id/authorizerAppId/seriesId，按名称过滤列表补齐。
     def handle(request):
-        assert request.url.path.endswith("/campaign-links/972")
-        return httpx.Response(
-            200,
-            json={
-                "code": 0,
-                "data": {
-                    "id": 972,
-                    "authorizerAppId": 16,
-                    "seriesId": 12,
-                    "seriesTitle": "Moon",
-                    "freeEpisodeCount": 3,
-                    "episodeSeq": 1,
-                    "paymentTemplateId": 7,
-                    "paymentTemplateName": "Pay",
-                    "deliveryMode": "mixed",
-                    "minisLink": "https://www.tiktok.com/minis/ggh",
+        if request.url.path.endswith("/campaign-links/972"):
+            return httpx.Response(
+                200,
+                json={
+                    "code": 0,
+                    "data": {
+                        "name": "ggh-972",
+                        "seriesTitle": "Moon",
+                        "freeEpisodeCount": 3,
+                        "episodeSeq": 1,
+                        "paymentTemplateId": 7,
+                        "paymentTemplateName": "Pay",
+                        "deliveryMode": "mixed",
+                        "minisLink": "https://www.tiktok.com/minis/ggh",
+                    },
                 },
-            },
+            )
+        assert request.url.path.endswith("/campaign-links")
+        assert request.url.params["keyword"] == "ggh-972"
+        rows = [
+            {"id": 973, "name": "ggh-972", "authorizerAppId": 16, "seriesId": 99},
+            {"id": 972, "name": "ggh-972", "authorizerAppId": 16, "seriesId": 12},
+        ]
+        return httpx.Response(
+            200, json={"code": 0, "data": {"list": rows, "total": len(rows)}}
         )
 
     with httpx.Client(transport=httpx.MockTransport(handle)) as http:
@@ -224,6 +232,7 @@ def test_gangganhao_read_link_returns_verifiable_configuration():
         "episode_seq": 1,
         "payment_template_id": 7,
         "payment_template_name": "Pay",
+        "name": "ggh-972",
     }
 
 

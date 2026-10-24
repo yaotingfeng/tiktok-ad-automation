@@ -36,7 +36,7 @@ XLA_CI = os.getenv("RONG_LIANG_XLA_CI", "").strip()
 SESSION_EXPIRED_CODES = {"user-2", 401, "401", 403, "403"}
 
 
-def _checked_body(status: int, body: Any, *, write: bool) -> JsonDict:
+def _checked_body(status: int, body: Any, *, write: bool) -> Any:
     if status in {401, 403} or (
         isinstance(body, dict) and body.get("code") in SESSION_EXPIRED_CODES
     ):
@@ -46,7 +46,8 @@ def _checked_body(status: int, body: Any, *, write: bool) -> JsonDict:
             "provider_result_unknown" if write else "provider_unavailable",
             retryable=not write,
         )
-    if not 200 <= status < 300 or not isinstance(body, dict):
+    # 剧集下拉等接口直接返回数组、没有 code/data 外层（2026-10-24 生产实测）。
+    if not 200 <= status < 300 or not isinstance(body, dict | list):
         raise failure("provider_rejected")
     return body
 
@@ -87,7 +88,7 @@ class _CurlSession:
         json: JsonDict | None = None,
         content: str | None = None,
         form: dict[str, str] | None = None,
-    ) -> JsonDict:
+    ) -> Any:
         if params:
             from urllib.parse import urlencode
 
@@ -220,6 +221,8 @@ class RongliangClient:
                     "provider_result_unknown" if write else "provider_schema_unsupported"
                 )
             body = _checked_body(response.status_code, body_value, write=write)
+        if isinstance(body, list):
+            return body
         code = body.get("code")
         if code not in (None, 0, "0"):
             raise failure("provider_rejected")

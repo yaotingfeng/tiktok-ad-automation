@@ -36,6 +36,7 @@ class DuibaClient:
 
     def __init__(self, http: httpx.Client, *, token: str = ""):
         self.http, self.token = http, token
+        self._miniapp_ids: dict[str, str] | None = None
 
     @classmethod
     def login(cls, http: httpx.Client, *, account: str, password: str) -> DuibaClient:
@@ -98,6 +99,29 @@ class DuibaClient:
         if not result:
             raise failure("provider_application_discovery_unverified")
         return result
+
+    def _row_miniapp_id(self, row: JsonDict) -> str:
+        """链接记录里的小程序换算成内部 id。
+
+        建链传的是内部小程序 id（如 67），但链接记录只返回 TikTok appId
+        （miniappAppId，2026-10-24 生产实测）。按 /miniapp/myList 的 id↔appId
+        换算后再比对，否则查重永远不命中、建链后核实误判配置冲突。
+        """
+        if row.get("miniappId") is not None:
+            return str(row["miniappId"])
+        app_id = str(row.get("miniappAppId"))
+        if self._miniapp_ids is None:
+            data = self._request("GET", "/miniapp/myList")
+            if not isinstance(data, list):
+                raise failure("provider_schema_unsupported")
+            self._miniapp_ids = {
+                str(item["appId"]): str(item["id"])
+                for item in data
+                if isinstance(item, dict)
+                and item.get("appId") is not None
+                and item.get("id") is not None
+            }
+        return self._miniapp_ids.get(app_id, app_id)
 
     def search(self, title: str, cursor: str | None) -> SearchPage:
         page = positive(cursor or 1)
@@ -178,7 +202,7 @@ class DuibaClient:
             row
             for row in rows
             if str(row.get("dramaId")) == str(drama_id)
-            and str(row.get("miniappId", row.get("miniappAppId"))) == str(config["miniapp_id"])
+            and self._row_miniapp_id(row) == str(config["miniapp_id"])
             and positive(row.get("defaultEpisode")) == config["episode"]
             and positive(row.get("cardPointEpisode")) == config["card_point_episode"]
         ]
@@ -221,7 +245,7 @@ class DuibaClient:
             raise failure("provider_result_unknown")
         row = rows[0]
         config = {
-            "miniapp_id": str(row.get("miniappId", row.get("miniappAppId"))),
+            "miniapp_id": self._row_miniapp_id(row),
             "episode": positive(row.get("defaultEpisode")),
             "card_point_episode": positive(row.get("cardPointEpisode")),
         }

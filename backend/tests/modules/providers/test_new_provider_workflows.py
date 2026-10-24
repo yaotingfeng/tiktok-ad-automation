@@ -25,6 +25,7 @@ from tests.modules.strategies.test_concurrency import (  # noqa: F401
     isolated_strategy_database,
 )
 
+DUIBA_APP_ID = "7689015647607719944"
 DUIBA_DRAMA = {"id": 12, "title": "Moon", "freeEpisodeCount": 8, "episodeCount": 10}
 GGH_DRAMA = {
     "publishId": 886,
@@ -70,6 +71,14 @@ class ProviderRemote:
 
     def _duiba(self, request: httpx.Request) -> httpx.Response:
         path = request.url.path
+        if path.endswith("/miniapp/myList"):
+            return httpx.Response(
+                200,
+                json={
+                    "success": True,
+                    "data": [{"id": 77, "name": "English Mini", "appId": DUIBA_APP_ID}],
+                },
+            )
         if path.endswith("/drama/page"):
             return httpx.Response(
                 200,
@@ -110,7 +119,8 @@ class ProviderRemote:
                     {
                         "linkNo": "D-1",
                         "dramaId": body["dramaId"],
-                        "miniappId": str(body["miniappId"]),
+                        # 2026-10-24 生产实测：记录里是 TikTok appId，不是内部 id。
+                        "miniappAppId": DUIBA_APP_ID,
                         "defaultEpisode": body["defaultEpisode"],
                         "cardPointEpisode": body["cardPointEpisode"],
                         "minisLink": "https://www.tiktok.com/minis/duiba",
@@ -126,6 +136,8 @@ class ProviderRemote:
         body = self.bodies[-1]
         return {
             "id": 972,
+            "linkCode": "CL972",
+            "name": "ggh-972",
             "authorizerAppId": body["authorizerAppId"],
             "seriesId": body["seriesId"],
             "seriesTitle": body["seriesTitle"],
@@ -165,7 +177,24 @@ class ProviderRemote:
                 },
             )
         if path.endswith("/campaign-links"):
-            rows = [{"id": 972, "seriesId": 12}] if self.created else []
+            rows = []
+            if self.created:
+                link = self._ggh_link()
+                rows = [
+                    {
+                        key: link[key]
+                        for key in (
+                            "id",
+                            "linkCode",
+                            "name",
+                            "authorizerAppId",
+                            "seriesId",
+                            "seriesTitle",
+                            "episodeSeq",
+                            "minisLink",
+                        )
+                    }
+                ]
             return httpx.Response(
                 200,
                 json={"code": 0, "data": {"list": rows, "total": len(rows)}},
@@ -175,7 +204,12 @@ class ProviderRemote:
             self.bodies.append(json.loads(request.content))
             return httpx.Response(200, json={"code": 0, "data": self._ggh_link()})
         if path.endswith("/campaign-links/972"):
-            return httpx.Response(200, json={"code": 0, "data": self._ggh_link()})
+            # 2026-10-24 生产实测：详情只有名称、免费集数、跳转集、模板等，
+            # 不含 id/linkCode/authorizerAppId/seriesId。
+            link = self._ggh_link()
+            for key in ("id", "linkCode", "authorizerAppId", "seriesId"):
+                link.pop(key)
+            return httpx.Response(200, json={"code": 0, "data": link})
         raise AssertionError(request.url)
 
     def _rongliang(self, request: httpx.Request) -> httpx.Response:
@@ -189,15 +223,13 @@ class ProviderRemote:
                 },
             )
         if path.endswith("/episodic_dramas"):
+            # 2026-10-24 生产实测：直接返回数组，没有 code/data 外层。
             return httpx.Response(
                 200,
-                json={
-                    "code": 0,
-                    "data": [
-                        {"episodicDramaId": 991, "title": "1"},
-                        {"episodicDramaId": 992, "title": "2"},
-                    ],
-                },
+                json=[
+                    {"episodicDramaId": 991, "title": "1"},
+                    {"episodicDramaId": 992, "title": "2"},
+                ],
             )
         if path.endswith("/link/compilations_alias"):
             return httpx.Response(

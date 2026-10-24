@@ -3472,3 +3472,15 @@ CI affected后端1017项通过、0失败/0并行不稳定，Ruff/ty通过；前�
 - 修复：97c53d1e 嘉书 `10001`/`10004` 都判为会话过期；19271b04 容量 curl 与 httpx 两条路径共用 `_checked_body`，先识别 `user-2/401/403` 返回码再看 HTTP 状态，httpx 路径不再走会丢弃 500 响应体的 `request_json`。新增用例：嘉书 10004；容量 500+403、401、无认证码的 500 仍为可重试的暂不可用。
 - 验证：本地 PG18/Redis 上 providers 模块 346 通过，改动文件 Ruff check 通过（容量文件原有格式与 mypy 告警未处理）。无数据库迁移。上线后需用户重新提交这 8 部剧。
 - 补充（Jenkins #131 上线后用户重新提交，仍全部失败）：自动重登生效（连接 16:47:35 重新验证），8 部剧均搜到并已在嘉书新建渠道号（备注如 `200106-The Little Rat Rules the Kitchen-junbo`），随后读取链接 `getGuideUrl` 返回 `{"config": null}`（渠道号已建、尚未生成链接），适配器要求 config 为对象，判 `provider_schema_unsupported`。修复：`config=null` 视为空配置，继续生成、保存、核实，与 CLI `config || {}` 一致。原测试替身在此时返回 `{}`，掩盖了问题；改为与线上一致返回 null 后 9 项失败，修复后 providers 346 通过。界面“暂未获取，等待重试”对应 `retryable_error`，本次为自动重登期间每 5 秒等待一次，重登完成即继续，不是失败循环。已建的渠道号重新提交时会被查到并直接补生成链接，不会重复创建。
+
+### 2026-10-24 版权方集成按生产真实返回逐家核对
+
+- 背景：用户质疑“CLI 一点问题都没有，集成是不是有问题”。生产 `promotion_link` 显示历史上只有网眼成功取过链（69 条）；嘉书、兑吧、刚刚好、容量从未在生产跑通。适配器照 CLI 翻译，但改成严格校验，测试替身按想象写，没有拿真实返回核对。
+- 方法：在生产 API Pod 内用各真实连接只读调用适配器全部读取方法（应用发现、搜剧、剧集/详情、查已有链接、读链接），样本取版权方后台已有的剧和链接；修复后把本地适配器源码只在内存中加载重跑同一探测。脚本 `.runtime/drama-link-diag/probe.py`、`probe_patched.py`（不进 Git）。
+- 发现并修复：
+  - 兑吧：建链传内部小程序 id（如 67），链接记录只返回 TikTok appId（`miniappAppId`）。原实现查重永远不命中，建链后核实判 `config_conflict`。改为按 `/miniapp/myList` 的 id↔appId 换算后比对（每个客户端缓存一次）。
+  - 刚刚好：详情 `/campaign-links/{id}` 不含 id/linkCode/authorizerAppId/seriesId，只有列表行有。原实现读链接必然 `provider_request_invalid`，查重比对永远不成立。查重合并列表行与详情；读链接按详情名称过滤列表找回同 id 行再合并（名称为空时逐页，最多 50 页）。
+  - 容量：剧集下拉 `/link/episodic_dramas` 直接返回数组，没有 code/data 外层，原实现判 `provider_rejected`，选集必然失败。请求层接受数组响应。
+  - 嘉书：见上一节（10004、`config=null`）。
+- 测试替身改为生产实测格式（兑吧记录只有 `miniappAppId`、刚刚好详情缺字段、容量剧集为裸数组）后，三家工作流用例复现失败；修复后 providers 346 通过，改动文件 Ruff 通过，mypy 告警数与改动前相同。
+- 未覆盖：建链写接口（兑吧/刚刚好/容量 create、嘉书 generate/save）的真实返回无法只读验证。刚刚好建链返回是否带 id 未证实；若缺 id，会进入“结果待核实”，由查重和读链接恢复（这两步已按真实返回修好）。需用户首次真实取链后复核。
