@@ -1229,3 +1229,82 @@ def test_batch_claim_waits_past_short_callback_budget(
         blocker.join(timeout=20)
     assert monotonic() - started >= 6
     assert [state(task)[0].status for task in tasks] == ["verifying"] * 4
+
+
+@pytest.mark.parametrize("gateway_case", ["OFFICIAL_API"], indirect=True)
+def test_full_batch_claim_round_trips_do_not_grow_with_members(
+    share_case, database_engine, gateway_wire, redis_client, gateway_case, monkeypatch
+):
+    """生产根因回归：20×10 领取原先逐成员 5 条 SQL（共 1036 条），在 800 万行
+    outbox 上超过 5 秒本地期限。领取往返次数必须与成员数无关。"""
+    from sqlalchemy import Engine, event
+
+    assert gateway_case[1].channel == "OFFICIAL_API"
+    import app.modules.materials.batch_distribution as batch_module
+
+    tasks, rows = seed_rectangle(share_case, database_engine, materials=20, targets=10)
+    prepare_wire(gateway_wire, rows)
+    claimed = []
+    counting = {"on": True}
+
+    def count(_conn, _cursor, statement, *_rest):
+        if counting["on"] and _conn.engine.url.database == database_engine.url.database:
+            claimed.append(statement)
+
+    def stop_after_claim(**_kwargs):
+        counting["on"] = False
+
+    monkeypatch.setattr(batch_module, "_send_batch", stop_after_claim)
+    event.listen(Engine, "before_cursor_execute", count)
+    try:
+        run(share_case, redis_client, tasks[0], kind="prepare")
+    finally:
+        event.remove(Engine, "before_cursor_execute", count)
+    assert not counting["on"], "batch claim did not complete"
+    # 200 个成员的领取：逐成员仅剩成员插入（ORM 批量 executemany 计一次）。
+    assert len(claimed) <= 60, len(claimed)
+    with Session(database_engine) as db:
+        from sqlmodel import select
+
+        from app.jobs.models import PendingDispatch
+
+        recovers = [
+            row
+            for row in db.exec(select(PendingDispatch)).all()
+            if row.task_key.startswith("material-target-recover:")
+        ]
+        assert len(recovers) == 200
+        assert len({row.available_at for row in recovers}) == 1
+
+
+@pytest.mark.parametrize("gateway_case", ["OFFICIAL_API"], indirect=True)
+def test_transient_source_read_failure_requeues_batch_instead_of_failing(
+    share_case, database_engine, gateway_wire, redis_client, gateway_case, monkeypatch
+):
+    """生产回归：共享前读取来源视频遇 TikTok 临时错误，原先整批 40 个成员
+    永久失败、对应组合整组无法搭建。共享未发出，必须按未发送重排并能成功。"""
+    assert gateway_case[1].channel == "OFFICIAL_API"
+    from app.core.errors import DomainError
+    from app.modules.materials import sdk_assets
+
+    tasks, rows = seed_rectangle(share_case, database_engine, materials=2, targets=2)
+    prepare_wire(gateway_wire, rows, requests=2)
+    original = sdk_assets.MaterialReadAdapter.read_videos
+    failures = {"left": 1}
+
+    def flaky(self, **kwargs):
+        if failures["left"]:
+            failures["left"] -= 1
+            raise DomainError("tiktok_response_error", "TikTok 请求未成功")
+        return original(self, **kwargs)
+
+    monkeypatch.setattr(sdk_assets.MaterialReadAdapter, "read_videos", flaky)
+    run(share_case, redis_client, tasks[0], kind="prepare")
+    statuses = [state(task)[0].status for task in tasks]
+    assert statuses == ["queued"] * 4, statuses
+    assert all(
+        state(task)[1].remote_response.get("share_read_failures") == 1 for task in tasks
+    )
+    run(share_case, redis_client, tasks[0], kind="prepare")
+    assert [state(task)[0].status for task in tasks] == ["verifying"] * 4
+    assert "share_read_failures" not in state(tasks[0])[1].remote_response

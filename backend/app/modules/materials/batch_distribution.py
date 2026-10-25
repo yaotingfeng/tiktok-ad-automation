@@ -45,6 +45,17 @@ SOURCE_KEYS = (
     "content_md5",
 )
 BATCH_CLAIM_SECONDS = READ_HARD_LIMIT + 30
+# 共享前读取来源视频的临时失败码；连续超过上限才把成员判为失败，避免无声无限重排。
+READ_RETRYABLE = frozenset(
+    {
+        "tiktok_response_error",
+        "read_deadline_exceeded",
+        "tiktok_call_deadline_exceeded",
+        "tiktok_local_resources_unavailable",
+        "material_response_unknown",
+    }
+)
+SHARE_READ_RETRY_LIMIT = 5
 # 完整 20×10 领取要写 200 条成员与 outbox，并可能排队等待同一冻结范围的
 # advisory lock。生产实测单次领取约 5 秒，原先被 bounded_session 默认 5 秒
 # 上限截断，四个 worker 全部超时且消息被消费，整批素材停住。这里给本地事务
@@ -344,13 +355,43 @@ def try_prepare_batch(
             return False
         selected = [candidates[pair] for pair in sorted(chosen)]
         # 与旧任务相同，先按素材加锁再锁操作；重复投递只能有一个事务领取。
-        for material_id in sorted({dist.material_id for dist, _ in selected}):
-            _locked_material(db, context, material_id)
-        for dist, op in sorted(selected, key=lambda row: row[1].id):
-            db.refresh(dist)
-            current = _locked_operation(db, context, op.id)
+        # 素材、操作各一条按 ID 排序的加锁查询，分发一条刷新查询：原先逐成员
+        # refresh + 加锁共 400 次往返，是领取在生产超过 5 秒的主要来源之一。
+        db.exec(
+            select(MaterialFile.id)
+            .where(
+                MaterialFile.tenant_id == context.tenant_id,
+                col(MaterialFile.id).in_({dist.material_id for dist, _ in selected}),
+            )
+            .order_by(col(MaterialFile.id))
+            .with_for_update()
+        ).all()
+        locked_ops = {
+            row.id: row
+            for row in db.exec(
+                select(MaterialAssetOperation)
+                .where(
+                    MaterialAssetOperation.tenant_id == context.tenant_id,
+                    col(MaterialAssetOperation.id).in_({op.id for _, op in selected}),
+                )
+                .order_by(col(MaterialAssetOperation.id))
+                .with_for_update()
+                .execution_options(populate_existing=True)
+            ).all()
+        }
+        db.exec(
+            select(MaterialDistribution)
+            .where(
+                MaterialDistribution.tenant_id == context.tenant_id,
+                col(MaterialDistribution.id).in_({dist.id for dist, _ in selected}),
+            )
+            .execution_options(populate_existing=True)
+        ).all()
+        for dist, op in selected:
+            current = locked_ops.get(op.id)
             if (
-                dist.operation_id != current.id
+                current is None
+                or dist.operation_id != current.id
                 or dist.superseded_by_id is not None
                 or current.superseded_by_id is not None
                 or dist.status != "queued"
@@ -382,9 +423,8 @@ def try_prepare_batch(
         )
         db.add(batch)
         db.flush()
-        # queue_distribution checks for an existing outbox row. Every call also
-        # triggers SQLAlchemy autoflush; suppressing that flush inside the loop
-        # avoids repeatedly writing the growing 20x10 batch before each check.
+        # 成员循环里的历史批次查询会触发 autoflush；关闭后避免每次都把
+        # 逐步增长的 20×10 成员重复写一遍。
         with db.no_autoflush:
             for dist, op in selected:
                 previous_batch = op.remote_response.get("share_batch_id")
@@ -427,15 +467,13 @@ def try_prepare_batch(
                         revision=op.remote_response["revision"],
                     )
                 )
-                single.queue_distribution(
-                    db,
-                    dist,
-                    op,
-                    kind="prepare",
-                    due=op.claimed_until,
-                    claim_id=op.attempt_token,
-                    assume_new=True,
-                )
+            # 全部成员同一领取到期时间，接续消息一次写入 outbox。
+            single.queue_claimed_distributions(
+                db,
+                selected,
+                kind="prepare",
+                due=now + timedelta(seconds=BATCH_CLAIM_SECONDS),
+            )
         db.flush()
         batch_id = batch.id
     _send_batch(
@@ -757,13 +795,17 @@ def _send_batch(
     except SDK_SCOPE_INTERRUPTS:
         raise
     except Exception as error:
+        code = error.code if isinstance(error, DomainError) else None
         not_sent = (
             isinstance(error, api.SdkAdmissionDeferred)
             or (isinstance(error, RemoteCallError) and error.effect == "NOT_SENT")
+            or (code == "material_claim_expired" and not armed)
+            # 共享前只读核对来源视频；读取失败（TikTok 临时错误、超时、本地资源
+            # 拥塞）时共享请求根本没发，按未发送重排。原先一律判 FAILED，一次
+            # 临时读取错误就让整批成员永久失败，对应组合整组无法搭建。
             or (
-                isinstance(error, DomainError)
-                and error.code == "material_claim_expired"
-                and not armed
+                not armed
+                and (isinstance(error, RemoteCallError) or code in READ_RETRYABLE)
             )
         )
         effect = (
@@ -780,9 +822,7 @@ def _send_batch(
             context,
             batch_id,
             effect=effect,
-            code=error.code
-            if isinstance(error, DomainError)
-            else "material_response_unknown",
+            code=code or "material_response_unknown",
             missing_sources=missing_sources,
             receipt=receipt,
         )
@@ -867,6 +907,19 @@ def _finish(
                 if rejected or member.source_video_id in (missing_sources or set())
                 else effect
             )
+            read_failures = op.remote_response.get("share_read_failures", 0)
+            if member_effect == "NOT_SENT" and code in READ_RETRYABLE:
+                # 读取临时失败按未发送重排，但连续次数有上限，超过后明确失败可见。
+                read_failures += 1
+                if read_failures > SHARE_READ_RETRY_LIMIT:
+                    member_effect = "FAILED"
+            elif member_effect == "ACKNOWLEDGED":
+                read_failures = 0
+            op.remote_response = {
+                key: value
+                for key, value in op.remote_response.items()
+                if key != "share_read_failures"
+            } | ({"share_read_failures": read_failures} if read_failures else {})
             member.status = {
                 "ACKNOWLEDGED": "verifying",
                 "UNKNOWN": "result_unknown",

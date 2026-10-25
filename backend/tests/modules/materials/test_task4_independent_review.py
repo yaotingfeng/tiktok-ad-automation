@@ -103,8 +103,11 @@ def test_all_preview_paths_are_sql_read_only_with_external_boundaries_disabled(
         m.setattr("boto3.client", forbidden)
         m.setattr("urllib3.PoolManager.request", forbidden)
         m.setattr("httpx2.AsyncHTTPTransport.handle_async_request", forbidden)
-        m.setattr("app.modules.materials.distribution.enqueue_after_commit", forbidden)
+        m.setattr(
+            "app.modules.materials.distribution.enqueue_many_after_commit", forbidden
+        )
         m.setattr("app.jobs.outbox.enqueue_after_commit", forbidden)
+        m.setattr("app.jobs.outbox.enqueue_many_after_commit", forbidden)
         event.listen(engine, "before_cursor_execute", observe)
         try:
             with Session(engine) as session, session.begin():

@@ -22,7 +22,7 @@ from app.integrations.tiktok.material_upload_evidence import material_upload_pol
 from app.integrations.tiktok.sdk import SDK_SCOPE_INTERRUPTS
 from app.jobs.admission import admission_policy
 from app.jobs.models import PendingDispatch
-from app.jobs.outbox import enqueue_after_commit
+from app.jobs.outbox import enqueue_many_after_commit
 from app.jobs.tasks import register_dispatch_task
 from app.modules.accounts.access import resolve_account_access
 from app.modules.accounts.routing import freeze_route
@@ -144,28 +144,26 @@ def _context(dist: MaterialDistribution) -> TenantContext:
     )
 
 
-def queue_distribution(
-    session: Session,
+def _target_dispatch(
     dist: MaterialDistribution,
     operation: MaterialAssetOperation,
     *,
     kind: str,
-    due: datetime | None = None,
     claim_id: UUID | None = None,
     observe: bool = False,
     read_only: bool = False,
-    assume_new: bool = False,
-) -> None:
+) -> tuple[str, dict[str, Any]] | None:
+    """目标素材消息的身份与正文；返回 None 表示该操作不应再安排消息。"""
     # 显式接替后旧未知只保留历史，不再安排核实或准备消息。
     if dist.superseded_by_id is not None or operation.superseded_by_id is not None:
-        return
+        return None
     if read_only and kind != "verify":
         raise DomainError("invalid_asset_task", "只读核实不能安排上传")
     if operation.remote_response.get(
         "reconciliation_complete"
     ) or operation.remote_response.get("reconciliation_stopped"):
         if not (observe and read_only):
-            return
+            return None
         # 完整空查/预算耗尽不是未发送证明。仅显式只读核查重开已结束轮次；
         # 进行中的重复点击不刷新预算，自动补偿和旧消息不能续命或重新上传。
         operation.remote_response = {
@@ -195,7 +193,7 @@ def queue_distribution(
         and _reconciliation_exhausted(operation)
     ):
         _stop_reconciliation(dist, operation)
-        return
+        return None
     payload: dict[str, Any] = {
         "distribution_id": str(dist.id),
         "operation_id": str(operation.id),
@@ -216,6 +214,32 @@ def queue_distribution(
         if observe:
             payload["revision"] = operation.remote_response.get("revision", 0)
             key += f":{payload['revision']}"
+    return key, payload
+
+
+def queue_distribution(
+    session: Session,
+    dist: MaterialDistribution,
+    operation: MaterialAssetOperation,
+    *,
+    kind: str,
+    due: datetime | None = None,
+    claim_id: UUID | None = None,
+    observe: bool = False,
+    read_only: bool = False,
+    assume_new: bool = False,
+) -> None:
+    identity = _target_dispatch(
+        dist,
+        operation,
+        kind=kind,
+        claim_id=claim_id,
+        observe=observe,
+        read_only=read_only,
+    )
+    if identity is None:
+        return
+    key, payload = identity
     existing = None
     if not assume_new:
         existing = session.exec(
@@ -239,17 +263,38 @@ def queue_distribution(
             existing.published_at = None
             existing.available_at = due or datetime.now(UTC)
         return
-    identity = enqueue_after_commit(
+    enqueue_many_after_commit(
         session,
         context=_context(dist),
-        task_name=f"materials.{kind}_target",
-        task_key=key,
-        payload=payload,
+        entries=[(f"materials.{kind}_target", key, payload, due)],
     )
-    if due:
-        dispatch = session.get(PendingDispatch, identity)
-        assert dispatch
-        dispatch.available_at = due
+
+
+def queue_claimed_distributions(
+    session: Session,
+    rows: list[tuple[MaterialDistribution, MaterialAssetOperation]],
+    *,
+    kind: str,
+    due: datetime,
+) -> None:
+    """批量领取后为每个成员登记各自领取代次的接续消息，一次写入 outbox。
+
+    各成员领取代次（attempt_token）刚生成，消息身份必然是新的；与逐条
+    queue_distribution(claim_id=..., assume_new=True) 语义相同。
+    """
+    entries = []
+    for dist, operation in rows:
+        identity = _target_dispatch(
+            dist, operation, kind=kind, claim_id=operation.attempt_token
+        )
+        if identity is not None:
+            entries.append((f"materials.{kind}_target", *identity, due))
+    if not entries:
+        return
+    contexts = {(dist.tenant_id, dist.actor_id) for dist, _ in rows}
+    if len(contexts) != 1:
+        raise DomainError("material_claim_changed", "共享批次成员范围已改变")
+    enqueue_many_after_commit(session, context=_context(rows[0][0]), entries=entries)
 
 
 def _bind_operation(

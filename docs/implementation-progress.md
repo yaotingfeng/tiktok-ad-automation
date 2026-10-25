@@ -3518,3 +3518,14 @@ CI affected后端1017项通过、0失败/0并行不稳定，Ruff/ty通过；前�
 - 验证：新增回归 `test_batch_claim_waits_past_short_callback_budget`、`test_source_candidate_timeout_does_not_block_target_repair`，均在旧代码失败、新代码通过；materials 模块 + bounded_resources 1284 通过，3 失败中 2 项 `test_cover_bulk_lock_order` 在原代码同样失败，1 项锁竞争用例改为缩短领取上限后通过；builds 素材/恢复/执行相关快速层 351 通过。无迁移。
 - 发布：本机 `deploy/local.py deploy` 检查通过、镜像已推，但被每日 `backup-online`（Jenkins #139，10-24 20:10 UTC 启动 30 秒即失败）遗留的集群发布锁阻断；核实 #139 已结束、11 角色均为原版本且无在跑备份后，按 UID 前置条件删除该锁（原内容存 `.runtime/build-stall-20261025/stale-lock-139.json`）。推送触发的 Jenkins #140 发布 e3a28875 成功（北京时间约 23:17）。#139 备份失败原因未查，最近 24 小时内备份是否有效需另行核对。
 - 上线核对：11 角色均为 e3a28875；`materials.repair_dispatches` 首轮 10.6 秒成功补派 100 条；200 条卡住素材组成的共享批次被 TikTok 受理（acknowledged）。上线 6 分钟后该批：素材 350 完成、系列 10/40 完成、广告组开始创建，执行窗口按序推进。
+
+### 2026-10-26 批量共享领取本地超时的根因：逐成员 1036 条 SQL；共享前读取临时失败被判为永久失败
+
+- 用户指出上一轮放宽期限只是规避，根因是领取本身慢。核实：生产 resource Pod 到 PG 单次往返约 1.4–2 毫秒；本地按 20×10 规模重放领取，事务内 1036 条语句——逐成员 refresh 分发、逐成员加锁操作，以及每条 outbox 消息 3 条（租户游标、插入、按 ID 回读以设到期时间）。生产上往返和 800 万行 outbox 的索引维护叠加，超过 5 秒。
+- 修复：
+  - `jobs/outbox.py` 新增 `enqueue_many_after_commit`：游标一次、多行插入一次（RETURNING id+task_key）、冲突核对一次，到期时间随插入写入；`enqueue_after_commit` 改为调用它，语义不变（同 key 一致复用、不一致拒绝）。
+  - `materials/distribution.py` 把消息身份计算拆成 `_target_dispatch`，新增 `queue_claimed_distributions` 供批量领取一次写入 200 条接续消息。
+  - `materials/batch_distribution.py` 领取改为素材一条、操作一条按 ID 排序加锁，分发一条刷新查询，锁序不变。领取语句 1036 → 20，与成员数无关。60 秒上限保留作为余量。
+- 2S1T 后续失败：共享批次 247bd2e0（20 素材 × 2 账户）共享前 `read_videos` 返回 `tiktok_response_error`（SDK 层只保留“请求未成功”，原始码未留存），共享未发出却被判 FAILED，40 个成员永久 blocked，2 个组合整组失败。事后同一连接重放同样 20 个视频 ID 读取成功，是临时错误。修复：共享发出前的读取/本地失败按 NOT_SENT 重排，每个成员连续最多 5 次（`share_read_failures`），成功清零，超过才落 FAILED。
+- 另一个 UNKNOWN 广告组（2S1T-g01，账户 7696728162612477972）：创建返回 TikTok `51002`，判结果未知；回读该系列下广告组为 0，与生产只读复查一致（total 0），确认未创建。它不由本次修复改变，需页面重试。
+- 验证：新增 `test_full_batch_claim_round_trips_do_not_grow_with_members`（旧代码 1036 条失败）、`test_transient_source_read_failure_requeues_batch_instead_of_failing`（旧代码成员全 blocked 失败），新代码均通过；jobs/materials/builds/core 快速层 2181 通过，2 失败为原代码即失败的 `test_cover_bulk_lock_order` MCP 用例。无迁移。
