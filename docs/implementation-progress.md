@@ -3516,3 +3516,5 @@ CI affected后端1017项通过、0失败/0并行不稳定，Ruff/ty通过；前�
 - 修复：`bounded_session` 新增 `max_resource_seconds`（默认仍 5 秒）；批量领取改为 60 秒上限（`BATCH_CLAIM_HARD_LIMIT` 600→60，锁等待与 SQL 共用）。补派目标类只物化活动分发（ready/blocked 的遗留只读观察消息不再补派，搭建侧由 `recover_material_results` 按终态收口）；三类候选各自在保存点内执行，单类超时记 warning 跳过，不影响其它类。
 - 生产只读验证（补丁模块内存加载、事务回滚）：补派两轮 10.9 秒/5.6 秒（来源类首轮超时被跳过），均找到 100 条可补派消息（即卡住的目标素材）。来源类 5 个长期未知上传的历史消息膨胀未处理，另行跟进。
 - 验证：新增回归 `test_batch_claim_waits_past_short_callback_budget`、`test_source_candidate_timeout_does_not_block_target_repair`，均在旧代码失败、新代码通过；materials 模块 + bounded_resources 1284 通过，3 失败中 2 项 `test_cover_bulk_lock_order` 在原代码同样失败，1 项锁竞争用例改为缩短领取上限后通过；builds 素材/恢复/执行相关快速层 351 通过。无迁移。
+- 发布：本机 `deploy/local.py deploy` 检查通过、镜像已推，但被每日 `backup-online`（Jenkins #139，10-24 20:10 UTC 启动 30 秒即失败）遗留的集群发布锁阻断；核实 #139 已结束、11 角色均为原版本且无在跑备份后，按 UID 前置条件删除该锁（原内容存 `.runtime/build-stall-20261025/stale-lock-139.json`）。推送触发的 Jenkins #140 发布 e3a28875 成功（北京时间约 23:17）。#139 备份失败原因未查，最近 24 小时内备份是否有效需另行核对。
+- 上线核对：11 角色均为 e3a28875；`materials.repair_dispatches` 首轮 10.6 秒成功补派 100 条；200 条卡住素材组成的共享批次被 TikTok 受理（acknowledged）。上线 6 分钟后该批：素材 350 完成、系列 10/40 完成、广告组开始创建，执行窗口按序推进。
