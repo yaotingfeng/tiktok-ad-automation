@@ -27,9 +27,13 @@ def test_repair_locks_candidate_dispatch_by_primary_key(source_env, wire, cached
     assert queued.task_id is not None, queued
     captured = []
 
+    probes = []
+
     def capture(_connection, _cursor, statement, parameters, *_rest):
         if "FOR UPDATE" in statement and "pending_dispatch" in statement:
             captured.append((statement, parameters))
+        elif "repair_target_identities" in statement:
+            probes.append((statement, parameters))
 
     with Session(engine) as db, db.begin():
         row = db.exec(
@@ -122,14 +126,27 @@ def test_repair_locks_candidate_dispatch_by_primary_key(source_env, wire, cached
             if "Node Type" in n
         ]
         assert any("id =" in node["Index Cond"] for node in indexed), chain
-        # 源/目标候选必须按活跃 operation 身份探测消息，不能每轮全扫历史 outbox。
+        # 目标候选必须按活跃 operation 身份探测消息，不能每轮全扫历史 outbox。
+        assert len(probes) == 1
+        probe_statement, probe_parameters = probes[0]
+        probe_plan = (
+            explain_prepared(db.connection(), probe_statement, probe_parameters)
+            if cached
+            else (
+                db.connection()
+                .exec_driver_sql(
+                    "EXPLAIN (FORMAT JSON) " + probe_statement, probe_parameters
+                )
+                .scalar_one()
+            )
+        )
         operation_probes = [
             n
-            for n in nodes(plan)
+            for n in nodes(probe_plan)
             if n.get("Relation Name") == "pending_dispatch"
             and "operation_id" in n.get("Index Cond", "")
         ]
-        assert len(operation_probes) >= 2, chain
+        assert operation_probes, probe_plan
         assert db.execute(text("SHOW statement_timeout")).scalar_one() == "10s"
         assert db.execute(text("SHOW jit")).scalar_one() == "off"
     assert wire[0] == []

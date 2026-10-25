@@ -1,5 +1,6 @@
 """Submission-only target preparation with independently scoped source and target."""
 
+import logging
 from contextlib import AbstractContextManager, nullcontext
 from dataclasses import asdict
 from datetime import UTC, datetime, timedelta
@@ -76,6 +77,7 @@ from .storage import OriginalFile, open_original
 
 register_dispatch_task("materials.prepare_target", "resources")
 register_dispatch_task("materials.verify_target", "resources")
+logger = logging.getLogger(__name__)
 ACTIVE_DISTRIBUTIONS = ("queued", "preparing", "verifying", "result_unknown")
 RECONCILIATION_MAX_CLAIMS = 120
 RECONCILIATION_SECONDS = 15 * 60
@@ -2078,8 +2080,9 @@ def repair_material_dispatches(session: Session, *, limit: int = 100) -> int:
     message after a grace period; never manufacture revisions or touch pending
     broker backoff. Eligibility is filtered in SQL before applying the row limit.
     """
-    from sqlalchemy import String, and_, cast, func, or_, text, union
+    from sqlalchemy import String, and_, cast, func, or_, text
     from sqlalchemy import select as sa_select
+    from sqlalchemy.exc import OperationalError
 
     from .models import MaterialFile, MaterialUploadAttempt, ObjectUpload
 
@@ -2196,7 +2199,6 @@ def repair_material_dispatches(session: Session, *, limit: int = 100) -> int:
         sa_select(
             col(MaterialDistribution.id),
             col(MaterialDistribution.tenant_id),
-            col(MaterialDistribution.status),
             col(MaterialAssetOperation.id).label("operation_id"),
             col(MaterialAssetOperation.status).label("operation_status"),
             col(MaterialAssetOperation.attempt_token),
@@ -2219,6 +2221,11 @@ def repair_material_dispatches(session: Session, *, limit: int = 100) -> int:
             ),
         )
         .where(
+            # 只物化仍在推进的分发。原先连同两万多条 ready/blocked 一起物化，
+            # 再与十几万条历史目标消息全量合并，生产实测 7.8 秒、整条补派超时，
+            # 丢失的素材消息永不补派。已落定分发的遗留只读观察消息不再补派：
+            # 搭建侧 UNKNOWN 步骤由 recover_material_results 按分发终态直接收口。
+            col(MaterialDistribution.status).in_(ACTIVE_DISTRIBUTIONS),
             col(MaterialDistribution.superseded_by_id).is_(None),
             col(MaterialAssetOperation.superseded_by_id).is_(None),
             remote["reconciliation_complete"].astext.is_distinct_from("true"),
@@ -2248,13 +2255,6 @@ def repair_material_dispatches(session: Session, *, limit: int = 100) -> int:
                 ["materials.prepare_target", "materials.verify_target"]
             ),
             or_(
-                target_identities.c.status.in_(ACTIVE_DISTRIBUTIONS),
-                and_(
-                    payload["read_only"].astext == "true",
-                    target_identities.c.status.in_(["ready", "blocked"]),
-                ),
-            ),
-            or_(
                 and_(
                     payload["read_only"].astext == "true",
                     live_message(target_identities),
@@ -2271,20 +2271,30 @@ def repair_material_dispatches(session: Session, *, limit: int = 100) -> int:
             ),
         )
     )
-    # 三种来源独立求值并去重；不能先截取历史100条再过滤，否则活任务会饥饿。
-    candidates = (
-        union(
-            source_candidates,
-            select(PendingDispatch.id).where(*due, original_work),
-            target_candidates,
-        )
-        .cte("repair_material_candidates")
-        .prefix_with("MATERIALIZED")
-    )
+    # 三种来源各自独立查询并去重；不能先截取历史100条再过滤，否则活任务会饥饿。
+    # 每类在独立保存点里执行：来源上传的长期核查会积累数万条历史消息，单类超时
+    # 只跳过该类并记录告警，不能再拖垮目标素材补派（搭建素材依赖目标类）。
+    candidate_ids: set[UUID] = set()
+    for label, statement in (
+        ("target", target_candidates),
+        ("original", select(PendingDispatch.id).where(*due, original_work)),
+        ("source", source_candidates),
+    ):
+        try:
+            with session.begin_nested():
+                candidate_ids.update(session.exec(statement).all())
+        except OperationalError as error:
+            logger.warning(
+                "material dispatch repair skipped %s candidates: %s",
+                label,
+                type(error.orig).__name__,
+            )
+    if not candidate_ids:
+        return 0
     rows = session.exec(
         select(PendingDispatch)
-        .join(candidates, candidates.c.id == PendingDispatch.id)
-        # CTE快照之后消息可能已被其他worker更新；行锁EPQ必须重验实际到期时间。
+        .where(col(PendingDispatch.id).in_(candidate_ids))
+        # 候选查询之后消息可能已被其他worker更新；行锁EPQ必须重验实际到期时间。
         .where(*due)
         .order_by(col(PendingDispatch.published_at), col(PendingDispatch.id))
         .limit(limit)

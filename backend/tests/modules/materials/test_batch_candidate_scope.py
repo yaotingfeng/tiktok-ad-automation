@@ -109,7 +109,11 @@ def seed_preceding_rows(database_engine, env, anchor_id, *, eligible):
         connection.execute(MaterialDistribution.__table__.insert(), distributions)
         # 临时库一次灌入万条记录后立即查询，不能等待异步 autoanalyze；
         # 先更新统计，让候选范围测试使用与正常运行库一致的查询计划。
-        for table in ("material_file", "material_asset_operation", "material_distribution"):
+        for table in (
+            "material_file",
+            "material_asset_operation",
+            "material_distribution",
+        ):
             connection.execute(text(f"ANALYZE {table}"))
 
 
@@ -179,9 +183,13 @@ def test_ten_thousand_preceding_rows_cannot_split_legal_anchor_rectangle(
 
 
 def test_contended_batch_claim_exits_without_send_and_original_dispatch_recovers(
-    share_case, database_engine, gateway_wire, redis_client, gateway_case
+    share_case, database_engine, gateway_wire, redis_client, gateway_case, monkeypatch
 ):
     # 能捕获领取锁等待没有期限，或锁超时落入单条发送/伪造UNKNOWN的错误。
+    # 生产领取上限为 60 秒；这里缩短上限，只验证超时仍有界且可重试。
+    monkeypatch.setattr(
+        "app.modules.materials.batch_distribution.BATCH_CLAIM_HARD_LIMIT", 4
+    )
     tasks, videos = seed_rectangle(share_case, database_engine, materials=1, targets=2)
     prepare_wire(gateway_wire, videos)
     with Session(database_engine) as db, db.begin():

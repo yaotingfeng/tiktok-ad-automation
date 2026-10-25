@@ -87,7 +87,8 @@ def test_completed_history_does_not_repeat_identity_lookups_or_starve_live_repai
     captured = []
 
     def capture(_connection, _cursor, statement, parameters, *_rest):
-        if "FOR UPDATE" in statement and "pending_dispatch" in statement:
+        # 目标候选单独成句；历史消息的身份查找成本只出现在这条语句里。
+        if "repair_target_identities" in statement:
             captured.append((statement, parameters))
 
     with Session(engine) as db, db.begin():
@@ -98,7 +99,7 @@ def test_completed_history_does_not_repeat_identity_lookups_or_starve_live_repai
             event.remove(engine, "before_cursor_execute", capture)
         assert db.get(PendingDispatch, active_message).published_at is None
         statement, parameters = captured[-1]
-        # 只在独立测试库执行真实 ANALYZE；实际恢复查询包含 LIMIT 与SKIP LOCKED。
+        # 只在独立测试库执行真实 ANALYZE。
         plan = (
             db.connection()
             .exec_driver_sql(
@@ -194,8 +195,8 @@ def test_repair_rechecks_due_after_concurrent_dispatch_update(source_env, change
             def wait_before_lock(_connection, _cursor, statement, parameters, *_):
                 # 仅在测试连接给真实候选JOIN加同步点，业务谓词/行锁保持原样。
                 return statement.replace(
-                    "repair_material_candidates.id = pending_dispatch.id",
-                    "pg_temp.repair_gate(repair_material_candidates.id) = pending_dispatch.id",
+                    "pending_dispatch.id IN (",
+                    "pg_temp.repair_gate(pending_dispatch.id) IN (",
                 ), parameters
 
             event.listen(
@@ -229,3 +230,42 @@ def test_repair_rechecks_due_after_concurrent_dispatch_update(source_env, change
         assert future.result(timeout=5) == 0
     with Session(engine) as db:
         assert db.get(PendingDispatch, dispatch_id).published_at is not None
+
+
+def test_source_candidate_timeout_does_not_block_target_repair(source_env):
+    """生产回归：来源上传长期核查积累数万条历史消息，来源类候选超时；
+    原先三类合成一句，整轮补派失败，丢失的目标素材消息永不补派、搭建停住。"""
+    with Session(engine) as db, db.begin():
+        live = target(db, source_env, advertiser_id="target-after-source-timeout")
+        asset(db, source_env, live, status="result_unknown")
+    identity = queue(source_env, live).task_id
+    with Session(engine) as db, db.begin():
+        message = next(
+            row
+            for row in db.exec(select(PendingDispatch)).all()
+            if row.payload.get("distribution_id") == str(identity)
+        )
+        message.published_at = message.available_at = datetime.now(UTC) - timedelta(
+            minutes=3
+        )
+        dispatch_id = message.id
+    slowed = []
+
+    def slow_source(_connection, cursor, statement, parameters, *_rest):
+        if "repair_source_identities" not in statement:
+            return statement, parameters
+        # 只让来源类候选在本保存点内真实超时，模拟生产冷读历史消息超过 10 秒。
+        slowed.append(True)
+        cursor.execute("SET LOCAL statement_timeout = 50")
+        return "SELECT pg_sleep(1)", {}
+
+    with Session(engine) as db, db.begin():
+        connection = db.connection()
+        event.listen(connection, "before_cursor_execute", slow_source, retval=True)
+        try:
+            assert repair_material_dispatches(db) == 1
+        finally:
+            event.remove(connection, "before_cursor_execute", slow_source)
+        assert slowed
+        assert db.get(PendingDispatch, dispatch_id).published_at is None
+        assert db.execute(text("SHOW statement_timeout")).scalar_one() == "10s"

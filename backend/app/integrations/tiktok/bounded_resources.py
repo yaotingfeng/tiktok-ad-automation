@@ -38,14 +38,18 @@ def _resource_error() -> DomainError:
 
 @contextmanager
 def bounded_session(
-    database_engine: Engine, *, task_deadline: datetime
+    database_engine: Engine,
+    *,
+    task_deadline: datetime,
+    max_resource_seconds: float = MAX_RESOURCE_SECONDS,
 ) -> Iterator[Session]:
+    """默认 5 秒短事务；只有明确的批量本地登记才能传入更长的资源上限。"""
     remaining = _remaining(task_deadline)
     # 固定 psycopg 驱动把小于 2 秒的连接期限提高到 2 秒；预算不足时不连接。
     if remaining < 2:
         raise DomainError("tiktok_call_deadline_exceeded", "本次调用剩余期限不足")
     local_deadline = min(
-        task_deadline, datetime.now(UTC) + timedelta(seconds=MAX_RESOURCE_SECONDS)
+        task_deadline, datetime.now(UTC) + timedelta(seconds=max_resource_seconds)
     )
     milliseconds = max(1, int(_remaining(local_deadline) * 1000))
     scoped = create_engine(

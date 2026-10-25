@@ -45,10 +45,11 @@ SOURCE_KEYS = (
     "content_md5",
 )
 BATCH_CLAIM_SECONDS = READ_HARD_LIMIT + 30
-# A full 20x10 claim writes 200 member/outbox rows. Keep its worker lease
-# short, but give the local transaction enough time to finish on slow staging
-# PostgreSQL; the remote TikTok request remains bounded by READ_HARD_LIMIT.
-BATCH_CLAIM_HARD_LIMIT = 10 * 60
+# 完整 20×10 领取要写 200 条成员与 outbox，并可能排队等待同一冻结范围的
+# advisory lock。生产实测单次领取约 5 秒，原先被 bounded_session 默认 5 秒
+# 上限截断，四个 worker 全部超时且消息被消费，整批素材停住。这里给本地事务
+# 单独 60 秒上限（锁等待与 SQL 共用）；远端 TikTok 请求仍受 READ_HARD_LIMIT 约束。
+BATCH_CLAIM_HARD_LIMIT = 60
 
 
 def rectangle(
@@ -140,7 +141,7 @@ def try_prepare_batch(
             recover_armed=armed_recovery,
         ):
             return True
-    # 领取只做本地登记，同样受已有短事务资源期限保护。锁/SQL超时向上
+    # 领取只做本地登记，受 BATCH_CLAIM_HARD_LIMIT 资源期限保护。锁/SQL超时向上
     # 返回可重试错误并整体回滚，由原outbox修复接续，不能返回False绕过锁
     # 进入单条发送，也不能把尚未发送的任务改成UNKNOWN。
     with (
@@ -151,6 +152,7 @@ def try_prepare_batch(
             # 不应复用单次远端读取的 40 秒期限；远端请求仍由 _send_batch
             # 使用 READ_HARD_LIMIT 独立约束。
             task_deadline=now + timedelta(seconds=BATCH_CLAIM_HARD_LIMIT),
+            max_resource_seconds=BATCH_CLAIM_HARD_LIMIT,
         ) as db,
         db.begin(),
     ):

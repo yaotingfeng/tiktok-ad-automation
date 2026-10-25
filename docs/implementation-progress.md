@@ -3507,3 +3507,12 @@ CI affected后端1017项通过、0失败/0并行不稳定，Ruff/ty通过；前�
 - 发布：Jenkins #136（报表用例时钟竞态）、#137（素材共享并发用例在共用节点超时）、#138（前端检查线失败，控制台无用例名）均在检查阶段失败，未停服。修正报表用例（f9c5e79f）后改用本机 `python3 deploy/local.py deploy`：首次因本机 5181 端口被 3 天前的演示预览进程占用失败，结束该进程后第二次完整检查通过并发布（批次 20261025T014644-99cbb7，北京时间 2026-10-25 约 03:40 完成；备份 1627 秒，冻结至恢复约 37 分钟）。上线核对：11 个角色镜像均为 f9c5e79f、各 1 副本就绪；builds Worker 并发 3；`builds.advance_execution` 每 5 秒运行（单次约 0.2 秒）、`materials.repair_covers` 每 15 秒运行；HTTPS 健康检查 200。
 - 存量处理：上线前在旧版本上对 20:37 批两轮重试（北京时间 01:32–01:52），72 条广告全部创建成功；17:36 批第 8 个广告组在 TikTok 读回已有人工补建的 `-R1` 广告（19:02 创建、ENABLE、48 条素材），系统未再创建，该步骤仍为“需要核查”。
 - 第二批耗时拆解（北京时间）：素材分发 20:40–21:31 分 6 波（执行窗口被等封面的广告占满）；第一轮广告 72 条仅 2 条成功，85 次本地失败（57 次期限耗尽、27 次封面结果未知）；21:35–01:32 无进展等待人工重试；重试 20 分钟完成，约 4 条/分钟。新版本上线后需按同一时间线口径复核下一批真实搭建。
+
+### 2026-10-25 搭建提交后素材一点不动：批量共享领取被 5 秒期限截断，补派查询持续超时
+
+- 现象：生产（租户 97323db6，小 BC 7683817908149272592）北京时间 19:50 提交（submission 69cfbc80，40 组合），1.5 小时零进展：200 个 MATERIAL 步骤 `material_pending`，1450 个 `execution_window_wait`，系列/广告组/广告全部未开始。
+- 根因 1：这 200 条目标素材走批量共享（`try_prepare_batch`）。领取事务（20×10 成员 + outbox 写入、等待同范围 advisory lock）用 `bounded_session`，虽传了 10 分钟任务期限，但 `bounded_session` 内部固定把本地资源期限截到 5 秒。11:51–11:57 UTC 四个 resource 进程抢锁，189 次 `tiktok_call_deadline_exceeded`、28 次 statement timeout，消息被消费、分发停在 `queued` + `tiktok_call_deadline_exceeded`，操作 `pending`、无领取。
+- 根因 2：兜底 `materials.repair_dispatches` 从日志最早时刻（07:54 UTC）起每分钟 100% 失败（10 秒语句超时）。生产只读 EXPLAIN ANALYZE 实测 23.7 秒：来源候选为 5 个长期 `result_unknown` 的来源上传（单个累计最多 9.6 万条历史 `verify_original` 消息）冷读 15.7 秒；目标候选物化全部 2.4 万条分发（含 ready/blocked）再与 16 万条目标消息排序合并 7.8 秒。三类合成一句，任一类慢即整轮失败，丢失消息永不补派。
+- 修复：`bounded_session` 新增 `max_resource_seconds`（默认仍 5 秒）；批量领取改为 60 秒上限（`BATCH_CLAIM_HARD_LIMIT` 600→60，锁等待与 SQL 共用）。补派目标类只物化活动分发（ready/blocked 的遗留只读观察消息不再补派，搭建侧由 `recover_material_results` 按终态收口）；三类候选各自在保存点内执行，单类超时记 warning 跳过，不影响其它类。
+- 生产只读验证（补丁模块内存加载、事务回滚）：补派两轮 10.9 秒/5.6 秒（来源类首轮超时被跳过），均找到 100 条可补派消息（即卡住的目标素材）。来源类 5 个长期未知上传的历史消息膨胀未处理，另行跟进。
+- 验证：新增回归 `test_batch_claim_waits_past_short_callback_budget`、`test_source_candidate_timeout_does_not_block_target_repair`，均在旧代码失败、新代码通过；materials 模块 + bounded_resources 1284 通过，3 失败中 2 项 `test_cover_bulk_lock_order` 在原代码同样失败，1 项锁竞争用例改为缩短领取上限后通过；builds 素材/恢复/执行相关快速层 351 通过。无迁移。

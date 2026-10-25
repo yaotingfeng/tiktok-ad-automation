@@ -1187,3 +1187,45 @@ def test_fifty_video_guard_does_not_repeat_common_account_queries(
     assert queries
     assert max(queries.values()) <= 220
     assert [state(task)[0].status for task in tasks] == ["ready"] * 50
+
+
+def test_batch_claim_waits_past_short_callback_budget(
+    share_case,
+    database_engine,
+    gateway_wire,
+    redis_client,
+):
+    """生产回归：领取要等其它事务释放素材行锁时，不能被默认 5 秒短事务截断。
+
+    原实现领取会话被 bounded_session 截到 5 秒，四个 worker 抢锁全部超时，
+    消息被消费后整批素材停在排队。
+    """
+    from threading import Thread
+    from time import monotonic, sleep
+
+    from sqlalchemy import text
+
+    tasks, rows = seed_rectangle(share_case, database_engine, materials=2, targets=2)
+    prepare_wire(gateway_wire, rows)
+    locked = []
+
+    def hold_material_lock():
+        with database_engine.connect() as connection, connection.begin():
+            connection.execute(
+                text("SELECT id FROM material_file WHERE id = :id FOR UPDATE"),
+                {"id": share_case["material_id"]},
+            )
+            locked.append(True)
+            sleep(7)
+
+    blocker = Thread(target=hold_material_lock)
+    blocker.start()
+    while not locked:
+        sleep(0.05)
+    started = monotonic()
+    try:
+        run(share_case, redis_client, tasks[0], kind="prepare")
+    finally:
+        blocker.join(timeout=20)
+    assert monotonic() - started >= 6
+    assert [state(task)[0].status for task in tasks] == ["verifying"] * 4
