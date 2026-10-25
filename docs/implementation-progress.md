@@ -3529,3 +3529,5 @@ CI affected后端1017项通过、0失败/0并行不稳定，Ruff/ty通过；前�
 - 2S1T 后续失败：共享批次 247bd2e0（20 素材 × 2 账户）共享前 `read_videos` 返回 `tiktok_response_error`（SDK 层只保留“请求未成功”，原始码未留存），共享未发出却被判 FAILED，40 个成员永久 blocked，2 个组合整组失败。事后同一连接重放同样 20 个视频 ID 读取成功，是临时错误。修复：共享发出前的读取/本地失败按 NOT_SENT 重排，每个成员连续最多 5 次（`share_read_failures`），成功清零，超过才落 FAILED。
 - 另一个 UNKNOWN 广告组（2S1T-g01，账户 7696728162612477972）：创建返回 TikTok `51002`，判结果未知；回读该系列下广告组为 0，与生产只读复查一致（total 0），确认未创建。它不由本次修复改变，需页面重试。
 - 验证：新增 `test_full_batch_claim_round_trips_do_not_grow_with_members`（旧代码 1036 条失败）、`test_transient_source_read_failure_requeues_batch_instead_of_failing`（旧代码成员全 blocked 失败），新代码均通过；jobs/materials/builds/core 快速层 2181 通过，2 失败为原代码即失败的 `test_cover_bulk_lock_order` MCP 用例。无迁移。
+- 发布：Jenkins #141 后端检查线因 ty 类型告警（outbox 混合字典）失败，2c72f767 修正；#142 前端检查线失败（控制台无用例名，本次未改前端）。改用本机 `deploy/local.py deploy` 完整检查通过并发布（批次 20261026T022034-3dcd19，北京时间 10-26 约 04:00 完成）。因改动 `jobs/outbox.py`，自动走完整冻结备份（冻结约 35 分钟）。上线核对：11 角色均为 2c72f767；resource Worker 上线后 30 分钟内无本地期限/语句超时；补派任务约 10 秒成功。
+- 2S1T 当前：广告 74/80 成功；共享读取失败的 2 个组合（40 素材，旧版本已落 FAILED）和 51002 的 1 个广告组需页面重试，新代码不会自动接回已落定的失败。
