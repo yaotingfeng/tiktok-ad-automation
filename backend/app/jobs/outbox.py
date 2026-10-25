@@ -135,7 +135,7 @@ def enqueue_many_after_commit(
     """
     if not entries:
         return []
-    rows = []
+    rows: list[dict[str, Any]] = []
     for task_name, task_key, payload, available_at in entries:
         dispatch_queue(task_name)
         payload = validate_dispatch_payload(payload)
@@ -153,15 +153,15 @@ def enqueue_many_after_commit(
                 "available_at": available_at or datetime.now(UTC),
             }
         )
-    dues = [available_at for *_, available_at in entries]
-    if len({row["task_key"] for row in rows}) != len(rows):
+    keys = [task_key for _, task_key, _, _ in entries]
+    if len(set(keys)) != len(keys):
         raise DomainError("dispatch_key_conflict", "同一批次内任务标识重复")
     session.exec(
         insert(DispatchTenantCursor)
         .values(tenant_id=context.tenant_id)
         .on_conflict_do_nothing(index_elements=["tenant_id"])
     )
-    inserted = {
+    inserted: dict[str, UUID] = {
         task_key: identity
         for identity, task_key in session.exec(
             insert(PendingDispatch)
@@ -170,37 +170,32 @@ def enqueue_many_after_commit(
             .returning(col(PendingDispatch.id), col(PendingDispatch.task_key))
         ).all()
     }
-    missing = [
-        {**row, "due": due}
-        for row, due in zip(rows, dues, strict=True)
-        if row["task_key"] not in inserted
-    ]
+    missing = [index for index, key in enumerate(keys) if key not in inserted]
     if missing:
         existing = {
             row.task_key: row
             for row in session.exec(
                 select(PendingDispatch).where(
                     PendingDispatch.tenant_id == context.tenant_id,
-                    col(PendingDispatch.task_key).in_(
-                        [row["task_key"] for row in missing]
-                    ),
+                    col(PendingDispatch.task_key).in_([keys[i] for i in missing]),
                 )
             ).all()
         }
-        for row in missing:
-            found = existing[row["task_key"]]
+        for index in missing:
+            task_name, task_key, _, due = entries[index]
+            found = existing[task_key]
             if (found.task_name, found.actor_id) != (
-                row["task_name"],
+                task_name,
                 context.actor_id,
-            ) or (found.payload_digest or _payload_digest(found.payload)) != row[
-                "payload_digest"
-            ]:
+            ) or (found.payload_digest or _payload_digest(found.payload)) != rows[
+                index
+            ]["payload_digest"]:
                 raise DomainError("dispatch_key_conflict", "同一任务标识的配置不一致")
             # 与单条写入后由调用方改到期时间一致：复用已有消息也采用本次指定的到期。
-            if row["due"] is not None:
-                found.available_at = row["due"]
-            inserted[row["task_key"]] = found.id
-    return [cast(UUID, inserted[row["task_key"]]) for row in rows]
+            if due is not None:
+                found.available_at = due
+            inserted[task_key] = found.id
+    return [inserted[key] for key in keys]
 
 
 def compact_published_dispatches(

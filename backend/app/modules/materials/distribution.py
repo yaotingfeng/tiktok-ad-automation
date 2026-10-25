@@ -282,7 +282,7 @@ def queue_claimed_distributions(
     各成员领取代次（attempt_token）刚生成，消息身份必然是新的；与逐条
     queue_distribution(claim_id=..., assume_new=True) 语义相同。
     """
-    entries = []
+    entries: list[tuple[str, str, dict[str, Any], datetime | None]] = []
     for dist, operation in rows:
         identity = _target_dispatch(
             dist, operation, kind=kind, claim_id=operation.attempt_token
