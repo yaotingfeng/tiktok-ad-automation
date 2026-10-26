@@ -97,7 +97,9 @@ echo "$d"
 """
 _POLL = 'if [ -e "$1/rc" ]; then cat "$1/rc"; else echo running; fi'
 DETACHED_POLL_SECONDS = 3
-DETACHED_TIMEOUT_SECONDS = 3600
+# 只用于判定后台作业失联，不是业务时限。2026-10-26 数据库约 56 GB，在线单连接导出
+# 超过 1 小时，原 3600 秒使每日备份必然超时；放到 2.5 小时，仍在 Jenkins 4 小时内。
+DETACHED_TIMEOUT_SECONDS = 9000
 # 轮询连接本身也可能断，连续失败超过此次数（约 2 分钟）才判定失败。
 DETACHED_POLL_FAILURES = 40
 
