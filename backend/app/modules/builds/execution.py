@@ -944,7 +944,7 @@ def process_step(
                     # 再剥离传输字段供严格业务 DTO 解码，冻结正文保持不变。
                     if claim.kind in {"CAMPAIGN", "ADGROUP"}:
                         if local_body.pop("request_id", None) != remote_request_id(
-                            claim.attempt_id
+                            claim.remote_attempt_id
                         ):
                             raise DomainError(
                                 "execution_intent_changed", "原请求关联不匹配"
@@ -1024,7 +1024,7 @@ def process_step(
                     arm_request(session, context=context, claim=claim, body=body)
                 armed = True
                 result = gateway.builds.create(
-                    attempt_id=claim.attempt_id, intent=intent
+                    attempt_id=claim.remote_attempt_id, intent=intent
                 )
                 # 收到实际 ID 后先提交，再退出拥有的客户端；停用/撤权不抹除在途回执。
                 try:

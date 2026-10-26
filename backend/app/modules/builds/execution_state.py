@@ -4,10 +4,11 @@ import json
 from datetime import UTC, datetime, timedelta
 from hashlib import sha256
 from typing import Any
+from uuid import UUID
 
 from sqlalchemy import text
 from sqlalchemy.orm import Session as SASession
-from sqlmodel import Session, select
+from sqlmodel import Session, col, select
 
 from app.core.context import TenantContext
 from app.core.errors import DomainError
@@ -507,6 +508,90 @@ AUTOMATIC_RETRY_ATTEMPT = (
         "conclusion IN ('REQUEST_ARMED','NOT_SENT','REMOTE_REJECTED')",
     )
 )
+
+
+# 已核实未创建：系列/广告组创建结果未知，但请求发出至少 10 分钟后，TikTok 按名称
+# 和父级的完整回读结果为 0。只对带 TikTok request_id 的两类对象开放，且只允许原样
+# 重发冻结正文（同一 request_id，正文摘要不变）：即使对象其实已创建，TikTok 也会按
+# request_id 去重，不会多出一份。任何创建回执、远端 ID、非零回读都会封死此路径。
+# 回读会递增本地 attempt；重发沿用新的本地 attempt 记证据，request_id 取自首次发出。
+CONFIRMED_ABSENT_SECONDS = 600
+CONFIRMED_ABSENT = f"""(
+s.kind IN ('CAMPAIGN','ADGROUP')
+AND s.remote_id IS NULL AND NOT s.mismatch AND s.lease_token IS NULL
+AND s.request_body IS NOT NULL AND s.request_body_digest IS NOT NULL AND s.request_body_digest <> ''
+AND s.attempt_id IS NOT NULL AND s.attempt > 0
+AND s.request_body->>'request_id' IS NOT NULL
+AND NOT EXISTS (SELECT 1 FROM step_evidence danger
+ WHERE danger.tenant_id=s.tenant_id AND danger.submission_id=s.submission_id AND danger.step_id=s.id
+ AND (danger.summary ? 'remote_id' OR danger.conclusion IN ('CREATED','LATE_CREATED','LEASE_EXPIRED_ARMED')
+  OR (danger.conclusion='REQUEST_ARMED'
+   AND danger.summary->>'body_digest' IS DISTINCT FROM s.request_body_digest)
+  OR (danger.conclusion='READBACK_PAGE' AND (
+   coalesce(danger.summary->>'total','') <> '0' OR danger.summary->'ids' <> '[]'::jsonb))))
+AND EXISTS (SELECT 1 FROM step_evidence absent
+ WHERE absent.tenant_id=s.tenant_id AND absent.submission_id=s.submission_id AND absent.step_id=s.id
+ AND absent.conclusion='READBACK_PAGE' AND absent.request_id IS NOT NULL
+ AND absent.summary->>'stage'='OBJECT' AND absent.summary->>'page'='1'
+ AND absent.summary->>'total'='0' AND absent.summary->'ids'='[]'::jsonb
+ AND absent.summary->>'body_digest'=s.request_body_digest
+ AND absent.observed_at >= (SELECT max(armed.observed_at) FROM step_evidence armed
+  WHERE armed.tenant_id=s.tenant_id AND armed.submission_id=s.submission_id AND armed.step_id=s.id
+  AND armed.conclusion='REQUEST_ARMED') + interval '{CONFIRMED_ABSENT_SECONDS} seconds')
+)"""
+# 执行器领取/投递时额外要求：最后一次发出之后，有一次显式恢复请求批准了重发。
+CONFIRMED_ABSENT_RESEND = f"""({CONFIRMED_ABSENT}
+AND EXISTS (SELECT 1 FROM step_evidence approved JOIN submission_recovery r
+ ON r.tenant_id=approved.tenant_id AND r.submission_id=approved.submission_id AND r.kind='RETRY'
+ AND CAST(r.id AS text)=approved.summary->>'recovery_id'
+ WHERE approved.tenant_id=s.tenant_id AND approved.submission_id=s.submission_id AND approved.step_id=s.id
+ AND approved.conclusion='RETRY_REQUESTED' AND approved.summary->>'confirmed_absent'='true'
+ AND approved.observed_at > (SELECT max(armed.observed_at) FROM step_evidence armed
+  WHERE armed.tenant_id=s.tenant_id AND armed.submission_id=s.submission_id AND armed.step_id=s.id
+  AND armed.conclusion='REQUEST_ARMED')))"""
+
+
+def _step_matches(session: Session, step: ExecutionStep, predicate: str) -> bool:
+    session.flush()
+    return bool(
+        SASession.execute(
+            session,
+            text(
+                "SELECT EXISTS(SELECT 1 FROM execution_step s WHERE s.id=:step AND s.tenant_id=:tenant AND "
+                + predicate
+                + ")"
+            ),
+            {"step": step.id, "tenant": step.tenant_id},
+        ).scalar_one()
+    )
+
+
+def confirmed_absent_attempt(session: Session, *, step: ExecutionStep) -> bool:
+    """人工恢复可把“结果未知”的系列/广告组按已核实未创建原样重发。"""
+    return step.status == "UNKNOWN" and _step_matches(session, step, CONFIRMED_ABSENT)
+
+
+def approved_absent_resend(session: Session, *, step: ExecutionStep) -> bool:
+    """执行器侧：只有显式批准后的那一次重发可以领取原冻结正文。"""
+    if step.status not in {"PENDING", "QUEUED"} or step.phase != "IDLE":
+        return False
+    return _step_matches(session, step, CONFIRMED_ABSENT_RESEND)
+
+
+def first_armed_attempt_id(session: Session, *, step: ExecutionStep) -> UUID:
+    """冻结正文 request_id 对应的首次发出 attempt；所有发出证据正文摘要相同。"""
+    value = session.exec(
+        select(StepEvidence.summary)
+        .where(
+            StepEvidence.tenant_id == step.tenant_id,
+            StepEvidence.submission_id == step.submission_id,
+            StepEvidence.step_id == step.id,
+            StepEvidence.conclusion == "REQUEST_ARMED",
+        )
+        .order_by(col(StepEvidence.observed_at), col(StepEvidence.id))
+        .limit(1)
+    ).one()
+    return UUID(value["attempt_id"])
 
 
 def safely_unsent_attempt(

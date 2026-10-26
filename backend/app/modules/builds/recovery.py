@@ -24,7 +24,9 @@ from app.modules.builds.execution_models import (
 )
 from app.modules.builds.execution_schemas import Recovery
 from app.modules.builds.execution_state import (
+    CONFIRMED_ABSENT,
     UNSENT_ATTEMPT,
+    confirmed_absent_attempt,
     evidence,
     safely_unsent_attempt,
 )
@@ -159,7 +161,7 @@ MATERIAL_RETRY = """(s.cover_job_id IS NULL AND NOT s.resolved ? 'mapping' AND E
   AND (pd.payload->>'distribution_id'=d.id::text OR pd.payload->>'operation_id'=o.id::text))
 ))"""
 RETRY = f"""
-AND (s.status IN ('FAILED','RETRYABLE') OR (
+AND ((s.status IN ('FAILED','RETRYABLE') OR (
  s.status='PENDING' AND s.kind='MATERIAL'
  AND s.error_code IN ('cover_pending','material_pending','execution_window_wait')
  AND {COVER_RETRY})) AND s.remote_id IS NULL
@@ -167,6 +169,7 @@ AND s.phase<>'REQUEST_ARMED' AND s.kind<>'READBACK' AND coalesce(s.error_code,''
 AND (({UNARMED_RETRY})
  OR (s.phase='DONE' AND {UNSENT_ATTEMPT}))
 AND (s.kind<>'MATERIAL' OR (s.cover_job_id IS NULL AND s.distribution_id IS NULL) OR {COVER_RETRY} OR {MATERIAL_RETRY})
+ OR (s.status='UNKNOWN' AND {CONFIRMED_ABSENT}))
 {DEPENDENCIES_READY}
 """
 # 持久等待步骤不必先消耗一次执行才能暴露依赖失败；显式批次重试可直接
@@ -753,11 +756,17 @@ def _schedule(
         return _material_reconciliation(session, step=step, unit=unit, context=original)
     if job.kind == "RETRY":
         frozen_retry = step.request_body is not None
-        if frozen_retry and not safely_unsent_attempt(
-            session, step=step, recovery=True
+        # 结果未知但已核实未创建的系列/广告组：批准一次原样重发（同 request_id）。
+        absent = frozen_retry and confirmed_absent_attempt(session, step=step)
+        if (
+            frozen_retry
+            and not absent
+            and not safely_unsent_attempt(session, step=step, recovery=True)
         ):
             return False
         audit: dict[str, Any] = {"recovery_id": str(job.id)}
+        if absent:
+            audit["confirmed_absent"] = True
         if step.kind == "MATERIAL" and step.distribution_id and not step.cover_job_id:
             material_audit = _retry_material(
                 session, step=step, unit=unit, row=row, context=original

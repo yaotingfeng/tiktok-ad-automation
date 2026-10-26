@@ -92,6 +92,12 @@ class StepClaim(BaseModel):
     attempt_id: UUID
     route: FrozenTikTokRoute
     dispatch_revision: int
+    # 已核实未创建后的原样重发：TikTok request_id 取自首次发出的 attempt。
+    request_attempt_id: UUID | None = None
+
+    @property
+    def remote_attempt_id(self) -> UUID:
+        return self.request_attempt_id or self.attempt_id
 
 
 class ExecutionUnit(BaseModel):

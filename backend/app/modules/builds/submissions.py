@@ -511,10 +511,19 @@ def claim_step(
     )
     if access.connection_id != frozen.connection_id:
         raise DomainError("account_access_denied", "冻结账户授权已变更")
+    request_attempt_id = None
     if step.request_body is not None:
-        from app.modules.builds.execution_state import safely_retryable_attempt
+        from app.modules.builds.execution_state import (
+            approved_absent_resend,
+            first_armed_attempt_id,
+            safely_retryable_attempt,
+        )
 
-        if not safely_retryable_attempt(session, step=step):
+        if approved_absent_resend(session, step=step):
+            # 已核实未创建、经显式恢复批准：新本地 attempt 记证据，原样重发冻结正文。
+            request_attempt_id = first_armed_attempt_id(session, step=step)
+            step.attempt += 1
+        elif not safely_retryable_attempt(session, step=step):
             raise DomainError("create_result_unknown", "原请求只能核查，不可再次创建")
     else:
         step.attempt += 1
@@ -547,6 +556,7 @@ def claim_step(
         attempt_id=attempt_id,
         route=route,
         dispatch_revision=step.dispatch_revision,
+        request_attempt_id=request_attempt_id,
     )
 
 
@@ -765,7 +775,11 @@ def get_submission(
         currency=preview.config["currency"],
         daily_budget_sum=str(
             preview.budget
-            * (scope["submitted_g"] if budget_strategy == "ADGROUP" else scope["submitted_c"])
+            * (
+                scope["submitted_g"]
+                if budget_strategy == "ADGROUP"
+                else scope["submitted_c"]
+            )
         ),
         daily_budget_label=budget_strategy_label(budget_strategy),
         budget_strategy=budget_strategy,

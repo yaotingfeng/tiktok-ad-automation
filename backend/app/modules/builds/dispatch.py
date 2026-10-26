@@ -21,6 +21,7 @@ from app.modules.builds.execution_models import (
     SubmissionUnit,
 )
 from app.modules.builds.execution_state import (
+    approved_absent_resend,
     evidence,
     expire_attempt,
     safely_retryable_attempt,
@@ -77,6 +78,7 @@ def queue_step(
         or (
             step.request_body is not None
             and not safely_retryable_attempt(session, step=step)
+            and not approved_absent_resend(session, step=step)
         )
         or step.status in {"UNKNOWN", "SUCCEEDED"}
     ):

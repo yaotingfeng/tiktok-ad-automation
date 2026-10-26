@@ -3536,3 +3536,10 @@ CI affected后端1017项通过、0失败/0并行不稳定，Ruff/ty通过；前�
 
 - 按用户“处理一下”，北京时间 09:46 用页面同一入口 `request_recovery` 对 2S1T 先 RECONCILE 后 RETRY。失败的 40 个素材全部成功（MATERIAL 1650/1650）。两个组合的系列 09:48 重新创建时，官方 SDK 报 `MaxRetryError`（连接层，两条同时发生），记为 `create_result_unknown`。按设计，UNKNOWN 创建不会自动重建。生产只读复查：这两个账户下同名系列为 0（同批其余 3 个 2S1T 系列都能查到），广告组 2S1T-g01 所在系列下广告组为 0。3 个对象确认未创建，系统没有重建入口，待用户决定。
 - 每日 `backup-online`（Jenkins #139、#143）连续失败，根因是备份盘余量检查：`backup.py:check_space` 要求可用 ≥ 3×上一份完整备份。上一份约 18.9 GiB，要求 56.7 GiB，超过 50Gi 整盘，无论怎么清理都不可能通过（数据库约 56 GiB）。每次失败都在 prepared 之后，留下集群发布锁，下次发布会被阻断。10-26 #143 的残留锁已核实后删除（内容存 `.runtime/build-stall-20261025/stale-lock-143.json`）；本机复现批次 20261026T094721-ce3889 已按 `recover` 收尾，锁已释放、11 角色正常。扩盘涉及云资源和费用，待用户确认。
+- 用户选择“扩盘到 100Gi 并修正规则”：备份盘已在线扩到 100Gi（22e9d24a 同步清单）；余量规则 3 倍 → 2 倍（空闲已扣除盘上的 latest，原规则重复计入）；在线备份在替换 latest 之前失败时自动回收辅助 Pod 并释放锁（`backup-failed`），替换中失败仍保留锁供人工核对。扩盘后首次重跑（批次 20261026T103813-7fc2ec）余量检查通过，但 pg_dump 超过后台作业 3600 秒时限失败，锁已按新逻辑自动释放。数据库约 56 GB、单连接导出已超过 1 小时，1f45225b 把后台作业时限放到 9000 秒（仍在 Jenkins 4 小时内），重新执行中。
+
+### 2026-10-26 已核实未创建的系列/广告组可经恢复原样重发
+
+- 用户选择“让系统自己重建”。设计：只对带 TikTok `request_id` 的 CAMPAIGN/ADGROUP 开放，并且只允许原样重发冻结正文（同一 request_id）。即使对象其实已创建，TikTok 也会按 request_id 去重。条件（`CONFIRMED_ABSENT`）：无远端 ID/mismatch/租约；没有 CREATED/LATE_CREATED/LEASE_EXPIRED_ARMED 或带 remote_id 的证据；所有 REQUEST_ARMED 的正文摘要与冻结正文一致；所有 READBACK_PAGE 都是 total=0、ids=[]；至少一次 OBJECT 第 1 页空回读，晚于最后一次发出 10 分钟以上。
+- 恢复 RETRY 把满足条件的 UNKNOWN 步骤列为可重试，记 `RETRY_REQUESTED` 带 `confirmed_absent=true`。领取（`claim_step`）/投递（`queue_step`）只认“最后一次发出之后有这种批准”（`CONFIRMED_ABSENT_RESEND`）：新本地 attempt 记证据，`StepClaim.request_attempt_id` 取首次发出的 attempt，执行器用它校验与发送 request_id，冻结正文不变。再次发出后旧批准失效，结果仍未知时需要新的空回读和新的批准。
+- 验证：新增 `test_confirmed_absent_resend.py` 5 项（批准后原样重发、只批准一次；发出不足 10 分钟、无回读、回读非零、有迟到创建回执都不可重试），旧代码不可导入；builds + integrations/tiktok 快速层 1580 通过；ruff、ty 通过。无迁移。
