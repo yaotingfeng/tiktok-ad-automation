@@ -1049,10 +1049,22 @@ class Release:
             self.check_remote(sha)
         if action == "backup-online":
             # 与发布共用集群锁；PG 使用自身一致快照，应用全程继续运行。
-            self.helper()
-            snapshot(self, online=True)
-            self.save("backed-up")
-            restore_verify(self.pod, self.folder, self.state["backup_dir"], online=True)
+            try:
+                self.helper()
+                snapshot(self, online=True)
+                self.save("backed-up")
+                restore_verify(
+                    self.pod, self.folder, self.state["backup_dir"], online=True
+                )
+            except Exception:
+                # 在线备份不停应用；替换 latest 之前失败没有需要人工核对的现场，
+                # 直接回收辅助 Pod 并释放锁。原先保留锁，每日定时备份一失败，
+                # 后续所有发布都被挡住，直到有人手动 recover。
+                self.save("backup-failed")
+                self.remove_helper()
+                self.unlock()
+                raise
+            # 替换 latest 中途失败可能留下不完整目录，保留锁和现场供人工核对。
             publish(self.pod, self.folder, self.state["backup_dir"])
             self.save("backup-verified")
             self.remove_helper()

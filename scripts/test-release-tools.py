@@ -542,6 +542,15 @@ class ReleaseTests(unittest.TestCase):
             ],
             2 * 2**30,
         )
+        # 生产回归：上一份 18.9 GiB、50Gi 盘剩 31 GiB 时原规则要求 56.7 GiB。
+        # 盘上的 latest 已不在空闲里，只需新的一份加一份余量。
+        last = 18898 * 2**20
+        self.assertEqual(
+            check_space(
+                lambda *_a, **_k: b"%d\n%d\n" % (81 * 2**30, last), 56 * 2**30
+            )["required"],
+            2 * last,
+        )
 
     def test_resume_starts_beat_after_all_consumers_ready(self):
         calls = []
@@ -887,6 +896,55 @@ class ReleaseTests(unittest.TestCase):
             self.assertTrue(restore.call_args.kwargs["online"])
             pause.assert_not_called()
             resume.assert_not_called()
+
+    def test_failed_online_backup_releases_lock_before_publish(self):
+        # 生产回归：每日在线备份失败留下集群锁，后续发布全部被阻断。
+        for failing in ("helper", "snapshot", "restore"):
+            with (
+                patch.object(self.release, "begin"),
+                patch.object(self.release, "prepare_tools"),
+                patch.object(self.release, "save"),
+                patch.object(
+                    self.release,
+                    "helper",
+                    side_effect=RuntimeError("x") if failing == "helper" else None,
+                ),
+                patch(
+                    "release.snapshot",
+                    side_effect=RuntimeError("x") if failing == "snapshot" else None,
+                ),
+                patch(
+                    "release.restore_verify",
+                    side_effect=RuntimeError("x") if failing == "restore" else None,
+                ),
+                patch("release.publish") as publish,
+                patch.object(self.release, "remove_helper") as remove,
+                patch.object(self.release, "unlock") as unlock,
+            ):
+                self.release.state = {"backup_dir": "/backup/.pending-x", "helper": "h"}
+                with self.assertRaises(RuntimeError):
+                    self.release.execute("backup-online", None)
+                remove.assert_called_once()
+                unlock.assert_called_once()
+                publish.assert_not_called()
+
+    def test_online_backup_publish_failure_keeps_lock_for_inspection(self):
+        with (
+            patch.object(self.release, "begin"),
+            patch.object(self.release, "prepare_tools"),
+            patch.object(self.release, "save"),
+            patch.object(self.release, "helper"),
+            patch("release.snapshot"),
+            patch("release.restore_verify"),
+            patch("release.publish", side_effect=RuntimeError("rotate")),
+            patch.object(self.release, "remove_helper") as remove,
+            patch.object(self.release, "unlock") as unlock,
+        ):
+            self.release.state = {"backup_dir": "/backup/.pending-x", "helper": "h"}
+            with self.assertRaises(RuntimeError):
+                self.release.execute("backup-online", None)
+            remove.assert_not_called()
+            unlock.assert_not_called()
 
     def test_lightweight_and_online_helpers_do_not_mount_live_beat_disk(self):
         for mode, action in [("routine", "deploy"), ("full", "backup-online")]:

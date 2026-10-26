@@ -198,9 +198,12 @@ def check_space(pod, database_bytes):
         BACKUP_ROOT,
     ).split()
     available, last = int(output[0]), int(output[1])
-    # 新备份验证完成、旧备份删除前两份并存，再留一份余量（按上一份完整备份的总大小）；
+    # available 已扣除盘上的 latest；新备份写入 .pending-* 并验证完成前两份并存，
+    # 所以空闲只需容纳新的一份，再留一份增长余量（按上一份完整备份的总大小）。
+    # 恢复验证的临时 PostgreSQL 在辅助 Pod 的独立临时卷上，不占备份盘。原先按
+    # 3 倍把 latest 重复计入：上一份 18.9 GiB 时要求 56.7 GiB，50Gi 盘永远通不过。
     # 首次没有上一份时按数据库大小估算（lz4 压缩实测约 3.5:1，按 1/4 留足）。
-    required = max(3 * last, database_bytes // 4, 2 * 2**30)
+    required = max(2 * last, database_bytes // 4, 2 * 2**30)
     require(
         available >= required,
         f"Backup disk {BACKUP_PVC} has {available >> 20} MiB free, needs"
