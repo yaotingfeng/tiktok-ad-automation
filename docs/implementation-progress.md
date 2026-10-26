@@ -3531,3 +3531,8 @@ CI affected后端1017项通过、0失败/0并行不稳定，Ruff/ty通过；前�
 - 验证：新增 `test_full_batch_claim_round_trips_do_not_grow_with_members`（旧代码 1036 条失败）、`test_transient_source_read_failure_requeues_batch_instead_of_failing`（旧代码成员全 blocked 失败），新代码均通过；jobs/materials/builds/core 快速层 2181 通过，2 失败为原代码即失败的 `test_cover_bulk_lock_order` MCP 用例。无迁移。
 - 发布：Jenkins #141 后端检查线因 ty 类型告警（outbox 混合字典）失败，2c72f767 修正；#142 前端检查线失败（控制台无用例名，本次未改前端）。改用本机 `deploy/local.py deploy` 完整检查通过并发布（批次 20261026T022034-3dcd19，北京时间 10-26 约 04:00 完成）。因改动 `jobs/outbox.py`，自动走完整冻结备份（冻结约 35 分钟）。上线核对：11 角色均为 2c72f767；resource Worker 上线后 30 分钟内无本地期限/语句超时；补派任务约 10 秒成功。
 - 2S1T 当前：广告 74/80 成功；共享读取失败的 2 个组合（40 素材，旧版本已落 FAILED）和 51002 的 1 个广告组需页面重试，新代码不会自动接回已落定的失败。
+
+### 2026-10-26 2S1T 重试结果与每日备份连续失败的原因
+
+- 按用户“处理一下”，北京时间 09:46 用页面同一入口 `request_recovery` 对 2S1T 先 RECONCILE 后 RETRY。失败的 40 个素材全部成功（MATERIAL 1650/1650）。两个组合的系列 09:48 重新创建时，官方 SDK 报 `MaxRetryError`（连接层，两条同时发生），记为 `create_result_unknown`。按设计，UNKNOWN 创建不会自动重建。生产只读复查：这两个账户下同名系列为 0（同批其余 3 个 2S1T 系列都能查到），广告组 2S1T-g01 所在系列下广告组为 0。3 个对象确认未创建，系统没有重建入口，待用户决定。
+- 每日 `backup-online`（Jenkins #139、#143）连续失败，根因是备份盘余量检查：`backup.py:check_space` 要求可用 ≥ 3×上一份完整备份。上一份约 18.9 GiB，要求 56.7 GiB，超过 50Gi 整盘，无论怎么清理都不可能通过（数据库约 56 GiB）。每次失败都在 prepared 之后，留下集群发布锁，下次发布会被阻断。10-26 #143 的残留锁已核实后删除（内容存 `.runtime/build-stall-20261025/stale-lock-143.json`）；本机复现批次 20261026T094721-ce3889 已按 `recover` 收尾，锁已释放、11 角色正常。扩盘涉及云资源和费用，待用户确认。
