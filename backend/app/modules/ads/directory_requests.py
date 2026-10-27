@@ -6,7 +6,7 @@ from collections.abc import Collection, Mapping
 from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4, uuid5
 
-from sqlalchemy import and_, func, text
+from sqlalchemy import and_, text
 from sqlmodel import Session, col, select
 
 from app.core.config import settings
@@ -118,25 +118,43 @@ def directory_ad_types(
         {"tenant": tenant_id, "accounts": accounts, "types": list(DIRECTORY_AD_TYPES)},
     ):
         used.setdefault(advertiser_id, set()).add(ad_type or "")
+    active = set(active_ids)
     probes = {
         _probe_partition(advertiser_id, ad_type): (advertiser_id, ad_type)
         for advertiser_id in accounts
         for ad_type in DIRECTORY_AD_TYPES
+        if ad_type not in used.get(advertiser_id, set())
+        and not (advertiser_id in active and not used.get(advertiser_id))
     }
     probed: set[tuple[str, str]] = set()
-    for partition_key in session.exec(
-        select(AdDirectoryRun.partition_key)
-        .where(
-            AdDirectoryRun.tenant_id == tenant_id,
-            col(AdDirectoryRun.advertiser_id).in_(accounts),
-            col(AdDirectoryRun.partition_key).in_(list(probes)),
-            AdDirectoryRun.status == "COMPLETE",
-        )
-        .group_by(AdDirectoryRun.partition_key)
-        .having(func.max(AdDirectoryRun.completed_at) > now - AD_TYPE_PROBE_INTERVAL)
-    ):
-        probed.add(probes[partition_key])
-    active = set(active_ids)
+    if probes:
+        # 账户与分区成对探测，从最新请求向后找任一近期成功即可；不能先扫描
+        # 整段账户历史再汇总max。保留精确分区合同，不用其他类型/定向任务替代。
+        for partition_key in (
+            session.connection()
+            .execute(
+                text("""
+            SELECT p.partition_key FROM unnest(
+              CAST(:accounts AS text[]),CAST(:partitions AS text[])
+            ) p(advertiser_id,partition_key)
+            JOIN LATERAL (
+              SELECT true FROM ad_directory_run r
+              WHERE r.tenant_id=:tenant AND r.advertiser_id=p.advertiser_id
+                AND r.partition_key=p.partition_key AND r.status='COMPLETE'
+                AND r.completed_at>:cutoff
+              ORDER BY r.request_sequence DESC LIMIT 1
+            ) fresh ON true
+            """),
+                {
+                    "tenant": tenant_id,
+                    "accounts": [advertiser for advertiser, _ in probes.values()],
+                    "partitions": list(probes),
+                    "cutoff": now - AD_TYPE_PROBE_INTERVAL,
+                },
+            )
+            .scalars()
+        ):
+            probed.add(probes[partition_key])
     result: dict[str, dict[str, tuple[str, ...]]] = {}
     for advertiser_id in accounts:
         in_use = used.get(advertiser_id, set())
@@ -172,30 +190,34 @@ def directory_due_accounts(
     accounts = sorted(set(advertiser_ids))
     if not accounts:
         return []
+    session.flush()
     # 旧全量仍在读取/等待时先让它完成；在扫描 ad_object 大表前去掉重叠账户。
     # 定向回读和不同冻结授权不能替代本轮全量，不纳入这个周期去重范围。
+    # 先物化当前范围内的待执行集合，避免账户IN使优化器交叉扫描大量历史索引。
     pending = set(
-        session.exec(
-            select(AdDirectoryRun.advertiser_id)
-            .where(
-                AdDirectoryRun.tenant_id == tenant_id,
-                AdDirectoryRun.bc_id == bc_id,
-                AdDirectoryRun.actor_id == actor_id,
-                col(AdDirectoryRun.frozen_route) == frozen_route,
-                col(AdDirectoryRun.advertiser_id).in_(accounts),
-                col(AdDirectoryRun.status).in_(
-                    ["QUEUED", "RUNNING", "ADMISSION_WAIT", "WAITING_REMOTE"]
-                ),
-                AdDirectoryRun.query["include_deleted"].as_boolean().is_(True),
-                func.coalesce(func.jsonb_array_length(AdDirectoryRun.query["ids"]), 0)
-                == 0,
-                func.coalesce(
-                    func.jsonb_array_length(AdDirectoryRun.query["parent_ids"]), 0
-                )
-                == 0,
+        session.connection()
+        .execute(
+            text("""
+            WITH pending AS MATERIALIZED (
+              SELECT advertiser_id FROM ad_directory_run
+              WHERE tenant_id=:tenant AND bc_id=:bc AND actor_id=:actor
+                AND frozen_route=CAST(:route AS jsonb)
+                AND status IN ('QUEUED','RUNNING','ADMISSION_WAIT','WAITING_REMOTE')
+                AND (query->>'include_deleted')::boolean IS TRUE
+                AND coalesce(jsonb_array_length(query->'ids'),0)=0
+                AND coalesce(jsonb_array_length(query->'parent_ids'),0)=0
             )
-            .distinct()
-        ).all()
+            SELECT DISTINCT advertiser_id FROM pending WHERE advertiser_id=ANY(:ids)
+            """),
+            {
+                "tenant": tenant_id,
+                "bc": bc_id,
+                "actor": actor_id,
+                "route": json.dumps(frozen_route),
+                "ids": accounts,
+            },
+        )
+        .scalars()
     )
     accounts = [
         advertiser_id for advertiser_id in accounts if advertiser_id not in pending
