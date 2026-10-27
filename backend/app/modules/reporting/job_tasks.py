@@ -31,6 +31,7 @@ from app.jobs.tasks import register_dispatch_task
 from app.modules.accounts.models import AdvertiserAccount
 from app.modules.accounts.routing import verify_route
 from app.modules.ads.directory_dispatch import (
+    PUBLISH_TASK_NAME,
     TARGETED_TASK_NAME,
     directory_step_key,
     enqueue_directory_step,
@@ -89,10 +90,11 @@ LINK_DISPATCH_WINDOW = 4
 # 历史事实/关联各保底一半，闲置份额可借；实际执行并发及平台配额不变。
 BACKFILL_DISPATCH_WINDOW = 6
 # 目录消息发布后超过此时长仍未被领取，视为丢失并重新入队。
-# 已消费失败的末页消息不能再按6小时占位。后台发布有75秒事务/85秒软限，
-# 10分钟是失联判定而非排队上界；执行中的行锁与代数保护防止重复发布。
+# 读取孤儿10分钟恢复；单槽发布可执行至210秒，8个窗口最坏排队低于30分钟。
+# 发布单独判丢失，避免长队中合法消息被反复换代；行锁/代数仍防重复发布。
 # 实时定向仍使用更短的2分钟。
 DIRECTORY_MESSAGE_LOST_AFTER = timedelta(minutes=10)
+PUBLISH_MESSAGE_LOST_AFTER = timedelta(minutes=30)
 TARGETED_MESSAGE_LOST_AFTER = timedelta(minutes=2)
 # 一轮周期目录分批推进；此游标不占用账户筛选或规则相位的进度键。
 DIRECTORY_PLAN_PROGRESS = "directory_cycle_v1"
@@ -237,18 +239,22 @@ def _advance(due, now, interval):
 
 def _message_lost(session: Session, row: AdDirectoryRun, now: datetime) -> bool:
     key = directory_step_key(row)
-    published = session.exec(
-        select(PendingDispatch.published_at).where(
+    dispatch = session.exec(
+        select(PendingDispatch.published_at, PendingDispatch.task_name).where(
             PendingDispatch.tenant_id == row.tenant_id,
             PendingDispatch.task_key == key,
         )
     ).first()
+    if dispatch is None or dispatch.published_at is None:
+        return False
     threshold = (
-        TARGETED_MESSAGE_LOST_AFTER
+        PUBLISH_MESSAGE_LOST_AFTER
+        if dispatch.task_name == PUBLISH_TASK_NAME
+        else TARGETED_MESSAGE_LOST_AFTER
         if is_live_directory(row)
         else DIRECTORY_MESSAGE_LOST_AFTER
     )
-    return published is not None and published < now - threshold
+    return dispatch.published_at < now - threshold
 
 
 def _dispatch_directories(session, now):
@@ -288,6 +294,10 @@ def _dispatch_directories(session, now):
             PendingDispatch.task_key == current_key,
             col(PendingDispatch.published_at)
             < case(
+                (
+                    col(PendingDispatch.task_name) == PUBLISH_TASK_NAME,
+                    now - PUBLISH_MESSAGE_LOST_AFTER,
+                ),
                 (targeted, now - TARGETED_MESSAGE_LOST_AFTER),
                 else_=now - DIRECTORY_MESSAGE_LOST_AFTER,
             ),
@@ -314,7 +324,7 @@ def _dispatch_directories(session, now):
             AdDirectoryRun.channel == "OFFICIAL_API",
             ~targeted,
             # 已有领取记录说明本代数消息已被消费；租约过期后不再算在途，否则未判丢失的
-            # 6 小时内窗口被永久占满。与下方候选条件一致，过期运行会换代重新入队。
+            # 消息判丢失前窗口被永久占满。与下方候选条件一致，过期运行会换代重新入队。
             (enqueued & ~lost & col(AdDirectoryRun.claimed_until).is_(None))
             | (col(AdDirectoryRun.claimed_until) > now),
         )

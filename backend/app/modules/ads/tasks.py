@@ -41,9 +41,10 @@ from app.modules.ads.sync import (
 from app.modules.ads.sync_models import AdDirectoryPage, AdDirectoryRun
 
 _LEASE_SECONDS = 90
+_PUBLISH_LEASE_SECONDS = 210
 _LOCK_TIMEOUT = "20s"
 _TRANSACTION_TIMEOUT = "45s"
-_PUBLISH_TRANSACTION_TIMEOUT = "75s"
+_PUBLISH_TRANSACTION_TIMEOUT = "180s"
 logger = logging.getLogger(__name__)
 
 
@@ -59,7 +60,7 @@ def _directory_session(
             )
             session.connection().execute(text("SET LOCAL statement_timeout = '30s'"))
             # 仅单槽本地发布给大目录累计IO独立预算；读取/实时定向仍是45秒。
-            # 75秒从领取前开始，早于85秒软限及90秒租约；不延长单语句或等锁。
+            # 180秒从领取前开始，早于195秒软限及210秒发布租约；不延长单语句或等锁。
             timeout = (
                 _PUBLISH_TRANSACTION_TIMEOUT if publish_only else _TRANSACTION_TIMEOUT
             )
@@ -218,7 +219,9 @@ def _run_directory_step(
             return "WAIT"
         run.claim_token = uuid4()
         claim_token = run.claim_token
-        run.claimed_until = now + timedelta(seconds=_LEASE_SECONDS)
+        run.claimed_until = now + timedelta(
+            seconds=_PUBLISH_LEASE_SECONDS if publish_only else _LEASE_SECONDS
+        )
         route = _route(run.frozen_route)
         verify_route(
             session,
@@ -383,8 +386,8 @@ def sync_step(*, tenant_id: str, actor_id: str, payload: dict[str, Any]) -> str:
 
 @celery_app.task(  # type: ignore[untyped-decorator]
     name=PUBLISH_TASK_NAME,
-    time_limit=100,
-    soft_time_limit=85,
+    time_limit=210,
+    soft_time_limit=195,
     acks_late=True,
     reject_on_worker_lost=True,
 )

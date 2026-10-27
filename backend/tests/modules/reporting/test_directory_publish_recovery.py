@@ -59,7 +59,7 @@ def _terminal(factory, seed, now, *, lease=None):
                 PendingDispatch.task_name == "ads.publish_step",
             )
         ).one()
-        dispatch.published_at = now - timedelta(minutes=12)
+        dispatch.published_at = now - timedelta(minutes=32)
         return run.id
 
 
@@ -98,6 +98,40 @@ def test_terminal_orphan_recovers_within_directory_cycle_but_not_during_lease(
                 publish_only=True,
             )
             == "FAILED"
+        )
+
+
+@pytest.mark.parametrize(
+    "task_name,age_minutes,recovered",
+    [
+        ("ads.publish_step", 12, False),
+        ("ads.publish_step", 32, True),
+        ("ads.sync_step", 12, True),
+    ],
+)
+def test_publish_queue_wait_does_not_consume_read_orphan_recovery_budget(
+    committed_sync_seed, monkeypatch, task_name, age_minutes, recovered
+):
+    seed, factory = committed_sync_seed
+    monkeypatch.setattr(settings, "ADS_SYNC_ENABLED", True)
+    now = datetime.now(UTC)
+    run_id = _terminal(factory, seed, now)
+    with factory() as session, session.begin():
+        dispatch = session.exec(
+            select(PendingDispatch).where(
+                PendingDispatch.tenant_id == seed.tenant_id,
+                PendingDispatch.task_name == "ads.publish_step",
+            )
+        ).one()
+        dispatch.task_name = task_name
+        dispatch.published_at = now - timedelta(minutes=age_minutes)
+    with factory() as session, session.begin():
+        row = session.get(AdDirectoryRun, run_id)
+        assert job_tasks._message_lost(session, row, now) is recovered
+        assert job_tasks._dispatch_directories(session, now) == int(recovered)
+    with factory() as session:
+        assert session.get(AdDirectoryRun, run_id).claim_generation == (
+            2 if recovered else 1
         )
 
 

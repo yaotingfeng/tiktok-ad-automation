@@ -437,14 +437,84 @@ def observe_health(session, plan, *, now, deadline=None, measurement=None):
     return row
 
 
+def _repair_fact_accounts(session, plan, accounts, *, kind, now):
+    """在途账户不占救援名额；不同当地日合计仍只补最老的50个缺口。"""
+    candidates = []
+    for (start, end), ids in _group_by_window(
+        session, plan, sorted(accounts), lambda tz: _hot_window(tz, now)
+    ).items():
+        params = {
+            "tenant": plan.tenant_id,
+            "bc": plan.bc_id,
+            "actor": plan.actor_id,
+            "route": json.dumps(plan.frozen_route),
+            "kind": kind,
+            "start": start,
+            "end": end,
+        }
+        # 与enqueue_jobs的实时覆盖身份一致，先整批读取一次，避免逐账户扫任务。
+        # 此处只筛候选，最终入队仍由原覆盖事务锁与唯一键串行复核竞争。
+        pending = (
+            session.connection()
+            .execute(
+                text("""
+            SELECT advertiser_ids FROM report_sync_job
+            WHERE tenant_id=:tenant AND bc_id=:bc AND actor_id=:actor
+              AND frozen_route=CAST(:route AS jsonb) AND kind=:kind
+              AND priority<=2 AND start_date=:start AND end_date=:end
+              AND campaign_ids='[]'::jsonb AND status IN ('QUEUED','RUNNING','WAITING')
+            """),
+                params,
+            )
+            .scalars()
+        )
+        covered = {advertiser for group in pending for advertiser in group}
+        remaining = [advertiser for advertiser in ids if advertiser not in covered]
+        if not remaining:
+            continue
+        candidates.extend(
+            session.connection()
+            .execute(
+                text("""
+                SELECT a.advertiser_id,s.last_success_at
+                FROM unnest(CAST(:ids AS text[])) a(advertiser_id)
+                LEFT JOIN LATERAL (
+                  SELECT last_success_at FROM report_sync_state s
+                  WHERE s.tenant_id=:tenant AND s.advertiser_id=a.advertiser_id
+                    AND s.report_kind=:kind AND s.stat_date=:start LIMIT 1
+                ) s ON true
+                ORDER BY s.last_success_at ASC NULLS FIRST,a.advertiser_id LIMIT :limit
+                """),
+                params | {"ids": remaining, "limit": MAX_REPAIR_ACCOUNTS},
+            )
+            .all()
+        )
+    # 每个日期先取50足以覆盖全局前50；不因多时区放大修复上限。
+    candidates.sort(
+        key=lambda row: (
+            row.last_success_at is not None,
+            row.last_success_at or datetime.min.replace(tzinfo=UTC),
+            row.advertiser_id,
+        )
+    )
+    return [row.advertiser_id for row in candidates[:MAX_REPAIR_ACCOUNTS]]
+
+
 def _repair_health(session, plan, row, repairs, now):
     count = plan_hot(
-        session, plan, active=sorted(repairs["ad"])[:MAX_REPAIR_ACCOUNTS], now=now
+        session,
+        plan,
+        active=_repair_fact_accounts(
+            session, plan, repairs["ad"], kind="ad_day", now=now
+        ),
+        now=now,
     )
     count += plan_material(
         session,
         plan,
-        active=sorted(repairs["material"])[:MAX_REPAIR_ACCOUNTS],
+        active=_repair_fact_accounts(
+            session, plan, repairs["material"], kind="material_day", now=now
+        ),
         now=now,
     )
     for (start, end), ids in _group_by_window(

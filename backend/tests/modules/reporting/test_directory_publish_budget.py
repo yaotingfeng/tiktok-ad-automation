@@ -14,15 +14,15 @@ from tests.modules.reporting.test_directory_publish_recovery import _terminal
 
 def test_only_local_publish_task_has_extended_deadline():
     assert (tasks.publish_step.soft_time_limit, tasks.publish_step.time_limit) == (
-        85,
-        100,
+        195,
+        210,
     )
     for task in (tasks.sync_step, tasks.targeted_step):
         assert (task.soft_time_limit, task.time_limit) == (55, 60)
 
 
 def test_publish_session_budget_preserves_statement_lock_and_lease_bounds():
-    for publish_only, expected in [(False, "45s"), (True, "75s")]:
+    for publish_only, expected in [(False, "45s"), (True, "3min")]:
         with tasks._directory_session(engine, publish_only=publish_only) as session:
             values = {
                 key: session.connection().execute(text(f"SHOW {key}")).scalar_one()
@@ -39,8 +39,9 @@ def test_publish_session_budget_preserves_statement_lock_and_lease_bounds():
             "lock_timeout": "20s",
             "idle_in_transaction_session_timeout": "10s",
         }
-    # 总事务限从领取前开始，75s数据库限和85s软限均在90s领取租约内。
-    assert 75 < tasks.publish_step.soft_time_limit < tasks._LEASE_SECONDS
+    # 本地发布租约独立于远端读取；事务、软限都在专用租约内。
+    assert 180 < tasks.publish_step.soft_time_limit < tasks._PUBLISH_LEASE_SECONDS
+    assert tasks._LEASE_SECONDS == 90
 
 
 def test_atomic_publish_can_finish_after_read_budget_without_reopening_provider(
@@ -55,8 +56,8 @@ def test_atomic_publish_can_finish_after_read_budget_without_reopening_provider(
 
     def slow(session, **kwargs):
         row = session.get(AdDirectoryRun, run_id)
-        assert (row.claimed_until - datetime.now(UTC)).total_seconds() > 89
-        # 原消息已超过10分钟；发布事务行锁仍阻止扫描器抢走当前运行。
+        assert (row.claimed_until - datetime.now(UTC)).total_seconds() > 209
+        # 原消息已超过30分钟；发布事务行锁仍阻止扫描器抢走当前运行。
         with factory() as observer, observer.begin():
             assert job_tasks._dispatch_directories(observer, datetime.now(UTC)) == 0
         session.connection().execute(text("SELECT pg_sleep(0.25)"))
