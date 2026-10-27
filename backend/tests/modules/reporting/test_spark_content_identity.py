@@ -1,7 +1,7 @@
 """旧 Spark 桥接缺失时，以平台内容摘要及大小匹配唯一原视频。"""
 
 from copy import deepcopy
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from sqlmodel import select
@@ -263,3 +263,112 @@ def test_unversioned_checks_are_reverified_once_after_upgrade(session, sync_seed
     session.refresh(link)
     assert link.platform_material_id == "vid"
     assert len(reader.history) == 2
+
+
+def delayed_clock(monkeypatch):
+    from app.modules.reporting import spark_identity
+
+    current = [datetime.now(UTC)]
+
+    class Clock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return current[0].astimezone(tz)
+
+    monkeypatch.setattr(spark_identity, "datetime", Clock)
+    return current
+
+
+def test_two_hour_worker_queue_delay_advances_from_assets_to_post(
+    committed_sync_seed, monkeypatch
+):
+    from app.modules.reporting.store_models import ReportSyncJob
+    from tests.modules.reporting.test_material_link_resume import step
+
+    clock = delayed_clock(monkeypatch)
+    seed, factory = committed_sync_seed
+    with factory() as session:
+        job, _ = prepare(session, seed)
+        job_id = job.id
+        scope = (job.tenant_id, job.bc_id, job.actor_id, job.frozen_route.copy())
+        session.commit()
+    reader = Reader()
+    assert step(factory, job_id, reader) == "WAITING"
+    assert [op for op, _ in reader.history] == ["assets"]
+    clock[0] += timedelta(hours=2)
+    assert step(factory, job_id, reader) == "WAITING"
+    assert [op for op, _ in reader.history] == ["assets", "post"]
+    with factory() as session:
+        job = session.get(ReportSyncJob, job_id)
+        assert len(job.progress["spark_identity_checked"]) == 1
+        assert (job.tenant_id, job.bc_id, job.actor_id, job.frozen_route) == scope
+        assert (
+            session.exec(select(MaterialPostLink)).one().platform_material_id == "vid"
+        )
+        assert job.request_count == 2
+    clock[0] += timedelta(hours=2)
+    assert step(factory, job_id, reader) == "COMPLETE"
+    assert [op for op, _ in reader.history] == ["assets", "post"]
+
+
+@pytest.mark.parametrize("case", ["missing", "ambiguous", "different_size"])
+def test_delayed_post_checks_keep_unproven_gap_and_finish_this_scope(
+    session, sync_seed, monkeypatch, case
+):
+    clock = delayed_clock(monkeypatch)
+    job, link = prepare(session, sync_seed)
+    reader = Reader()
+    if case == "missing":
+        reader.content = None
+    elif case == "ambiguous":
+        reader.assets[1] = {"video_id": "other", **reader.content}
+    else:
+        reader.content = {"signature": DIGEST, "size": 124}
+    assert resolve(session, job, reader)
+    clock[0] += timedelta(hours=2)
+    assert resolve(session, job, reader)
+    assert [op for op, _ in reader.history] == ["assets", "post"]
+    clock[0] += timedelta(hours=2)
+    assert not resolve(session, job, reader)
+    session.refresh(link)
+    assert link.platform_material_id is None
+
+
+def test_delayed_same_scope_posts_reuse_snapshot_but_new_round_reads_again(
+    session, sync_seed, monkeypatch
+):
+    from app.modules.reporting.material_links import wait_for_dependencies
+    from tests.modules.reporting.test_material_query import material_row, publish
+
+    clock = delayed_clock(monkeypatch)
+    job, _ = prepare(session, sync_seed)
+    publish(
+        session,
+        sync_seed,
+        "acc-1",
+        [material_row("post", "1"), material_row("post2", "1")],
+    )
+    session.add(
+        MaterialPostLink(
+            tenant_id=sync_seed.tenant_id,
+            advertiser_id="acc-1",
+            main_material_id="post2",
+            ad_remote_id="ad",
+            main_material_type="VIDEO_SPARK_ADS",
+            observed_at=clock[0],
+        )
+    )
+    session.flush()
+    reader = Reader()
+    reader.content = None
+    for _ in range(3):
+        before = len(reader.history)
+        assert resolve(session, job, reader)
+        assert len(reader.history) == before + 1
+        clock[0] += timedelta(hours=2)
+    assert [op for op, _ in reader.history] == ["assets", "post", "post"]
+    assert not resolve(session, job, reader)
+    assert wait_for_dependencies(session, job, now=clock[0])
+    assert "spark_asset_content" not in job.progress
+    assert resolve(session, job, reader)
+    assert reader.history[-1][0] == "assets"

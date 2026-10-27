@@ -61,6 +61,16 @@ Interfaces: 原reconcile_link_work与wake_link_dependencies签名保持。
 
 - [x] 三个修改面独立审查，针对性PG/Redis/API/前端验证及静态检查；只因相关变化重跑覆盖。
 - [x] 更新运行契约与验收证据，明确完整覆盖时限与剩余来源限制。
-- [ ] 聚焦提交，暂停Jenkins避免重复发布，仅推company，精确干净checkout构建。
-- [ ] 保留正常退出宽限，11角色SHA/digest/config/HTTPS/单Beat/0045核对；恢复Jenkins。
+- [x] 聚焦提交，暂停Jenkins避免重复发布，仅推company，精确干净checkout构建。
+- [x] 保留正常退出宽限，11角色SHA/digest/config/HTTPS/单Beat/0045核对；恢复Jenkins。
 - [ ] 真实完整coverage周期与固定历史/依赖样本推进验收，未达标不宣称全部修复。
+
+## Task 5: 实际验收暴露的两处续步阻断
+
+首次9576233a发布基础验收通过，业务验收未完成。query代理只负责health.py及相关tests；cleanup代理只负责spark_identity.py及相关tests；root负责集成文档、独立审查与最终补全发布。
+
+- [x] 分钟失败与coverage调度解耦，保留当前scope/授权、失败指标与outbox原子性；真实PG失败路径先红后绿。
+- [x] 水位按512账户分批，10秒总/5秒单句预算不变，不发布部分结果；一次生产只读验证实际成本。
+- [x] Spark同scope资产摘要跨长队列续步保存，范围变化失效，真实唯一签名/大小匹配；2小时续步回归先红后绿。
+- [ ] 两项独立审查、受影响测试、静态检查通过后一起补全，禁止每项单独发版。
+- [ ] 验收后续完整coverage/分钟成功恢复、固定Spark真实进入帖子阶段、原固定目录继续推进，未达到项如实记录。

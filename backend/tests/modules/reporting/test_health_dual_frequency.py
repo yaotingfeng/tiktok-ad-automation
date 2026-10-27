@@ -326,6 +326,129 @@ def test_scope_changed_during_freshness_cannot_publish_or_enqueue_old_scope(
         assert session.get(ReportSyncHealth, (seed.tenant_id, "bc-a")) is None
 
 
+def test_failed_minute_still_schedules_complete_coverage_without_claiming_freshness(
+    committed_sync_seed, redis_client, monkeypatch
+):
+    seed, factory = committed_sync_seed
+    args = _case(seed, factory, monkeypatch) | {"redis_client": redis_client}
+    monkeypatch.setattr(health, "HEALTH_MAX_CHUNKS", 16)
+    key = health._health_progress_key(seed.tenant_id, "bc-a")
+    before = datetime.now(UTC) - timedelta(minutes=1)
+    with factory() as session, session.begin():
+        session.add(
+            ReportSyncHealth(
+                tenant_id=seed.tenant_id,
+                bc_id="bc-a",
+                observed_at=before,
+                metrics={"stale_material_accounts": 7},
+            )
+        )
+
+    def failed(db, *_args, **_kwargs):
+        db.execute(text("SET LOCAL statement_timeout='50ms'"))
+        db.execute(text("SELECT pg_sleep(0.1)"))
+
+    monkeypatch.setattr(health, "measure_freshness", failed)
+    try:
+        assert health.run_bc_health(**args) == "FAILED"
+        progress = json.loads(redis_client.get(key))
+        assert progress["offset"] == 0
+        assert health.run_bc_health(**args, cycle=progress["cycle"]) == "COMPLETE"
+        with factory() as session:
+            row = session.get(ReportSyncHealth, (seed.tenant_id, "bc-a"))
+            assert row.observed_at == before
+            assert row.metrics["stale_material_accounts"] == 7
+            assert row.metrics["coverage_status"] == "COMPLETE"
+            assert row.status == "DEGRADED" and "MONITOR_QUERY_FAILED" in row.issues
+    finally:
+        redis_client.delete(key)
+
+
+def test_failed_coverage_scheduling_does_not_roll_back_minute_failure_record(
+    committed_sync_seed, redis_client, monkeypatch
+):
+    seed, factory = committed_sync_seed
+    args = _case(seed, factory, monkeypatch) | {"redis_client": redis_client}
+    key = health._health_progress_key(seed.tenant_id, "bc-a")
+
+    def failed(db, *_args, **_kwargs):
+        db.execute(text("SET LOCAL statement_timeout='50ms'"))
+        db.execute(text("SELECT pg_sleep(0.1)"))
+
+    called = []
+
+    def failed_schedule(db, *_args, **_kwargs):
+        called.append(db.in_nested_transaction())
+        db.execute(text("SELECT 1 / 0"))
+
+    monkeypatch.setattr(health, "measure_freshness", failed)
+    monkeypatch.setattr(health, "_schedule_coverage", failed_schedule)
+    try:
+        assert health.run_bc_health(**args) == "FAILED"
+        assert called == [True]
+        with factory() as session:
+            row = session.get(ReportSyncHealth, (seed.tenant_id, "bc-a"))
+            assert row.status == "DEGRADED" and "MONITOR_QUERY_FAILED" in row.issues
+            assert not row.metrics.get("coverage_observed_at")
+            assert session.execute(text("SELECT 1")).scalar_one() == 1
+    finally:
+        redis_client.delete(key)
+
+
+def test_later_freshness_batch_failure_preserves_previous_complete_metrics(
+    committed_sync_seed, redis_client, monkeypatch
+):
+    from sqlalchemy.orm import Session
+
+    from tests.modules.reporting.test_health_adaptive_batches import _pool
+
+    seed, factory = committed_sync_seed
+    args, key = _pool(seed, factory, monkeypatch, redis_client)
+    with factory() as session, session.begin():
+        session.execute(
+            text("""
+            INSERT INTO advertiser_account(tenant_id,advertiser_id,name,currency,timezone,remote_status,ownership_conflict)
+            SELECT :tenant,'fresh-batch-'||i,'','USD','UTC','ENABLE',false FROM generate_series(1,513) i
+        """),
+            {"tenant": seed.tenant_id},
+        )
+        session.execute(
+            text("""
+            INSERT INTO ad_sync_account(tenant_id,advertiser_id,owner_bc_id)
+            SELECT :tenant,'fresh-batch-'||i,'bc-a' FROM generate_series(1,513) i
+        """),
+            {"tenant": seed.tenant_id},
+        )
+        plan = session.get(AdSyncBc, (seed.tenant_id, "bc-a"))
+        plan.last_active_advertiser_ids = health.owned_accounts(session, plan)
+        old = session.get(ReportSyncHealth, (seed.tenant_id, "bc-a")).observed_at
+    original = Session.execute
+    batches = []
+
+    def fail_second(db, statement, *args, **kwargs):
+        if "WITH active AS" in str(statement):
+            parameters = kwargs.get("params", args[0] if args else {})
+            batches.append(len(parameters["ids"]))
+            if len(batches) == 2:
+                original(db, text("SET LOCAL statement_timeout='50ms'"))
+                original(db, text("SELECT pg_sleep(0.1)"))
+        return original(db, statement, *args, **kwargs)
+
+    monkeypatch.setattr(Session, "execute", fail_second)
+    try:
+        assert health.run_bc_health(**args) == "FAILED"
+        assert batches == [512, 129]
+        with factory() as session:
+            row = session.get(ReportSyncHealth, (seed.tenant_id, "bc-a"))
+            assert row.observed_at == old
+            assert row.metrics == {"prior_complete": 1}
+            assert "MONITOR_QUERY_FAILED" in row.issues
+        # 覆盖可独立开始，但没有把首批512个缺水位的部分计数写入正式指标。
+        assert json.loads(redis_client.get(key))["offset"] == 0
+    finally:
+        redis_client.delete(key)
+
+
 def test_failed_coverage_is_not_cleared_by_successful_freshness(
     committed_sync_seed, redis_client, monkeypatch
 ):

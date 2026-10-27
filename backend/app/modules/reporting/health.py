@@ -57,6 +57,7 @@ register_dispatch_task(HEALTH_BC_TASK, "control")
 HEALTH_CHUNK_SIZE = 64
 HEALTH_MAX_CHUNKS = 16
 HEALTH_CYCLE_SECONDS = 120
+FRESHNESS_BATCH_SIZE = 512
 COVERAGE_REFRESH = timedelta(minutes=3)
 COVERAGE_MAX_AGE = timedelta(minutes=5)
 COVERAGE_COUNTS = {"missing_directory_ads", "unlinked_material_posts"}
@@ -210,41 +211,46 @@ def measure_freshness(session, plan, *, now, accounts=None):
     params = _measurement_params(session, plan, now=now, owned=owned, coverage=False)
     # 每账户合并今日/昨日两类水位，只按主键读取最多四行；聚合保留缺失的 NULL。
     # 不再让双 JOIN 在大池重复随机读取，或改走整租户历史水位的哈希扫描。
-    rows = (
-        session.execute(
-            text("""
-        WITH active AS (
-          SELECT a.advertiser_id,a.timezone,(CAST(:now AS timestamptz) AT TIME ZONE a.timezone)::date AS local_day
-          FROM advertiser_account a WHERE a.tenant_id=:t AND a.advertiser_id=ANY(:ids)
-            AND a.advertiser_id=ANY(:active))
-        SELECT a.advertiser_id,a.timezone,a.local_day,kinds.kind AS report_kind,
-          kinds.last_success_at,kinds.previous_success_at
-        FROM active a
-        LEFT JOIN LATERAL (
-          SELECT
-            max(s.last_success_at) FILTER (WHERE s.report_kind='ad_day'
-              AND s.stat_date=a.local_day) AS ad_at,
-            max(s.last_success_at) FILTER (WHERE s.report_kind='ad_day'
-              AND s.stat_date=a.local_day-1) AS ad_previous_at,
-            max(s.last_success_at) FILTER (WHERE s.report_kind='material_day'
-              AND s.stat_date=a.local_day) AS material_at,
-            max(s.last_success_at) FILTER (WHERE s.report_kind='material_day'
-              AND s.stat_date=a.local_day-1) AS material_previous_at
-          FROM report_sync_state s
-          WHERE s.tenant_id=:t AND s.advertiser_id=a.advertiser_id
-            AND s.report_kind IN ('ad_day','material_day')
-            AND s.stat_date BETWEEN a.local_day-1 AND a.local_day
-        ) recent ON true
-        CROSS JOIN LATERAL (VALUES
-          ('ad_day',recent.ad_at,recent.ad_previous_at),
-          ('material_day',recent.material_at,recent.material_previous_at)
-        ) kinds(kind,last_success_at,previous_success_at)
-    """),
-            params,
+    # 一次求出完整活跃归属集合；只拆SQL执行，不降低覆盖、不分批发布。
+    # 每句仍受原5秒限制，调用方10秒总预算覆盖全部批次与后续指标。
+    active = sorted(set(owned) & set(params["active"]))
+    rows = []
+    for offset in range(0, len(active), FRESHNESS_BATCH_SIZE):
+        rows.extend(
+            session.execute(
+                text("""
+            WITH active AS (
+              SELECT a.advertiser_id,a.timezone,(CAST(:now AS timestamptz) AT TIME ZONE a.timezone)::date AS local_day
+              FROM advertiser_account a WHERE a.tenant_id=:t AND a.advertiser_id=ANY(:ids)
+                AND a.advertiser_id=ANY(:active))
+            SELECT a.advertiser_id,a.timezone,a.local_day,kinds.kind AS report_kind,
+              kinds.last_success_at,kinds.previous_success_at
+            FROM active a
+            LEFT JOIN LATERAL (
+              SELECT
+                max(s.last_success_at) FILTER (WHERE s.report_kind='ad_day'
+                  AND s.stat_date=a.local_day) AS ad_at,
+                max(s.last_success_at) FILTER (WHERE s.report_kind='ad_day'
+                  AND s.stat_date=a.local_day-1) AS ad_previous_at,
+                max(s.last_success_at) FILTER (WHERE s.report_kind='material_day'
+                  AND s.stat_date=a.local_day) AS material_at,
+                max(s.last_success_at) FILTER (WHERE s.report_kind='material_day'
+                  AND s.stat_date=a.local_day-1) AS material_previous_at
+              FROM report_sync_state s
+              WHERE s.tenant_id=:t AND s.advertiser_id=a.advertiser_id
+                AND s.report_kind IN ('ad_day','material_day')
+                AND s.stat_date BETWEEN a.local_day-1 AND a.local_day
+            ) recent ON true
+            CROSS JOIN LATERAL (VALUES
+              ('ad_day',recent.ad_at,recent.ad_previous_at),
+              ('material_day',recent.material_at,recent.material_previous_at)
+            ) kinds(kind,last_success_at,previous_success_at)
+        """),
+                {**params, "ids": active[offset : offset + FRESHNESS_BATCH_SIZE]},
+            )
+            .mappings()
+            .all()
         )
-        .mappings()
-        .all()
-    )
     stale = {"ad_day": set(), "material_day": set()}
     times = []
     for row in rows:
@@ -1090,6 +1096,43 @@ def run_bc_health(*, database_engine, redis_client, context, bc_id, cycle=None):
                     )
                 # 失败不推进任何成功观测时间，分钟失败与覆盖失败不能互相清除。
                 row.status = "DEGRADED"
+                if cycle is None:
+                    # 分钟水位失败不能阻止到期的覆盖观测。失败事实先留在外层，
+                    # 授权/范围读取或outbox登记再失败，只回滚此处独立保存点。
+                    session.flush()
+                    try:
+                        with session.begin_nested(), query_budget(session, seconds=2):
+                            scope = _health_scope(
+                                session, plan, owned_accounts(session, plan)
+                            )
+                            session.refresh(plan)
+                            if (
+                                plan.enabled
+                                and plan.actor_id == context.actor_id
+                                and _health_scope(
+                                    session, plan, owned_accounts(session, plan)
+                                )
+                                == scope
+                            ):
+                                require_tenant(
+                                    session,
+                                    actor_id=context.actor_id,
+                                    tenant_id=context.tenant_id,
+                                    action="reporting_write",
+                                )
+                                _schedule_coverage(
+                                    session,
+                                    plan,
+                                    redis_client,
+                                    row=row,
+                                    scope=scope,
+                                    now=datetime.now(UTC),
+                                )
+                                session.flush()
+                    except Exception:
+                        logger.exception(
+                            "sync coverage dispatch deferred after freshness failure"
+                        )
                 if isinstance(error, _HealthBatchTimeout):
                     raw = redis_client.get(_health_progress_key(*key))
                     progress: _HealthProgress | None = json.loads(raw) if raw else None

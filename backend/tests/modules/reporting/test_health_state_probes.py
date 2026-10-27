@@ -84,16 +84,24 @@ def test_health_states_use_one_bounded_probe_per_account(session, sync_seed):
         measure_health(session, plan, now=now, accounts=accounts)
     finally:
         event.remove(conn, "before_cursor_execute", capture)
-    assert len(queries) == 1
-    sql, params = queries[0]
-    actual = conn.exec_driver_sql(sql, params).all()
+    assert len(queries) == 2
+    assert all(len(params["ids"]) <= 512 for _, params in queries)
+    actual = [
+        row
+        for sql, params in queries
+        for row in conn.exec_driver_sql(sql, params).all()
+    ]
     expected = session.execute(
         text(REFERENCE), {"now": now, "t": sync_seed.tenant_id, "ids": accounts}
     ).all()
     assert sorted(actual) == sorted(expected)
-    explain = conn.exec_driver_sql(
-        "EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) " + sql, params
-    ).scalar_one()[0]
-    visits, rows = _state_work(explain["Plan"])
-    assert rows <= 4 * len(accounts), explain
-    assert visits <= len(accounts), explain
+    visits = rows = 0
+    for sql, params in queries:
+        explain = conn.exec_driver_sql(
+            "EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) " + sql, params
+        ).scalar_one()[0]
+        batch_visits, batch_rows = _state_work(explain["Plan"])
+        visits += batch_visits
+        rows += batch_rows
+    assert rows <= 4 * len(accounts)
+    assert visits <= len(accounts)

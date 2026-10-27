@@ -2,7 +2,7 @@
 
 import hashlib
 import json
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 
 from sqlalchemy import text
 
@@ -143,9 +143,10 @@ def resolve_spark_videos(session, job, reader) -> bool:
         ).hexdigest()
         now = datetime.now(UTC)
         cache = job.progress.get("spark_asset_content", {})
-        if cache.get("scope") != scope_key or datetime.fromisoformat(
-            cache["at"]
-        ) < now - timedelta(minutes=5):
+        # 缓存只有VID/内容摘要/大小，不含临时URL；同一身份和VID范围内作为
+        # 本轮证据续用。按墙钟过期会让排队超过五分钟的每一步都重读素材，
+        # 永远到不了帖子匹配。范围变化立即失效，依赖退避开启下一轮时清除。
+        if cache.get("scope") != scope_key:
             assets = reader.material_video_content(
                 advertiser_id=job.advertiser_ids[0], video_ids=tuple(videos)
             )
