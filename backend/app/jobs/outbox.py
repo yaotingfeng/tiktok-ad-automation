@@ -362,6 +362,14 @@ def flush_dispatch(limit: int = 100) -> int:
                             kwargs=kwargs,
                             task_id=str(record.id),
                             queue=queue,
+                            # Redis 0 最高；纯补位唤醒让出 control 给每秒 flush，
+                            # 避免业务 outbox 已就绪但发送 tick 排队过期。正文/身份不变。
+                            **(
+                                {"priority": 3}
+                                if record.task_name == "reporting.plan_due"
+                                and payload == {"dispatch_only": True}
+                                else {}
+                            ),
                         )
                 except Exception:
                     # Do not persist broker exceptions: they can contain secrets.

@@ -15,7 +15,8 @@ from typing import Any, cast
 from uuid import UUID, uuid4
 
 from sqlalchemy import inspect, text, tuple_
-from sqlalchemy.dialects.postgresql import insert
+from sqlalchemy.orm import QueryableAttribute, load_only
+from sqlalchemy.orm.util import identity_key
 from sqlmodel import Session, col, select
 
 from app.core.context import TenantContext
@@ -387,18 +388,51 @@ def _publish_entities(
             values[key] = value
     result: list[AdObject] = []
     for batch in _batches(list(values.values())):
-        statement = insert(AdObject).values(batch)
+        # 对象配置可能很大；固定SQL避免每500条重新编译8000个参数，发布仍原子。
         session.connection().execute(
-            statement.on_conflict_do_update(
-                index_elements=["tenant_id", "advertiser_id", "kind", "remote_id"],
-                set_={
-                    key: statement.excluded[key]
-                    for key in batch[0]
-                    if key not in {"tenant_id", "advertiser_id", "kind", "remote_id"}
-                },
-                where=col(AdObject.observed_at) <= statement.excluded.observed_at,
+            text("""
+            INSERT INTO ad_object (
+              tenant_id,advertiser_id,kind,remote_id,parent_kind,parent_remote_id,
+              ad_type,name,configuration,operation_status,review_status,delivery_status,
+              observed_at,published_version,source_connection_id,source_channel
             )
+            SELECT tenant_id,advertiser_id,kind,remote_id,parent_kind,parent_remote_id,
+              ad_type,name,configuration,operation_status,review_status,delivery_status,
+              observed_at,published_version,source_connection_id,source_channel
+            FROM jsonb_to_recordset(CAST(:rows AS jsonb)) AS incoming (
+              tenant_id uuid,advertiser_id text,kind text,remote_id text,
+              parent_kind text,parent_remote_id text,ad_type text,name text,
+              configuration jsonb,operation_status text,review_status text,
+              delivery_status text,observed_at timestamptz,published_version integer,
+              source_connection_id uuid,source_channel text
+            )
+            ON CONFLICT (tenant_id,advertiser_id,kind,remote_id) DO UPDATE SET
+              parent_kind=EXCLUDED.parent_kind,parent_remote_id=EXCLUDED.parent_remote_id,
+              ad_type=EXCLUDED.ad_type,name=EXCLUDED.name,
+              configuration=EXCLUDED.configuration,operation_status=EXCLUDED.operation_status,
+              review_status=EXCLUDED.review_status,delivery_status=EXCLUDED.delivery_status,
+              observed_at=EXCLUDED.observed_at,published_version=EXCLUDED.published_version,
+              source_connection_id=EXCLUDED.source_connection_id,
+              source_channel=EXCLUDED.source_channel
+            WHERE ad_object.observed_at<=EXCLUDED.observed_at
+            """),
+            {"rows": json.dumps(batch, default=str, ensure_ascii=False)},
         )
+        for item in batch:
+            loaded = session.identity_map.get(
+                identity_key(
+                    AdObject,
+                    (
+                        item["tenant_id"],
+                        item["advertiser_id"],
+                        item["kind"],
+                        item["remote_id"],
+                    ),
+                )
+            )
+            if loaded is not None:
+                # 原已加载配置也必须失效；窄回读不应留下同事务中的旧完整对象。
+                session.expire(loaded)
         # 被较新事实挡住的对象仍参与父目录及名称审计，保持原有发布语义。
         result.extend(
             session.exec(
@@ -409,6 +443,13 @@ def _publish_entities(
                     tuple_(col(AdObject.kind), col(AdObject.remote_id)).in_(
                         [(item["kind"], item["remote_id"]) for item in batch]
                     ),
+                )
+                .options(
+                    load_only(
+                        cast(QueryableAttribute[Any], AdObject.parent_kind),
+                        cast(QueryableAttribute[Any], AdObject.parent_remote_id),
+                        cast(QueryableAttribute[Any], AdObject.name),
+                    )
                 )
                 .execution_options(populate_existing=True)
             ).all()

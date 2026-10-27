@@ -1375,7 +1375,14 @@ def plan_due(*, tenant_id=None, actor_id=None, payload=None):
         with Redis.from_url(settings.REDIS_URL) as redis:
             allow_backfill = planner.backfill_allowed(redis, now)
         # 报表与目录共用轻量补位信号；只领取本地持久任务，不重做外部筛选。
-        return _dispatch_pending(engine, now, allow_backfill=allow_backfill)
+        count = _dispatch_pending(engine, now, allow_backfill=allow_backfill)
+        if count:
+            from app.jobs.tasks import drain_dispatch
+
+            # 领取事务已提交，再复用原一秒公平发送预算；新业务工作无需等第二个 tick。
+            # 空补位不扫描 outbox，失败消息仍由原持久记录与 broker 退避恢复。
+            drain_dispatch()
+        return count
     with Redis.from_url(settings.REDIS_URL) as redis:
         return plan_due_runs(database_engine=engine, redis_client=redis)
 

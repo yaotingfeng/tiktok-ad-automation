@@ -55,7 +55,12 @@ def test_large_full_directory_publish_preserves_every_object_and_material(
         page=DirectoryPage(items, materials, None, True, CallEvidence()),
         claim_generation=1,
     )
-    stats = {"sql_count": 0, "sql_seconds": 0.0, "material_return_rows": 0}
+    stats = {
+        "sql_count": 0,
+        "sql_seconds": 0.0,
+        "material_return_rows": 0,
+        "wide_object_reads": 0,
+    }
     connection = session.connection()
 
     def before(_conn, _cursor, _sql, _params, context, _many):
@@ -66,6 +71,8 @@ def test_large_full_directory_publish_preserves_every_object_and_material(
         stats["sql_seconds"] += monotonic() - context.test_started
         if "INSERT INTO ad_material_reference" in sql and "RETURNING" in sql:
             stats["material_return_rows"] += cursor.rowcount
+        if sql.startswith("SELECT") and "ad_object.configuration" in sql:
+            stats["wide_object_reads"] += 1
 
     event.listen(connection, "before_cursor_execute", before)
     event.listen(connection, "after_cursor_execute", after)
@@ -134,6 +141,40 @@ def test_large_full_directory_publish_preserves_every_object_and_material(
     )
     record_property("large_directory_repeat_seconds", repeat_seconds)
     assert repeat_seconds < 45
+    # 发布后的父链与系列名审计不需要再次传输上万条完整配置。
+    assert stats["wide_object_reads"] == 0
+
+
+def test_object_publish_refreshes_loaded_configuration_after_narrow_read(
+    session, directory_seed
+):
+    from datetime import timedelta
+
+    from app.modules.ads.sync import _entity_json, _publish_entities
+
+    current = directory_seed.row
+    original_version = current.published_version
+    observed = current.observed_at + timedelta(seconds=1)
+    incoming = replace(
+        _page(directory_seed).items[0],
+        ref=current.ref,
+        observed_at=observed,
+        name="更新后的广告",
+        configuration={"creative": "新的配置"},
+    )
+    run = _run(session, directory_seed, kind="ad")
+    published = _publish_entities(
+        session,
+        [_entity_json(incoming)],
+        run=run,
+        version=original_version + 1,
+        fallback=observed,
+    )
+    assert published == [current]
+    assert current.name == incoming.name
+    assert current.configuration == incoming.configuration
+    assert current.observed_at == observed
+    assert current.published_version == original_version + 1
 
 
 @pytest.mark.parametrize("expire_identity", [False, True])
