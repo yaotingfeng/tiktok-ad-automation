@@ -112,43 +112,68 @@ def measure_health(session, plan, *, now, accounts=None):
             times.append(measured_at)
         if at is None:
             stale[row["report_kind"]].add(row["advertiser_id"])
-    missing = (
-        session.execute(
-            text("""
+    # 逐批完整测量；任一批失败仍向外抛出，不能把部分覆盖标记为健康。
+    # 广告已缺失/过期即已证明缺口，不再随机读取其父链；父层同样短路。
+    missing = []
+    directory_accounts = sorted(set(owned))
+    for offset in range(0, len(directory_accounts), 256):
+        missing.extend(
+            session.execute(
+                text("""
         SELECT r.advertiser_id,r.ad_id FROM ad_report_day r
-        LEFT JOIN ad_object a ON a.tenant_id=r.tenant_id AND a.advertiser_id=r.advertiser_id AND a.kind='ad' AND a.remote_id=r.ad_id
-        LEFT JOIN ad_object g ON g.tenant_id=r.tenant_id AND g.advertiser_id=r.advertiser_id AND g.kind='adgroup' AND g.remote_id=r.adgroup_id
-        LEFT JOIN ad_object c ON c.tenant_id=r.tenant_id AND c.advertiser_id=r.advertiser_id AND c.kind='campaign' AND c.remote_id=r.campaign_id
+        LEFT JOIN LATERAL (
+          SELECT true AS fresh FROM ad_object o
+          WHERE o.tenant_id=r.tenant_id AND o.advertiser_id=r.advertiser_id
+            AND o.kind='ad' AND o.remote_id=r.ad_id
+            AND o.observed_at >= CASE WHEN r.advertiser_id=ANY(:strict_accounts)
+              THEN :rule_cutoff ELSE :status_cutoff END LIMIT 1
+        ) a ON true
+        LEFT JOIN LATERAL (
+          SELECT true AS fresh FROM ad_object o
+          WHERE a.fresh AND o.tenant_id=r.tenant_id AND o.advertiser_id=r.advertiser_id
+            AND o.kind='adgroup' AND o.remote_id=r.adgroup_id
+            AND o.observed_at >= CASE WHEN r.advertiser_id=ANY(:strict_accounts)
+              THEN :rule_cutoff ELSE :parent_cutoff END LIMIT 1
+        ) g ON true
+        LEFT JOIN LATERAL (
+          SELECT true AS fresh FROM ad_object o
+          WHERE g.fresh AND o.tenant_id=r.tenant_id AND o.advertiser_id=r.advertiser_id
+            AND o.kind='campaign' AND o.remote_id=r.campaign_id
+            AND o.observed_at >= CASE WHEN r.advertiser_id=ANY(:strict_accounts)
+              THEN :rule_cutoff ELSE :parent_cutoff END LIMIT 1
+        ) c ON true
         WHERE r.tenant_id=:t AND r.advertiser_id=ANY(:ids)
-          AND r.stat_date BETWEEN :first_day AND :last_day AND r.stat_date=(CAST(:now AS timestamptz) AT TIME ZONE r.timezone)::date
-          AND r.spend>0 AND (a.remote_id IS NULL OR g.remote_id IS NULL OR c.remote_id IS NULL
-            OR a.observed_at < CASE WHEN r.advertiser_id=ANY(:strict_accounts)
-              THEN :rule_cutoff ELSE :status_cutoff END
-            OR g.observed_at < CASE WHEN r.advertiser_id=ANY(:strict_accounts)
-              THEN :rule_cutoff ELSE :parent_cutoff END
-            OR c.observed_at < CASE WHEN r.advertiser_id=ANY(:strict_accounts)
-              THEN :rule_cutoff ELSE :parent_cutoff END)
+          AND r.stat_date BETWEEN :first_day AND :last_day
+          AND r.stat_date=(CAST(:now AS timestamptz) AT TIME ZONE r.timezone)::date
+          AND r.spend>0 AND c.fresh IS NULL
     """),
-            params,
+                {**params, "ids": directory_accounts[offset : offset + 256]},
+            )
+            .mappings()
+            .all()
         )
-        .mappings()
-        .all()
-    )
-    unlinked = (
-        session.execute(
-            text("""
-        SELECT DISTINCT r.advertiser_id,r.main_material_id FROM material_report_day r
-        WHERE r.tenant_id=:t AND r.advertiser_id=ANY(:ids) AND r.spend>0
-          AND r.stat_date BETWEEN :first_day AND :last_day AND r.stat_date=(CAST(:now AS timestamptz) AT TIME ZONE r.timezone)::date
-          AND NOT EXISTS(SELECT 1 FROM material_post_link l WHERE l.tenant_id=r.tenant_id
-            AND l.advertiser_id=r.advertiser_id AND l.main_material_id=r.main_material_id
-            AND l.platform_material_id IS NOT NULL)
-    """),
-            params,
+    # 素材关联同样逐账户主键前缀短探测，避免反连接扫描所有历史映射。
+    unlinked = []
+    for offset in range(0, len(directory_accounts), 256):
+        unlinked.extend(
+            session.execute(
+                text("""
+            SELECT DISTINCT r.advertiser_id,r.main_material_id FROM material_report_day r
+            LEFT JOIN LATERAL (
+              SELECT true AS found FROM material_post_link l
+              WHERE l.tenant_id=r.tenant_id AND l.advertiser_id=r.advertiser_id
+                AND l.main_material_id=r.main_material_id
+                AND l.platform_material_id IS NOT NULL LIMIT 1
+            ) linked ON true
+            WHERE r.tenant_id=:t AND r.advertiser_id=ANY(:ids) AND r.spend>0
+              AND r.stat_date BETWEEN :first_day AND :last_day AND r.stat_date=(CAST(:now AS timestamptz) AT TIME ZONE r.timezone)::date
+              AND linked.found IS NULL
+        """),
+                {**params, "ids": directory_accounts[offset : offset + 256]},
+            )
+            .mappings()
+            .all()
         )
-        .mappings()
-        .all()
-    )
     pending = session.execute(
         text("""
         SELECT count(*) FROM management_task WHERE tenant_id=:t AND bc_id=:bc

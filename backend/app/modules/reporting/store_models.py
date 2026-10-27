@@ -9,7 +9,14 @@ from decimal import Decimal
 from typing import Any
 from uuid import UUID, uuid4
 
-from sqlalchemy import CheckConstraint, Column, ForeignKeyConstraint, Index, Numeric
+from sqlalchemy import (
+    CheckConstraint,
+    Column,
+    ForeignKeyConstraint,
+    Index,
+    Numeric,
+    text,
+)
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlmodel import Field, SQLModel
 
@@ -62,6 +69,14 @@ class AdReportDay(_Fact, table=True):
     __tablename__ = "ad_report_day"
     __table_args__ = (
         Index("ix_ad_report_day_period", "tenant_id", "stat_date", "advertiser_id"),
+        Index(
+            "ix_ad_report_day_spending",
+            "tenant_id",
+            "stat_date",
+            "advertiser_id",
+            postgresql_include=["timezone", "ad_id", "adgroup_id", "campaign_id"],
+            postgresql_where=text("spend > 0"),
+        ),
         Index("ix_ad_report_day_campaign", "tenant_id", "campaign_id", "stat_date"),
     )
     stat_date: date = Field(primary_key=True)
@@ -101,6 +116,14 @@ class MaterialReportDay(_Fact, table=True):
 
     __tablename__ = "material_report_day"
     __table_args__ = (
+        Index(
+            "ix_material_report_day_spending",
+            "tenant_id",
+            "stat_date",
+            "advertiser_id",
+            postgresql_include=["timezone", "main_material_id"],
+            postgresql_where=text("spend > 0"),
+        ),
         Index(
             "ix_material_report_day_period", "tenant_id", "stat_date", "advertiser_id"
         ),

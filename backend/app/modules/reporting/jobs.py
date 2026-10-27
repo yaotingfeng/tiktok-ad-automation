@@ -292,10 +292,13 @@ def claim_jobs(
     # 每类事实按任务创建先后服务；due_at 仅控制准入，退避不能把老任务反复排到队尾。
     # 关联使用独立窗口，不能以旧关联 FIFO 阻挡较新的事实。
     # 历史关联不再继承产生它的事实优先级，统一按due_at轮转；否则热报来源
-    # 的历史续步会永久压住每日/历史来源。历史事实仍保留一天后的优先级提升。
+    # 的历史续步会永久压住每日/历史来源。过期热报/收尾事实同样归入每日档，
+    # 不能带着 0/1/2 的实时优先级永久插队；历史事实仍保留一天后的优先级提升。
+    # 同档继续按 due_at 轮转，续页或准入退避更新到期时间后让出给已等待的任务。
     priority = (
         "CASE WHEN j.kind = 'material_links' THEN 2 "
-        "WHEN j.created_at <= :now - interval '24 hours' THEN LEAST(j.priority, 3) ELSE j.priority END"
+        "WHEN j.created_at <= :now - interval '24 hours' THEN 3 "
+        "ELSE GREATEST(j.priority, 3) END"
         if lane == "backfill"
         else "j.priority"
     )

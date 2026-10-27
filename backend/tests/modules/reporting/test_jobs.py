@@ -617,9 +617,20 @@ def test_hot_report_queues_missing_ad_and_parent_directory(
     dispatches = session.exec(
         select(PendingDispatch).where(PendingDispatch.tenant_id == sync_seed.tenant_id)
     ).all()
-    assert len(dispatches) == 3 and all(
-        r.task_name == "ads.targeted_step" for r in dispatches
-    )
+    assert len(dispatches) == 1
+    assert dispatches[0].task_name == "reporting.plan_due"
+    assert dispatches[0].payload == {"dispatch_only": True}
+    # 周期刷新先唤醒公平派发；无旧积压时三层目录仍能立即填满可用窗口。
+    from app.modules.reporting.job_tasks import _dispatch_directories
+
+    assert _dispatch_directories(session, datetime.now(UTC)) == 3
+    targeted = session.exec(
+        select(PendingDispatch).where(
+            PendingDispatch.tenant_id == sync_seed.tenant_id,
+            PendingDispatch.task_name == "ads.targeted_step",
+        )
+    ).all()
+    assert len(targeted) == 3
     # 完整新一轮热刷仍合并未完成的回读，不靠重放同一旧水位任务验证去重。
     job.status = "COMPLETE"
     session.flush()

@@ -215,7 +215,7 @@ def test_health_limits_history_scan_without_losing_local_date_boundaries(
         queries = []
 
         def capture(_conn, _cursor, sql, params, _context, _many, queries=queries):
-            if ("FROM ad_report_day r" in sql and "LEFT JOIN ad_object" in sql) or (
+            if ("FROM ad_report_day r" in sql and "FROM ad_object" in sql) or (
                 "SELECT DISTINCT r.advertiser_id,r.main_material_id" in sql
             ):
                 queries.append((sql, params))

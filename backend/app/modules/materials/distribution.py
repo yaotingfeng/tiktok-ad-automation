@@ -2194,22 +2194,46 @@ def repair_material_dispatches(session: Session, *, limit: int = 100) -> int:
         col(PendingDispatch.published_at) <= now - timedelta(seconds=120),
         PendingDispatch.available_at <= now,
     )
-    source_candidates = (
+    # 当前代已经有待投递消息时，沿用它的退避时间；重放更早消息会绕过退避，
+    # 也会让恢复成本随历史投递次数增长。先在小型 pending 索引中排除这些身份。
+    source_tasks = ["materials.upload_original", "materials.verify_original"]
+    scheduled_source = (
         select(PendingDispatch.id)
-        .join(
-            source_identities,
-            and_(
-                source_identities.c.tenant_id == PendingDispatch.tenant_id,
-                cast(source_identities.c.id, String) == payload["operation_id"].astext,
-            ),
-        )
         .where(
-            *due,
-            col(PendingDispatch.task_name).in_(
-                ["materials.upload_original", "materials.verify_original"]
-            ),
+            PendingDispatch.tenant_id == source_identities.c.tenant_id,
+            payload["operation_id"].astext == cast(source_identities.c.id, String),
+            col(PendingDispatch.task_name).in_(source_tasks),
+            col(PendingDispatch.published_at).is_(None),
             live_message(source_identities),
         )
+        .correlate(source_identities)
+        .exists()
+    )
+    missing_sources = (
+        sa_select(source_identities)
+        .where(~scheduled_source)
+        .cte("repair_missing_sources")
+        .prefix_with("MATERIALIZED")
+    )
+    # 同一操作/代数只需一条原消息恢复推进；其余历史消息仍保留审计和幂等键。
+    # LATERAL LIMIT 保证查到一个有效候选即停止，不把数万条旧消息搬回 Python。
+    source_message = (
+        select(PendingDispatch.id)
+        .where(
+            PendingDispatch.tenant_id == missing_sources.c.tenant_id,
+            payload["operation_id"].astext == cast(missing_sources.c.id, String),
+            *due,
+            col(PendingDispatch.task_name).in_(source_tasks),
+            live_message(missing_sources),
+        )
+        .correlate(missing_sources)
+        .limit(1)
+        .lateral("repair_source_message")
+    )
+    source_candidates = (
+        select(source_message.c.id)
+        .select_from(missing_sources)
+        .join(source_message, text("true"))
     )
     source_started = (
         select(MaterialUploadAttempt.id)

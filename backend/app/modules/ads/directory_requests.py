@@ -13,6 +13,7 @@ from app.core.config import settings
 from app.core.context import TenantContext
 from app.core.errors import DomainError
 from app.integrations.tiktok.contracts.context import FrozenTikTokRoute
+from app.jobs.outbox import enqueue_after_commit
 from app.modules.accounts.routing import verify_route
 from app.modules.ads.directory_dispatch import enqueue_directory_step
 from app.modules.ads.models import AdObject
@@ -190,19 +191,28 @@ def directory_due_accounts(
     idle = [advertiser_id for advertiser_id in accounts if advertiser_id not in active]
     fresh: set[str] = set()
     if idle:
+        # 只需任一最近成功证据；逐账户找到首条即停，避免 DISTINCT 扫完运行历史。
+        # 保留原有成功范围：不额外收窄 BC、冻结路由或定向 ID 条件。
         fresh = set(
-            session.exec(
-                select(AdDirectoryRun.advertiser_id)
-                .where(
-                    AdDirectoryRun.tenant_id == tenant_id,
-                    col(AdDirectoryRun.advertiser_id).in_(idle),
-                    AdDirectoryRun.status == "COMPLETE",
-                    AdDirectoryRun.query["include_deleted"].as_boolean().is_(True),
-                    col(AdDirectoryRun.completed_at)
-                    > now - INACTIVE_DIRECTORY_INTERVAL,
-                )
-                .distinct()
-            ).all()
+            session.connection()
+            .execute(
+                text("""
+                SELECT a.advertiser_id FROM unnest(CAST(:accounts AS text[])) a(advertiser_id)
+                JOIN LATERAL (
+                  SELECT 1 FROM ad_directory_run r
+                  WHERE r.tenant_id=:tenant AND r.advertiser_id=a.advertiser_id
+                    AND r.status='COMPLETE'
+                    AND CAST(r.query->>'include_deleted' AS boolean) IS true
+                    AND r.completed_at > :cutoff LIMIT 1
+                ) recent ON true
+                """),
+                {
+                    "tenant": tenant_id,
+                    "accounts": idle,
+                    "cutoff": now - INACTIVE_DIRECTORY_INTERVAL,
+                },
+            )
+            .scalars()
         )
     return [
         advertiser_id
@@ -248,12 +258,14 @@ def request_directory(
     ad_types: Mapping[str, Mapping[str, Collection[str]]] | None = None,
     include_deleted: bool = False,
     workload: str | None = None,
+    dispatch_immediately: bool = True,
 ) -> int:
     """ad_types 为空表示请求全部类型全部层级；周期调度传入 directory_ad_types 的裁剪结果。
 
     同一账户同一查询已有尚未开始的运行时不再新建：积压期间每轮的周期请求
     不会层层叠加，排队中的那一条开始执行时自然读到最新数据。
     历史身份补录可显式包含已删除对象；仍按指定ID有界读取，不扩大为全账户扫描。
+    周期定向刷新关闭立即入队，只唤醒公平派发；操作后的显式回读保留立即投递。
     """
     if not settings.ADS_SYNC_ENABLED or frozen_route.get("channel") != "OFFICIAL_API":
         return 0
@@ -302,6 +314,7 @@ def request_directory(
         text("SELECT pg_advisory_xact_lock(:key)"), {"key": slot_id.int % (2**63)}
     )
     created = 0
+    refill_run = None
     for advertiser_id in advertiser_ids:
         account_refs = tuple(ref for ref in refs if ref.advertiser_id == advertiser_id)
         for kind, ad_type, page_size in DIRECTORY_SPECS:
@@ -398,7 +411,20 @@ def request_directory(
                 session.add(run)
                 if scope == "targeted":
                     session.flush()
-                    enqueue_directory_step(session, run, initial=True)
+                    if dispatch_immediately:
+                        enqueue_directory_step(session, run, initial=True)
+                    elif refill_run is None:
+                        refill_run = run
                 created += 1
     session.flush()
+    if refill_run is not None:
+        # 整批只发一次同事务唤醒，空槽无需等待 Beat；统一派发器先服务已有积压。
+        # 使用请求专属键，不能吞掉同一运行完成后的补位信号。
+        enqueue_after_commit(
+            session,
+            context=context,
+            task_name="reporting.plan_due",
+            task_key=f"directory-request-refill:{refill_run.id}:{refill_run.claim_generation}",
+            payload={"dispatch_only": True},
+        )
     return created

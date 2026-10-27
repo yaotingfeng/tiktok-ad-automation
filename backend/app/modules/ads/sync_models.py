@@ -12,6 +12,7 @@ from sqlalchemy import (
     Identity,
     Index,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlmodel import Field, SQLModel
@@ -116,6 +117,15 @@ class AdDirectoryRun(SyncRunFields, table=True):
     __tablename__ = "ad_directory_run"
     __table_args__ = (
         *run_constraints("ad_directory_run"),
+        Index(
+            "ix_ad_directory_recent_success",
+            "tenant_id",
+            "advertiser_id",
+            "completed_at",
+            postgresql_where=text(
+                "status = 'COMPLETE' AND CAST(query->>'include_deleted' AS boolean) IS TRUE"
+            ),
+        ),
         CheckConstraint(
             "workload IN ('live','background')", name="ck_ad_directory_workload"
         ),

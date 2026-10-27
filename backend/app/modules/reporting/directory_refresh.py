@@ -173,6 +173,7 @@ def refresh_report_directory(
             actor_id=job.actor_id,
             advertiser_ids=advertisers,
             scope="targeted",
+            dispatch_immediately=False,
             refs=tuple(refs),
             ad_types={adv: {ad_type: types[adv][ad_type]} for adv in advertisers},
         )
@@ -252,6 +253,7 @@ def request_link_directory(
             frozen_route=job.frozen_route,
             advertiser_ids=job.advertiser_ids,
             scope="targeted",
+            dispatch_immediately=False,
             include_deleted=True,
             workload=workload,
             refs=tuple(

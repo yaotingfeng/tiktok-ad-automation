@@ -469,20 +469,25 @@ def known_reporting_accounts(session, plan, *, accounts, now) -> set[str]:
         days.setdefault(day, []).append(advertiser)
     known: set[str] = set()
     for day, candidates in days.items():
-        # 每账户用事实表主键前缀探测，找到任意一行即结束；不按消费金额筛选。
+        # LATERAL LIMIT 阻止 EXISTS OR 被改成整日事实哈希扫描；广告命中后
+        # 不再读取素材。候选已按账户自身时区分日，仍保留零消耗事实。
         known.update(
             session.connection()
             .execute(
                 text("""
-            SELECT a.advertiser_id FROM advertiser_account a
-            WHERE a.tenant_id=:tenant AND a.advertiser_id=ANY(:accounts)
-              AND (EXISTS (
-                SELECT 1 FROM ad_report_day r WHERE r.tenant_id=a.tenant_id
-                  AND r.advertiser_id=a.advertiser_id AND r.stat_date=:day
-              ) OR EXISTS (
-                SELECT 1 FROM material_report_day r WHERE r.tenant_id=a.tenant_id
-                  AND r.advertiser_id=a.advertiser_id AND r.stat_date=:day
-              ))
+            SELECT a.advertiser_id
+            FROM unnest(CAST(:accounts AS text[])) a(advertiser_id)
+            LEFT JOIN LATERAL (
+              SELECT true AS found FROM ad_report_day r
+              WHERE r.tenant_id=:tenant AND r.advertiser_id=a.advertiser_id
+                AND r.stat_date=:day LIMIT 1
+            ) ad ON true
+            LEFT JOIN LATERAL (
+              SELECT true AS found FROM material_report_day r
+              WHERE ad.found IS NULL AND r.tenant_id=:tenant
+                AND r.advertiser_id=a.advertiser_id AND r.stat_date=:day LIMIT 1
+            ) mat ON true
+            WHERE ad.found OR mat.found
         """),
                 {"tenant": plan.tenant_id, "accounts": candidates, "day": day},
             )

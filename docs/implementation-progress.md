@@ -3543,3 +3543,10 @@ CI affected后端1017项通过、0失败/0并行不稳定，Ruff/ty通过；前�
 - 用户选择“让系统自己重建”。设计：只对带 TikTok `request_id` 的 CAMPAIGN/ADGROUP 开放，并且只允许原样重发冻结正文（同一 request_id）。即使对象其实已创建，TikTok 也会按 request_id 去重。条件（`CONFIRMED_ABSENT`）：无远端 ID/mismatch/租约；没有 CREATED/LATE_CREATED/LEASE_EXPIRED_ARMED 或带 remote_id 的证据；所有 REQUEST_ARMED 的正文摘要与冻结正文一致；所有 READBACK_PAGE 都是 total=0、ids=[]；至少一次 OBJECT 第 1 页空回读，晚于最后一次发出 10 分钟以上。
 - 恢复 RETRY 把满足条件的 UNKNOWN 步骤列为可重试，记 `RETRY_REQUESTED` 带 `confirmed_absent=true`。领取（`claim_step`）/投递（`queue_step`）只认“最后一次发出之后有这种批准”（`CONFIRMED_ABSENT_RESEND`）：新本地 attempt 记证据，`StepClaim.request_attempt_id` 取首次发出的 attempt，执行器用它校验与发送 request_id，冻结正文不变。再次发出后旧批准失效，结果仍未知时需要新的空回读和新的批准。
 - 验证：新增 `test_confirmed_absent_resend.py` 5 项（批准后原样重发、只批准一次；发出不足 10 分钟、无回读、回读非零、有迟到创建回执都不可重试），旧代码不可导入；builds + integrations/tiktok 快速层 1580 通过；ruff、ty 通过。无迁移。
+
+### 2026-10-27 生产同步积压诊断与修复
+
+- 用户明确要求处理生产积压。确认服务在线但大租户历史素材、目录排队以及清理/补派查询存在问题。
+- 本轮修复历史任务公平档位、周期目录公平入队、已知事实账户索引短探测、来源素材补派历史扫描和清理分批提交；任务正文/队列路由及现有并发/配额保持；无迁移方案未解决目录与健康事实扫描，补充 0044 三项派生索引候选，待明确迁移授权。
+- 独立生产只读查询验证：来源候选约 31ms，4859 账户事实筛选约 127ms。整合快速层 1223 通过/3 跳过，来源补派与投递相关 43 通过，清理相关 131 项通过，索引/健康/目录包 126 项通过，Ruff/ty/格式通过；当前未发布，不声明积压已解决。
+- 大租户健康与目录规划仅改查询仍超时，补充部分覆盖索引及完整短路查询；本地扫描规模已下降，生产整轮性能仍待实际迁移后验证。详见 [诊断、验证与发布观察](validation/2026-10-27-sync-backlog.md)。

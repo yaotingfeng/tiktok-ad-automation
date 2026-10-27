@@ -1,5 +1,6 @@
 """报表后台入口：冻结授权、分档规划、持久派发与有限租约恢复。"""
 
+import json
 import logging
 import time
 from contextlib import contextmanager
@@ -10,7 +11,7 @@ from uuid import UUID
 
 from billiard.exceptions import SoftTimeLimitExceeded
 from redis import Redis
-from sqlalchemy import case, delete, func, text, update
+from sqlalchemy import case, delete, func, text, tuple_, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.orm import aliased
@@ -48,7 +49,6 @@ from app.modules.reporting.jobs import (
     _CountingReader,
     _read_all,
     claim_jobs,
-    cleanup_material_pages,
     execute_job,
     request_time,
 )
@@ -58,7 +58,7 @@ from app.modules.reporting.lanes import (
 )
 from app.modules.reporting.metrics import parse_decimal
 from app.modules.reporting.partitions import ensure_month_partitions
-from app.modules.reporting.query_models import QuerySnapshot
+from app.modules.reporting.query_models import QuerySnapshot, QuerySnapshotRow
 from app.modules.reporting.store_models import (
     AdSyncBc,
     CampaignReportHour,
@@ -66,6 +66,7 @@ from app.modules.reporting.store_models import (
     ReportBalanceRun,
     ReportDispatchCursor,
     ReportSyncJob,
+    ReportSyncPage,
 )
 
 logger = logging.getLogger(__name__)
@@ -964,31 +965,56 @@ DIRECTORY_PAGE_RETENTION = timedelta(hours=1)
 DIRECTORY_PAGE_CLEANUP_RUNS = 2000
 # 每轮任务内继续分批清理的时间预算（任务软超时 55 秒）；积压时下一轮继续。
 DIRECTORY_PAGE_CLEANUP_SECONDS = 30
+# 先按主键取有限候选，再判断保留期，避免无时间索引时 LIMIT 仍扫描全表。
+CLEANUP_SCAN_ROWS = 1000
+CLEANUP_BATCH_ROWS = 100
+# 无页父任务很小，单批放大到1000；大JSONB子页仍独立限制100页。
+CLEANUP_JOB_BATCH_ROWS = 1000
+CLEANUP_STATEMENT_MS = 2000
+CLEANUP_LOCK_MS = 200
+CLEANUP_CATEGORIES = (
+    "material_pages",
+    "jobs",
+    "hours",
+    "snapshots",
+    "balances",
+    "directory_superseded",
+    "directory_pages",
+)
 
 
-def _supersede_stalled_directory_runs(now):
+def _supersede_stalled_directory_runs(now, *, candidate_ids=None, batch_limit=None):
     """同一账户、层级、广告类型已有更新运行发布后，较早的未完成运行不可能再发布
     （publish_directory 会以 directory_run_stale 拒绝）：标记为 STALE，暂存页随后清理。
     与 0031 迁移取消堆积运行同口径；租约有效的运行留给持有者结束，不抢改。"""
     newer = aliased(AdDirectoryRun)
+    candidates = select(AdDirectoryRun.id).where(
+        col(AdDirectoryRun.status).in_(["QUEUED", "RUNNING", "WAITING_REMOTE"]),
+        col(AdDirectoryRun.published_version).is_(None),
+        col(AdDirectoryRun.claimed_until).is_(None)
+        | (col(AdDirectoryRun.claimed_until) <= now),
+        col(AdDirectoryRun.created_at) < now - DIRECTORY_PAGE_RETENTION,
+        select(newer.id)
+        .where(
+            newer.tenant_id == AdDirectoryRun.tenant_id,
+            newer.advertiser_id == AdDirectoryRun.advertiser_id,
+            newer.kind == AdDirectoryRun.kind,
+            newer.ad_type == AdDirectoryRun.ad_type,
+            col(newer.request_sequence) > AdDirectoryRun.request_sequence,
+            col(newer.published_version).is_not(None),
+        )
+        .exists(),
+    )
+    if candidate_ids is not None:
+        candidates = candidates.where(col(AdDirectoryRun.id).in_(candidate_ids))
     return (
         update(AdDirectoryRun)
         .where(
-            col(AdDirectoryRun.status).in_(["QUEUED", "RUNNING", "WAITING_REMOTE"]),
-            col(AdDirectoryRun.published_version).is_(None),
-            col(AdDirectoryRun.claimed_until).is_(None)
-            | (col(AdDirectoryRun.claimed_until) <= now),
-            col(AdDirectoryRun.created_at) < now - DIRECTORY_PAGE_RETENTION,
-            select(newer.id)
-            .where(
-                newer.tenant_id == AdDirectoryRun.tenant_id,
-                newer.advertiser_id == AdDirectoryRun.advertiser_id,
-                newer.kind == AdDirectoryRun.kind,
-                newer.ad_type == AdDirectoryRun.ad_type,
-                col(newer.request_sequence) > AdDirectoryRun.request_sequence,
-                col(newer.published_version).is_not(None),
+            col(AdDirectoryRun.id).in_(
+                candidates.limit(batch_limit or CLEANUP_BATCH_ROWS).with_for_update(
+                    skip_locked=True
+                )
             )
-            .exists(),
         )
         .values(
             status="STALE",
@@ -1022,45 +1048,207 @@ def _expired_directory_runs(now):
     )
 
 
-def cleanup_store(session, *, now):
-    result = {}
-    for key, model, condition in (
-        (
-            "jobs",
-            ReportSyncJob,
-            col(ReportSyncJob.finished_at) < now - timedelta(days=7),
-        ),
-        (
-            "hours",
+def _cleanup_candidates(session, model, *, cursor, limit):
+    """主键窗口本身不附带过期条件；读取上限不受历史表大小或命中率影响。"""
+    keys = tuple(model.__table__.primary_key.columns)
+    statement = select(*keys).order_by(*keys).limit(limit)
+    if cursor:
+        values = []
+        for column, value in zip(keys, cursor, strict=True):
+            kind = column.type.python_type
+            values.append(
+                datetime.fromisoformat(value) if kind is datetime else kind(value)
+            )
+        statement = statement.where(tuple_(*keys) > tuple_(*values))
+    return keys, list(session.connection().execute(statement).all())
+
+
+def _cleanup_category(session, *, category, now, cursors):
+    terminal = col(ReportSyncJob.status).in_(["COMPLETE", "FAILED", "CANCELLED"])
+    expired_jobs = terminal & (col(ReportSyncJob.finished_at) < now - timedelta(days=7))
+    models = {
+        "jobs": (ReportSyncJob, expired_jobs),
+        "material_pages": (ReportSyncJob, expired_jobs),
+        "hours": (
             CampaignReportHour,
             col(CampaignReportHour.stat_hour) < now - timedelta(days=30),
         ),
-        ("snapshots", QuerySnapshot, col(QuerySnapshot.expires_at) < now),
-        (
-            "balances",
+        "snapshots": (QuerySnapshot, col(QuerySnapshot.expires_at) < now),
+        "balances": (
             ReportBalanceRun,
             (col(ReportBalanceRun.created_at) < now - timedelta(days=7))
-            & (col(ReportBalanceRun.status).in_(["COMPLETE", "FAILED"])),
+            & col(ReportBalanceRun.status).in_(["COMPLETE", "FAILED"]),
         ),
-    ):
-        result[key] = (
-            session.connection().execute(delete(model).where(condition)).rowcount
-        )
-    result["directory_superseded"] = (
-        session.connection().execute(_supersede_stalled_directory_runs(now)).rowcount
+        "directory_superseded": (AdDirectoryRun, None),
+        "directory_pages": (AdDirectoryRun, None),
+    }
+    model, condition = models[category]
+    limits = cursors.get("_limits", {}).get(category, {})
+    batch_limit = limits.get(
+        "batch", CLEANUP_JOB_BATCH_ROWS if category == "jobs" else CLEANUP_BATCH_ROWS
     )
-    result["directory_pages"] = cleanup_directory_pages(session, now=now)
-    result["material_pages"] = cleanup_material_pages(session, now=now)
+    keys, candidates = _cleanup_candidates(
+        session,
+        model,
+        cursor=cursors.get(category),
+        limit=limits.get("scan", CLEANUP_SCAN_ROWS),
+    )
+    if not candidates:
+        cursors[category] = None
+        cursors["_exhausted"] = True
+        return 0
+    scope = tuple_(*keys).in_(candidates)
+    eligible = select(*keys).where(scope)
+    if condition is not None:
+        eligible = eligible.where(condition)
+    has_pages = (
+        select(ReportSyncPage.job_id)
+        .where(ReportSyncPage.job_id == ReportSyncJob.id)
+        .exists()
+    )
+    if category == "material_pages":
+        eligible = eligible.where(has_pages)
+    elif category == "jobs":
+        eligible = eligible.where(~has_pages)
+    eligible = eligible.limit(batch_limit).with_for_update(skip_locked=True)
+    child_removed = 0
+    if category == "material_pages":
+        page_keys = (
+            select(ReportSyncPage.job_id, ReportSyncPage.page)
+            .where(col(ReportSyncPage.job_id).in_(eligible))
+            .limit(batch_limit)
+            .with_for_update(skip_locked=True)
+        )
+        statement = delete(ReportSyncPage).where(
+            tuple_(col(ReportSyncPage.job_id), col(ReportSyncPage.page)).in_(page_keys)
+        )
+    elif category == "jobs":
+        # 大 JSONB 子页另按页清理；只删已无页的父任务，禁止隐式大级联。
+        statement = delete(ReportSyncJob).where(
+            expired_jobs,
+            col(ReportSyncJob.id).in_(eligible),
+            ~select(ReportSyncPage.job_id)
+            .where(ReportSyncPage.job_id == ReportSyncJob.id)
+            .exists(),
+        )
+    elif category == "directory_superseded":
+        statement = _supersede_stalled_directory_runs(
+            now, candidate_ids=[row[0] for row in candidates], batch_limit=batch_limit
+        )
+    elif category == "directory_pages":
+        removed = cleanup_directory_pages(
+            session,
+            now=now,
+            candidate_ids=[row[0] for row in candidates],
+            batch_limit=batch_limit,
+        )
+        if not removed:
+            cursors[category] = [str(value) for value in candidates[-1]]
+        return removed
+    else:
+        if category == "snapshots":
+            # 快照同样可能包含大量行；先排空有界子行，再删除父记录。
+            rows = (
+                select(QuerySnapshotRow.snapshot_id, QuerySnapshotRow.row_key)
+                .where(col(QuerySnapshotRow.snapshot_id).in_(eligible))
+                .limit(batch_limit)
+                .with_for_update(skip_locked=True)
+            )
+            child_removed = (
+                session.connection()
+                .execute(
+                    delete(QuerySnapshotRow).where(
+                        tuple_(
+                            col(QuerySnapshotRow.snapshot_id),
+                            col(QuerySnapshotRow.row_key),
+                        ).in_(rows)
+                    )
+                )
+                .rowcount
+            )
+            eligible = eligible.where(
+                ~select(QuerySnapshotRow.snapshot_id)
+                .where(QuerySnapshotRow.snapshot_id == QuerySnapshot.id)
+                .exists()
+            )
+        statement = delete(model).where(tuple_(*keys).in_(eligible))
+    removed = session.connection().execute(statement).rowcount
+    # 仍有删除进展就复查同一窗口，以便一个大任务逐页排空；空窗口才前进。
+    if child_removed:
+        cursors["_child_progress"] = True
+    if not removed and not child_removed:
+        cursors[category] = [str(value) for value in candidates[-1]]
+    return removed
+
+
+def cleanup_store(session, *, now, categories=CLEANUP_CATEGORIES, cursors=None):
+    """每类只执行一批；调用方负责提交，不把某类超时扩散到其余保留策略。"""
+    cursors = {} if cursors is None else cursors
+    result = dict.fromkeys(categories, 0)
+    for category in categories:
+        try:
+            with session.begin_nested():
+                session.connection().execute(
+                    text(f"SET LOCAL statement_timeout = '{CLEANUP_STATEMENT_MS}ms'")
+                )
+                session.connection().execute(
+                    text(f"SET LOCAL lock_timeout = '{CLEANUP_LOCK_MS}ms'")
+                )
+                result[category] = _cleanup_category(
+                    session, category=category, now=now, cursors=cursors
+                )
+            # 短暂拥塞恢复后逐级放大，避免一次超时永久降低清理吞吐。
+            limits = cursors.get("_limits", {}).get(category)
+            if limits:
+                limits["scan"] = min(CLEANUP_SCAN_ROWS, limits["scan"] * 2)
+                maximum = (
+                    CLEANUP_JOB_BATCH_ROWS if category == "jobs" else CLEANUP_BATCH_ROWS
+                )
+                limits["batch"] = min(maximum, limits["batch"] * 2)
+        except DBAPIError as error:
+            # 数据库主动取消语句，savepoint 回滚后仍可处理其他类别；未知错误保留告警。
+            if getattr(error.orig, "sqlstate", None) not in {"57014", "55P03"}:
+                raise
+            # 大窗口超时后下轮缩小重试，保持原游标；不能永久重跑同一超大批。
+            limits = cursors.setdefault("_limits", {}).setdefault(category, {})
+            limits["scan"] = max(1, limits.get("scan", CLEANUP_SCAN_ROWS) // 4)
+            default_batch = (
+                CLEANUP_JOB_BATCH_ROWS if category == "jobs" else CLEANUP_BATCH_ROWS
+            )
+            limits["batch"] = max(1, limits.get("batch", default_batch) // 4)
+            cursors["_deferred"] = True
+            if limits["scan"] == limits["batch"] == 1:
+                logger.error(
+                    "report cleanup requires single-row retry: category=%s cursor=%s",
+                    category,
+                    cursors.get(category),
+                )
+            logger.warning(
+                "report cleanup batch deferred: category=%s sqlstate=%s",
+                category,
+                getattr(error.orig, "sqlstate", None),
+            )
     return result
 
 
-def cleanup_directory_pages(session, *, now):
-    """删除一批已发布或已作废运行的目录暂存页；返回删除的页数。"""
+def cleanup_directory_pages(session, *, now, candidate_ids=None, batch_limit=None):
+    """同时限制运行数与页数，单个大运行也不能产生无界 JSONB 删除。"""
+    runs = _expired_directory_runs(now)
+    if candidate_ids is not None:
+        runs = runs.where(col(AdDirectoryRun.id).in_(candidate_ids))
+    pages = (
+        select(AdDirectoryPage.run_id, AdDirectoryPage.page)
+        .where(col(AdDirectoryPage.run_id).in_(runs))
+        .limit(batch_limit or CLEANUP_BATCH_ROWS)
+        .with_for_update(skip_locked=True)
+    )
     return (
         session.connection()
         .execute(
             delete(AdDirectoryPage).where(
-                col(AdDirectoryPage.run_id).in_(_expired_directory_runs(now))
+                tuple_(col(AdDirectoryPage.run_id), col(AdDirectoryPage.page)).in_(
+                    pages
+                )
             )
         )
         .rowcount
@@ -1123,13 +1311,74 @@ def backfill_step(*, tenant_id, actor_id, payload):
 @celery_app.task(name="reporting.cleanup_store", time_limit=60, soft_time_limit=55)
 def cleanup_store_task():
     now = datetime.now(UTC)
-    with Session(engine) as session, session.begin():
-        result = cleanup_store(session, now=now)
-    # 首次上线时暂存页积压数 GB：在时间预算内继续分批，每批独立提交。
+    # 预算从第一次数据库操作前计算，每类轮流一批；任何批失败都不撤销已提交进展。
     deadline = time.monotonic() + DIRECTORY_PAGE_CLEANUP_SECONDS
-    removed = result["directory_pages"]
-    while removed and time.monotonic() < deadline:
-        with Session(engine) as session, session.begin():
-            removed = cleanup_directory_pages(session, now=now)
-        result["directory_pages"] += removed
+    result = dict.fromkeys(CLEANUP_CATEGORIES, 0)
+    cursor_key = "reporting:cleanup:cursors:v1"
+    with Redis.from_url(
+        settings.REDIS_URL,
+        decode_responses=True,
+        socket_timeout=2,
+        socket_connect_timeout=2,
+    ) as redis:
+        # 并发 Beat/人工重跑不交错推进游标；锁比60秒任务硬上限长，崩溃后自动释放。
+        lock = redis.lock("reporting:cleanup:lock:v1", timeout=120, blocking=False)
+        if not lock.acquire(blocking=False):
+            return result
+        try:
+            return _cleanup_store_batches(
+                redis, now=now, deadline=deadline, result=result, cursor_key=cursor_key
+            )
+        finally:
+            lock.release()
+
+
+def _cleanup_store_batches(redis, *, now, deadline, result, cursor_key):
+    cursors = {
+        key: json.loads(value)
+        for key, value in redis.hgetall(cursor_key).items()
+        if key in CLEANUP_CATEGORIES or key == "_limits"
+    }
+    completed = set()
+    retries = dict.fromkeys(CLEANUP_CATEGORIES, 0)
+    first_round = True
+    while first_round or time.monotonic() < deadline:
+        progressed = False
+        for category in CLEANUP_CATEGORIES:
+            if category in completed:
+                continue
+            # 首轮给每类一次独立机会，避免前几类耗尽软预算后固定饿死尾部类别。
+            if not first_round and time.monotonic() >= deadline:
+                return result
+            previous = cursors.get(category)
+            for marker in ("_child_progress", "_exhausted", "_deferred"):
+                cursors.pop(marker, None)
+            with Session(engine) as session, session.begin():
+                batch = cleanup_store(
+                    session, now=now, categories=(category,), cursors=cursors
+                )
+            # 只有数据库提交成功才推进恢复位置；Redis丢失只会安全重扫。
+            with redis.pipeline(transaction=True) as pipe:
+                pipe.hset(cursor_key, category, json.dumps(cursors.get(category)))
+                pipe.hset(cursor_key, "_limits", json.dumps(cursors.get("_limits", {})))
+                pipe.expire(cursor_key, 7 * 24 * 3600)
+                pipe.execute()
+            result[category] += batch[category]
+            if cursors.pop("_exhausted", False):
+                completed.add(category)
+            if cursors.pop("_deferred", False):
+                retries[category] += 1
+                # 先轮转给其他类别，再在预算内缩批重试；不必等下一小时才试小批。
+                if retries[category] >= 5:
+                    completed.add(category)
+                else:
+                    progressed = True
+            progressed |= (
+                bool(batch[category])
+                or bool(cursors.pop("_child_progress", False))
+                or cursors.get(category) != previous
+            )
+        first_round = False
+        if not progressed:
+            break
     return result
