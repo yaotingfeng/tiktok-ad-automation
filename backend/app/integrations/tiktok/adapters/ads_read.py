@@ -304,6 +304,15 @@ class AdsReadAdapter:
         return usages, complete
 
     def read_page(self, query: DirectoryQuery) -> DirectoryPage:
+        return self._read_page(query, defer_materials=False)
+
+    def read_primary_page(self, query: DirectoryQuery) -> DirectoryPage:
+        """持久目录先交付主响应；素材由独立子运行逐页提交，避免重放主请求。"""
+        return self._read_page(query, defer_materials=True)
+
+    def _read_page(
+        self, query: DirectoryQuery, *, defer_materials: bool
+    ) -> DirectoryPage:
         operation, arguments = compile_query(query)
         # 目录读取前核对当前账户权限；物理发送边界仍重复核验冻结路由。
         self._check_account(query.advertiser_id)
@@ -333,7 +342,15 @@ class AdsReadAdapter:
                 materials.extend(usage)
                 materials_complete &= complete
         missing = None
-        if query.kind == "ad" and query.ad_type == "SMART_PLUS" and items:
+        if (
+            defer_materials
+            and query.kind == "ad"
+            and query.ad_type == "SMART_PLUS"
+            and items
+        ):
+            materials_complete = False
+            missing = "material_supplement_pending"
+        elif query.kind == "ad" and query.ad_type == "SMART_PLUS" and items:
             try:
                 added, usages, complete = self._supplement(query, items)
                 items.extend(added)
@@ -404,69 +421,193 @@ class AdsReadAdapter:
             missing,
         )
 
+    def read_material_page(
+        self,
+        query: DirectoryQuery,
+        *,
+        ads: tuple[AdEntity, ...],
+        materials: tuple[AdMaterialUsage, ...],
+    ) -> DirectoryPage:
+        """一次只读一个素材子页；准入失败原样抛出，由持久运行保留页码。"""
+        if (
+            query.kind != "creative"
+            or query.ad_type != "SMART_PLUS"
+            or query.ids
+            or not ads
+            or query.page_size > 1000
+        ):
+            raise DomainError("ads_query_invalid", "素材补读范围无效")
+        owners = {ad.ref for ad in ads}
+        groups = {ad.parent_ref.remote_id for ad in ads if ad.parent_ref}
+        if (
+            len(owners) != len(ads)
+            or not groups
+            or len(groups) > 100
+            or any(
+                ad.ref.tenant_id != self.route.tenant_id
+                or ad.ref.advertiser_id != query.advertiser_id
+                or ad.ref.kind != "ad"
+                or ad.ad_type != "SMART_PLUS"
+                or ad.parent_ref is None
+                or ad.parent_ref.kind != "adgroup"
+                or ad.parent_ref.tenant_id != ad.ref.tenant_id
+                or ad.parent_ref.advertiser_id != ad.ref.advertiser_id
+                for ad in ads
+            )
+            or any(usage.use_ref.ad_ref not in owners for usage in materials)
+            or query.parent_ids
+            and set(query.parent_ids) != {ref.remote_id for ref in owners}
+        ):
+            raise DomainError("directory_scope_mismatch", "素材补读超出冻结父身份")
+        self._check_account(query.advertiser_id)
+        items, usages, known, next_page, evidence = self._supplement_page(
+            query, list(ads), page=query.page, page_size=query.page_size
+        )
+        # 一次索引冻结桥，避免每个子页素材反复线性扫描数万主响应身份。
+        bridges: dict[tuple, dict[MaterialUseRef, AdMaterialUsage]] = {}
+        for original in materials:
+            use = original.use_ref
+            for creative_id in original.creative_ids:
+                key = (
+                    use.ad_ref,
+                    use.platform_material_id,
+                    use.material_type,
+                    creative_id,
+                )
+                bridges.setdefault(key, {})[use] = original
+        merged: dict[MaterialUseRef, AdMaterialUsage] = {}
+        for usage in usages:
+            use = usage.use_ref
+            linked: dict[MaterialUseRef, AdMaterialUsage] = {}
+            for creative_id in usage.creative_ids:
+                linked.update(
+                    bridges.get(
+                        (
+                            use.ad_ref,
+                            use.platform_material_id,
+                            use.material_type,
+                            creative_id,
+                        ),
+                        {},
+                    )
+                )
+            if len(linked) > 1:
+                raise invalid()
+            if linked:
+                # 精确桥的素材状态与子响应的创意广告状态是不同层级，不能相互覆盖。
+                original = next(iter(linked.values()))
+                if (
+                    use.ad_material_id is not None
+                    and original.use_ref.ad_material_id is not None
+                    and use.ad_material_id != original.use_ref.ad_material_id
+                ):
+                    raise invalid()
+                usage = replace(
+                    usage,
+                    use_ref=replace(
+                        use,
+                        ad_material_id=use.ad_material_id
+                        or original.use_ref.ad_material_id,
+                    ),
+                    local_material_id=original.local_material_id,
+                    operation_status=original.operation_status,
+                    name=original.name,
+                )
+            usage = replace(usage, complete=usage.complete and known)
+            previous = merged.get(usage.use_ref)
+            if previous is not None:
+                if previous.operation_status != usage.operation_status:
+                    raise invalid()
+                usage = replace(
+                    usage,
+                    creative_ids=tuple(
+                        dict.fromkeys((*previous.creative_ids, *usage.creative_ids))
+                    ),
+                )
+            merged[usage.use_ref] = usage
+        self._check_account(query.advertiser_id)
+        return DirectoryPage(
+            tuple(items),
+            tuple(merged.values()),
+            next_page,
+            next_page is None,
+            evidence,
+            query.page,
+            known,
+            None if known else "CREATIVE_ASSOCIATION_INCOMPLETE",
+        )
+
+    def _supplement_page(self, query, ads, *, page, page_size):
+        ad_refs = {ad.ref.remote_id: ad.ref for ad in ads}
+        parent_refs = {ad.ref.remote_id: ad.parent_ref for ad in ads}
+        groups = sorted({ad.parent_ref.remote_id for ad in ads if ad.parent_ref})
+        filtering: dict[str, Any] = {
+            "adgroup_ids": groups,
+            "campaign_automation_type": "UPGRADED_SMART_PLUS",
+        }
+        if query.include_deleted:
+            filtering["primary_status"] = "STATUS_ALL"
+        response = self._call(
+            ADS_OPERATIONS["ad", False],
+            {
+                "advertiser_id": query.advertiser_id,
+                "filtering": filtering,
+                "page": page,
+                "page_size": page_size,
+            },
+        )
+        rows, next_page = paged_rows(response.data, page=page, page_size=page_size)
+        creatives, materials = [], []
+        complete = True
+        seen: set[str] = set()
+        for row in rows:
+            if (
+                row.get("advertiser_id") != query.advertiser_id
+                or row.get("adgroup_id") not in groups
+            ):
+                raise invalid()
+            if not row.get("smart_plus_ad_id") or not row.get("ad_id"):
+                complete = False
+                continue
+            asset_id = identifier(row["smart_plus_ad_id"])
+            identifier(row["ad_id"])
+            if asset_id not in ad_refs:
+                continue
+            expected_group = parent_refs[asset_id]
+            if expected_group is None or row["adgroup_id"] != expected_group.remote_id:
+                raise invalid()
+            entity = self._entity(
+                row, replace(query, kind="creative", ids=(), parent_ids=())
+            )
+            if entity.ref.remote_id in seen:
+                raise invalid()
+            seen.add(entity.ref.remote_id)
+            creatives.append(entity)
+            usage, known = self._materials(
+                row, ad_refs[asset_id], smart=False, creative_id=entity.ref.remote_id
+            )
+            materials.extend(usage)
+            complete &= known
+        return creatives, materials, complete, next_page, response.evidence
+
     def _supplement(
         self, query: DirectoryQuery, ads: list[AdEntity]
     ) -> tuple[list[AdEntity], list[AdMaterialUsage], bool]:
-        ad_refs = {ad.ref.remote_id: ad.ref for ad in ads}
-        groups = sorted({ad.parent_ref.remote_id for ad in ads if ad.parent_ref})
         creatives, materials = [], []
         complete = True
         seen: set[str] = set()
         page = 1
         while True:
-            # 不使用 ad_ids_v2：该筛选仅返回资产组摘要，会丢掉实际创意及素材。
-            filtering: dict[str, Any] = {
-                "adgroup_ids": groups,
-                "campaign_automation_type": "UPGRADED_SMART_PLUS",
-            }
-            if query.include_deleted:
-                filtering["primary_status"] = "STATUS_ALL"
-            response = self._call(
-                ADS_OPERATIONS["ad", False],
-                {
-                    "advertiser_id": query.advertiser_id,
-                    "filtering": filtering,
-                    "page": page,
-                    "page_size": 1000,
-                },
+            added, usages, known, next_page, _evidence = self._supplement_page(
+                query, ads, page=page, page_size=1000
             )
-            rows, next_page = paged_rows(response.data, page=page, page_size=1000)
-            for row in rows:
-                if (
-                    row.get("advertiser_id") != query.advertiser_id
-                    or row.get("adgroup_id") not in groups
-                ):
-                    raise invalid()
-                if not row.get("smart_plus_ad_id") or not row.get("ad_id"):
-                    complete = False
-                    continue
-                asset_id = identifier(row["smart_plus_ad_id"])
-                identifier(row["ad_id"])
-                if asset_id not in ad_refs:
-                    continue
-                expected_group = next(
-                    ad.parent_ref for ad in ads if ad.ref.remote_id == asset_id
-                )
-                if (
-                    expected_group is None
-                    or row["adgroup_id"] != expected_group.remote_id
-                ):
-                    raise invalid()
-                entity = self._entity(
-                    row, replace(query, kind="creative", ids=(), parent_ids=())
-                )
+            for entity in added:
                 if entity.ref.remote_id in seen:
                     raise invalid()
                 seen.add(entity.ref.remote_id)
-                creatives.append(entity)
-                usage, known = self._materials(
-                    row,
-                    ad_refs[row["smart_plus_ad_id"]],
-                    smart=False,
-                    creative_id=entity.ref.remote_id,
-                )
-                materials.extend(usage)
-                complete &= known
+            creatives.extend(added)
+            materials.extend(usages)
+            complete &= known
             if next_page is None:
                 break
             page = next_page

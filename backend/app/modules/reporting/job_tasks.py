@@ -43,6 +43,7 @@ from app.modules.ads.directory_requests import (
     directory_due_accounts,
     request_directory,
 )
+from app.modules.ads.material_directory_children import MATERIAL_CHILD_KEY
 from app.modules.ads.sync_models import AdDirectoryPage, AdDirectoryRun
 from app.modules.reporting import planner, publish
 from app.modules.reporting.jobs import (
@@ -331,9 +332,12 @@ def _dispatch_directories(session, now):
     ).one()
     available = max(0, DIRECTORY_DISPATCH_WINDOW - inflight)
     targeted_available = targeted_capacity(session, now)
-    # 素材目录每次十余页，系列/组/广告目录只有一两页且决定止损父链与目录新鲜度；
-    # 全量 lane 内对象目录优先，素材目录用剩余名额，避免旧素材积压饿死对象目录。
-    creative_last = case((col(AdDirectoryRun.kind) == "creative", 1), else_=0)
+    # 旧全账户创意扫描仍降后；主目录派生的素材子页沿原请求年龄续跑，
+    # 否则会永远排在对象队尾，并在执行前被下一轮主观察淘汰。
+    legacy_creative = (col(AdDirectoryRun.kind) == "creative") & ~col(
+        AdDirectoryRun.query
+    ).op("?")(MATERIAL_CHILD_KEY)
+    creative_last = case((legacy_creative, 1), else_=0)
     newer_scan = aliased(AdDirectoryRun)
     # 历史素材全量扫描曾重复堆积。同一冻结授权和完整查询仅先推进最新一轮，
     # 它成功发布后再由原 superseded 机制淘汰旧轮；不合并分页、不把旧轮记为成功。
@@ -369,7 +373,7 @@ def _dispatch_directories(session, now):
             (targeted & (targeted_available > 0)) | (~targeted & (available > 0)),
             col(AdDirectoryRun.status).in_(["QUEUED", "RUNNING", "WAITING_REMOTE"]),
             AdDirectoryRun.channel == "OFFICIAL_API",
-            ~(~targeted & (AdDirectoryRun.kind == "creative") & newer_creative_pending),
+            ~(~targeted & legacy_creative & newer_creative_pending),
             col(AdDirectoryRun.next_attempt_at).is_(None)
             | (col(AdDirectoryRun.next_attempt_at) <= now),
             # 租约过期的运行会进入新代数、生成新投递标识，仍需入队。
@@ -1095,6 +1099,8 @@ def _supersede_stalled_directory_runs(now, *, candidate_ids=None, batch_limit=No
         col(AdDirectoryRun.claimed_until).is_(None)
         | (col(AdDirectoryRun.claimed_until) <= now),
         col(AdDirectoryRun.created_at) < now - DIRECTORY_PAGE_RETENTION,
+        # 素材子运行覆盖冻结父组，不能以同账户其他组的发布淘汰。
+        ~col(AdDirectoryRun.query).op("?")(MATERIAL_CHILD_KEY),
         select(newer.id)
         .where(
             newer.tenant_id == AdDirectoryRun.tenant_id,
@@ -1103,6 +1109,7 @@ def _supersede_stalled_directory_runs(now, *, candidate_ids=None, batch_limit=No
             newer.ad_type == AdDirectoryRun.ad_type,
             col(newer.request_sequence) > AdDirectoryRun.request_sequence,
             col(newer.published_version).is_not(None),
+            ~col(newer.query).op("?")(MATERIAL_CHILD_KEY),
         )
         .exists(),
     )

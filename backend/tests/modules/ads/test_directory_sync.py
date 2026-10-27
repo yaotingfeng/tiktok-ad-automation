@@ -2,6 +2,7 @@ from contextlib import contextmanager
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from time import monotonic
+from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
@@ -26,6 +27,15 @@ from app.modules.accounts.connection_models import (
 from app.modules.ads.models import AdMaterialReference, AdObject, CampaignNameProjection
 from app.modules.ads.sync import publish_directory, stage_directory_page
 from app.modules.ads.sync_models import AdDirectoryPage, AdDirectoryRun
+
+
+def _freeze_refill_clock(monkeypatch):
+    from app.modules.ads import directory_dispatch
+
+    now = datetime.now(UTC)
+    monkeypatch.setattr(
+        directory_dispatch, "datetime", SimpleNamespace(now=lambda tz: now)
+    )
 
 
 def _route(seed):
@@ -478,6 +488,7 @@ def test_staged_terminal_page_publishes_without_another_provider_call(
 ):
     from app.modules.ads import tasks
 
+    _freeze_refill_clock(monkeypatch)
     _authority(session, directory_seed)
     monkeypatch.setattr(settings, "ADS_SYNC_ENABLED", True)
     run = _run(session, directory_seed)
@@ -519,7 +530,9 @@ def test_staged_terminal_page_publishes_without_another_provider_call(
     wakeups = session.exec(
         select(PendingDispatch).where(
             PendingDispatch.tenant_id == run.tenant_id,
-            PendingDispatch.task_key == f"directory-refill:{run.id}:1",
+            col(PendingDispatch.task_key).startswith(
+                f"directory-refill:{run.tenant_id}:{run.actor_id}:"
+            ),
         )
     ).all()
     assert len(wakeups) == 1
@@ -738,7 +751,9 @@ def test_rejected_publish_does_not_wake_dispatch(
         )
     assert not session.exec(
         select(PendingDispatch).where(
-            col(PendingDispatch.task_key).startswith(f"directory-refill:{run.id}:")
+            col(PendingDispatch.task_key).startswith(
+                f"directory-refill:{run.tenant_id}:{run.actor_id}:"
+            )
         )
     ).all()
 
@@ -758,7 +773,9 @@ def test_publish_rollback_also_rolls_back_refill(session, directory_seed, monkey
     assert run.published_version is None
     assert not session.exec(
         select(PendingDispatch).where(
-            PendingDispatch.task_key == f"directory-refill:{run.id}:1"
+            col(PendingDispatch.task_key).startswith(
+                f"directory-refill:{run.tenant_id}:{run.actor_id}:"
+            )
         )
     ).all()
 
@@ -769,6 +786,7 @@ def test_superseded_directory_task_finishes_without_poisoning_window(
 ):
     from app.modules.ads import tasks
 
+    _freeze_refill_clock(monkeypatch)
     _authority(session, directory_seed)
     monkeypatch.setattr(settings, "ADS_SYNC_ENABLED", True)
     older = _run(session, directory_seed)
@@ -803,7 +821,9 @@ def test_superseded_directory_task_finishes_without_poisoning_window(
     assert session.get(AdDirectoryPage, (older.id, 1)) is not None
     wake = session.exec(
         select(PendingDispatch).where(
-            PendingDispatch.task_key == f"directory-refill:{older.id}:1"
+            col(PendingDispatch.task_key).startswith(
+                f"directory-refill:{older.tenant_id}:{older.actor_id}:"
+            )
         )
     ).one()
     assert wake.payload == {"dispatch_only": True}
@@ -821,7 +841,9 @@ def test_superseded_directory_task_finishes_without_poisoning_window(
         len(
             session.exec(
                 select(PendingDispatch).where(
-                    PendingDispatch.task_key == f"directory-refill:{older.id}:1"
+                    col(PendingDispatch.task_key).startswith(
+                        f"directory-refill:{older.tenant_id}:{older.actor_id}:"
+                    )
                 )
             ).all()
         )

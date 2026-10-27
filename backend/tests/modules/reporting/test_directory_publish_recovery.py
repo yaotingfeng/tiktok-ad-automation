@@ -168,12 +168,16 @@ def test_publish_transaction_timeout_rolls_back_then_defers_new_generation(
         assert run.claim_generation == 2 and run.claimed_until is None
         assert run.next_attempt_at > now
         assert session.get(AdDirectoryPage, (run_id, 1)).complete
-        assert not session.exec(
+        wakeups = session.exec(
             select(PendingDispatch).where(
                 PendingDispatch.tenant_id == seed.tenant_id,
-                PendingDispatch.task_key == f"directory-refill:{run_id}:1",
+                PendingDispatch.task_key.startswith(
+                    f"directory-refill:{seed.tenant_id}:{seed.actor_id}:"
+                ),
             )
         ).all()
+        assert len(wakeups) == 1
+        assert wakeups[0].payload == {"dispatch_only": True}
     monkeypatch.setattr(tasks, "_PUBLISH_TRANSACTION_TIMEOUT", "75s")
     monkeypatch.setattr(tasks, "publish_directory", original)
     assert (

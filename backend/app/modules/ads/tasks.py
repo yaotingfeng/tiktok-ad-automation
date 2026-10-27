@@ -33,6 +33,10 @@ from app.modules.ads.directory_dispatch import (
     enqueue_directory_step,
     is_live_directory,
 )
+from app.modules.ads.material_directory_children import (
+    MATERIAL_CHILD_KEY,
+    material_child_scope,
+)
 from app.modules.ads.sync import (
     directory_run_superseded,
     publish_directory,
@@ -256,13 +260,20 @@ def _run_directory_step(
             return "READY"
         if publish_only:
             raise DomainError("directory_incomplete", "目录发布缺少已暂存末页")
+        material_scope = material_child_scope(session, run)
         query_data = dict(run.query)
+        query_data.pop(MATERIAL_CHILD_KEY, None)
         # Celery retries must resume the persisted cursor.  The durable query is
         # the contract; page is the only mutable transport cursor.
         query_data["page"] = run.next_page
         query_data["ids"] = tuple(query_data.get("ids", ()))
         query_data["parent_ids"] = tuple(query_data.get("parent_ids", ()))
         query = DirectoryQuery(**query_data)
+        primary_only = (
+            run.channel == "OFFICIAL_API"
+            and run.kind == "ad"
+            and run.ad_type == "SMART_PLUS"
+        )
         workload = "background" if run.workload == "background" else "live"
         session.commit()
 
@@ -276,7 +287,14 @@ def _run_directory_step(
             task_deadline=deadline,
             workload=workload,
         ) as gateway:
-            page = gateway.ads.read_page(query)
+            if material_scope is not None:
+                page = gateway.ads.read_material_page(
+                    query, ads=material_scope[0], materials=material_scope[1]
+                )
+            elif primary_only:
+                page = gateway.ads.read_primary_page(query)
+            else:
+                page = gateway.ads.read_page(query)
     except AccountAdmissionDeferred as error:
         with _directory_session(database_engine) as session:
             current = session.get(AdDirectoryRun, run_id, with_for_update=True)

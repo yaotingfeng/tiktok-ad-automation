@@ -366,3 +366,11 @@ Beat 每秒触发一次 outbox 发布。单次发布默认最多 20 个公平轮
 尾部候选补充：现有control队列仅outbox中payload严格为`{"dispatch_only": true}`的`reporting.plan_due`消息显式设priority3；默认0的发送tick先消费。Redis既有0/3/6/9子队列沿用，补投识别覆盖所有子队列；正常排空仍取消逻辑control订阅。不改队列绑定或Worker数量。纯补位领取事务完成后若有新消息，复用原1秒续轮预算drain；失败保留原outbox与退避。
 
 尾部恢复候选：`ads.publish_step`专用180秒事务、195/210秒任务期限、210秒租约；仅此task已发布消息30分钟判丢失。普通读取/targeted仍45秒事务及55/60秒、90秒租约；后台读取10分钟/实时定向2分钟判丢失，单语句30秒和锁20秒不变。正常排空须等待该发布任务自然完成，不强杀。健康续测超时先回滚批次，再缩批并按递增序号重投；单账户冷却60秒，完整周期仍120秒。私有v1进度追加调度字段，原scope/as_of/累计值含义不变。
+
+
+素材断点候选：仅官方持久Smart+ad运行用主页面读取，material_child_v1私有query子运行沿用creative类型、原冻结scope/workload和目录页/outbox/租约，每步一个1000行素材页；每组最多100广告组且跨主页去重。主coverage保留原响应审计，子完成单独验收。旧镜像不认识私有子query，不可在存在未完成子运行时直接回退；正常排空、精确版本及前向修复要求保持。源页完整且当前授权有效的旧COMPLETE运行可用同服务幂等补建，不能直接改coverage为完整。
+
+本地发布Worker退出宽限240秒（Kubernetes及systemd）；其他服务不变。目录纯补位通知在原事务outbox按tenant/actor/当前UTC五秒桶合并；实际业务任务不合并、不删旧队列。丢失即时唤醒仍靠原Beat恢复，不能将Beat30秒周期写成拥塞下处理期限。
+
+
+素材子运行冻结明细放自身AdDirectoryPage保留页2147483647（MATERIAL_CONTEXT），不是provider页、无published_version；query.material_child_v1仅保留source/context指针，原parent_ids与workload路由不变。实际分页从1开始，只有经scope核验的子运行允许剥离自身context后校验完整链，普通孤页不忽略。子created_at沿原source逻辑请求年龄以延续公平排队，不能据此当作物理插入时间；新子范围验收可用request_sequence或确定性ID。旧全账户creative仍降后，子素材续页与原请求同序。

@@ -17,7 +17,7 @@ Environment=PYTHONUNBUFFERED=1
 ExecStart=/usr/bin/env DATABASE_POOL_SIZE=2 DATABASE_MAX_OVERFLOW=1 /opt/tt-ada-staging/current/.venv/bin/celery -A app.jobs.celery_app:celery_app worker -Q ads-publish --pool prefork --concurrency 1 --loglevel INFO --hostname ads-directory-singapore@%%h
 Restart=on-failure
 RestartSec=5
-TimeoutStopSec=120
+TimeoutStopSec=240
 KillMode=mixed
 UMask=0077
 NoNewPrivileges=true

@@ -362,7 +362,7 @@ spec:
       imagePullSecrets:
         - name: tiktok-ad-automation-registry
       automountServiceAccountToken: false
-      terminationGracePeriodSeconds: 120
+      terminationGracePeriodSeconds: 240
       containers:
         - name: worker-ads-directory
           image: __APP_IMAGE__

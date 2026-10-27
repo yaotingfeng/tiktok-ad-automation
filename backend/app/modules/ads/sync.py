@@ -163,6 +163,17 @@ def stage_directory_page(
         raise _domain("directory_run_closed", "目录同步运行已经结束")
     if page.page < 1:
         raise _domain("directory_page_invalid", "目录页码无效")
+    from app.modules.ads.material_directory_children import (
+        MATERIAL_CONTEXT_PAGE,
+        is_material_child,
+    )
+
+    if is_material_child(run) and (
+        page.page >= MATERIAL_CONTEXT_PAGE
+        or page.next_page is not None
+        and page.next_page >= MATERIAL_CONTEXT_PAGE
+    ):
+        raise _domain("directory_page_invalid", "素材子页不能使用上下文保留页码")
     if claim_generation > run.claim_generation:
         raise _domain("directory_claim_lost", "目录同步 claim 已被替换")
     if claim_generation < run.claim_generation:
@@ -641,6 +652,15 @@ def _next_directory_version(session: Session) -> int:
 
 def directory_run_superseded(session: Session, run: AdDirectoryRun) -> bool:
     """沿用发布顺序判定；已被更新发布取代的运行不再占读取与恢复窗口。"""
+    from app.modules.ads.material_directory_children import (
+        MATERIAL_CHILD_KEY,
+        is_material_child,
+        material_child_superseded,
+    )
+
+    # 子运行只覆盖冻结广告组的部分素材，不是全账户创意快照；不同子范围不能互相淘汰。
+    if is_material_child(run):
+        return material_child_superseded(session, run)
     if run.request_sequence is None:
         return False
     return (
@@ -653,6 +673,7 @@ def directory_run_superseded(session: Session, run: AdDirectoryRun) -> bool:
                 AdDirectoryRun.ad_type == run.ad_type,
                 col(AdDirectoryRun.request_sequence) > run.request_sequence,
                 col(AdDirectoryRun.published_version).is_not(None),
+                ~col(AdDirectoryRun.query).op("?")(MATERIAL_CHILD_KEY),
             )
             .limit(1)
         ).first()
@@ -684,7 +705,13 @@ def publish_directory(session: Session, *, run_id: UUID, claim_generation: int) 
             .order_by(col(AdDirectoryPage.page))
             .with_for_update()
         ).all()
-        ordered = _complete_chain(list(pages))
+        from app.modules.ads.material_directory_children import (
+            material_child_provider_pages,
+        )
+
+        ordered = _complete_chain(
+            material_child_provider_pages(session, run, list(pages))
+        )
         # 版本来自数据库序列；同账户的请求排序用账户锁保护。整租户行锁会让
         # 一个大历史目录挡住其他账户的实时发布，不能作为多账户的执行容量。
         tenant = session.exec(
@@ -709,6 +736,13 @@ def publish_directory(session: Session, *, run_id: UUID, claim_generation: int) 
         published_objects = _publish_entities(
             session, entities, run=run, version=version, fallback=fallback
         )
+        from app.modules.ads.material_directory_children import (
+            filter_current_child_materials,
+        )
+
+        materials, stale_materials = filter_current_child_materials(
+            session, run=run, materials=materials, version=version
+        )
         _publish_materials(session, materials, run=run, version=version)
         _queue_missing_parents(session, run=run, objects=published_objects)
         append_campaign_name_projections(
@@ -720,7 +754,7 @@ def publish_directory(session: Session, *, run_id: UUID, claim_generation: int) 
             ),
             parser_revision=1,
         )
-        material_incomplete = any(
+        material_incomplete = stale_materials or any(
             page.coverage in {"PARTIAL_MATERIALS", "MATERIALS_INCOMPLETE"}
             for page in ordered
         )
@@ -738,6 +772,8 @@ def publish_directory(session: Session, *, run_id: UUID, claim_generation: int) 
             ),
             None,
         )
+        if stale_materials:
+            run.missing_reason = "material_child_observation_stale"
         session.add(run)
         session.flush()
         for page in ordered:
@@ -745,5 +781,10 @@ def publish_directory(session: Session, *, run_id: UUID, claim_generation: int) 
             session.add(page)
         session.flush()
         # 仅首次成功发布进入这里；重复消息、旧代数和回滚均不会留下额外唤醒。
-        enqueue_directory_refill(session, run)
+        from app.modules.ads.material_directory_children import (
+            ensure_material_directory_children,
+        )
+
+        if not ensure_material_directory_children(session, source=run, pages=ordered):
+            enqueue_directory_refill(session, run)
     return version

@@ -244,6 +244,16 @@ class AccountBalance:
 class AdsReadOperations(Protocol):
     def read_page(self, query: DirectoryQuery) -> DirectoryPage: ...
 
+    def read_primary_page(self, query: DirectoryQuery) -> DirectoryPage: ...
+
+    def read_material_page(
+        self,
+        query: DirectoryQuery,
+        *,
+        ads: tuple[AdEntity, ...],
+        materials: tuple[AdMaterialUsage, ...],
+    ) -> DirectoryPage: ...
+
     def read_balance(self, advertiser_id: str) -> AccountBalance: ...
 
     def read_balance_page(

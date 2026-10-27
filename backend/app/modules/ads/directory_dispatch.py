@@ -116,13 +116,16 @@ def enqueue_directory_step(
 
 
 def enqueue_directory_refill(session, run) -> None:
-    """首次发布同事务唤醒有界派发，空槽无需再等下一个三十秒扫描。"""
+    """同租户/操作者五秒内共用补位唤醒，业务运行和执行消息仍各自持久。"""
     if not settings.ADS_SYNC_ENABLED:
         return
+    # 入队时取UTC墙钟，长发布事务不能沿用开始时间或run时间落入旧桶。
+    # 同桶首信号已消费时不复活；随后完成的持久工作仍由30秒Beat兜底。
+    bucket = int(datetime.now(UTC).timestamp()) // 5
     enqueue_after_commit(
         session,
         context=TenantContext(run.tenant_id, run.actor_id, "operator"),
         task_name="reporting.plan_due",
-        task_key=f"directory-refill:{run.id}:{run.claim_generation}",
+        task_key=f"directory-refill:{run.tenant_id}:{run.actor_id}:{bucket}",
         payload={"dispatch_only": True},
     )

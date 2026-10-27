@@ -1,6 +1,7 @@
 """周期定向刷新只唤醒公平派发；新一轮不能绕过已经排队的账户。"""
 
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 
 from sqlmodel import delete, select
 
@@ -71,6 +72,10 @@ def test_request_wakeup_does_not_consume_completion_wakeup_key(
     session, sync_seed, monkeypatch
 ):
     monkeypatch.setattr(settings, "ADS_SYNC_ENABLED", True)
+    now = datetime.now(UTC)
+    monkeypatch.setattr(
+        directory_dispatch, "datetime", SimpleNamespace(now=lambda tz: now)
+    )
     job = prepared(session, sync_seed)
     assert refresh_report_directory(session, job) == 3
     runs = session.exec(
@@ -83,4 +88,5 @@ def test_request_wakeup_does_not_consume_completion_wakeup_key(
         for row in dispatches(session, sync_seed)
         if row.task_name == "reporting.plan_due"
     ]
-    assert len(wakeups) == 4
+    assert len(wakeups) == 2
+    assert sum(row.task_key.startswith("directory-refill:") for row in wakeups) == 1
