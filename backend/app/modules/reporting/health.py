@@ -703,6 +703,7 @@ def _advance_health(session, plan, redis_client, *, cycle, deadline):
             break
         end = min(total, progress["offset"] + progress["batch_size"])
         # SAVEPOINT 只包本批；失败时已成功批次仍可从 Redis 恢复，不跳过失败账户。
+        batch_started = monotonic()
         try:
             with session.begin_nested(), query_budget(session, seconds=3):
                 metrics, issues, repairs = measure_health(
@@ -725,6 +726,7 @@ def _advance_health(session, plan, redis_client, *, cycle, deadline):
             )
             redis_client.set(key, json.dumps(progress), ex=180)
             raise _HealthBatchTimeout(progress["cycle"]) from error
+        batch_seconds = monotonic() - batch_started
         accumulated = progress["metrics"]
         for name, value in metrics.items():
             if name == "pending_actions":
@@ -745,7 +747,13 @@ def _advance_health(session, plan, redis_client, *, cycle, deadline):
             )
         progress["offset"] = end
         progress["retry_not_before"] = None
-        progress["success_streak"] += 1
+        # 成功不等于仍有扩批余量；贴近3秒期限的批次继续倍增会反复取消并重读。
+        # 慢成功已计入完整进度，只缩小下一批；仅连续两批不超过1秒才恢复扩批。
+        if batch_seconds > 1.5:
+            progress["batch_size"] = max(1, progress["batch_size"] // 2)
+        progress["success_streak"] = (
+            progress["success_streak"] + 1 if batch_seconds <= 1 else 0
+        )
         if progress["success_streak"] >= 2:
             progress["batch_size"] = min(HEALTH_CHUNK_SIZE, progress["batch_size"] * 2)
             progress["success_streak"] = 0

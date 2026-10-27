@@ -63,6 +63,7 @@ MATERIAL_BACKFILL_PAGES_PER_STEP = 50
 MATERIAL_BACKFILL_STEP_SECONDS = 30
 MATERIAL_SPLIT_ROWS = 5_000
 MAX_PROVIDER_RETRIES = 5
+MATERIAL_SNAPSHOT_RETRY_SECONDS = (5, 10, 20, 30, 60)
 LEASE = timedelta(seconds=240)
 _CONTRACT_ERRORS = frozenset(
     {
@@ -1247,9 +1248,18 @@ def _handle_error(session, job: ReportSyncJob, error: DomainError) -> str:
     elif error.code not in _CONTRACT_ERRORS and job.attempts < MAX_PROVIDER_RETRIES:
         job.attempts += 1
         job.status = "WAITING"
-        job.due_at = datetime.now(UTC) + timedelta(
-            seconds=min(1800, 60 * 2 ** (job.attempts - 1))
-        )
+        now = datetime.now(UTC)
+        delay = min(1800, 60 * 2 ** (job.attempts - 1))
+        # 今日素材集合会在秒级变化；重建仍完整校验且最多五次，但不沿用上游故障的
+        # 分钟级退避。按账户当地日核验，历史、昨日收尾及真实provider错误保持原策略。
+        if (
+            error.code == "report_snapshot_changed"
+            and job.kind == "material_day"
+            and job.priority in {1, 2}
+            and report_workload(session, job, now=now) == "live"
+        ):
+            delay = MATERIAL_SNAPSHOT_RETRY_SECONDS[job.attempts - 1]
+        job.due_at = now + timedelta(seconds=delay)
         return "WAITING"
     job.status, job.finished_at = "FAILED", datetime.now(UTC)
     publish.mark_failed(

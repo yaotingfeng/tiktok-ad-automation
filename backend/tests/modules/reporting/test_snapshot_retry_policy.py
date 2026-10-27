@@ -1,0 +1,118 @@
+"""今日素材源集合变化短退避；其他失败策略及完整快照预算保持不变。"""
+
+from datetime import UTC, date, datetime, timedelta
+
+import pytest
+
+from app.core.errors import DomainError
+from app.modules.reporting import jobs
+from app.modules.reporting.store_models import ReportSyncJob
+from tests.modules.reporting.test_material_resume import enqueue
+
+NOW = datetime(2026, 10, 27, 18, tzinfo=UTC)
+LOCAL_TODAY = date(2026, 10, 28)  # fixture账户为Asia/Hong_Kong，不能用UTC日期替代。
+
+
+@pytest.fixture
+def retry_clock(monkeypatch):
+    class Clock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return NOW if tz is not None else NOW.replace(tzinfo=None)
+
+    monkeypatch.setattr(jobs, "datetime", Clock)
+
+
+@pytest.mark.parametrize(
+    "kind,priority,day,error,delays",
+    [
+        (
+            "material_day",
+            2,
+            LOCAL_TODAY,
+            "report_snapshot_changed",
+            [5, 10, 20, 30, 60],
+        ),
+        (
+            "material_day",
+            1,
+            LOCAL_TODAY,
+            "report_snapshot_changed",
+            [5, 10, 20, 30, 60],
+        ),
+        (
+            "material_day",
+            2,
+            date(2026, 10, 27),
+            "report_snapshot_changed",
+            [60, 120, 240, 480, 960],
+        ),
+        (
+            "material_day",
+            0,
+            date(2026, 10, 27),
+            "report_snapshot_changed",
+            [60, 120, 240, 480, 960],
+        ),
+        (
+            "material_day",
+            3,
+            LOCAL_TODAY,
+            "report_snapshot_changed",
+            [60, 120, 240, 480, 960],
+        ),
+        (
+            "material_links",
+            2,
+            LOCAL_TODAY,
+            "report_snapshot_changed",
+            [60, 120, 240, 480, 960],
+        ),
+        ("ad_day", 1, LOCAL_TODAY, "report_snapshot_changed", [60, 120, 240, 480, 960]),
+        (
+            "material_day",
+            2,
+            LOCAL_TODAY,
+            "tiktok_response_error",
+            [60, 120, 240, 480, 960],
+        ),
+    ],
+)
+@pytest.mark.usefixtures("retry_clock")
+def test_snapshot_retry_delay_uses_actual_local_day_only(
+    committed_sync_seed, kind, priority, day, error, delays
+):
+    seed, factory = committed_sync_seed
+    original = enqueue(factory, seed, start=day, end=day)
+    with factory() as session:
+        job = session.get(ReportSyncJob, original.id)
+        job.kind, job.priority = kind, priority
+        session.flush()
+        for attempt, seconds in enumerate(delays, 1):
+            assert (
+                jobs._handle_error(session, job, DomainError(error, "synthetic"))
+                == "WAITING"
+            )
+            assert job.attempts == attempt
+            assert job.due_at == NOW + timedelta(seconds=seconds)
+        assert (
+            jobs._handle_error(session, job, DomainError(error, "synthetic"))
+            == "FAILED"
+        )
+        assert job.attempts == 5 and job.status == "FAILED"
+        session.commit()
+
+
+@pytest.mark.usefixtures("retry_clock")
+def test_exhausted_today_snapshot_allows_new_periodic_job(committed_sync_seed):
+    seed, factory = committed_sync_seed
+    original = enqueue(factory, seed, start=LOCAL_TODAY, end=LOCAL_TODAY)
+    with factory() as session:
+        job = session.get(ReportSyncJob, original.id)
+        error = DomainError("report_snapshot_changed", "synthetic")
+        for _ in range(5):
+            assert jobs._handle_error(session, job, error) == "WAITING"
+        assert jobs._handle_error(session, job, error) == "FAILED"
+        session.commit()
+    replacement = enqueue(factory, seed, start=LOCAL_TODAY, end=LOCAL_TODAY)
+    assert replacement.id != original.id and replacement.attempts == 0

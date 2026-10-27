@@ -2177,16 +2177,17 @@ def repair_material_dispatches(session: Session, *, limit: int = 100) -> int:
         .prefix_with("MATERIALIZED")
     )
 
-    def live_message(identity: Any):
+    def live_message(identity: Any, message_payload: Any = payload):
         return or_(
             and_(
                 identity.c.attempt_token.is_not(None),
-                payload["claim_id"].astext == cast(identity.c.attempt_token, String),
+                message_payload["claim_id"].astext
+                == cast(identity.c.attempt_token, String),
                 identity.c.claimed_until <= now,
             ),
             and_(
                 identity.c.attempt_token.is_(None),
-                payload["revision"].astext == identity.c.revision,
+                message_payload["revision"].astext == identity.c.revision,
             ),
         )
 
@@ -2197,14 +2198,25 @@ def repair_material_dispatches(session: Session, *, limit: int = 100) -> int:
     # 当前代已经有待投递消息时，沿用它的退避时间；重放更早消息会绕过退避，
     # 也会让恢复成本随历史投递次数增长。先在小型 pending 索引中排除这些身份。
     source_tasks = ["materials.upload_original", "materials.verify_original"]
-    scheduled_source = (
-        select(PendingDispatch.id)
+    # 显式物化待投递集合，防止规划器按 operation 索引扫描该身份全部历史，
+    # 再逐行检查 published_at。future available_at 也必须保留，不能绕过退避。
+    pending_sources = (
+        select(PendingDispatch.tenant_id, PendingDispatch.payload)
         .where(
-            PendingDispatch.tenant_id == source_identities.c.tenant_id,
-            payload["operation_id"].astext == cast(source_identities.c.id, String),
-            col(PendingDispatch.task_name).in_(source_tasks),
             col(PendingDispatch.published_at).is_(None),
-            live_message(source_identities),
+            col(PendingDispatch.task_name).in_(source_tasks),
+        )
+        .cte("repair_pending_sources")
+        .prefix_with("MATERIALIZED")
+    )
+    pending_payload = pending_sources.c.payload
+    scheduled_source = (
+        sa_select(pending_sources.c.tenant_id)
+        .where(
+            pending_sources.c.tenant_id == source_identities.c.tenant_id,
+            pending_payload["operation_id"].astext
+            == cast(source_identities.c.id, String),
+            live_message(source_identities, pending_payload),
         )
         .correlate(source_identities)
         .exists()

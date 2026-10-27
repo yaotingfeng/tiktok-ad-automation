@@ -39,6 +39,10 @@
 
 > **当前生产入口**：用户指定改为 `https://tkada.shortclipflix.com`；该域名已真实解析到新加坡 ALB，现有 `*.shortclipflix.com` 证书验证通过。本次配置切换及验收见[域名切换记录](../validation/2026-10-10-shortclipflix-domain.md)。下文 galaxyshortdrama 的 DNS 问题为首次发布时的历史情况。
 
+## 2026-10-27 当日素材快照重试修复候选
+
+待统一发布：账户当地今日、实际live且priority1/2的素材日报，仅在`report_snapshot_changed`时采用5/10/20/30/60秒退避。五次预算不增加，仍清除私有断点并完整重读、一致后原子发布；第六次失败保留真实失败，下一正常周期可创建新任务。历史、昨日收尾、关联及平台错误沿用旧策略。无新增业务开关、索引、队列或Worker并发，四开关及现有配额保持。来源补派仅优化当前pending消息访问路径。健康检查保持原分钟节奏、完整范围和超时，批次成功耗时超过1.5秒缩小下一批，仅连续两批不超过1秒才放大，避免慢成功后马上扩批。上线证据以[当天验收](../validation/2026-10-27-sync-backlog.md)续记为准。
+
 ## 当前实时同步拓扑（2026-10-20）
 
 当前程序发布版本以[素材跳转反馈验收](../validation/2026-10-21-material-login-loading.md)为准，迁移head `0042_drop_ad_material_main`。API、Beat与9个Worker共11角色，本次发布的镜像、实际政策与开关已逐角色验收；历史各版详见[本轮架构记录](../validation/2026-10-19-sync-architecture.md)。
