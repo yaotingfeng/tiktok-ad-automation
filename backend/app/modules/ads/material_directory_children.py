@@ -309,6 +309,7 @@ def filter_current_child_materials(
     run: AdDirectoryRun,
     materials: list[dict],
     version: int,
+    published_objects: list[AdObject],
 ) -> tuple[list[dict], bool]:
     """旧主桥及旧子页不能以晚发布版本覆盖新观察，缺口仍留在运行审计。"""
     scope = material_child_scope(session, run)
@@ -322,21 +323,16 @@ def filter_current_child_materials(
         for remote_id, value in observed.items()
         if value <= expected[remote_id]
     }
-    creative_ids = sorted(
-        {cid for row in materials for cid in row.get("creative_ids", [])}
-    )
-    current_creatives: dict[str, str | None] = {}
-    for offset in range(0, len(creative_ids), 500):
-        for remote_id, parent_id in session.exec(
-            select(AdObject.remote_id, AdObject.parent_remote_id).where(
-                AdObject.tenant_id == run.tenant_id,
-                AdObject.advertiser_id == run.advertiser_id,
-                AdObject.kind == "creative",
-                AdObject.published_version == version,
-                col(AdObject.remote_id).in_(creative_ids[offset : offset + 500]),
-            )
-        ):
-            current_creatives[remote_id] = parent_id
+    # 发布已窄回读实际胜出的对象及版本；复用结果，避免每500创意重复触盘。
+    # published_version必须在发布回读中显式加载，不能改成逐对象懒加载。
+    current_creatives = {
+        obj.remote_id: obj.parent_remote_id
+        for obj in published_objects
+        if obj.tenant_id == run.tenant_id
+        and obj.advertiser_id == run.advertiser_id
+        and obj.kind == "creative"
+        and obj.published_version == version
+    }
     accepted = []
     for row in materials:
         owner = row["use_ref"]["ad_ref"]["remote_id"]

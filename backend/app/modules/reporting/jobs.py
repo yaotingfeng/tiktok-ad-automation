@@ -8,6 +8,7 @@
 
 import hashlib
 import json
+import logging
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from random import randint
@@ -45,6 +46,8 @@ from app.modules.reporting.material_value import (
 )
 from app.modules.reporting.metrics import material_metric_values, parse_local_day
 from app.modules.reporting.store_models import ReportSyncJob, ReportSyncPage
+
+logger = logging.getLogger(__name__)
 
 PRIORITY = {
     "hot": 1,
@@ -497,6 +500,35 @@ def _material_scope(job):
     return hashlib.sha256(f"{key}:{request_time(job).isoformat()}".encode()).hexdigest()
 
 
+def _log_material_snapshot_change(job, result, *, page, reason):
+    # 失败会回滚并删除私有页；只保留小型分页诊断，不记录素材身份、正文或额外查库。
+    saved = job.progress.get("material_paging") or {}
+    age = None
+    try:
+        observed = datetime.fromisoformat(saved["observed_at"])
+        if observed.utcoffset() is not None:
+            elapsed = (datetime.now(UTC) - observed).total_seconds()
+            if elapsed >= 0:
+                age = round(elapsed, 3)
+    except KeyError, TypeError, ValueError:
+        pass
+    details = {
+        "job_id": str(job.id),
+        "reason": reason,
+        "page": page,
+        "saved_total_page": saved.get("total_page"),
+        "saved_total_number": saved.get("total_number"),
+        "current_total_page": result.total_page,
+        "current_total_number": result.total_number,
+        "first_page_age_seconds": age,
+    }
+    logger.warning(
+        "material snapshot changed %s",
+        json.dumps(details),
+        extra={"snapshot_failure": details},
+    )
+
+
 def _validate_material_page(session, job, accounts, result, page):
     if (
         any(
@@ -542,6 +574,9 @@ def _validate_material_page(session, job, accounts, result, page):
         )
         .scalar_one()
     ):
+        _log_material_snapshot_change(
+            job, result, page=page, reason="cross_page_duplicate"
+        )
         raise DomainError(
             "report_snapshot_changed", "素材跨页内容变化，需要重建完整快照"
         )
@@ -662,12 +697,18 @@ def _run_material(session, job, reader, accounts):
         )
         if snapshot_changed and not result.rows:
             # 缩页会让旧游标返回合法空页；保留正式事实，按已有有限预算重建暂存。
+            _log_material_snapshot_change(
+                job, result, page=page, reason="total_changed"
+            )
             raise DomainError(
                 "report_snapshot_changed", "素材分页总数变化，需要重建完整快照"
             )
         # 非空页先校验账户、日期及页内唯一性，不能被总数变化掩盖永久坏行。
         keys = _validate_material_page(session, job, accounts, result, page)
         if snapshot_changed:
+            _log_material_snapshot_change(
+                job, result, page=page, reason="total_changed"
+            )
             raise DomainError(
                 "report_snapshot_changed", "素材分页总数变化，需要重建完整快照"
             )

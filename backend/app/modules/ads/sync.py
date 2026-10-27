@@ -460,6 +460,7 @@ def _publish_entities(
                         cast(QueryableAttribute[Any], AdObject.parent_kind),
                         cast(QueryableAttribute[Any], AdObject.parent_remote_id),
                         cast(QueryableAttribute[Any], AdObject.name),
+                        cast(QueryableAttribute[Any], AdObject.published_version),
                     )
                 )
                 .execution_options(populate_existing=True)
@@ -741,7 +742,11 @@ def publish_directory(session: Session, *, run_id: UUID, claim_generation: int) 
         )
 
         materials, stale_materials = filter_current_child_materials(
-            session, run=run, materials=materials, version=version
+            session,
+            run=run,
+            materials=materials,
+            version=version,
+            published_objects=published_objects,
         )
         _publish_materials(session, materials, run=run, version=version)
         _queue_missing_parents(session, run=run, objects=published_objects)

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import logging
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -175,10 +176,18 @@ def run_directory_step(
             enqueue_directory_refill(session, run)
             session.commit()
         logger.warning(
-            "directory publish deferred: run=%s generation=%s error=%s",
+            "directory publish deferred: run=%s generation=%s error=%s "
+            "sqlstate=%s statement_sha256=%s",
             run_id,
             claim_generation,
             type(error).__name__,
+            getattr(error.orig, "sqlstate", None)
+            if isinstance(error, DBAPIError)
+            else None,
+            # 只记录语句形状的摘要，不展开SQL、绑定参数或数据库错误正文。
+            hashlib.sha256((error.statement or "").encode()).hexdigest()
+            if isinstance(error, DBAPIError)
+            else None,
         )
         return "WAIT"
 
