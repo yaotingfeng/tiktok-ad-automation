@@ -67,6 +67,18 @@ class _HealthProgress(TypedDict):
     metrics: dict[str, Any]
     issues: list[str]
     repairs: dict[str, list[str]]
+    batch_size: int
+    success_streak: int
+    continuation_seq: int
+    retry_not_before: str | None
+
+
+class _HealthBatchTimeout(Exception):
+    """失败批已回滚并保存缩批信息；外层独立事务记录失败并安排有界续投。"""
+
+    def __init__(self, cycle: str):
+        self.cycle = cycle
+        super().__init__("health observation batch timed out")
 
 
 def _fresh_parents(session, params, *, kind, keys):
@@ -558,6 +570,23 @@ def _health_scope(plan, owned):
     ).hexdigest()
 
 
+def _enqueue_health_continuation(
+    session, plan, redis_client, progress: _HealthProgress
+):
+    # 同 offset 的失败重试也必须有新投递键；原 outbox 已发布不能吞掉下一次唤醒。
+    progress["continuation_seq"] += 1
+    redis_client.set(
+        _health_progress_key(plan.tenant_id, plan.bc_id), json.dumps(progress), ex=180
+    )
+    enqueue_after_commit(
+        session,
+        context=TenantContext(plan.tenant_id, plan.actor_id, "operator"),
+        task_name=HEALTH_BC_TASK,
+        task_key=f"sync-health-continue:{plan.bc_id}:{progress['cycle']}:{progress['offset']}:{progress['continuation_seq']}",
+        payload={"bc_id": plan.bc_id, "cycle": progress["cycle"]},
+    )
+
+
 def _advance_health(session, plan, redis_client, *, cycle, deadline):
     """分片只保存私有进度；完整范围测完后才发布健康事实和执行修复。"""
     key = _health_progress_key(plan.tenant_id, plan.bc_id)
@@ -582,19 +611,50 @@ def _advance_health(session, plan, redis_client, *, cycle, deadline):
             "metrics": {},
             "issues": [],
             "repairs": {"ad": [], "material": [], "links": []},
+            "batch_size": HEALTH_CHUNK_SIZE,
+            "success_streak": 0,
+            "continuation_seq": 0,
+            "retry_not_before": None,
         }
         redis_client.set(key, json.dumps(progress), ex=180)
+    # v1 的范围、起点和累计指标含义不变；新增调度字段统一补默认值，不丢已测进度。
+    progress.setdefault("batch_size", HEALTH_CHUNK_SIZE)
+    progress.setdefault("success_streak", 0)
+    progress.setdefault("continuation_seq", 0)
+    progress.setdefault("retry_not_before", None)
+    if progress["retry_not_before"] and datetime.now(UTC) < datetime.fromisoformat(
+        progress["retry_not_before"]
+    ):
+        return "WAIT"
     as_of = datetime.fromisoformat(progress["at"])
     total = max(1, len(owned))
     for _ in range(HEALTH_MAX_CHUNKS):
         if progress["offset"] >= total or deadline - monotonic() < 3:
             break
-        end = min(total, progress["offset"] + HEALTH_CHUNK_SIZE)
+        end = min(total, progress["offset"] + progress["batch_size"])
         # SAVEPOINT 只包本批；失败时已成功批次仍可从 Redis 恢复，不跳过失败账户。
-        with session.begin_nested(), query_budget(session, seconds=3):
-            metrics, issues, repairs = measure_health(
-                session, plan, now=as_of, accounts=owned[progress["offset"] : end]
+        try:
+            with session.begin_nested(), query_budget(session, seconds=3):
+                metrics, issues, repairs = measure_health(
+                    session, plan, now=as_of, accounts=owned[progress["offset"] : end]
+                )
+        except (DBAPIError, QueryBudgetExceeded) as error:
+            if (
+                isinstance(error, DBAPIError)
+                and getattr(error.orig, "sqlstate", None) != "57014"
+            ):
+                raise
+            attempted = end - progress["offset"]
+            progress["batch_size"] = max(1, attempted // 2)
+            progress["success_streak"] = 0
+            # 单账户已无法再拆；不跳账户，也不让重复消息绕过冷却形成忙循环。
+            progress["retry_not_before"] = (
+                (datetime.now(UTC) + timedelta(seconds=60)).isoformat()
+                if attempted == 1
+                else None
             )
+            redis_client.set(key, json.dumps(progress), ex=180)
+            raise _HealthBatchTimeout(progress["cycle"]) from error
         accumulated = progress["metrics"]
         for name, value in metrics.items():
             if name == "pending_actions":
@@ -614,15 +674,14 @@ def _advance_health(session, plan, redis_client, *, cycle, deadline):
                 set(progress["repairs"][name]) | accounts
             )
         progress["offset"] = end
+        progress["retry_not_before"] = None
+        progress["success_streak"] += 1
+        if progress["success_streak"] >= 2:
+            progress["batch_size"] = min(HEALTH_CHUNK_SIZE, progress["batch_size"] * 2)
+            progress["success_streak"] = 0
         redis_client.set(key, json.dumps(progress), ex=180)
     if progress["offset"] < total:
-        enqueue_after_commit(
-            session,
-            context=TenantContext(plan.tenant_id, plan.actor_id, "operator"),
-            task_name=HEALTH_BC_TASK,
-            task_key=f"sync-health-continue:{plan.bc_id}:{progress['cycle']}:{progress['offset']}",
-            payload={"bc_id": plan.bc_id, "cycle": progress["cycle"]},
-        )
+        _enqueue_health_continuation(session, plan, redis_client, progress)
         return "CONTINUE"
     # 观测期间授权或计划范围变化，不能发布旧范围；下次 Beat 从新范围完整重测。
     session.refresh(plan)
@@ -684,7 +743,7 @@ def run_bc_health(*, database_engine, redis_client, context, bc_id, cycle=None):
             return result
         except DomainError:
             raise
-        except Exception:
+        except Exception as error:
             logger.exception("sync health check failed tenant=%s bc=%s", *key)
             # 失败不覆盖上次完整指标；只改变本 BC 的失败可见状态。
             with Session(database_engine) as session, session.begin():
@@ -705,6 +764,28 @@ def run_bc_health(*, database_engine, redis_client, context, bc_id, cycle=None):
                     ["MONITOR_QUERY_FAILED"],
                     now,
                 )
+                if isinstance(error, _HealthBatchTimeout):
+                    raw = redis_client.get(_health_progress_key(*key))
+                    progress: _HealthProgress | None = json.loads(raw) if raw else None
+                    if (
+                        progress is not None
+                        and progress["cycle"] == error.cycle
+                        and progress["retry_not_before"] is None
+                        and datetime.now(UTC) - datetime.fromisoformat(progress["at"])
+                        < timedelta(seconds=HEALTH_CYCLE_SECONDS)
+                        and _health_scope(plan, owned_accounts(session, plan))
+                        == progress["scope"]
+                    ):
+                        require_tenant(
+                            session,
+                            actor_id=context.actor_id,
+                            tenant_id=context.tenant_id,
+                            action="reporting_write",
+                        )
+                        # 一次任务只缩小一次即让出；失败事实与下一次投递在同事务提交。
+                        _enqueue_health_continuation(
+                            session, plan, redis_client, progress
+                        )
             return "FAILED"
     finally:
         lock.release()

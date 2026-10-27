@@ -53,6 +53,12 @@ def test_second_chunk_failure_resumes_without_partial_success(
             row = session.get(ReportSyncHealth, (seed.tenant_id, "bc-a"))
             assert row.issues == ["MONITOR_QUERY_FAILED"] and row.metrics == {}
         monkeypatch.setattr(health, "measure_health", original)
+        assert health.run_bc_health(**args, cycle=progress["cycle"]) == "WAIT"
+        resumed = json.loads(redis_client.get(key))
+        resumed["retry_not_before"] = (
+            datetime.now(UTC) - timedelta(seconds=1)
+        ).isoformat()
+        redis_client.set(key, json.dumps(resumed), ex=180)
         assert health.run_bc_health(**args, cycle=progress["cycle"]) == "COMPLETE"
         assert redis_client.get(key) is None
         with factory() as session:

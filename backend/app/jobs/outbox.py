@@ -6,11 +6,13 @@ must enqueue a bounded executable window instead of their entire future graph.
 """
 
 import json
+import logging
 import math
 import re
 from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
 from hashlib import sha256
+from time import monotonic
 from typing import Any, NoReturn, cast
 from uuid import UUID, uuid4
 
@@ -24,6 +26,8 @@ from app.core.errors import DomainError
 from app.jobs.celery_app import celery_app
 from app.jobs.models import DispatchTenantCursor, PendingDispatch
 from app.jobs.tasks import dispatch_queue
+
+logger = logging.getLogger(__name__)
 
 # One expansion slot keeps a generated successor ahead of its own unit fanout.
 # Other expansion messages never consume ordinary FIFO slots in this round.
@@ -295,7 +299,11 @@ def flush_dispatch(limit: int = 100) -> int:
     from app.jobs.queued_dispatches import queued_dispatches
 
     # 批量 broker 读取在数据库事务之外；命中后仍逐条实时确认原消息存在。
+    started = monotonic()
     queued = queued_dispatches()
+    database_started = monotonic()
+    snapshot_seconds = database_started - started
+    broker_seconds = 0.0
     now = datetime.now(UTC)
     published = 0
     attempted = 0
@@ -342,6 +350,7 @@ def flush_dispatch(limit: int = 100) -> int:
                 )
             for record in records:
                 attempted += 1
+                broker_started = monotonic()
                 try:
                     queue = dispatch_queue(record.task_name)
                     payload = validate_dispatch_payload(record.payload)
@@ -380,10 +389,32 @@ def flush_dispatch(limit: int = 100) -> int:
                     # 确认 broker 已持有相同投递也完成本轮 outbox；不新增队列副本。
                     record.published_at = datetime.now(UTC)
                     published += 1
+                finally:
+                    broker_seconds += monotonic() - broker_started
             if records:
                 # Serviced attempts advance the round even during broker outages.
                 cursor.last_published_at = datetime.now(UTC)
             if attempted >= limit:
                 # 在请求下一候选前停止，普通满额轮次不能额外查询第二页。
                 break
+        commit_started = monotonic()
+    finished = monotonic()
+    # 只诊断成功返回的慢轮；不增加查询或改变发送预算，也不记录任务身份及正文。
+    if finished - started > 2.0:
+        logger.warning(
+            "dispatch_flush_slow %s",
+            json.dumps(
+                {
+                    "total_seconds": round(finished - started, 6),
+                    "broker_snapshot_seconds": round(snapshot_seconds, 6),
+                    "db_query_claim_seconds": round(
+                        commit_started - database_started - broker_seconds, 6
+                    ),
+                    "broker_contains_send_seconds": round(broker_seconds, 6),
+                    "db_commit_seconds": round(finished - commit_started, 6),
+                    "attempted": attempted,
+                    "published": published,
+                }
+            ),
+        )
     return published

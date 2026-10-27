@@ -114,7 +114,7 @@ def test_publish_transaction_timeout_rolls_back_then_defers_new_generation(
         original(session, **kwargs)
         session.connection().execute(text("SELECT pg_sleep(0.3)"))
 
-    monkeypatch.setattr(tasks, "_TRANSACTION_TIMEOUT", "150ms")
+    monkeypatch.setattr(tasks, "_PUBLISH_TRANSACTION_TIMEOUT", "150ms")
     monkeypatch.setattr(tasks, "publish_directory", slow)
     assert (
         tasks.run_directory_step(
@@ -140,7 +140,7 @@ def test_publish_transaction_timeout_rolls_back_then_defers_new_generation(
                 PendingDispatch.task_key == f"directory-refill:{run_id}:1",
             )
         ).all()
-    monkeypatch.setattr(tasks, "_TRANSACTION_TIMEOUT", "45s")
+    monkeypatch.setattr(tasks, "_PUBLISH_TRANSACTION_TIMEOUT", "75s")
     monkeypatch.setattr(tasks, "publish_directory", original)
     assert (
         tasks.run_directory_step(

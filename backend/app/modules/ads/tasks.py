@@ -43,11 +43,14 @@ from app.modules.ads.sync_models import AdDirectoryPage, AdDirectoryRun
 _LEASE_SECONDS = 90
 _LOCK_TIMEOUT = "20s"
 _TRANSACTION_TIMEOUT = "45s"
+_PUBLISH_TRANSACTION_TIMEOUT = "75s"
 logger = logging.getLogger(__name__)
 
 
 @contextmanager
-def _directory_session(database_engine: Any) -> Iterator[Session]:
+def _directory_session(
+    database_engine: Any, *, publish_only: bool = False
+) -> Iterator[Session]:
     """领取和发布均使用有界事务，异常时丢弃物理连接以释放服务器行锁。"""
     with Session(database_engine) as session:
         try:
@@ -55,9 +58,13 @@ def _directory_session(database_engine: Any) -> Iterator[Session]:
                 text(f"SET LOCAL lock_timeout = '{_LOCK_TIMEOUT}'")
             )
             session.connection().execute(text("SET LOCAL statement_timeout = '30s'"))
-            # 多条短语句也有总事务预算，早于 Celery 的 55 秒信号退出。
+            # 仅单槽本地发布给大目录累计IO独立预算；读取/实时定向仍是45秒。
+            # 75秒从领取前开始，早于85秒软限及90秒租约；不延长单语句或等锁。
+            timeout = (
+                _PUBLISH_TRANSACTION_TIMEOUT if publish_only else _TRANSACTION_TIMEOUT
+            )
             session.connection().execute(
-                text(f"SET LOCAL transaction_timeout = '{_TRANSACTION_TIMEOUT}'")
+                text(f"SET LOCAL transaction_timeout = '{timeout}'")
             )
             # 发布没有外部请求；即使进程被软超时中断且回滚失败，也由服务器兜底。
             session.connection().execute(
@@ -183,7 +190,7 @@ def _run_directory_step(
     # 实例总开关同时拦截已经排队的目录任务；重新开启后由扫描器恢复。
     if not settings.ADS_SYNC_ENABLED:
         return "WAIT"
-    with _directory_session(database_engine) as session:
+    with _directory_session(database_engine, publish_only=publish_only) as session:
         run = session.exec(
             select(AdDirectoryRun)
             .where(
@@ -376,8 +383,8 @@ def sync_step(*, tenant_id: str, actor_id: str, payload: dict[str, Any]) -> str:
 
 @celery_app.task(  # type: ignore[untyped-decorator]
     name=PUBLISH_TASK_NAME,
-    time_limit=60,
-    soft_time_limit=55,
+    time_limit=100,
+    soft_time_limit=85,
     acks_late=True,
     reject_on_worker_lost=True,
 )
