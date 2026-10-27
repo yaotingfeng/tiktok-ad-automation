@@ -2,14 +2,17 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import UUID, uuid4
 
+from billiard.exceptions import SoftTimeLimitExceeded
 from redis import Redis
 from sqlalchemy import text
+from sqlalchemy.exc import DBAPIError
 from sqlmodel import Session, col, select
 
 from app.core.config import settings
@@ -40,6 +43,7 @@ from app.modules.ads.sync_models import AdDirectoryPage, AdDirectoryRun
 _LEASE_SECONDS = 90
 _LOCK_TIMEOUT = "20s"
 _TRANSACTION_TIMEOUT = "45s"
+logger = logging.getLogger(__name__)
 
 
 @contextmanager
@@ -101,6 +105,73 @@ def _finish_superseded_directory(session: Session, run: AdDirectoryRun) -> str:
 
 
 def run_directory_step(
+    *,
+    database_engine: Any,
+    redis_client: Redis,
+    context: TenantContext,
+    run_id: UUID,
+    claim_generation: int,
+    publish_only: bool = False,
+) -> str:
+    try:
+        return _run_directory_step(
+            database_engine=database_engine,
+            redis_client=redis_client,
+            context=context,
+            run_id=run_id,
+            claim_generation=claim_generation,
+            publish_only=publish_only,
+        )
+    except (DBAPIError, SoftTimeLimitExceeded) as error:
+        retryable = isinstance(error, SoftTimeLimitExceeded) or (
+            isinstance(error, DBAPIError)
+            and (
+                error.connection_invalidated
+                or getattr(error.orig, "sqlstate", None)
+                in {"25P04", "57014", "55P03", "40001", "40P01", "57P01", "08006"}
+            )
+        )
+        if not publish_only or not retryable:
+            raise
+        # 本地发布已整体回滚/断连；保存下一代重试，不能让已消费的outbox空占6小时。
+        # 这里不重放任何外部请求，末页及冻结范围仍由正常发布流程重新核验。
+        with _directory_session(database_engine) as session:
+            run = session.exec(
+                select(AdDirectoryRun)
+                .where(
+                    AdDirectoryRun.id == run_id,
+                    AdDirectoryRun.tenant_id == context.tenant_id,
+                )
+                .with_for_update(skip_locked=True)
+            ).one_or_none()
+            now = datetime.now(UTC)
+            if (
+                run is None
+                or run.actor_id != context.actor_id
+                or run.claim_generation != claim_generation
+                or run.published_version is not None
+                or run.status in {"COMPLETE", "FAILED", "CANCELLED", "STALE"}
+                or run.claimed_until is not None
+                and run.claimed_until > now
+            ):
+                return "FAILED"
+            run.claim_generation += 1
+            run.claim_token = run.claimed_until = None
+            run.status, run.error_code = "WAITING_REMOTE", "directory_publish_retry"
+            run.next_attempt_at = now + timedelta(minutes=2)
+            # 退避期间不预占目录窗口；scanner到期只发本地发布，其他账户可先执行。
+            enqueue_directory_refill(session, run)
+            session.commit()
+        logger.warning(
+            "directory publish deferred: run=%s generation=%s error=%s",
+            run_id,
+            claim_generation,
+            type(error).__name__,
+        )
+        return "WAIT"
+
+
+def _run_directory_step(
     *,
     database_engine: Any,
     redis_client: Redis,

@@ -7,13 +7,14 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import asdict
 from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any, cast
 from uuid import UUID, uuid4
 
-from sqlalchemy import text, tuple_
+from sqlalchemy import inspect, text, tuple_
 from sqlalchemy.dialects.postgresql import insert
 from sqlmodel import Session, col, select
 
@@ -474,20 +475,45 @@ def _publish_materials(
         if key not in values or value["complete"]:
             values[key] = value
     for batch in _batches(list(values.values())):
-        statement = insert(AdMaterialReference).values(batch)
-        session.scalars(
-            statement.on_conflict_do_update(
-                constraint="uq_ad_material_usage",
-                set_={
-                    key: statement.excluded[key]
-                    for key in batch[0]
-                    if key not in {*identity, "id"}
-                },
-                where=statement.excluded.complete.is_(True),
+        # 素材无需返回ORM对象。固定SQL+单个JSON参数避免每500行重新编译6500个
+        # 绑定参数；仍在目录原子事务内写入，完整性与版本冲突规则保持一致。
+        session.connection().execute(
+            text("""
+            INSERT INTO ad_material_reference (
+              id,tenant_id,advertiser_id,ad_remote_id,platform_material_id,
+              ad_material_id,material_type,name,creative_ids,local_material_id,
+              operation_status,complete,published_version
             )
-            .returning(AdMaterialReference)
-            .execution_options(populate_existing=True)
-        ).all()
+            SELECT id,tenant_id,advertiser_id,ad_remote_id,platform_material_id,
+              ad_material_id,material_type,name,creative_ids,local_material_id,
+              operation_status,complete,published_version
+            FROM jsonb_to_recordset(CAST(:rows AS jsonb)) AS incoming (
+              id uuid,tenant_id uuid,advertiser_id text,ad_remote_id text,
+              platform_material_id text,ad_material_id text,material_type text,
+              name text,creative_ids jsonb,local_material_id uuid,
+              operation_status text,complete boolean,published_version integer
+            )
+            ON CONFLICT ON CONSTRAINT uq_ad_material_usage DO UPDATE SET
+              name=EXCLUDED.name,creative_ids=EXCLUDED.creative_ids,
+              local_material_id=EXCLUDED.local_material_id,
+              operation_status=EXCLUDED.operation_status,
+              complete=EXCLUDED.complete,published_version=EXCLUDED.published_version
+            WHERE EXCLUDED.complete
+            """),
+            {"rows": json.dumps(batch, default=str, ensure_ascii=False)},
+        )
+    # Core批量写不自动刷新identity map；只失效本批已加载的素材，避免后续同事务
+    # 查询读到旧完整性/版本。身份列未加载时保守失效，不能为识别身份逐行查库。
+    for obj in list(session.identity_map.values()):
+        if isinstance(obj, AdMaterialReference):
+            mapped = inspect(obj)
+            assert mapped is not None
+            state = mapped.dict
+            if (
+                not all(field in state for field in identity)
+                or tuple(state[field] for field in identity) in values
+            ):
+                session.expire(obj)
 
 
 def _queue_missing_parents(

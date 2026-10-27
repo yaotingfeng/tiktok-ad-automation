@@ -160,7 +160,7 @@ def test_concurrent_task_does_not_advance_cleanup_cursor(redis_client, monkeypat
     import os
 
     monkeypatch.setattr(job_tasks.settings, "REDIS_URL", os.environ["TEST_REDIS_URL"])
-    cursor_key = "reporting:cleanup:cursors:v1"
+    cursor_key = job_tasks.CLEANUP_CURSOR_KEY
     lock = redis_client.lock("reporting:cleanup:lock:v1", timeout=120)
     redis_client.delete(cursor_key)
     assert lock.acquire(blocking=False)
@@ -241,7 +241,7 @@ def test_task_drains_multiple_job_batches_and_persists_cursor(
     import time
 
     seed, factory = committed_sync_seed
-    cursor_key = "reporting:cleanup:cursors:v1"
+    cursor_key = job_tasks.CLEANUP_CURSOR_KEY
     redis_client.delete(cursor_key)
     monkeypatch.setattr(job_tasks.settings, "REDIS_URL", os.environ["TEST_REDIS_URL"])
     with factory() as session:
@@ -275,7 +275,7 @@ def test_task_drains_multiple_job_batches_and_persists_cursor(
 def test_task_gives_every_category_a_turn_before_budget_exit(redis_client, monkeypatch):
     import os
 
-    cursor_key = "reporting:cleanup:cursors:v1"
+    cursor_key = job_tasks.CLEANUP_CURSOR_KEY
     redis_client.delete(cursor_key)
     monkeypatch.setattr(job_tasks.settings, "REDIS_URL", os.environ["TEST_REDIS_URL"])
     monkeypatch.setattr(job_tasks, "DIRECTORY_PAGE_CLEANUP_SECONDS", 0)
@@ -369,7 +369,7 @@ def test_hour_cleanup_restores_redis_cursor_across_task_invocations(
     with factory() as session:
         _hour_rows(session, seed, now=datetime.now(UTC))
         session.commit()
-    cursor_key = "reporting:cleanup:cursors:v1"
+    cursor_key = job_tasks.CLEANUP_CURSOR_KEY
     redis_client.delete(cursor_key)
     monkeypatch.setattr(job_tasks.settings, "REDIS_URL", os.environ["TEST_REDIS_URL"])
     monkeypatch.setattr(job_tasks, "CLEANUP_CATEGORIES", ("hours",))

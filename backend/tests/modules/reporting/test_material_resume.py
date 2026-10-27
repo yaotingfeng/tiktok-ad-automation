@@ -24,6 +24,13 @@ DAY = date(2026, 10, 5)
 ACCOUNTS = {"acc-1": AccountMeta("USD", "Asia/Hong_Kong")}
 
 
+@pytest.fixture(autouse=True)
+def small_material_step_budget(monkeypatch):
+    # 这些用例用短快照反复覆盖断点/失败/原子发布；默认历史50页/30秒及
+    # 今日5页的执行策略由test_material_step_budget独立验证。
+    monkeypatch.setattr(jobs, "MATERIAL_BACKFILL_PAGES_PER_STEP", 5)
+
+
 def row(index, *, day=DAY, spend="1", advertiser="acc-1"):
     return {
         "dimensions": {

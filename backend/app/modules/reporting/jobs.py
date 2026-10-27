@@ -11,6 +11,7 @@ import json
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from random import randint
+from time import monotonic
 from uuid import UUID, uuid4
 
 from sqlalchemy import delete, func, text
@@ -32,7 +33,11 @@ from app.modules.reporting.directory_refresh import (
     refresh_report_directory,
     request_link_directory,
 )
-from app.modules.reporting.lanes import CLOSEOUT_PRIORITY, lane_predicate
+from app.modules.reporting.lanes import (
+    CLOSEOUT_PRIORITY,
+    lane_predicate,
+    report_workload,
+)
 from app.modules.reporting.material_value import (
     MATERIAL_WINDOW_VALUES_SQL,
     material_value_parameters,
@@ -51,6 +56,8 @@ PRIORITY = {
 }
 TRUNCATION_ROWS = 20_000
 MATERIAL_PAGES_PER_STEP = 5
+MATERIAL_BACKFILL_PAGES_PER_STEP = 50
+MATERIAL_BACKFILL_STEP_SECONDS = 30
 MATERIAL_SPLIT_ROWS = 5_000
 MAX_PROVIDER_RETRIES = 5
 LEASE = timedelta(seconds=240)
@@ -581,6 +588,15 @@ def _split_material_dates(session, job, result: RawReportPage):
 def _run_material(session, job, reader, accounts):
     if len(accounts) != 1 or job.campaign_ids:
         raise DomainError("report_query_invalid", "素材日报要求一个账户且不能限定系列")
+    started = monotonic()
+    # 沿用执行器的账户当地日/收尾分类；过期热报才使用补数预算，今日与昨日
+    # 收尾仍每步最多5页。历史5页往往只读数秒，却要等数千任务轮转才能续页，
+    # 拉长完整快照窗口并增加重建。连续读仍有限额，不能一直占用后台执行槽。
+    background = report_workload(session, job, now=datetime.now(UTC)) == "background"
+    page_limit = (
+        MATERIAL_BACKFILL_PAGES_PER_STEP if background else MATERIAL_PAGES_PER_STEP
+    )
+    deadline = started + MATERIAL_BACKFILL_STEP_SECONDS if background else None
     scope = _material_scope(job)
     progress = job.progress.get("material_paging")
     if progress is None:
@@ -620,7 +636,11 @@ def _run_material(session, job, reader, accounts):
                 raise ValueError("missing timezone")
         except (KeyError, TypeError, ValueError) as error:
             raise DomainError("report_query_invalid", "素材首页观测时间无效") from error
-    for _ in range(MATERIAL_PAGES_PER_STEP):
+    for _ in range(page_limit):
+        # 只在完整页边界让出，已存断点按原due_at轮转；正在执行的单次请求继续
+        # 受SDK原期限和每次准入约束。拒绝仍立即退出，不重试或扩大平台配额。
+        if deadline is not None and monotonic() >= deadline:
+            return None
         result = reader.material_day(
             advertiser_id=job.advertiser_ids[0],
             start=job.start_date,

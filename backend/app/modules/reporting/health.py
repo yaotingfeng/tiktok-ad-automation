@@ -3,7 +3,12 @@
 import json
 import logging
 from datetime import UTC, datetime, timedelta
+from hashlib import sha256
+from time import monotonic
+from typing import Any, TypedDict
+from uuid import UUID, uuid4
 
+from redis import Redis
 from sqlalchemy import text
 from sqlalchemy.exc import DBAPIError
 from sqlmodel import Session, col, select
@@ -11,8 +16,10 @@ from sqlmodel import Session, col, select
 from app.core.config import settings
 from app.core.context import TenantContext
 from app.core.db import engine
+from app.core.errors import DomainError
 from app.jobs.celery_app import celery_app
-from app.jobs.outbox import enqueue_after_commit
+from app.jobs.outbox import enqueue_after_commit, validate_dispatch_payload
+from app.jobs.tasks import register_dispatch_task
 from app.modules.reporting.directory_refresh import (
     PARENT_INTERVAL,
     STATUS_INTERVAL,
@@ -37,6 +44,7 @@ from app.modules.reporting.store_models import (
     ReportSyncHealth,
     ReportSyncHealthEvent,
 )
+from app.modules.tenants.permissions import require_tenant
 
 logger = logging.getLogger(__name__)
 # 一个实时轮次外加执行余量，避免正常等待下一轮被健康修复反复补拉。
@@ -44,6 +52,103 @@ SLO = FRESHNESS["ad_day"]
 REPAIR_INTERVAL = timedelta(minutes=2)
 MAX_REPAIR_ACCOUNTS = 50
 REPAIR_BUDGET_SECONDS = 2
+HEALTH_BC_TASK = "reporting.check_bc_health"
+register_dispatch_task(HEALTH_BC_TASK, "control")
+HEALTH_CHUNK_SIZE = 64
+HEALTH_MAX_CHUNKS = 16
+HEALTH_CYCLE_SECONDS = 120
+
+
+class _HealthProgress(TypedDict):
+    cycle: str
+    scope: str
+    at: str
+    offset: int
+    metrics: dict[str, Any]
+    issues: list[str]
+    repairs: dict[str, list[str]]
+
+
+def _fresh_parents(session, params, *, kind, keys):
+    """在 Python 去重，避免数据库低估当天事实后把父键回连变成平方扫描。"""
+    fresh = set()
+    # 缺失父 ID 仍由调用方计作缺口，不参与排序或主键探测。
+    ordered = sorted(key for key in keys if key[1] is not None)
+    for offset in range(0, len(ordered), 256):
+        batch = ordered[offset : offset + 256]
+        fresh.update(
+            session.execute(
+                text("""
+            SELECT r.advertiser_id,r.parent_id
+            FROM unnest(CAST(:advertisers AS text[]),CAST(:parents AS text[]))
+              r(advertiser_id,parent_id)
+            JOIN LATERAL (
+              SELECT true FROM ad_object o
+              WHERE o.tenant_id=:t AND o.advertiser_id=r.advertiser_id
+                AND o.kind=:kind AND o.remote_id=r.parent_id
+                AND o.observed_at >= CASE WHEN r.advertiser_id=ANY(:strict_accounts)
+                  THEN :rule_cutoff ELSE :parent_cutoff END LIMIT 1
+            ) found ON true
+        """),
+                {
+                    **params,
+                    "kind": kind,
+                    "advertisers": [key[0] for key in batch],
+                    "parents": [key[1] for key in batch],
+                },
+            ).all()
+        )
+    return fresh
+
+
+def _missing_directory_ads(session, params):
+    rows = (
+        session.execute(
+            text("""
+        SELECT r.advertiser_id,r.ad_id,r.adgroup_id,r.campaign_id,a.fresh
+        FROM ad_report_day r
+        LEFT JOIN LATERAL (
+          SELECT true AS fresh FROM ad_object o
+          WHERE o.tenant_id=r.tenant_id AND o.advertiser_id=r.advertiser_id
+            AND o.kind='ad' AND o.remote_id=r.ad_id
+            AND o.observed_at >= CASE WHEN r.advertiser_id=ANY(:strict_accounts)
+              THEN :rule_cutoff ELSE :status_cutoff END LIMIT 1
+        ) a ON true
+        WHERE r.tenant_id=:t AND r.advertiser_id=ANY(:ids)
+          AND r.stat_date BETWEEN :first_day AND :last_day
+          AND r.stat_date=(CAST(:now AS timestamptz) AT TIME ZONE r.timezone)::date
+          AND r.spend>0
+    """),
+            params,
+        )
+        .mappings()
+        .all()
+    )
+    groups = _fresh_parents(
+        session,
+        params,
+        kind="adgroup",
+        keys={
+            (row["advertiser_id"], row["adgroup_id"]) for row in rows if row["fresh"]
+        },
+    )
+    campaigns = _fresh_parents(
+        session,
+        params,
+        kind="campaign",
+        keys={
+            (row["advertiser_id"], row["campaign_id"])
+            for row in rows
+            if row["fresh"] and (row["advertiser_id"], row["adgroup_id"]) in groups
+        },
+    )
+    return [
+        row
+        for row in rows
+        if not row["fresh"]
+        or (row["advertiser_id"], row["adgroup_id"]) not in groups
+        or (row["advertiser_id"], row["campaign_id"]) not in campaigns
+    ]
 
 
 def measure_health(session, plan, *, now, accounts=None):
@@ -76,6 +181,8 @@ def measure_health(session, plan, *, now, accounts=None):
         "strict_accounts": sorted(strict_accounts),
         "action_cutoff": now - timedelta(minutes=2),
     }
+    # 每账户合并今日/昨日两类水位，只按主键读取最多四行；聚合保留缺失的 NULL。
+    # 不再让双 JOIN 在大池重复随机读取，或改走整租户历史水位的哈希扫描。
     rows = (
         session.execute(
             text("""
@@ -84,13 +191,27 @@ def measure_health(session, plan, *, now, accounts=None):
           FROM advertiser_account a WHERE a.tenant_id=:t AND a.advertiser_id=ANY(:ids)
             AND a.advertiser_id=ANY(:active))
         SELECT a.advertiser_id,a.timezone,a.local_day,kinds.kind AS report_kind,
-          s.last_success_at, previous.last_success_at AS previous_success_at
-        FROM active a CROSS JOIN (VALUES ('ad_day'),('material_day')) kinds(kind)
-        LEFT JOIN report_sync_state s ON s.tenant_id=:t AND s.advertiser_id=a.advertiser_id
-          AND s.stat_date=a.local_day AND s.report_kind=kinds.kind
-        LEFT JOIN report_sync_state previous ON previous.tenant_id=:t
-          AND previous.advertiser_id=a.advertiser_id AND previous.stat_date=a.local_day-1
-          AND previous.report_kind=kinds.kind
+          kinds.last_success_at,kinds.previous_success_at
+        FROM active a
+        LEFT JOIN LATERAL (
+          SELECT
+            max(s.last_success_at) FILTER (WHERE s.report_kind='ad_day'
+              AND s.stat_date=a.local_day) AS ad_at,
+            max(s.last_success_at) FILTER (WHERE s.report_kind='ad_day'
+              AND s.stat_date=a.local_day-1) AS ad_previous_at,
+            max(s.last_success_at) FILTER (WHERE s.report_kind='material_day'
+              AND s.stat_date=a.local_day) AS material_at,
+            max(s.last_success_at) FILTER (WHERE s.report_kind='material_day'
+              AND s.stat_date=a.local_day-1) AS material_previous_at
+          FROM report_sync_state s
+          WHERE s.tenant_id=:t AND s.advertiser_id=a.advertiser_id
+            AND s.report_kind IN ('ad_day','material_day')
+            AND s.stat_date BETWEEN a.local_day-1 AND a.local_day
+        ) recent ON true
+        CROSS JOIN LATERAL (VALUES
+          ('ad_day',recent.ad_at,recent.ad_previous_at),
+          ('material_day',recent.material_at,recent.material_previous_at)
+        ) kinds(kind,last_success_at,previous_success_at)
     """),
             params,
         )
@@ -116,44 +237,16 @@ def measure_health(session, plan, *, now, accounts=None):
         if at is None:
             stale[row["report_kind"]].add(row["advertiser_id"])
     # 逐批完整测量；任一批失败仍向外抛出，不能把部分覆盖标记为健康。
-    # 广告已缺失/过期即已证明缺口，不再随机读取其父链；父层同样短路。
+    # 同批广告共享的父对象只读取一次；缺失/过期子层不再探测父层。
+    # 用集合回连保留逐广告缺口数，避免数据库低估基数引起父链平方扫描。
     missing = []
     directory_accounts = sorted(set(owned))
     for offset in range(0, len(directory_accounts), 256):
         missing.extend(
-            session.execute(
-                text("""
-        SELECT r.advertiser_id,r.ad_id FROM ad_report_day r
-        LEFT JOIN LATERAL (
-          SELECT true AS fresh FROM ad_object o
-          WHERE o.tenant_id=r.tenant_id AND o.advertiser_id=r.advertiser_id
-            AND o.kind='ad' AND o.remote_id=r.ad_id
-            AND o.observed_at >= CASE WHEN r.advertiser_id=ANY(:strict_accounts)
-              THEN :rule_cutoff ELSE :status_cutoff END LIMIT 1
-        ) a ON true
-        LEFT JOIN LATERAL (
-          SELECT true AS fresh FROM ad_object o
-          WHERE a.fresh AND o.tenant_id=r.tenant_id AND o.advertiser_id=r.advertiser_id
-            AND o.kind='adgroup' AND o.remote_id=r.adgroup_id
-            AND o.observed_at >= CASE WHEN r.advertiser_id=ANY(:strict_accounts)
-              THEN :rule_cutoff ELSE :parent_cutoff END LIMIT 1
-        ) g ON true
-        LEFT JOIN LATERAL (
-          SELECT true AS fresh FROM ad_object o
-          WHERE g.fresh AND o.tenant_id=r.tenant_id AND o.advertiser_id=r.advertiser_id
-            AND o.kind='campaign' AND o.remote_id=r.campaign_id
-            AND o.observed_at >= CASE WHEN r.advertiser_id=ANY(:strict_accounts)
-              THEN :rule_cutoff ELSE :parent_cutoff END LIMIT 1
-        ) c ON true
-        WHERE r.tenant_id=:t AND r.advertiser_id=ANY(:ids)
-          AND r.stat_date BETWEEN :first_day AND :last_day
-          AND r.stat_date=(CAST(:now AS timestamptz) AT TIME ZONE r.timezone)::date
-          AND r.spend>0 AND c.fresh IS NULL
-    """),
+            _missing_directory_ads(
+                session,
                 {**params, "ids": directory_accounts[offset : offset + 256]},
             )
-            .mappings()
-            .all()
         )
     # 素材关联同样逐账户主键前缀短探测，避免反连接扫描所有历史映射。
     unlinked = []
@@ -161,16 +254,20 @@ def measure_health(session, plan, *, now, accounts=None):
         unlinked.extend(
             session.execute(
                 text("""
-            SELECT DISTINCT r.advertiser_id,r.main_material_id FROM material_report_day r
+            WITH posts AS MATERIALIZED (
+              SELECT DISTINCT r.advertiser_id,r.main_material_id FROM material_report_day r
+              WHERE r.tenant_id=:t AND r.advertiser_id=ANY(:ids) AND r.spend>0
+                AND r.stat_date BETWEEN :first_day AND :last_day
+                AND r.stat_date=(CAST(:now AS timestamptz) AT TIME ZONE r.timezone)::date
+            )
+            SELECT r.advertiser_id,r.main_material_id FROM posts r
             LEFT JOIN LATERAL (
               SELECT true AS found FROM material_post_link l
-              WHERE l.tenant_id=r.tenant_id AND l.advertiser_id=r.advertiser_id
+              WHERE l.tenant_id=:t AND l.advertiser_id=r.advertiser_id
                 AND l.main_material_id=r.main_material_id
                 AND l.platform_material_id IS NOT NULL LIMIT 1
             ) linked ON true
-            WHERE r.tenant_id=:t AND r.advertiser_id=ANY(:ids) AND r.spend>0
-              AND r.stat_date BETWEEN :first_day AND :last_day AND r.stat_date=(CAST(:now AS timestamptz) AT TIME ZONE r.timezone)::date
-              AND linked.found IS NULL
+            WHERE linked.found IS NULL
         """),
                 {**params, "ids": directory_accounts[offset : offset + 256]},
             )
@@ -261,14 +358,16 @@ def _rescue_queued_actions(session, plan, *, now):
     return count
 
 
-def observe_health(session, plan, *, now, deadline=None):
+def observe_health(session, plan, *, now, deadline=None, measurement=None):
     remaining = (
         10
         if deadline is None
         else max(0, (deadline - datetime.now(UTC)).total_seconds())
     )
-    with query_budget(session, seconds=remaining):
-        metrics, issues, repairs = measure_health(session, plan, now=now)
+    if measurement is None:
+        with query_budget(session, seconds=remaining):
+            measurement = measure_health(session, plan, now=now)
+    metrics, issues, repairs = measurement
     status = "DEGRADED" if issues else "HEALTHY"
     row = session.get(ReportSyncHealth, (plan.tenant_id, plan.bc_id))
     if row is None:
@@ -401,42 +500,202 @@ def _repair_health(session, plan, row, repairs, now):
     )
 
 
-@celery_app.task(name="reporting.check_health", time_limit=25, soft_time_limit=20)
-def check_health():
+def schedule_health(*, database_engine, now=None):
+    """Beat 每分钟只登记独立 BC 任务，不把后续 BC 塞进前一个的剩余预算。"""
     if not settings.ADS_SYNC_ENABLED:
         return 0
-    now = datetime.now(UTC)
-    deadline = now + timedelta(seconds=10)
+    now = now or datetime.now(UTC)
     count = 0
-    with Session(engine) as session:
+    with Session(database_engine) as session:
         keys = session.exec(
-            select(AdSyncBc.tenant_id, AdSyncBc.bc_id)
-            .outerjoin(
-                ReportSyncHealth,
-                (col(ReportSyncHealth.tenant_id) == col(AdSyncBc.tenant_id))
-                & (col(ReportSyncHealth.bc_id) == col(AdSyncBc.bc_id)),
-            )
-            .where(col(AdSyncBc.enabled).is_(True))
-            .order_by(
-                col(ReportSyncHealth.observed_at).asc().nulls_first(),
-                col(AdSyncBc.tenant_id),
-                col(AdSyncBc.bc_id),
+            select(AdSyncBc.tenant_id, AdSyncBc.bc_id).where(
+                col(AdSyncBc.enabled).is_(True)
             )
         ).all()
     for key in keys:
-        if datetime.now(UTC) >= deadline:
-            break
         try:
-            with Session(engine) as session, session.begin():
+            with Session(database_engine) as session, session.begin():
                 session.connection().execute(text("SET LOCAL statement_timeout='5s'"))
                 plan = session.get(AdSyncBc, key)
-                if plan is not None and plan.enabled:
-                    observe_health(session, plan, now=now, deadline=deadline)
-                    count += 1
+                if plan is None or not plan.enabled:
+                    continue
+                enqueue_after_commit(
+                    session,
+                    context=TenantContext(plan.tenant_id, plan.actor_id, "operator"),
+                    task_name=HEALTH_BC_TASK,
+                    task_key=f"sync-health-measure:{plan.bc_id}:{int(now.timestamp()) // 60}",
+                    payload={"bc_id": plan.bc_id},
+                )
+                count += 1
+        except DBAPIError, DomainError:
+            # 单 BC 写入失败不挡后续 BC；Celery 软期限仍向外传播结束本轮。
+            logger.exception("sync health dispatch failed tenant=%s bc=%s", *key)
+    return count
+
+
+def _health_lock_key(tenant_id, bc_id):
+    return f"reporting:health:bc:v1:{tenant_id}:{bc_id}"
+
+
+def _health_progress_key(tenant_id, bc_id):
+    return f"reporting:health:progress:v1:{tenant_id}:{bc_id}"
+
+
+def _health_scope(plan, owned):
+    return sha256(
+        json.dumps(
+            [
+                str(plan.actor_id),
+                plan.frozen_route,
+                sorted(owned),
+                sorted(set(plan.last_active_advertiser_ids)),
+                plan.active_screened_at.isoformat()
+                if plan.active_screened_at
+                else None,
+            ],
+            sort_keys=True,
+        ).encode()
+    ).hexdigest()
+
+
+def _advance_health(session, plan, redis_client, *, cycle, deadline):
+    """分片只保存私有进度；完整范围测完后才发布健康事实和执行修复。"""
+    key = _health_progress_key(plan.tenant_id, plan.bc_id)
+    raw = redis_client.get(key)
+    progress: _HealthProgress | None = json.loads(raw) if raw else None
+    # 旧续投不能新建或推进后来的一轮；Beat 的无 token 任务可接续崩溃进度。
+    if cycle is not None and (not progress or progress["cycle"] != cycle):
+        return "IGNORED"
+    owned = sorted(set(owned_accounts(session, plan)))
+    scope = _health_scope(plan, owned)
+    if progress and datetime.now(UTC) - datetime.fromisoformat(
+        progress["at"]
+    ) > timedelta(seconds=HEALTH_CYCLE_SECONDS):
+        redis_client.delete(key)
+        raise QueryBudgetExceeded("health observation cycle expired")
+    if progress is None or progress["scope"] != scope:
+        progress = {
+            "cycle": uuid4().hex,
+            "scope": scope,
+            "at": datetime.now(UTC).isoformat(),
+            "offset": 0,
+            "metrics": {},
+            "issues": [],
+            "repairs": {"ad": [], "material": [], "links": []},
+        }
+        redis_client.set(key, json.dumps(progress), ex=180)
+    as_of = datetime.fromisoformat(progress["at"])
+    total = max(1, len(owned))
+    for _ in range(HEALTH_MAX_CHUNKS):
+        if progress["offset"] >= total or deadline - monotonic() < 3:
+            break
+        end = min(total, progress["offset"] + HEALTH_CHUNK_SIZE)
+        # SAVEPOINT 只包本批；失败时已成功批次仍可从 Redis 恢复，不跳过失败账户。
+        with session.begin_nested(), query_budget(session, seconds=3):
+            metrics, issues, repairs = measure_health(
+                session, plan, now=as_of, accounts=owned[progress["offset"] : end]
+            )
+        accumulated = progress["metrics"]
+        for name, value in metrics.items():
+            if name == "pending_actions":
+                # 这是 BC 级计数，采用最后一次完整查询，不能按账户批次相加。
+                accumulated[name] = value
+            elif name == "oldest_data_at":
+                times = [at for at in (accumulated.get(name), value) if at]
+                accumulated[name] = min(times) if times else None
+            else:
+                accumulated[name] = accumulated.get(name, 0) + value
+        progress["issues"] = sorted(
+            set(progress["issues"])
+            | {issue for issue in issues if issue not in metrics}
+        )
+        for name, accounts in repairs.items():
+            progress["repairs"][name] = sorted(
+                set(progress["repairs"][name]) | accounts
+            )
+        progress["offset"] = end
+        redis_client.set(key, json.dumps(progress), ex=180)
+    if progress["offset"] < total:
+        enqueue_after_commit(
+            session,
+            context=TenantContext(plan.tenant_id, plan.actor_id, "operator"),
+            task_name=HEALTH_BC_TASK,
+            task_key=f"sync-health-continue:{plan.bc_id}:{progress['cycle']}:{progress['offset']}",
+            payload={"bc_id": plan.bc_id, "cycle": progress["cycle"]},
+        )
+        return "CONTINUE"
+    # 观测期间授权或计划范围变化，不能发布旧范围；下次 Beat 从新范围完整重测。
+    session.refresh(plan)
+    current_owned = sorted(set(owned_accounts(session, plan)))
+    if not plan.enabled or _health_scope(plan, current_owned) != scope:
+        redis_client.delete(key)
+        return "IGNORED"
+    require_tenant(
+        session,
+        actor_id=plan.actor_id,
+        tenant_id=plan.tenant_id,
+        action="reporting_write",
+    )
+    if datetime.now(UTC) - as_of > timedelta(seconds=HEALTH_CYCLE_SECONDS):
+        redis_client.delete(key)
+        raise QueryBudgetExceeded("health observation cycle expired")
+    metrics = progress["metrics"]
+    issues = [
+        name for name, value in metrics.items() if name != "oldest_data_at" and value
+    ] + progress["issues"]
+    repairs = {name: set(accounts) for name, accounts in progress["repairs"].items()}
+    observe_health(session, plan, now=as_of, measurement=(metrics, issues, repairs))
+    return "COMPLETE"
+
+
+def run_bc_health(*, database_engine, redis_client, context, bc_id, cycle=None):
+    if not settings.ADS_SYNC_ENABLED:
+        return "IGNORED"
+    key = (context.tenant_id, bc_id)
+    lock = redis_client.lock(_health_lock_key(*key), timeout=30, blocking=False)
+    if not lock.acquire(blocking=False):
+        return "BUSY"
+    try:
+        now = datetime.now(UTC)
+        deadline = monotonic() + 10
+        try:
+            with Session(database_engine) as session, session.begin():
+                session.connection().execute(text("SET LOCAL statement_timeout='5s'"))
+                plan = session.get(AdSyncBc, key)
+                if plan is None or not plan.enabled:
+                    return "IGNORED"
+                if plan.actor_id != context.actor_id:
+                    raise DomainError(
+                        "dispatch_payload_invalid", "健康任务与当前计划身份不符"
+                    )
+                require_tenant(
+                    session,
+                    actor_id=context.actor_id,
+                    tenant_id=context.tenant_id,
+                    action="reporting_write",
+                )
+                # 使用执行时刻与当前计划；不携带过期冻结路由，也不共享别的 BC 的时限。
+                result = _advance_health(
+                    session, plan, redis_client, cycle=cycle, deadline=deadline
+                )
+            if result == "COMPLETE":
+                # 数据库提交成功后才删除进度；提交失败/进程崩溃可重试完整发布。
+                redis_client.delete(_health_progress_key(*key))
+            return result
+        except DomainError:
+            raise
         except Exception:
             logger.exception("sync health check failed tenant=%s bc=%s", *key)
-            # 单个BC慢查询不会饿死后面的监控；失败本身持久可见，下一轮先检查更旧BC。
-            with Session(engine) as session, session.begin():
+            # 失败不覆盖上次完整指标；只改变本 BC 的失败可见状态。
+            with Session(database_engine) as session, session.begin():
+                session.connection().execute(text("SET LOCAL statement_timeout='5s'"))
+                plan = session.get(AdSyncBc, key)
+                if (
+                    plan is None
+                    or not plan.enabled
+                    or plan.actor_id != context.actor_id
+                ):
+                    return "IGNORED"
                 row = session.get(ReportSyncHealth, key)
                 if row is None:
                     row = ReportSyncHealth(tenant_id=key[0], bc_id=key[1])
@@ -446,4 +705,35 @@ def check_health():
                     ["MONITOR_QUERY_FAILED"],
                     now,
                 )
-    return count
+            return "FAILED"
+    finally:
+        lock.release()
+
+
+@celery_app.task(name="reporting.check_health", time_limit=25, soft_time_limit=20)
+def check_health():
+    return schedule_health(database_engine=engine)
+
+
+@celery_app.task(name=HEALTH_BC_TASK, time_limit=25, soft_time_limit=20)
+def check_bc_health(*, tenant_id, actor_id, payload):
+    validate_dispatch_payload(payload)
+    if (
+        set(payload) not in ({"bc_id"}, {"bc_id", "cycle"})
+        or not isinstance(payload["bc_id"], str)
+        or not payload["bc_id"]
+        or (
+            "cycle" in payload
+            and (not isinstance(payload["cycle"], str) or not payload["cycle"])
+        )
+    ):
+        raise DomainError("dispatch_payload_invalid", "健康任务参数无效")
+    context = TenantContext(UUID(tenant_id), UUID(actor_id), "operator")
+    with Redis.from_url(settings.REDIS_URL) as redis:
+        return run_bc_health(
+            database_engine=engine,
+            redis_client=redis,
+            context=context,
+            bc_id=payload["bc_id"],
+            cycle=payload.get("cycle"),
+        )

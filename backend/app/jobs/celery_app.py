@@ -68,6 +68,7 @@ celery_app.conf.update(
         "jobs.compact_dispatches": {"queue": "control"},
         "reporting.plan_due": {"queue": "control"},
         "reporting.check_health": {"queue": "control"},
+        "reporting.check_bc_health": {"queue": "control"},
         "reporting.job_step": {"queue": "ads-reporting"},
         "reporting.backfill_step": {"queue": "ads-backfill"},
         "reporting.plan_balances": {"queue": "control"},
@@ -204,7 +205,7 @@ celery_app.conf.update(
         # explicit feature flag before touching plans or the provider gateway.
         "cleanup-report-store": {
             "task": "reporting.cleanup_store",
-            "schedule": 3600.0,
+            "schedule": 60.0,
             "options": {"queue": "ads-reporting"},
         },
         "scan-account-balances": {

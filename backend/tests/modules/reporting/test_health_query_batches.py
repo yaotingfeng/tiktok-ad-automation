@@ -56,7 +56,7 @@ def test_health_batches_preserve_complete_scope(
     plan.active_screened_at = now
     queries = []
     target = (
-        "SELECT r.advertiser_id,r.ad_id FROM ad_report_day r"
+        "SELECT r.advertiser_id,r.ad_id,r.adgroup_id,r.campaign_id"
         if kind == "ad"
         else "SELECT DISTINCT r.advertiser_id,r.main_material_id"
     )

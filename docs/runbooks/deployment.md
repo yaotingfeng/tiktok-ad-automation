@@ -353,3 +353,12 @@ Beat 每秒触发一次 outbox 发布。单次发布默认最多 20 个公平轮
 
 
 2026-10-20补充：官方SDK报表内容解析的`materials.get_videos`、`materials.search_videos`、`scene.get_identity_video`分别对应视频信息、视频搜索与帖子视频信息物理GET端点，均按应用+物理接口共享速率，跨BC/连接不得拆桶。生产仅给`OFFICIAL_API:`前缀的这三个操作配置`endpoint_calls_per_window=10`、`endpoint_max_inflight=6`，沿用1000ms窗口与960000ms租约；通用3QPS基线及写入/MCP不变。依据为[官方默认Basic额度与物理端点独立规则](https://business-api.tiktok.com/gateway/docs/index?doc_id=1740029171730433)，不代表申请到了更高级额度；真实40100继续按平台信号退避。
+
+
+### 2026-10-27 同步积压无迁移补修
+
+候选增加`reporting.check_bc_health`，仍在既有control队列消费；原`reporting.check_health`每分钟仅按BC登记任务。续测载荷只含bc_id与可选cycle，租户/操作者沿用outbox信封，运行时重新核对计划及授权。Redis私有进度使用`reporting:health:progress:v1`，180秒过期；完整观测须在120秒内覆盖全范围，失败不发布部分指标。10秒是单任务续测准入预算，任务仍20/25秒软硬期限。
+
+`reporting.cleanup_store`由每小时改为每分钟，10秒续批预算、首轮各分类一次机会、120秒互斥锁及55/60秒任务期限。分页清理按子表复合主键扫描，游标改`reporting:cleanup:cursors:v2`；旧游标不再使用，重新扫描仍保留原1小时/7天及失败可恢复保护，不需要人工删除Redis键。
+
+后台目录丢失消息判定从6小时缩为10分钟，有效租约仍保护；本地发布暂态数据库失败按下一代两分钟退避，不能重放广告写操作。历史素材每步50页/30秒页边界预算，实时及昨日收尾仍5页；既有平台配额、容量、四个部署开关均不变。按正常排空切换，schema保持0045；上线状态与完整业务验收以当日验证记录为准。

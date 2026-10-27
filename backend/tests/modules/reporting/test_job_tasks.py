@@ -738,7 +738,7 @@ def test_lost_directory_message_is_redispatched_with_new_generation(
                     materials=[],
                 )
             )
-        record.published_at = now - timedelta(hours=1)
+        record.published_at = now - timedelta(minutes=1)
         s.commit()
         run_id, generation = run.id, run.claim_generation
     # 发布不久：仍在等待执行，不重复入队。

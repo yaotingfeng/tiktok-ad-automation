@@ -190,8 +190,10 @@ def test_full_read_retry_takes_new_observation_after_later_publish(
 
 
 def test_material_retry_keeps_first_page_observation_and_protects_new_publish(
-    committed_sync_seed,
+    committed_sync_seed, monkeypatch
 ):
+    # 强制短步，验证跨步骤时首页观测不被新发布或准入重试刷新。
+    monkeypatch.setattr(jobs, "MATERIAL_BACKFILL_PAGES_PER_STEP", 5)
     seed, factory = committed_sync_seed
     job = enqueue(factory, seed)
     reader = Pages(count=7)
@@ -233,8 +235,10 @@ def test_material_retry_keeps_first_page_observation_and_protects_new_publish(
 
 @pytest.mark.parametrize("legacy", [False, True])
 def test_material_rebuild_uses_new_first_read_and_preserves_facts_until_complete(
-    committed_sync_seed, legacy
+    committed_sync_seed, monkeypatch, legacy
 ):
+    # 水位保护必须经历多个步骤；默认历史页预算由独立执行预算用例覆盖。
+    monkeypatch.setattr(jobs, "MATERIAL_BACKFILL_PAGES_PER_STEP", 5)
     seed, factory = committed_sync_seed
     job = enqueue(factory, seed)
     reader = Pages(count=7)

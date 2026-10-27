@@ -89,7 +89,9 @@ LINK_DISPATCH_WINDOW = 4
 # 历史事实/关联各保底一半，闲置份额可借；实际执行并发及平台配额不变。
 BACKFILL_DISPATCH_WINDOW = 6
 # 目录消息发布后超过此时长仍未被领取，视为丢失并重新入队。
-DIRECTORY_MESSAGE_LOST_AFTER = timedelta(hours=6)
+# 后台窗口最多8个运行、每步最多55秒；10分钟已覆盖单槽发布队列，
+# 已消费失败的末页消息不能再按6小时占位。实时定向仍使用更短的2分钟。
+DIRECTORY_MESSAGE_LOST_AFTER = timedelta(minutes=10)
 TARGETED_MESSAGE_LOST_AFTER = timedelta(minutes=2)
 # 一轮周期目录分批推进；此游标不占用账户筛选或规则相位的进度键。
 DIRECTORY_PLAN_PROGRESS = "directory_cycle_v1"
@@ -1050,8 +1052,9 @@ def run_job_step(*, database_engine, redis_client, job_id, claim_token):
 DIRECTORY_PAGE_RETENTION = timedelta(hours=1)
 # 单批清理的运行数上限：暂存页含大 JSONB，分批各自提交，避免长事务。
 DIRECTORY_PAGE_CLEANUP_RUNS = 2000
-# 每轮任务内继续分批清理的时间预算（任务软超时 55 秒）；积压时下一轮继续。
-DIRECTORY_PAGE_CLEANUP_SECONDS = 30
+# 每分钟以10秒为续批预算，首轮每类仍有一次机会；短批各自提交，持续追赶暂存。
+DIRECTORY_PAGE_CLEANUP_SECONDS = 10
+CLEANUP_CURSOR_KEY = "reporting:cleanup:cursors:v2"
 # 先按主键取有限候选，再判断保留期，避免无时间索引时 LIMIT 仍扫描全表。
 CLEANUP_SCAN_ROWS = 1000
 CLEANUP_BATCH_ROWS = 100
@@ -1135,9 +1138,13 @@ def _expired_directory_runs(now):
     )
 
 
+def _cleanup_primary_key(model):
+    return tuple(model.__table__.primary_key.columns)
+
+
 def _cleanup_candidates(session, model, *, cursor, limit):
     """主键窗口本身不附带过期条件；读取上限不受历史表大小或命中率影响。"""
-    keys = tuple(model.__table__.primary_key.columns)
+    keys = _cleanup_primary_key(model)
     statement = select(*keys).order_by(*keys).limit(limit)
     if cursor:
         values = []
@@ -1179,9 +1186,15 @@ def _cleanup_category(session, *, category, now, cursors):
     batch_limit = limits.get(
         "batch", CLEANUP_JOB_BATCH_ROWS if category == "jobs" else CLEANUP_BATCH_ROWS
     )
+    # 分页从子表自己的主键窗口出发，避免为找到少量有页任务反复读无页父记录。
+    # v2游标记录(job_id/run_id,page)，旧v1父表游标不复用；重扫不会越过保留策略。
+    page_model = {
+        "material_pages": ReportSyncPage,
+        "directory_pages": AdDirectoryPage,
+    }.get(category)
     keys, candidates = _cleanup_candidates(
         session,
-        model,
+        page_model or model,
         cursor=cursors.get(category),
         limit=limits.get("scan", CLEANUP_SCAN_ROWS),
     )
@@ -1189,8 +1202,13 @@ def _cleanup_category(session, *, category, now, cursors):
         cursors[category] = None
         cursors["_exhausted"] = True
         return 0
-    scope = tuple_(*keys).in_(candidates)
-    eligible = select(*keys).where(scope)
+    parent_keys = _cleanup_primary_key(model)
+    scope = (
+        parent_keys[0].in_(list(dict.fromkeys(row[0] for row in candidates)))
+        if page_model is not None
+        else tuple_(*keys).in_(candidates)
+    )
+    eligible = select(*parent_keys).where(scope)
     if condition is not None:
         eligible = eligible.where(condition)
     has_pages = (
@@ -1406,7 +1424,7 @@ def cleanup_store_task():
     # 预算从第一次数据库操作前计算，每类轮流一批；任何批失败都不撤销已提交进展。
     deadline = time.monotonic() + DIRECTORY_PAGE_CLEANUP_SECONDS
     result = dict.fromkeys(CLEANUP_CATEGORIES, 0)
-    cursor_key = "reporting:cleanup:cursors:v1"
+    cursor_key = CLEANUP_CURSOR_KEY
     with Redis.from_url(
         settings.REDIS_URL,
         decode_responses=True,
