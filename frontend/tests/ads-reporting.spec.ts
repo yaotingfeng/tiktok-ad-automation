@@ -480,6 +480,21 @@ for (const missing of [false, true]) {
 
 const degradedHealthCases = [
   {
+    name: "覆盖尚未完成不能借分钟水位消音",
+    health: { issues: ["COVERAGE_PENDING"] },
+    labels: ["该 BC 目录与素材关联尚未核验完成"],
+  },
+  {
+    name: "覆盖过期保留未确认告警",
+    health: { issues: ["COVERAGE_STALE"] },
+    labels: ["该 BC 目录与素材关联核验已过期，完整性待确认"],
+  },
+  {
+    name: "覆盖查询失败与同步新鲜度分开",
+    health: { issues: ["COVERAGE_QUERY_FAILED"] },
+    labels: ["该 BC 目录与素材关联核验失败，完整性待确认"],
+  },
+  {
     name: "具体异常计数与数据时间分开着色",
     health: {
       stale_ad_accounts: 2,
@@ -569,3 +584,35 @@ for (const scenario of degradedHealthCases) {
     ).toHaveCount(0)
   })
 }
+
+test("同步健康：独立覆盖观测时间不会随页面时钟续期", async ({ page }) => {
+  await page.clock.install({ time: new Date("2026-10-18T06:00:00Z") })
+  await adsBoundary(page)
+  await page.route("**/ad-sync-status?*", async (route) =>
+    route.fulfill({
+      json: {
+        accounts: [],
+        plan: { enabled: true, disabled_reason: null, slowed: false },
+        health: {
+          status: "HEALTHY",
+          observed_at: "2026-10-18T06:00:00Z",
+          coverage_status: "COMPLETE",
+          coverage_observed_at: "2026-10-18T05:59:00Z",
+          coverage_completed_at: "2026-10-18T05:59:30Z",
+          issues: [],
+        },
+      },
+    }),
+  )
+  await page.goto(`/tenants/${TENANT}/ads?bc_id=${BC_A}`)
+  const observation = page.getByText(/目录与素材关联核验于/)
+  await expect(observation).toBeVisible()
+  const original = await observation.textContent()
+  await page.clock.fastForward(5 * 60 * 1000)
+  await expect(
+    page.getByText("该 BC 目录与素材关联核验已过期，完整性待确认", {
+      exact: true,
+    }),
+  ).toBeVisible()
+  await expect(observation).toHaveText(original!)
+})

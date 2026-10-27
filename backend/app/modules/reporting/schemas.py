@@ -295,6 +295,9 @@ class SyncPlanStatus(BaseModel):
 class SyncHealthPublic(BaseModel):
     status: Literal["HEALTHY", "DEGRADED", "DISABLED"]
     observed_at: datetime | None = None
+    coverage_observed_at: datetime | None = None
+    coverage_completed_at: datetime | None = None
+    coverage_status: Literal["PENDING", "COMPLETE", "FAILED"] | None = None
     stale_ad_accounts: int = 0
     stale_material_accounts: int = 0
     missing_directory_ads: int = 0

@@ -2,6 +2,7 @@
 
 import json
 from datetime import UTC, datetime, timedelta
+from typing import Any
 from uuid import uuid4
 
 from sqlalchemy import text
@@ -28,6 +29,11 @@ def _case(seed, factory, monkeypatch):
     }
 
 
+def _start_coverage(args, redis_client, key):
+    assert health.run_bc_health(**args) == "CONTINUE"
+    return json.loads(redis_client.get(key))["cycle"]
+
+
 def test_second_chunk_failure_resumes_without_partial_success(
     committed_sync_seed, redis_client, monkeypatch
 ):
@@ -37,22 +43,29 @@ def test_second_chunk_failure_resumes_without_partial_success(
     try:
         assert health.run_bc_health(**args) == "CONTINUE"
         progress = json.loads(redis_client.get(key))
+        assert progress["offset"] == 0
+        assert health.run_bc_health(**args, cycle=progress["cycle"]) == "CONTINUE"
+        progress = json.loads(redis_client.get(key))
         assert progress["offset"] == 1
         with factory() as session:
-            assert session.get(ReportSyncHealth, (seed.tenant_id, "bc-a")) is None
-        original = health.measure_health
+            row = session.get(ReportSyncHealth, (seed.tenant_id, "bc-a"))
+            fresh_at = row.observed_at
+            assert row.metrics["coverage_status"] == "PENDING"
+            assert "missing_directory_ads" not in row.metrics
+        original = health.measure_coverage
 
         def failed(session, *_args, **_kwargs):
             session.execute(text("SET LOCAL statement_timeout='50ms'"))
             session.execute(text("SELECT pg_sleep(0.1)"))
 
-        monkeypatch.setattr(health, "measure_health", failed)
+        monkeypatch.setattr(health, "measure_coverage", failed)
         assert health.run_bc_health(**args, cycle=progress["cycle"]) == "FAILED"
         assert json.loads(redis_client.get(key))["offset"] == 1
         with factory() as session:
             row = session.get(ReportSyncHealth, (seed.tenant_id, "bc-a"))
-            assert row.issues == ["MONITOR_QUERY_FAILED"] and row.metrics == {}
-        monkeypatch.setattr(health, "measure_health", original)
+            assert "COVERAGE_QUERY_FAILED" in row.issues
+            assert "missing_directory_ads" not in row.metrics
+        monkeypatch.setattr(health, "measure_coverage", original)
         assert health.run_bc_health(**args, cycle=progress["cycle"]) == "WAIT"
         resumed = json.loads(redis_client.get(key))
         resumed["retry_not_before"] = (
@@ -65,7 +78,7 @@ def test_second_chunk_failure_resumes_without_partial_success(
             row = session.get(ReportSyncHealth, (seed.tenant_id, "bc-a"))
             assert row.metrics["stale_ad_accounts"] == 1
             assert row.metrics["stale_material_accounts"] == 1
-            assert row.observed_at == datetime.fromisoformat(progress["at"])
+            assert row.observed_at == fresh_at
         assert health.run_bc_health(**args, cycle=progress["cycle"]) == "IGNORED"
     finally:
         redis_client.delete(key)
@@ -86,7 +99,7 @@ def test_scope_change_resets_cycle_and_old_continuation_cannot_advance(
             session.commit()
         assert health.run_bc_health(**args) == "CONTINUE"
         current = json.loads(redis_client.get(key))
-        assert current["cycle"] != previous["cycle"] and current["offset"] == 1
+        assert current["cycle"] != previous["cycle"] and current["offset"] == 0
         assert health.run_bc_health(**args, cycle=previous["cycle"]) == "IGNORED"
         assert json.loads(redis_client.get(key)) == current
     finally:
@@ -108,7 +121,8 @@ def test_expired_cycle_does_not_publish_old_healthy_measurement(
         assert redis_client.get(key) is None
         with factory() as session:
             row = session.get(ReportSyncHealth, (seed.tenant_id, "bc-a"))
-            assert row.issues == ["MONITOR_QUERY_FAILED"] and row.metrics == {}
+            assert "COVERAGE_QUERY_FAILED" in row.issues
+            assert "missing_directory_ads" not in row.metrics
     finally:
         redis_client.delete(key)
 
@@ -123,7 +137,7 @@ def test_bc_level_pending_actions_are_not_added_for_each_chunk(
     args = _case(seed, factory, monkeypatch) | {"redis_client": redis_client}
     key = health._health_progress_key(seed.tenant_id, "bc-a")
     with factory() as session:
-        scope = {
+        scope: dict[str, Any] = {
             "tenant_id": seed.tenant_id,
             "bc_id": "bc-a",
             "actor_id": seed.actor_id,
@@ -153,7 +167,8 @@ def test_bc_level_pending_actions_are_not_added_for_each_chunk(
     try:
         assert health.run_bc_health(**args) == "CONTINUE"
         progress = json.loads(redis_client.get(key))
-        assert progress["metrics"]["pending_actions"] == 1
+        assert "pending_actions" not in progress["metrics"]
+        assert health.run_bc_health(**args, cycle=progress["cycle"]) == "CONTINUE"
         assert health.run_bc_health(**args, cycle=progress["cycle"]) == "COMPLETE"
         with factory() as session:
             assert (
@@ -166,21 +181,22 @@ def test_bc_level_pending_actions_are_not_added_for_each_chunk(
         redis_client.delete(key)
 
 
-def test_scope_fingerprint_covers_actor_active_and_owned_accounts(
+def test_scope_fingerprint_covers_actor_and_owned_but_not_screen_progress(
     committed_sync_seed, monkeypatch
 ):
     seed, factory = committed_sync_seed
     _case(seed, factory, monkeypatch)
     with factory() as session:
         plan = session.get(AdSyncBc, (seed.tenant_id, "bc-a"))
-        original = health._health_scope(plan, ["acc-1", "acc-2"])
-        assert health._health_scope(plan, ["acc-2", "acc-1"]) == original
-        assert health._health_scope(plan, ["acc-1"]) != original
+        original = health._health_scope(session, plan, ["acc-1", "acc-2"])
+        assert health._health_scope(session, plan, ["acc-2", "acc-1"]) == original
+        assert health._health_scope(session, plan, ["acc-1"]) != original
         plan.actor_id = uuid4()
-        assert health._health_scope(plan, ["acc-1", "acc-2"]) != original
+        assert health._health_scope(session, plan, ["acc-1", "acc-2"]) != original
         plan.actor_id = seed.actor_id
         plan.last_active_advertiser_ids = ["acc-1", "acc-2"]
-        assert health._health_scope(plan, ["acc-1", "acc-2"]) != original
+        plan.active_screened_at = datetime.now(UTC)
+        assert health._health_scope(session, plan, ["acc-1", "acc-2"]) == original
 
 
 def test_thousand_accounts_complete_across_tasks_without_partial_metrics(
@@ -224,16 +240,18 @@ def test_thousand_accounts_complete_across_tasks_without_partial_metrics(
         while True:
             result = health.run_bc_health(**args, cycle=cycle)
             calls += 1
-            assert calls <= 16
+            assert calls <= 17
             with factory() as session:
                 row = session.get(ReportSyncHealth, (seed.tenant_id, "bc-a"))
                 if result == "COMPLETE":
                     assert row.metrics["stale_ad_accounts"] == 1001
                     assert row.metrics["stale_material_accounts"] == 1001
                     break
-                assert result == "CONTINUE" and row.metrics == {"prior_complete": 1}
+                assert result == "CONTINUE" and row.metrics["prior_complete"] == 1
+                assert "missing_directory_ads" not in row.metrics
+                assert row.metrics["stale_ad_accounts"] == 1001
             progress = json.loads(redis_client.get(key))
             cycle = progress["cycle"]
-        assert calls == 16 and redis_client.get(key) is None
+        assert calls == 17 and redis_client.get(key) is None
     finally:
         redis_client.delete(key)

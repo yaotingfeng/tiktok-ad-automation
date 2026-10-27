@@ -454,6 +454,21 @@ def test_publish_preserves_newer_objects_and_complete_materials(
         True,
         name="完整素材",
     )
+    # 完整素材属于已有的新 owner 观察；旧目录不能再凭更晚发布版本补写旧素材。
+    session.add(
+        AdMaterialReference(
+            tenant_id=current.tenant_id,
+            advertiser_id=current.advertiser_id,
+            ad_remote_id=current.remote_id,
+            platform_material_id="vid",
+            ad_material_id=None,
+            material_type="VIDEO",
+            name="完整素材",
+            operation_status="ENABLE",
+            complete=True,
+            published_version=current.published_version,
+        )
+    )
     first = _run(session, directory_seed, kind="ad")
     stage_directory_page(
         session,
@@ -479,7 +494,8 @@ def test_publish_preserves_newer_objects_and_complete_materials(
     ).one()
     assert current.name == old_name and current.published_version == 1
     assert material.complete and material.name == "完整素材"
-    assert material.published_version == first.published_version
+    assert material.published_version == 1
+    assert first.coverage == second.coverage == "MATERIALS_INCOMPLETE"
 
 
 @pytest.mark.parametrize("publish_only", [False, True])

@@ -261,15 +261,14 @@ def _message_lost(session: Session, row: AdDirectoryRun, now: datetime) -> bool:
 def _dispatch_directories(session, now):
     # 本代数、本页的投递记录已存在（无论是否已发布）就不再重复入队：积压时
     # 若每轮重写全部运行，规划会长时间占住 control 唯一并发，使投递发布被饿死。
-    targeted = (col(AdDirectoryRun.workload) == "live") & (
-        (func.coalesce(func.jsonb_array_length(AdDirectoryRun.query["ids"]), 0) > 0)
-        | (
-            func.coalesce(
-                func.jsonb_array_length(AdDirectoryRun.query["parent_ids"]), 0
-            )
-            > 0
-        )
+    has_filters = (
+        func.coalesce(func.jsonb_array_length(AdDirectoryRun.query["ids"]), 0) > 0
+    ) | (
+        func.coalesce(func.jsonb_array_length(AdDirectoryRun.query["parent_ids"]), 0)
+        > 0
     )
+    targeted = (col(AdDirectoryRun.workload) == "live") & has_filters
+    dependency = ~targeted & has_filters
     current_key = func.concat(
         case((targeted, TARGETED_TASK_NAME + ":"), else_="ads.sync_step:"),
         col(AdDirectoryRun.id),
@@ -317,8 +316,8 @@ def _dispatch_directories(session, now):
     )
     if not locked:
         return 0
-    inflight = session.exec(
-        select(func.count())
+    inflight, dependency_inflight = session.exec(
+        select(func.count(), func.count().filter(dependency))
         .select_from(AdDirectoryRun)
         .where(
             col(AdDirectoryRun.status).in_(["QUEUED", "RUNNING", "WAITING_REMOTE"]),
@@ -332,6 +331,12 @@ def _dispatch_directories(session, now):
     ).one()
     available = max(0, DIRECTORY_DISPATCH_WINDOW - inflight)
     targeted_available = targeted_capacity(session, now)
+    # 原背景总窗口内，定向依赖和全量各保底一半；空闲份额可借用。
+    # 不能把后台依赖改成 live 绕过服务分类，也不能让更早全量永久占满窗口。
+    dependency_share = DIRECTORY_DISPATCH_WINDOW // 2
+    full_share = DIRECTORY_DISPATCH_WINDOW - dependency_share
+    dependency_reserved = max(0, dependency_share - dependency_inflight)
+    full_reserved = max(0, full_share - (inflight - dependency_inflight))
     # 旧全账户创意扫描仍降后；主目录派生的素材子页沿原请求年龄续跑，
     # 否则会永远排在对象队尾，并在执行前被下一轮主观察淘汰。
     legacy_creative = (col(AdDirectoryRun.kind) == "creative") & ~col(
@@ -360,7 +365,7 @@ def _dispatch_directories(session, now):
             AdDirectoryRun.id,
             func.row_number()
             .over(
-                partition_by=(targeted, col(AdDirectoryRun.tenant_id)),
+                partition_by=(targeted, dependency, col(AdDirectoryRun.tenant_id)),
                 order_by=(
                     targeted.desc(),
                     creative_last,
@@ -403,15 +408,76 @@ def _dispatch_directories(session, now):
             <= case((targeted, targeted_available), else_=available)
         )
     ).subquery()
-    rows = session.exec(
-        select(AdDirectoryRun)
+    # 先在每个服务类中沿原租户轮次排序，再裁剪到真实空槽。整个候选集合
+    # 只扫描一次；仅窗口大小的结果进入 ORM，不能把数万积压搬回 Python。
+    service_ranked = (
+        select(
+            AdDirectoryRun.id,
+            ranked.c.rn,
+            func.row_number()
+            .over(
+                partition_by=(targeted, dependency),
+                order_by=(
+                    ranked.c.rn,
+                    col(DirectoryDispatchCursor.last_dispatched_at).asc().nulls_first(),
+                    creative_last,
+                    col(AdDirectoryRun.created_at),
+                    col(AdDirectoryRun.id),
+                ),
+            )
+            .label("service_rn"),
+        )
         .join(ranked, ranked.c.id == AdDirectoryRun.id)
         .outerjoin(
             DirectoryDispatchCursor,
             col(DirectoryDispatchCursor.tenant_id) == col(AdDirectoryRun.tenant_id),
         )
+    ).subquery()
+    reserved = (
+        targeted
+        | (
+            service_ranked.c.service_rn
+            <= case((dependency, dependency_reserved), else_=full_reserved)
+        )
+        | (DIRECTORY_DISPATCH_WINDOW < 2)
+    )
+    pool_ranked = (
+        select(
+            AdDirectoryRun.id,
+            service_ranked.c.rn,
+            func.row_number()
+            .over(
+                partition_by=(targeted,),
+                order_by=(
+                    reserved.desc(),
+                    service_ranked.c.rn,
+                    col(DirectoryDispatchCursor.last_dispatched_at).asc().nulls_first(),
+                    creative_last,
+                    col(AdDirectoryRun.created_at),
+                    col(AdDirectoryRun.id),
+                ),
+            )
+            .label("pool_rn"),
+        )
+        .join(service_ranked, service_ranked.c.id == AdDirectoryRun.id)
+        .outerjoin(
+            DirectoryDispatchCursor,
+            col(DirectoryDispatchCursor.tenant_id) == col(AdDirectoryRun.tenant_id),
+        )
+    ).subquery()
+    rows = session.exec(
+        select(AdDirectoryRun)
+        .join(pool_ranked, pool_ranked.c.id == AdDirectoryRun.id)
+        .outerjoin(
+            DirectoryDispatchCursor,
+            col(DirectoryDispatchCursor.tenant_id) == col(AdDirectoryRun.tenant_id),
+        )
+        .where(
+            pool_ranked.c.pool_rn
+            <= case((targeted, targeted_available), else_=available)
+        )
         .order_by(
-            ranked.c.rn,
+            pool_ranked.c.rn,
             col(DirectoryDispatchCursor.last_dispatched_at).asc().nulls_first(),
             targeted.desc(),
             creative_last,
@@ -482,22 +548,24 @@ def plan_due_runs(*, database_engine, redis_client, now=None):
         planner.ensure_bc_plans(session, now=now)
         keys = [(p.tenant_id, p.bc_id) for p in planner.due_plans(session, now=now)]
     dispatched = _dispatch_pending(database_engine, now, allow_backfill=allow_backfill)
-    # 本地归并/依赖复核不能阻挡事实派发；独立短事务、总预算与单语句超时双重有界。
-    try:
-        from app.modules.reporting.link_work import (
-            reconcile_link_work,
-            wake_link_dependencies,
-        )
+    # 两类维护各自提交：旧任务归并读慢时，不能回滚/挡住目录依赖的复核游标。
+    # 先唤醒再归并，各一秒预算；正常事实派发已提交，不受维护失败影响。
+    from app.modules.reporting.link_work import (
+        reconcile_link_work,
+        wake_link_dependencies,
+    )
 
-        with Session(database_engine) as session, session.begin():
-            session.connection().execute(text("SET LOCAL statement_timeout='2s'"))
-            session.connection().execute(text("SET LOCAL lock_timeout='100ms'"))
-            maintenance_deadline = datetime.now(UTC) + timedelta(seconds=2)
-            reconcile_link_work(session, now=now, deadline=maintenance_deadline)
-            if datetime.now(UTC) < maintenance_deadline:
-                wake_link_dependencies(session, now=now, deadline=maintenance_deadline)
-    except Exception:
-        logger.exception("report link maintenance deferred")
+    for action in (wake_link_dependencies, reconcile_link_work):
+        try:
+            with Session(database_engine) as session, session.begin():
+                session.connection().execute(text("SET LOCAL statement_timeout='1s'"))
+                session.connection().execute(text("SET LOCAL lock_timeout='100ms'"))
+                maintenance_deadline = datetime.now(UTC) + timedelta(seconds=1)
+                action(session, now=now, deadline=maintenance_deadline)
+        except Exception:
+            logger.exception(
+                "report link maintenance deferred phase=%s", action.__name__
+            )
     for key in keys:
         if datetime.now(UTC) >= deadline:
             break
@@ -1089,9 +1157,12 @@ CLEANUP_CATEGORIES = (
 
 
 def _supersede_stalled_directory_runs(now, *, candidate_ids=None, batch_limit=None):
-    """同一账户、层级、广告类型已有更新运行发布后，较早的未完成运行不可能再发布
-    （publish_directory 会以 directory_run_stale 拒绝）：标记为 STALE，暂存页随后清理。
-    与 0031 迁移取消堆积运行同口径；租约有效的运行留给持有者结束，不抢改。"""
+    """仅清理已被同冻结范围完整覆盖的旧请求；局部刷新不能淘汰历史依赖。
+
+    与执行/发布共用替代条件，租约有效的运行留给持有者结束，不抢改。
+    """
+    from app.modules.ads.directory_supersession import superseding_directory_predicate
+
     newer = aliased(AdDirectoryRun)
     candidates = select(AdDirectoryRun.id).where(
         col(AdDirectoryRun.status).in_(["QUEUED", "RUNNING", "WAITING_REMOTE"]),
@@ -1103,13 +1174,7 @@ def _supersede_stalled_directory_runs(now, *, candidate_ids=None, batch_limit=No
         ~col(AdDirectoryRun.query).op("?")(MATERIAL_CHILD_KEY),
         select(newer.id)
         .where(
-            newer.tenant_id == AdDirectoryRun.tenant_id,
-            newer.advertiser_id == AdDirectoryRun.advertiser_id,
-            newer.kind == AdDirectoryRun.kind,
-            newer.ad_type == AdDirectoryRun.ad_type,
-            col(newer.request_sequence) > AdDirectoryRun.request_sequence,
-            col(newer.published_version).is_not(None),
-            ~col(newer.query).op("?")(MATERIAL_CHILD_KEY),
+            superseding_directory_predicate(AdDirectoryRun, newer),
         )
         .exists(),
     )

@@ -6,7 +6,7 @@ from time import monotonic
 
 import pytest
 from sqlalchemy import text
-from sqlmodel import select
+from sqlmodel import col, select
 
 from app.jobs.models import PendingDispatch
 from app.modules.reporting import health
@@ -55,10 +55,20 @@ def test_same_offset_timeouts_shrink_and_publish_distinct_immediate_retries(
 ):
     seed, factory = committed_sync_seed
     args, key = _pool(seed, factory, monkeypatch, redis_client)
-    original = health.measure_health
-    monkeypatch.setattr(health, "measure_health", _timeout)
+    original = health.measure_coverage
+    monkeypatch.setattr(health, "measure_coverage", _timeout)
     try:
-        cycle = None
+        assert health.run_bc_health(**args) == "CONTINUE"
+        cycle = json.loads(redis_client.get(key))["cycle"]
+        # 模拟 broker 已接收分钟阶段登记的初始消息。
+        with factory() as session, session.begin():
+            for row in session.exec(
+                select(PendingDispatch).where(
+                    PendingDispatch.tenant_id == seed.tenant_id,
+                    PendingDispatch.task_name == health.HEALTH_BC_TASK,
+                )
+            ):
+                row.published_at = datetime.now(UTC)
         original_at = None
         for expected_batch in [32, 16]:
             assert health.run_bc_health(**args, cycle=cycle) == "FAILED"
@@ -70,13 +80,14 @@ def test_same_offset_timeouts_shrink_and_publish_distinct_immediate_retries(
             cycle = progress["cycle"]
             with factory() as session, session.begin():
                 row = session.get(ReportSyncHealth, (seed.tenant_id, "bc-a"))
-                assert row.metrics == {"prior_complete": 1}
-                assert row.issues == ["MONITOR_QUERY_FAILED"]
+                assert row.metrics["prior_complete"] == 1
+                assert "missing_directory_ads" not in row.metrics
+                assert "COVERAGE_QUERY_FAILED" in row.issues
                 pending = session.exec(
                     select(PendingDispatch).where(
                         PendingDispatch.tenant_id == seed.tenant_id,
                         PendingDispatch.task_name == health.HEALTH_BC_TASK,
-                        PendingDispatch.published_at.is_(None),
+                        col(PendingDispatch.published_at).is_(None),
                     )
                 ).all()
                 assert len(pending) == 1 and pending[0].available_at <= datetime.now(
@@ -90,8 +101,8 @@ def test_same_offset_timeouts_shrink_and_publish_distinct_immediate_retries(
                     PendingDispatch.task_name == health.HEALTH_BC_TASK,
                 )
             ).all()
-            assert len({row.task_key for row in retries}) == 2
-        monkeypatch.setattr(health, "measure_health", original)
+            assert len({row.task_key for row in retries}) == 3
+        monkeypatch.setattr(health, "measure_coverage", original)
         sizes = []
         for _ in range(10):
             result = health.run_bc_health(**args, cycle=cycle)
@@ -108,7 +119,8 @@ def test_same_offset_timeouts_shrink_and_publish_distinct_immediate_retries(
                 == row.metrics["stale_material_accounts"]
                 == 128
             )
-            assert row.observed_at == datetime.fromisoformat(original_at)
+            assert row.metrics["coverage_observed_at"] == original_at
+            assert row.observed_at <= datetime.fromisoformat(original_at)
     finally:
         redis_client.delete(key)
 
@@ -119,16 +131,18 @@ def test_single_account_timeout_cools_down_without_skipping_or_retry_storm(
     seed, factory = committed_sync_seed
     args = _case(seed, factory, monkeypatch) | {"redis_client": redis_client}
     key = health._health_progress_key(seed.tenant_id, "bc-a")
-    original = health.measure_health
+    original = health.measure_coverage
     calls = []
 
     def fail(session, *args, **kwargs):
         calls.append(True)
         return _timeout(session, *args, **kwargs)
 
-    monkeypatch.setattr(health, "measure_health", fail)
+    monkeypatch.setattr(health, "measure_coverage", fail)
     try:
-        assert health.run_bc_health(**args) == "FAILED"
+        assert health.run_bc_health(**args) == "CONTINUE"
+        cycle = json.loads(redis_client.get(key))["cycle"]
+        assert health.run_bc_health(**args, cycle=cycle) == "FAILED"
         progress = json.loads(redis_client.get(key))
         assert progress["offset"] == 0 and progress["batch_size"] == 1
         assert datetime.fromisoformat(progress["retry_not_before"]) > datetime.now(
@@ -138,17 +152,22 @@ def test_single_account_timeout_cools_down_without_skipping_or_retry_storm(
             assert health.run_bc_health(**args, cycle=cycle) == "WAIT"
         assert len(calls) == 1
         with factory() as session:
-            assert not session.exec(
-                select(PendingDispatch).where(
-                    PendingDispatch.tenant_id == seed.tenant_id,
-                    PendingDispatch.task_name == health.HEALTH_BC_TASK,
+            assert (
+                len(
+                    session.exec(
+                        select(PendingDispatch).where(
+                            PendingDispatch.tenant_id == seed.tenant_id,
+                            PendingDispatch.task_name == health.HEALTH_BC_TASK,
+                        )
+                    ).all()
                 )
-            ).all()
+                == 1
+            )
         progress["retry_not_before"] = (
             datetime.now(UTC) - timedelta(seconds=1)
         ).isoformat()
         redis_client.set(key, json.dumps(progress), ex=180)
-        monkeypatch.setattr(health, "measure_health", original)
+        monkeypatch.setattr(health, "measure_coverage", original)
         assert health.run_bc_health(**args, cycle=progress["cycle"]) == "CONTINUE"
         assert json.loads(redis_client.get(key))["offset"] == 1
     finally:
@@ -159,15 +178,17 @@ def test_timeout_restores_savepoint_and_original_statement_timeout(
     committed_sync_seed, redis_client, monkeypatch
 ):
     seed, factory = committed_sync_seed
-    _, key = _pool(seed, factory, monkeypatch, redis_client)
-    monkeypatch.setattr(health, "measure_health", _timeout)
+    args, key = _pool(seed, factory, monkeypatch, redis_client)
+    assert health.run_bc_health(**args) == "CONTINUE"
+    cycle = json.loads(redis_client.get(key))["cycle"]
+    monkeypatch.setattr(health, "measure_coverage", _timeout)
     try:
         with factory() as session:
             session.execute(text("SET LOCAL statement_timeout='750ms'"))
             plan = session.get(AdSyncBc, (seed.tenant_id, "bc-a"))
             with pytest.raises(health._HealthBatchTimeout):
                 health._advance_health(
-                    session, plan, redis_client, cycle=None, deadline=monotonic() + 10
+                    session, plan, redis_client, cycle=cycle, deadline=monotonic() + 10
                 )
             assert session.execute(text("SELECT 1")).scalar_one() == 1
             assert (
@@ -177,31 +198,27 @@ def test_timeout_restores_savepoint_and_original_statement_timeout(
         redis_client.delete(key)
 
 
-def test_v1_progress_defaults_preserve_already_measured_scope_and_timestamp(
+def test_v1_progress_is_not_read_and_old_continuation_does_not_start_new_cycle(
     committed_sync_seed, redis_client, monkeypatch
 ):
     seed, factory = committed_sync_seed
     args = _case(seed, factory, monkeypatch) | {"redis_client": redis_client}
     key = health._health_progress_key(seed.tenant_id, "bc-a")
+    legacy = key.replace(":v2:", ":v1:")
     try:
+        redis_client.set(
+            legacy, json.dumps({"cycle": "old", "metrics": {"partial": 999}}), ex=180
+        )
+        assert health.run_bc_health(**args, cycle="old") == "IGNORED"
+        assert redis_client.get(key) is None
         assert health.run_bc_health(**args) == "CONTINUE"
         progress = json.loads(redis_client.get(key))
-        for name in [
-            "batch_size",
-            "success_streak",
-            "continuation_seq",
-            "retry_not_before",
-        ]:
-            progress.pop(name)
-        redis_client.set(key, json.dumps(progress), ex=180)
-        assert health.run_bc_health(**args, cycle=progress["cycle"]) == "COMPLETE"
-        with factory() as session:
-            row = session.get(ReportSyncHealth, (seed.tenant_id, "bc-a"))
-            assert row.observed_at == datetime.fromisoformat(progress["at"])
-            assert row.metrics["stale_ad_accounts"] == 1
-            assert row.metrics["stale_material_accounts"] == 1
+        assert progress["cycle"] != "old" and progress["offset"] == 0
+        assert progress["metrics"] == {}
+        assert health.run_bc_health(**args, cycle="old") == "IGNORED"
+        assert json.loads(redis_client.get(key)) == progress
     finally:
-        redis_client.delete(key)
+        redis_client.delete(key, legacy)
 
 
 def test_scope_change_during_failed_batch_does_not_enqueue_old_scope_retry(
@@ -209,7 +226,7 @@ def test_scope_change_during_failed_batch_does_not_enqueue_old_scope_retry(
 ):
     seed, factory = committed_sync_seed
     args, key = _pool(seed, factory, monkeypatch, redis_client)
-    original = health.measure_health
+    original = health.measure_coverage
 
     def change_scope_and_fail(session, *args, **kwargs):
         with factory() as writer, writer.begin():
@@ -217,22 +234,29 @@ def test_scope_change_during_failed_batch_does_not_enqueue_old_scope_retry(
             plan.frozen_route = plan.frozen_route | {"binding_revision": 99}
         return _timeout(session, *args, **kwargs)
 
-    monkeypatch.setattr(health, "measure_health", change_scope_and_fail)
+    monkeypatch.setattr(health, "measure_coverage", change_scope_and_fail)
     try:
-        assert health.run_bc_health(**args) == "FAILED"
+        assert health.run_bc_health(**args) == "CONTINUE"
+        cycle = json.loads(redis_client.get(key))["cycle"]
+        assert health.run_bc_health(**args, cycle=cycle) == "FAILED"
         previous = json.loads(redis_client.get(key))
         with factory() as session:
-            assert not session.exec(
-                select(PendingDispatch).where(
-                    PendingDispatch.tenant_id == seed.tenant_id,
-                    PendingDispatch.task_name == health.HEALTH_BC_TASK,
+            assert (
+                len(
+                    session.exec(
+                        select(PendingDispatch).where(
+                            PendingDispatch.tenant_id == seed.tenant_id,
+                            PendingDispatch.task_name == health.HEALTH_BC_TASK,
+                        )
+                    ).all()
                 )
-            ).all()
-        monkeypatch.setattr(health, "measure_health", original)
+                == 1
+            )
+        monkeypatch.setattr(health, "measure_coverage", original)
         assert health.run_bc_health(**args) == "CONTINUE"
         current = json.loads(redis_client.get(key))
         assert current["cycle"] != previous["cycle"]
-        assert current["batch_size"] == 64 and current["offset"] == 64
+        assert current["batch_size"] == 64 and current["offset"] == 0
         assert health.run_bc_health(**args, cycle=previous["cycle"]) == "IGNORED"
     finally:
         redis_client.delete(key)

@@ -776,6 +776,15 @@ def get_ad_sync_status_route(
             issues=tuple(health_row.issues),
             **health_row.metrics,
         )
+        from app.modules.reporting.health import _health_scope, coverage_issues
+        from app.modules.reporting.planner import owned_accounts
+
+        # 分钟水位不能替旧目录/关联覆盖续期；授权、规则和当地日变化也要立即可见。
+        scope = _health_scope(session, plan, owned_accounts(session, plan), now=now)
+        coverage = coverage_issues(health_row.metrics, now=now, scope=scope)
+        if coverage:
+            health.status = "DEGRADED"
+            health.issues = tuple(dict.fromkeys((*health.issues, *coverage)))
         if health_row.observed_at < now - timedelta(minutes=3):
             health.status = "DEGRADED"
             health.issues = (*health.issues, "MONITOR_STALE")

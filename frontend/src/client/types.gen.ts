@@ -7302,6 +7302,18 @@ export type SyncHealthPublic = {
      */
     observed_at?: string | null;
     /**
+     * Coverage Observed At
+     */
+    coverage_observed_at?: string | null;
+    /**
+     * Coverage Completed At
+     */
+    coverage_completed_at?: string | null;
+    /**
+     * Coverage Status
+     */
+    coverage_status?: 'PENDING' | 'COMPLETE' | 'FAILED' | null;
+    /**
      * Stale Ad Accounts
      */
     stale_ad_accounts?: number;

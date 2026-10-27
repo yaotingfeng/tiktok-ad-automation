@@ -57,6 +57,10 @@ register_dispatch_task(HEALTH_BC_TASK, "control")
 HEALTH_CHUNK_SIZE = 64
 HEALTH_MAX_CHUNKS = 16
 HEALTH_CYCLE_SECONDS = 120
+COVERAGE_REFRESH = timedelta(minutes=3)
+COVERAGE_MAX_AGE = timedelta(minutes=5)
+COVERAGE_COUNTS = {"missing_directory_ads", "unlinked_material_posts"}
+COVERAGE_ISSUES = {"COVERAGE_PENDING", "COVERAGE_STALE", "COVERAGE_QUERY_FAILED"}
 
 
 class _HealthProgress(TypedDict):
@@ -163,19 +167,24 @@ def _missing_directory_ads(session, params):
     ]
 
 
-def measure_health(session, plan, *, now, accounts=None):
+def _measurement_params(session, plan, *, now, owned, coverage):
     # 常驻连接的通用计划不知道BC账户数组长度，会放弃日期索引；按本轮参数
     # 规划，避免“重启后快、复用后慢”使健康检查超时。仅作用于当前事务。
     session.connection().execute(text("SET LOCAL plan_cache_mode='force_custom_plan'"))
-    owned = owned_accounts(session, plan) if accounts is None else accounts
-    strict_accounts = rule_accounts(
-        session, tenant_id=plan.tenant_id, bc_id=plan.bc_id, accounts=owned
+    strict_accounts = (
+        rule_accounts(
+            session, tenant_id=plan.tenant_id, bc_id=plan.bc_id, accounts=owned
+        )
+        if coverage
+        else set()
     )
-    params = {
+    return {
         "t": plan.tenant_id,
         "bc": plan.bc_id,
         "ids": owned,
-        "active": sorted(
+        "active": []
+        if coverage
+        else sorted(
             set(plan.last_active_advertiser_ids)
             | known_reporting_accounts(session, plan, accounts=owned, now=now)
         ),
@@ -193,6 +202,12 @@ def measure_health(session, plan, *, now, accounts=None):
         "strict_accounts": sorted(strict_accounts),
         "action_cutoff": now - timedelta(minutes=2),
     }
+
+
+def measure_freshness(session, plan, *, now, accounts=None):
+    """分钟检查只读发布水位、筛选与动作队列，不触碰目录或素材关联事实。"""
+    owned = owned_accounts(session, plan) if accounts is None else accounts
+    params = _measurement_params(session, plan, now=now, owned=owned, coverage=False)
     # 每账户合并今日/昨日两类水位，只按主键读取最多四行；聚合保留缺失的 NULL。
     # 不再让双 JOIN 在大池重复随机读取，或改走整租户历史水位的哈希扫描。
     rows = (
@@ -248,6 +263,39 @@ def measure_health(session, plan, *, now, accounts=None):
             times.append(measured_at)
         if at is None:
             stale[row["report_kind"]].add(row["advertiser_id"])
+    pending = session.execute(
+        text("""
+        SELECT count(*) FROM management_task WHERE tenant_id=:t AND bc_id=:bc
+          AND status='QUEUED' AND created_at<:action_cutoff
+    """),
+        params,
+    ).scalar_one()
+    metrics = {
+        "stale_ad_accounts": len(stale["ad_day"]),
+        "stale_material_accounts": len(stale["material_day"]),
+        "pending_actions": pending,
+        "oldest_data_at": min(times).isoformat() if times else None,
+    }
+    issues = [
+        key for key, value in metrics.items() if key != "oldest_data_at" and value
+    ]
+    repairs = {
+        "ad": stale["ad_day"],
+        "material": stale["material_day"],
+        "links": set(),
+    }
+    if owned and (
+        plan.active_screened_at is None or plan.active_screened_at < now - SLO
+    ):
+        # 没有“完整筛选确认为零”的证据，空活跃集合是覆盖未知，不能报健康。
+        issues.append("ACCOUNT_SCREEN_STALE")
+    return metrics, issues, repairs
+
+
+def measure_coverage(session, plan, *, now, accounts=None):
+    """有时间标记的完整覆盖快照；分片期间不对外发布部分指标。"""
+    owned = owned_accounts(session, plan) if accounts is None else accounts
+    params = _measurement_params(session, plan, now=now, owned=owned, coverage=True)
     # 逐批完整测量；任一批失败仍向外抛出，不能把部分覆盖标记为健康。
     # 同批广告共享的父对象只读取一次；缺失/过期子层不再探测父层。
     # 用集合回连保留逐广告缺口数，避免数据库低估基数引起父链平方扫描。
@@ -286,47 +334,34 @@ def measure_health(session, plan, *, now, accounts=None):
             .mappings()
             .all()
         )
-    pending = session.execute(
-        text("""
-        SELECT count(*) FROM management_task WHERE tenant_id=:t AND bc_id=:bc
-          AND status='QUEUED' AND created_at<:action_cutoff
-    """),
-        params,
-    ).scalar_one()
     metrics = {
-        "stale_ad_accounts": len(stale["ad_day"]),
-        "stale_material_accounts": len(stale["material_day"]),
         "missing_directory_ads": len(missing),
         "unlinked_material_posts": len(unlinked),
-        "pending_actions": pending,
-        "oldest_data_at": min(times).isoformat() if times else None,
     }
-    issues = [
-        key for key, value in metrics.items() if key != "oldest_data_at" and value
-    ]
-    repairs = {
-        "ad": stale["ad_day"] | {r["advertiser_id"] for r in missing},
-        "material": stale["material_day"],
-        "links": {r["advertiser_id"] for r in unlinked},
-    }
-    if owned and (
-        plan.active_screened_at is None or plan.active_screened_at < now - SLO
-    ):
-        # 没有“完整筛选确认为零”的证据，空活跃集合是覆盖未知，不能报健康。
-        issues.append("ACCOUNT_SCREEN_STALE")
-        unknown = session.execute(
-            text("""
-            SELECT a.advertiser_id FROM advertiser_account a
-            LEFT JOIN report_sync_state s ON s.tenant_id=a.tenant_id AND s.advertiser_id=a.advertiser_id
-              AND s.report_kind='ad_day' AND s.stat_date=(CAST(:now AS timestamptz) AT TIME ZONE a.timezone)::date
-            WHERE a.tenant_id=:t AND a.advertiser_id=ANY(:ids)
-              AND (s.last_success_at IS NULL OR s.last_success_at<:cutoff)
-            ORDER BY s.last_success_at ASC NULLS FIRST, a.advertiser_id LIMIT :limit
-        """),
-            {**params, "limit": MAX_REPAIR_ACCOUNTS},
-        ).scalars()
-        repairs["ad"].update(unknown)
-    return metrics, issues, repairs
+    return (
+        metrics,
+        [key for key, value in metrics.items() if value],
+        {
+            "ad": {r["advertiser_id"] for r in missing},
+            "material": set(),
+            "links": {r["advertiser_id"] for r in unlinked},
+        },
+    )
+
+
+def measure_health(session, plan, *, now, accounts=None):
+    """需要单次完整观测的内部调用复用两种测量；周期任务分别调度。"""
+    fresh, issues, repairs = measure_freshness(
+        session, plan, now=now, accounts=accounts
+    )
+    coverage, coverage_issues, coverage_repairs = measure_coverage(
+        session, plan, now=now, accounts=accounts
+    )
+    return (
+        fresh | coverage,
+        issues + coverage_issues,
+        {key: repairs[key] | coverage_repairs[key] for key in repairs},
+    )
 
 
 def _rescue_queued_actions(session, plan, *, now):
@@ -370,7 +405,52 @@ def _rescue_queued_actions(session, plan, *, now):
     return count
 
 
-def observe_health(session, plan, *, now, deadline=None, measurement=None):
+def coverage_issues(metrics, *, now, scope=None):
+    """完整覆盖是最多五分钟的观测，不用分钟水位伪造其观测时间。"""
+    issues = [name for name in sorted(COVERAGE_COUNTS) if metrics.get(name)]
+    if scope is not None and metrics.get("coverage_scope") != scope:
+        return issues + ["COVERAGE_PENDING"]
+    status = metrics.get("coverage_status", "PENDING")
+    if status == "FAILED":
+        return issues + ["COVERAGE_QUERY_FAILED"]
+    if status != "COMPLETE" or not metrics.get("coverage_observed_at"):
+        return issues + ["COVERAGE_PENDING"]
+    if (
+        datetime.fromisoformat(metrics["coverage_observed_at"])
+        <= now - COVERAGE_MAX_AGE
+    ):
+        issues.append("COVERAGE_STALE")
+    return issues
+
+
+def _locked_health(session, plan):
+    # 两阶段只在合并时锁行；重新加载最新值，不能拿测量前的 ORM 快照覆盖。
+    session.connection().execute(
+        text("""
+        INSERT INTO report_sync_health(tenant_id,bc_id,status,metrics,issues,observed_at)
+        VALUES (:tenant,:bc,'DEGRADED','{}','[]',:unobserved)
+        ON CONFLICT(tenant_id,bc_id) DO NOTHING
+        """),
+        {
+            "tenant": plan.tenant_id,
+            "bc": plan.bc_id,
+            "unobserved": datetime(1970, 1, 1, tzinfo=UTC),
+        },
+    )
+    return session.exec(
+        select(ReportSyncHealth)
+        .where(
+            ReportSyncHealth.tenant_id == plan.tenant_id,
+            ReportSyncHealth.bc_id == plan.bc_id,
+        )
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    ).one()
+
+
+def observe_health(
+    session, plan, *, now, deadline=None, measurement=None, phase="full", scope=None
+):
     remaining = (
         10
         if deadline is None
@@ -380,11 +460,50 @@ def observe_health(session, plan, *, now, deadline=None, measurement=None):
         with query_budget(session, seconds=remaining):
             measurement = measure_health(session, plan, now=now)
     metrics, issues, repairs = measurement
+    row = _locked_health(session, plan)
+    merged = dict(row.metrics)
+    previous_coverage = merged.get("coverage_observed_at")
+    if phase in {"full", "coverage"}:
+        if previous_coverage and datetime.fromisoformat(previous_coverage) > now:
+            return row
+        merged.update({key: metrics[key] for key in COVERAGE_COUNTS})
+        merged.update(
+            coverage_observed_at=now.isoformat(),
+            coverage_completed_at=datetime.now(UTC).isoformat(),
+            coverage_scope=scope,
+            coverage_status="COMPLETE",
+        )
+    if phase in {"full", "freshness"}:
+        if row.observed_at > now:
+            return row
+        merged.update(
+            {key: value for key, value in metrics.items() if key not in COVERAGE_COUNTS}
+        )
+        merged.setdefault("coverage_observed_at", None)
+        merged.setdefault("coverage_completed_at", None)
+        merged.setdefault("coverage_scope", None)
+        merged.setdefault("coverage_status", "PENDING")
+        if phase == "freshness" and merged["coverage_scope"] != scope:
+            merged["coverage_status"] = "PENDING"
+            merged["coverage_scope"] = scope
+        row.observed_at = now
+        fresh_issues = [issue for issue in issues if issue not in COVERAGE_COUNTS]
+    else:
+        fresh_issues = [
+            issue
+            for issue in row.issues
+            if issue not in COVERAGE_COUNTS | COVERAGE_ISSUES
+        ]
+        if row.observed_at < datetime.now(UTC) - timedelta(minutes=3):
+            fresh_issues.append("MONITOR_STALE")
+    issues = sorted(
+        set(
+            fresh_issues
+            + coverage_issues(merged, now=max(now, row.observed_at), scope=scope)
+        )
+    )
+    metrics = merged
     status = "DEGRADED" if issues else "HEALTHY"
-    row = session.get(ReportSyncHealth, (plan.tenant_id, plan.bc_id))
-    if row is None:
-        row = ReportSyncHealth(tenant_id=plan.tenant_id, bc_id=plan.bc_id)
-        session.add(row)
     changed = row.status != status or row.issues != issues
     if changed:
         session.add(
@@ -404,9 +523,13 @@ def observe_health(session, plan, *, now, deadline=None, measurement=None):
             status,
             issues,
         )
-    row.status, row.metrics, row.issues, row.observed_at = status, metrics, issues, now
+    row.status, row.metrics, row.issues = status, metrics, issues
+    repair_at = datetime.now(UTC) if phase == "coverage" else now
+    # 完整覆盖每轮最多一次；分钟修复不能用共享 last_repair_at 长期压住关联补齐。
     if issues and (
-        row.last_repair_at is None or row.last_repair_at <= now - REPAIR_INTERVAL
+        phase == "coverage"
+        or row.last_repair_at is None
+        or row.last_repair_at <= repair_at - REPAIR_INTERVAL
     ):
         # 观测先落在外层事务；补任务遇到规划锁时仅回滚补任务，不丢失健康事实。
         session.flush()
@@ -417,7 +540,15 @@ def observe_health(session, plan, *, now, deadline=None, measurement=None):
                 )
                 session.connection().execute(text("SET LOCAL lock_timeout='100ms'"))
                 with query_budget(session, seconds=REPAIR_BUDGET_SECONDS):
-                    _repair_health(session, plan, row, repairs, now)
+                    _repair_health(
+                        session,
+                        plan,
+                        row,
+                        repairs,
+                        repair_at,
+                        screen_unknown=phase in {"full", "freshness"}
+                        and "ACCOUNT_SCREEN_STALE" in fresh_issues,
+                    )
                     session.flush()
                 session.connection().execute(
                     text("SELECT set_config('lock_timeout', :value, true)"),
@@ -500,7 +631,28 @@ def _repair_fact_accounts(session, plan, accounts, *, kind, now):
     return [row.advertiser_id for row in candidates[:MAX_REPAIR_ACCOUNTS]]
 
 
-def _repair_health(session, plan, row, repairs, now):
+def _repair_health(session, plan, row, repairs, now, *, screen_unknown=False):
+    # 未知账户选择只决定补修，不是健康指标；必须留在修复保存点与2秒预算内。
+    # 覆盖续步不重复筛选，分钟/full阶段才按当前筛选告警补最旧的50个账户。
+    if screen_unknown:
+        unknown = session.execute(
+            text("""
+            SELECT a.advertiser_id FROM advertiser_account a
+            LEFT JOIN report_sync_state s ON s.tenant_id=a.tenant_id AND s.advertiser_id=a.advertiser_id
+              AND s.report_kind='ad_day' AND s.stat_date=(CAST(:now AS timestamptz) AT TIME ZONE a.timezone)::date
+            WHERE a.tenant_id=:t AND a.advertiser_id=ANY(:ids)
+              AND (s.last_success_at IS NULL OR s.last_success_at<:cutoff)
+            ORDER BY s.last_success_at ASC NULLS FIRST, a.advertiser_id LIMIT :limit
+        """),
+            {
+                "t": plan.tenant_id,
+                "ids": owned_accounts(session, plan),
+                "now": now,
+                "cutoff": now - SLO,
+                "limit": MAX_REPAIR_ACCOUNTS,
+            },
+        ).scalars()
+        repairs = {**repairs, "ad": repairs["ad"] | set(unknown)}
     count = plan_hot(
         session,
         plan,
@@ -620,24 +772,79 @@ def _health_lock_key(tenant_id, bc_id):
 
 
 def _health_progress_key(tenant_id, bc_id):
-    return f"reporting:health:progress:v1:{tenant_id}:{bc_id}"
+    return f"reporting:health:progress:v2:{tenant_id}:{bc_id}"
 
 
-def _health_scope(plan, owned):
+def _health_scope(session, plan, owned, *, now=None):
+    now = now or datetime.now(UTC)
+    # 轻量范围元数据能使时区、跨日、规则阈值变化失效；筛选时间不改变覆盖范围。
+    zones = (
+        session.connection()
+        .execute(
+            text("""
+        SELECT advertiser_id,timezone,(CAST(:now AS timestamptz) AT TIME ZONE timezone)::date
+        FROM advertiser_account WHERE tenant_id=:tenant AND advertiser_id=ANY(:ids)
+        ORDER BY advertiser_id
+    """),
+            {"tenant": plan.tenant_id, "ids": sorted(owned), "now": now},
+        )
+        .all()
+    )
+    strict = rule_accounts(
+        session, tenant_id=plan.tenant_id, bc_id=plan.bc_id, accounts=owned
+    )
     return sha256(
         json.dumps(
             [
+                str(plan.tenant_id),
+                plan.bc_id,
                 str(plan.actor_id),
                 plan.frozen_route,
                 sorted(owned),
-                sorted(set(plan.last_active_advertiser_ids)),
-                plan.active_screened_at.isoformat()
-                if plan.active_screened_at
-                else None,
+                [[account, zone, day.isoformat()] for account, zone, day in zones],
+                sorted(strict),
             ],
             sort_keys=True,
         ).encode()
     ).hexdigest()
+
+
+def _new_coverage_progress(scope):
+    return {
+        "cycle": uuid4().hex,
+        "scope": scope,
+        "at": datetime.now(UTC).isoformat(),
+        "offset": 0,
+        "metrics": {},
+        "issues": [],
+        "repairs": {"ad": [], "material": [], "links": []},
+        "batch_size": HEALTH_CHUNK_SIZE,
+        "success_streak": 0,
+        "continuation_seq": 0,
+        "retry_not_before": None,
+    }
+
+
+def _schedule_coverage(session, plan, redis_client, *, row, scope, now):
+    key = _health_progress_key(plan.tenant_id, plan.bc_id)
+    raw = redis_client.get(key)
+    progress = json.loads(raw) if raw else None
+    if progress is None or progress["scope"] != scope:
+        observed = row.metrics.get("coverage_observed_at")
+        if (
+            row.metrics.get("coverage_status") == "COMPLETE"
+            and row.metrics.get("coverage_scope") == scope
+            and observed
+            and datetime.fromisoformat(observed) > now - COVERAGE_REFRESH
+        ):
+            return "COMPLETE"
+        progress = _new_coverage_progress(scope)
+    if progress.get("retry_not_before") and now < datetime.fromisoformat(
+        progress["retry_not_before"]
+    ):
+        return "WAIT"
+    _enqueue_health_continuation(session, plan, redis_client, progress)
+    return "CONTINUE"
 
 
 def _enqueue_health_continuation(
@@ -666,28 +873,16 @@ def _advance_health(session, plan, redis_client, *, cycle, deadline):
     if cycle is not None and (not progress or progress["cycle"] != cycle):
         return "IGNORED"
     owned = sorted(set(owned_accounts(session, plan)))
-    scope = _health_scope(plan, owned)
+    scope = _health_scope(session, plan, owned)
     if progress and datetime.now(UTC) - datetime.fromisoformat(
         progress["at"]
     ) > timedelta(seconds=HEALTH_CYCLE_SECONDS):
         redis_client.delete(key)
         raise QueryBudgetExceeded("health observation cycle expired")
     if progress is None or progress["scope"] != scope:
-        progress = {
-            "cycle": uuid4().hex,
-            "scope": scope,
-            "at": datetime.now(UTC).isoformat(),
-            "offset": 0,
-            "metrics": {},
-            "issues": [],
-            "repairs": {"ad": [], "material": [], "links": []},
-            "batch_size": HEALTH_CHUNK_SIZE,
-            "success_streak": 0,
-            "continuation_seq": 0,
-            "retry_not_before": None,
-        }
-        redis_client.set(key, json.dumps(progress), ex=180)
-    # v1 的范围、起点和累计指标含义不变；新增调度字段统一补默认值，不丢已测进度。
+        redis_client.delete(key)
+        return "IGNORED"
+    # v2 只累计覆盖指标，与旧的全指标进度隔离。
     progress.setdefault("batch_size", HEALTH_CHUNK_SIZE)
     progress.setdefault("success_streak", 0)
     progress.setdefault("continuation_seq", 0)
@@ -706,7 +901,7 @@ def _advance_health(session, plan, redis_client, *, cycle, deadline):
         batch_started = monotonic()
         try:
             with session.begin_nested(), query_budget(session, seconds=3):
-                metrics, issues, repairs = measure_health(
+                metrics, issues, repairs = measure_coverage(
                     session, plan, now=as_of, accounts=owned[progress["offset"] : end]
                 )
         except (DBAPIError, QueryBudgetExceeded) as error:
@@ -764,7 +959,7 @@ def _advance_health(session, plan, redis_client, *, cycle, deadline):
     # 观测期间授权或计划范围变化，不能发布旧范围；下次 Beat 从新范围完整重测。
     session.refresh(plan)
     current_owned = sorted(set(owned_accounts(session, plan)))
-    if not plan.enabled or _health_scope(plan, current_owned) != scope:
+    if not plan.enabled or _health_scope(session, plan, current_owned) != scope:
         redis_client.delete(key)
         return "IGNORED"
     require_tenant(
@@ -781,7 +976,14 @@ def _advance_health(session, plan, redis_client, *, cycle, deadline):
         name for name, value in metrics.items() if name != "oldest_data_at" and value
     ] + progress["issues"]
     repairs = {name: set(accounts) for name, accounts in progress["repairs"].items()}
-    observe_health(session, plan, now=as_of, measurement=(metrics, issues, repairs))
+    observe_health(
+        session,
+        plan,
+        now=as_of,
+        measurement=(metrics, issues, repairs),
+        phase="coverage",
+        scope=scope,
+    )
     return "COMPLETE"
 
 
@@ -812,10 +1014,45 @@ def run_bc_health(*, database_engine, redis_client, context, bc_id, cycle=None):
                     action="reporting_write",
                 )
                 # 使用执行时刻与当前计划；不携带过期冻结路由，也不共享别的 BC 的时限。
-                result = _advance_health(
-                    session, plan, redis_client, cycle=cycle, deadline=deadline
-                )
-            if result == "COMPLETE":
+                if cycle is None:
+                    with query_budget(session, seconds=max(0, deadline - monotonic())):
+                        owned = sorted(set(owned_accounts(session, plan)))
+                        scope = _health_scope(session, plan, owned, now=now)
+                        measurement = measure_freshness(
+                            session, plan, now=now, accounts=owned
+                        )
+                        session.refresh(plan)
+                        if (
+                            not plan.enabled
+                            or plan.actor_id != context.actor_id
+                            or _health_scope(
+                                session, plan, owned_accounts(session, plan)
+                            )
+                            != scope
+                        ):
+                            return "IGNORED"
+                        require_tenant(
+                            session,
+                            actor_id=context.actor_id,
+                            tenant_id=context.tenant_id,
+                            action="reporting_write",
+                        )
+                    row = observe_health(
+                        session,
+                        plan,
+                        now=now,
+                        measurement=measurement,
+                        phase="freshness",
+                        scope=scope,
+                    )
+                    result = _schedule_coverage(
+                        session, plan, redis_client, row=row, scope=scope, now=now
+                    )
+                else:
+                    result = _advance_health(
+                        session, plan, redis_client, cycle=cycle, deadline=deadline
+                    )
+            if result == "COMPLETE" and cycle is not None:
                 # 数据库提交成功后才删除进度；提交失败/进程崩溃可重试完整发布。
                 redis_client.delete(_health_progress_key(*key))
             return result
@@ -833,15 +1070,26 @@ def run_bc_health(*, database_engine, redis_client, context, bc_id, cycle=None):
                     or plan.actor_id != context.actor_id
                 ):
                     return "IGNORED"
-                row = session.get(ReportSyncHealth, key)
-                if row is None:
-                    row = ReportSyncHealth(tenant_id=key[0], bc_id=key[1])
-                    session.add(row)
-                row.status, row.issues, row.observed_at = (
-                    "DEGRADED",
-                    ["MONITOR_QUERY_FAILED"],
-                    now,
-                )
+                row = _locked_health(session, plan)
+                if cycle is not None:
+                    row.metrics = {**row.metrics, "coverage_status": "FAILED"}
+                    fresh_issues = [
+                        issue
+                        for issue in row.issues
+                        if issue not in COVERAGE_COUNTS | COVERAGE_ISSUES
+                    ]
+                    row.issues = sorted(
+                        set(fresh_issues + coverage_issues(row.metrics, now=now))
+                    )
+                else:
+                    row.issues = sorted(
+                        set(
+                            ["MONITOR_QUERY_FAILED"]
+                            + coverage_issues(row.metrics, now=now)
+                        )
+                    )
+                # 失败不推进任何成功观测时间，分钟失败与覆盖失败不能互相清除。
+                row.status = "DEGRADED"
                 if isinstance(error, _HealthBatchTimeout):
                     raw = redis_client.get(_health_progress_key(*key))
                     progress: _HealthProgress | None = json.loads(raw) if raw else None
@@ -851,7 +1099,7 @@ def run_bc_health(*, database_engine, redis_client, context, bc_id, cycle=None):
                         and progress["retry_not_before"] is None
                         and datetime.now(UTC) - datetime.fromisoformat(progress["at"])
                         < timedelta(seconds=HEALTH_CYCLE_SECONDS)
-                        and _health_scope(plan, owned_accounts(session, plan))
+                        and _health_scope(session, plan, owned_accounts(session, plan))
                         == progress["scope"]
                     ):
                         require_tenant(

@@ -654,7 +654,6 @@ def _next_directory_version(session: Session) -> int:
 def directory_run_superseded(session: Session, run: AdDirectoryRun) -> bool:
     """沿用发布顺序判定；已被更新发布取代的运行不再占读取与恢复窗口。"""
     from app.modules.ads.material_directory_children import (
-        MATERIAL_CHILD_KEY,
         is_material_child,
         material_child_superseded,
     )
@@ -664,18 +663,12 @@ def directory_run_superseded(session: Session, run: AdDirectoryRun) -> bool:
         return material_child_superseded(session, run)
     if run.request_sequence is None:
         return False
+    from app.modules.ads.directory_supersession import superseding_directory_predicate
+
     return (
         session.exec(
             select(AdDirectoryRun.id)
-            .where(
-                AdDirectoryRun.tenant_id == run.tenant_id,
-                AdDirectoryRun.advertiser_id == run.advertiser_id,
-                AdDirectoryRun.kind == run.kind,
-                AdDirectoryRun.ad_type == run.ad_type,
-                col(AdDirectoryRun.request_sequence) > run.request_sequence,
-                col(AdDirectoryRun.published_version).is_not(None),
-                ~col(AdDirectoryRun.query).op("?")(MATERIAL_CHILD_KEY),
-            )
+            .where(superseding_directory_predicate(run, AdDirectoryRun))
             .limit(1)
         ).first()
         is not None
@@ -748,6 +741,47 @@ def publish_directory(session: Session, *, run_id: UUID, claim_generation: int) 
             version=version,
             published_objects=published_objects,
         )
+        stale_owner_materials = False
+        if run.kind in {"ad", "creative"}:
+            # 部分重叠查询可以晚发布未覆盖的广告；但输给新观察的广告素材不能
+            # 借本次更大发布版本覆盖新事实。复用已回读版本，不增加逐广告查询。
+            winning_ads = {
+                obj.remote_id
+                for obj in published_objects
+                if obj.kind == "ad" and obj.published_version == version
+            }
+            # 普通 creative 也携带素材；只接受本轮真实获胜且归属相符的创意。
+            # child 已先经过冻结广告观察保护，此处同样不能放宽其创意身份。
+            winning_creatives = {
+                obj.remote_id: obj.parent_remote_id
+                for obj in published_objects
+                if obj.kind == "creative"
+                and obj.parent_kind == "ad"
+                and obj.published_version == version
+            }
+            accepted = []
+            for material in materials:
+                use = material.get("use_ref")
+                ref = _parse_ref(use.get("ad_ref")) if isinstance(use, dict) else None
+                creative_ids = material.get("creative_ids")
+                current = ref is not None and (
+                    ref[3] in winning_ads
+                    if run.kind == "ad"
+                    else isinstance(creative_ids, list)
+                    and bool(creative_ids)
+                    and all(
+                        winning_creatives.get(creative_id) == ref[3]
+                        for creative_id in creative_ids
+                    )
+                )
+                if current:
+                    accepted.append(material)
+                else:
+                    # 失效观察也不能掩盖原本应报错的非法暂存身份。
+                    _material_values(material, run=run, version=version)
+                    stale_owner_materials = True
+            materials = accepted
+            stale_materials = stale_materials or stale_owner_materials
         _publish_materials(session, materials, run=run, version=version)
         _queue_missing_parents(session, run=run, objects=published_objects)
         append_campaign_name_projections(
@@ -778,7 +812,11 @@ def publish_directory(session: Session, *, run_id: UUID, claim_generation: int) 
             None,
         )
         if stale_materials:
-            run.missing_reason = "material_child_observation_stale"
+            run.missing_reason = (
+                "material_owner_observation_stale"
+                if stale_owner_materials
+                else "material_child_observation_stale"
+            )
         session.add(run)
         session.flush()
         for page in ordered:

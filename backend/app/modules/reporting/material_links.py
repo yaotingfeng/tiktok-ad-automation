@@ -334,7 +334,13 @@ def wait_for_dependencies(session, job, *, now):
     job.progress = {
         key: value
         for key, value in job.progress.items()
-        if key in {"coalesced_v1", "requested_at", "initial_window"}
+        if key
+        in {
+            "coalesced_v1",
+            "requested_at",
+            "initial_window",
+            "dependency_recovery_sequences",
+        }
     } | {
         "waiting_ids": sorted(missing),
         "dependency_checked_at": now.isoformat(),

@@ -2,17 +2,47 @@
 
 import hashlib
 import json
-from datetime import UTC, datetime
+import logging
+from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 from uuid import uuid4
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import text
+from sqlalchemy import and_, func, or_, text
+from sqlalchemy.exc import DBAPIError
+from sqlalchemy.orm import aliased
 from sqlmodel import col, select
 
 from app.modules.accounts.models import AdvertiserAccount
+from app.modules.reporting.query_budget import QueryBudgetExceeded, query_budget
 from app.modules.reporting.store_models import ReportSyncJob
 
 ACTIVE = ("QUEUED", "WAITING")
+logger = logging.getLogger(__name__)
+
+# 先收窄到现有部分索引覆盖的活动关联，再检查 JSON 游标；不能为找到少量旧
+# 工作沿全历史排序扫描。物化边界也避免优化器把外层 JSON 谓词推回历史扫描。
+RECONCILE_CANDIDATES_SQL = """
+WITH active_links AS MATERIALIZED (
+    SELECT id, created_at, progress ? 'coalesced_v1' AS coalesced
+    FROM report_sync_job
+    WHERE kind='material_links' AND status IN ('QUEUED','WAITING')
+)
+SELECT id FROM active_links WHERE NOT coalesced
+ORDER BY created_at, id LIMIT :limit
+"""
+
+WAKE_CANDIDATES_SQL = """
+WITH active_links AS MATERIALIZED (
+    SELECT id, created_at, progress->>'dependency_probed_at' AS probed_at
+    FROM report_sync_job
+    WHERE kind='material_links' AND status IN ('QUEUED','WAITING')
+      AND status='WAITING' AND error_code = ANY(:errors) AND due_at > :now
+      AND claim_token IS NULL AND (claimed_until IS NULL OR claimed_until <= :now)
+)
+SELECT id FROM active_links
+ORDER BY probed_at NULLS FIRST, created_at, id LIMIT :limit
+"""
 
 
 def _current(session, tenant_id, advertiser, start, end, now):
@@ -188,20 +218,20 @@ def enqueue_link_jobs(
 
 def reconcile_link_work(session, *, now, limit=50, deadline=None):
     """旧任务有界归并；原记录保留承接关系，不把归并计为数据已经补齐。"""
-    candidates = session.exec(
-        select(ReportSyncJob)
-        .where(
-            ReportSyncJob.kind == "material_links",
-            col(ReportSyncJob.status).in_(ACTIVE),
-            text("NOT (report_sync_job.progress ? 'coalesced_v1')"),
-        )
-        .order_by(col(ReportSyncJob.created_at), col(ReportSyncJob.id))
-        .limit(limit)
-    ).all()
+    session.flush()
+    candidates = (
+        session.connection()
+        .execute(text(RECONCILE_CANDIDATES_SQL), {"limit": limit})
+        .scalars()
+        .all()
+    )
     merged = 0
-    for candidate in candidates:
+    for candidate_id in candidates:
         if deadline is not None and datetime.now(UTC) >= deadline:
             break
+        candidate = session.get(ReportSyncJob, candidate_id)
+        if candidate is None:
+            continue
         if len(candidate.advertiser_ids) != 1:
             continue
         advertiser = candidate.advertiser_ids[0]
@@ -248,6 +278,116 @@ def reconcile_link_work(session, *, now, limit=50, deadline=None):
     return merged
 
 
+def _orphaned_directory_sequence(session, job, *, now):
+    """仅恢复当前缺口确实需要、又被错误淘汰且失去覆盖的定向目录请求。"""
+    if job.error_code != "material_directory_pending" or len(job.advertiser_ids) != 1:
+        return None
+    waiting_ids = job.progress.get("waiting_ids", [])
+    if not waiting_ids:
+        return None
+    from app.modules.ads.directory_supersession import directory_query_covers
+    from app.modules.ads.sync_models import AdDirectoryRun
+    from app.modules.reporting.store_models import MaterialPostLink
+
+    done = aliased(MaterialPostLink)
+    # 已解析帖子即使还留有另一条未解析使用行，也不能再被旧waiting_ids唤醒。
+    resolved = (
+        select(done.main_material_id)
+        .where(
+            done.tenant_id == MaterialPostLink.tenant_id,
+            done.advertiser_id == MaterialPostLink.advertiser_id,
+            done.main_material_id == MaterialPostLink.main_material_id,
+            func.nullif(col(done.platform_material_id), "").is_not(None),
+        )
+        .exists()
+    )
+    needed = (
+        select(MaterialPostLink.ad_remote_id)
+        .where(
+            MaterialPostLink.tenant_id == job.tenant_id,
+            MaterialPostLink.advertiser_id == job.advertiser_ids[0],
+            col(MaterialPostLink.main_material_id).in_(waiting_ids),
+            ~resolved,
+        )
+        .distinct()
+        .cte("needed_link_ads")
+    )
+    older, covering = AdDirectoryRun, aliased(AdDirectoryRun)
+    # 覆盖只要求本任务仍缺失的广告，不拿旧请求里无关的其它ID扩大恢复范围。
+    needed_ids = (
+        select(func.jsonb_agg(needed.c.ad_remote_id))
+        .where(col(older.query)["ids"].op("?")(needed.c.ad_remote_id))
+        .correlate(older)
+        .scalar_subquery()
+    )
+    scope = SimpleNamespace(
+        **{
+            key: getattr(older, key)
+            for key in (
+                "tenant_id",
+                "advertiser_id",
+                "bc_id",
+                "actor_id",
+                "frozen_route",
+                "kind",
+                "ad_type",
+            )
+        },
+        query=func.jsonb_build_object(
+            "ids",
+            needed_ids,
+            "parent_ids",
+            col(older.query)["parent_ids"],
+            "include_deleted",
+            True,
+        ),
+    )
+    covered = (
+        select(covering.id)
+        .where(
+            directory_query_covers(scope, covering),
+            or_(
+                col(covering.status).in_(
+                    ("QUEUED", "RUNNING", "ADMISSION_WAIT", "WAITING_REMOTE")
+                ),
+                and_(
+                    col(covering.status) == "COMPLETE",
+                    col(covering.coverage) == "COMPLETE",
+                    col(covering.published_version).is_not(None),
+                    col(covering.request_sequence) > older.request_sequence,
+                ),
+                # 与正常request_link_directory相同的十分钟去重期；暂时覆盖不记
+                # 已处理，防止刚失败的请求被提前标记后再次陷入数小时退避。
+                col(covering.created_at) >= now - timedelta(minutes=10),
+            ),
+        )
+        .exists()
+    )
+    handled = job.progress.get("dependency_recovery_sequences", [])
+    return session.exec(
+        select(older.request_sequence)
+        .where(
+            older.tenant_id == job.tenant_id,
+            older.advertiser_id == job.advertiser_ids[0],
+            older.bc_id == job.bc_id,
+            older.actor_id == job.actor_id,
+            older.frozen_route == job.frozen_route,
+            older.kind == "ad",
+            older.status == "STALE",
+            col(older.published_version).is_(None),
+            col(older.error_code).in_(("superseded", "directory_run_stale")),
+            col(older.query)["include_deleted"].astext == "true",
+            func.jsonb_array_length(col(older.query)["ids"]) > 0,
+            ~col(older.query).op("?")("material_child_v1"),
+            needed_ids.is_not(None),
+            col(older.request_sequence).not_in(handled),
+            ~covered,
+        )
+        .order_by(col(older.request_sequence))
+        .limit(1)
+    ).first()
+
+
 def wake_link_dependencies(session, *, now, limit=50, deadline=None):
     """有界轮转复核目录证据，历史任务也可被新目录唤醒，无需等待下一次事实刷新。"""
     from app.modules.reporting.material_links import (
@@ -255,31 +395,81 @@ def wake_link_dependencies(session, *, now, limit=50, deadline=None):
         dependency_changed,
     )
 
-    rows = session.exec(
-        select(ReportSyncJob)
-        .where(
-            ReportSyncJob.kind == "material_links",
-            ReportSyncJob.status == "WAITING",
-            col(ReportSyncJob.error_code).in_(DEPENDENCY_ERRORS),
-            ReportSyncJob.due_at > now,
-            col(ReportSyncJob.claim_token).is_(None),
+    session.flush()
+    rows = (
+        session.connection()
+        .execute(
+            text(WAKE_CANDIDATES_SQL),
+            {"errors": sorted(DEPENDENCY_ERRORS), "now": now, "limit": limit},
         )
-        .order_by(
-            text("progress->>'dependency_probed_at' NULLS FIRST"),
-            col(ReportSyncJob.created_at),
-            col(ReportSyncJob.id),
-        )
-        .limit(limit)
-        .with_for_update(skip_locked=True)
-    ).all()
+        .scalars()
+        .all()
+    )
     count = 0
-    for job in rows:
+    for job_id in rows:
         if deadline is not None and datetime.now(UTC) >= deadline:
             break
-        if dependency_changed(session, job):
+        # 候选只取ID；逐条锁定并重验当前状态，不能预锁整批阻挡正常领取。
+        job = session.exec(
+            select(ReportSyncJob)
+            .where(
+                ReportSyncJob.id == job_id,
+                ReportSyncJob.kind == "material_links",
+                ReportSyncJob.status == "WAITING",
+                col(ReportSyncJob.error_code).in_(DEPENDENCY_ERRORS),
+                ReportSyncJob.due_at > now,
+                col(ReportSyncJob.claim_token).is_(None),
+                col(ReportSyncJob.claimed_until).is_(None)
+                | (col(ReportSyncJob.claimed_until) <= now),
+            )
+            .with_for_update(skip_locked=True)
+            .execution_options(populate_existing=True)
+        ).one_or_none()
+        if job is None:
+            continue
+        remaining = (
+            1.0 if deadline is None else (deadline - datetime.now(UTC)).total_seconds()
+        )
+        if remaining <= 0:
+            break
+        changed = False
+        recovery_sequence = None
+        try:
+            # 冷读可能超过一秒；只取消本条提前复核。原任务到期读取继续兜底，
+            # 不假定证据已变化，也不因一个慢账户回滚此前成功的唤醒。
+            with (
+                session.begin_nested(),
+                query_budget(session, seconds=min(1.0, remaining)),
+            ):
+                recovery_sequence = _orphaned_directory_sequence(session, job, now=now)
+                if recovery_sequence is None:
+                    changed = dependency_changed(session, job)
+        except (DBAPIError, QueryBudgetExceeded) as error:
+            if (
+                isinstance(error, DBAPIError)
+                and getattr(error.orig, "sqlstate", None) != "57014"
+            ):
+                raise
+            changed, recovery_sequence = False, None
+            logger.info("report link dependency probe deferred: job=%s", job_id)
+        if recovery_sequence is not None:
+            # 只提前原任务；其正常执行重新校验授权/付费缺口并经唯一入口建目录。
+            # 记录实际触发集合而非最大序号：较早的暂时覆盖失败后仍能被恢复。
+            job.due_at = now
+            job.progress = job.progress | {
+                "dependency_recovery_sequences": sorted(
+                    {
+                        *job.progress.get("dependency_recovery_sequences", []),
+                        recovery_sequence,
+                    }
+                )
+            }
+            count += 1
+        elif changed:
             job.due_at, job.error_code = now, None
             job.progress = job.progress | {"dependency_attempts": -1}
             count += 1
+        # 超时也持久记录轮转位置；只能表示尝试过，不能更新真实证据签名。
         job.progress = job.progress | {"dependency_probed_at": now.isoformat()}
-    session.flush()
+        session.flush()
     return count

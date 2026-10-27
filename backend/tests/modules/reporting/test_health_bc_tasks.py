@@ -79,13 +79,13 @@ def test_failed_bc_keeps_metrics_and_next_bc_gets_full_budget(
     seen = []
     original = health.observe_health
 
-    def observe(session, plan, *, now, deadline=None, measurement=None):
+    def observe(session, plan, *, now, deadline=None, measurement=None, **kwargs):
         seen.append((plan.bc_id, deadline))
         if plan.bc_id == "bc-a":
             session.execute(text("SET LOCAL statement_timeout='50ms'"))
             session.execute(text("SELECT pg_sleep(0.1)"))
         return original(
-            session, plan, now=now, deadline=deadline, measurement=measurement
+            session, plan, now=now, deadline=deadline, measurement=measurement, **kwargs
         )
 
     monkeypatch.setattr(health, "observe_health", observe)
@@ -105,15 +105,19 @@ def test_failed_bc_keeps_metrics_and_next_bc_gets_full_budget(
             context=context,
             bc_id="bc-b",
         )
-        == "COMPLETE"
+        == "CONTINUE"
     )
     assert seen == [("bc-a", None), ("bc-b", None)]
     with factory() as session:
         row = session.get(ReportSyncHealth, (seed.tenant_id, "bc-a"))
         assert row.metrics == {"missing_directory_ads": 9}
-        assert row.issues == ["MONITOR_QUERY_FAILED"]
+        assert "MONITOR_QUERY_FAILED" in row.issues
+        assert "COVERAGE_PENDING" in row.issues
         assert (
-            session.get(ReportSyncHealth, (seed.tenant_id, "bc-b")).status == "HEALTHY"
+            session.get(ReportSyncHealth, (seed.tenant_id, "bc-b")).metrics[
+                "coverage_status"
+            ]
+            == "PENDING"
         )
 
 
@@ -198,7 +202,7 @@ def test_crashed_worker_lock_expires_and_next_task_can_finish(
             context=TenantContext(seed.tenant_id, seed.actor_id, "operator"),
             bc_id="bc-a",
         )
-        == "COMPLETE"
+        == "CONTINUE"
     )
     assert redis_client.get(key) is None
 

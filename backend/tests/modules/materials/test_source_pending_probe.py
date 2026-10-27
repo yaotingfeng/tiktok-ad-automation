@@ -132,6 +132,8 @@ def test_pending_source_keeps_claim_tenant_and_task_scope(
         assert (old.published_at is None) == bool(repaired)
         assert old.payload["claim_id"] == str(claim)
         assert pending.available_at == now + timedelta(hours=1)
+        if scheduled_scope == "other_tenant":
+            db.delete(pending)
 
 
 def test_source_repair_keeps_completed_operation_terminal(source_env):

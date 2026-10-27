@@ -37,10 +37,24 @@ const HEALTH_ISSUES: Record<string, string> = {
   MONITOR_PENDING: "健康监测尚未完成，当前同步状态待确认",
   MONITOR_STALE: "健康监测已过期，当前同步状态待确认",
   MONITOR_QUERY_FAILED: "健康监测读取失败，当前同步状态待确认",
+  COVERAGE_PENDING: "目录与素材关联尚未核验完成",
+  COVERAGE_STALE: "目录与素材关联核验已过期，完整性待确认",
+  COVERAGE_QUERY_FAILED: "目录与素材关联核验失败，完整性待确认",
 }
 
-function healthWarnings(health?: SyncHealthPublic | null): string[] {
-  if (health?.status !== "DEGRADED") return []
+function healthWarnings(
+  health: SyncHealthPublic | null | undefined,
+  now: number,
+): string[] {
+  if (!health || health.status === "DISABLED") return []
+  // 页面没有重新取得响应时，完整覆盖观测也不能随分钟水位或本地时钟续期。
+  const issues = new Set(health.issues ?? [])
+  if (
+    health.coverage_observed_at &&
+    new Date(health.coverage_observed_at).getTime() <= now - 5 * 60_000
+  )
+    issues.add("COVERAGE_STALE")
+  if (health.status !== "DEGRADED" && !issues.size) return []
   const messages: string[] = []
   const explained = new Set<string>()
   for (const [key, label, unit] of HEALTH_COUNTS) {
@@ -51,7 +65,7 @@ function healthWarnings(health?: SyncHealthPublic | null): string[] {
     }
   }
   let unknown = false
-  for (const issue of new Set(health.issues ?? [])) {
+  for (const issue of issues) {
     if (HEALTH_ISSUES[issue]) messages.push(`该 BC ${HEALTH_ISSUES[issue]}`)
     else if (!explained.has(issue)) unknown = true
   }
@@ -172,8 +186,13 @@ export function ReportStatusBar({
       text: `${future.length} 个账户当地尚未到所选日期`,
       tone: "ok",
     })
-  for (const text of healthWarnings(status?.health))
+  for (const text of healthWarnings(status?.health, now))
     extras.push({ text, tone: "error" })
+  if (status?.health?.coverage_observed_at)
+    extras.push({
+      text: `目录与素材关联核验于 ${new Date(status.health.coverage_observed_at).toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false })}`,
+      tone: "ok",
+    })
   // 历史回填只覆盖到开户日之后的部分区间：告诉用户从哪天起数据完整，
   // 选择更早的日期时就能理解缺口来自回填范围，而不是同步出错。
   if (status?.complete_from)
