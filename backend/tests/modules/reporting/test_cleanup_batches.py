@@ -292,3 +292,107 @@ def test_task_gives_every_category_a_turn_before_budget_exit(redis_client, monke
         assert categories == list(job_tasks.CLEANUP_CATEGORIES)
     finally:
         redis_client.delete(cursor_key)
+
+
+def _hour_rows(session, seed, *, now, include_boundary=False):
+    from datetime import timezone
+    from uuid import uuid4
+
+    from app.modules.reporting.store_models import CampaignReportHour
+
+    # 不同 UTC 偏移写入同一时间点；游标恢复后必须保持原时间意义和 30 天边界。
+    offset = timezone(timedelta(hours=5, minutes=45))
+    rows = [
+        ("acc-1", f"recent-{index}", now - timedelta(days=1)) for index in range(3)
+    ] + [("acc-2", f"expired-{index}", now - timedelta(days=31)) for index in range(2)]
+    if include_boundary:
+        rows.append(("acc-2", "boundary", now - timedelta(days=30)))
+    for account, campaign, at in rows:
+        session.add(
+            CampaignReportHour(
+                tenant_id=seed.tenant_id,
+                advertiser_id=account,
+                campaign_id=campaign,
+                stat_hour=at.astimezone(offset),
+                currency="USD",
+                timezone="Asia/Kathmandu",
+                fetched_at=now,
+                sync_job_id=uuid4(),
+            )
+        )
+    session.flush()
+
+
+def test_hour_cleanup_resumes_composite_cursor_and_preserves_retention(
+    session, sync_seed, monkeypatch
+):
+    from app.modules.reporting.store_models import CampaignReportHour
+
+    now = datetime.now(UTC)
+    _hour_rows(session, sync_seed, now=now, include_boundary=True)
+    monkeypatch.setattr(job_tasks, "CLEANUP_SCAN_ROWS", 2)
+    monkeypatch.setattr(job_tasks, "CLEANUP_BATCH_ROWS", 1)
+    cursors = {}
+    removed = [
+        job_tasks.cleanup_store(
+            session, now=now, categories=("hours",), cursors=cursors
+        )["hours"]
+        for _ in range(8)
+    ]
+    assert sum(removed) == 2
+    assert max(removed) == 1
+    remaining = session.exec(
+        select(CampaignReportHour).where(
+            CampaignReportHour.tenant_id == sync_seed.tenant_id
+        )
+    ).all()
+    assert {row.campaign_id for row in remaining} == {
+        "recent-0",
+        "recent-1",
+        "recent-2",
+        "boundary",
+    }
+    boundary = next(row for row in remaining if row.campaign_id == "boundary")
+    assert boundary.stat_hour == now - timedelta(days=30)
+    assert boundary.stat_hour.utcoffset() is not None
+
+
+def test_hour_cleanup_restores_redis_cursor_across_task_invocations(
+    committed_sync_seed, redis_client, monkeypatch
+):
+    import json
+    import os
+
+    from app.modules.reporting.store_models import CampaignReportHour
+
+    seed, factory = committed_sync_seed
+    with factory() as session:
+        _hour_rows(session, seed, now=datetime.now(UTC))
+        session.commit()
+    cursor_key = "reporting:cleanup:cursors:v1"
+    redis_client.delete(cursor_key)
+    monkeypatch.setattr(job_tasks.settings, "REDIS_URL", os.environ["TEST_REDIS_URL"])
+    monkeypatch.setattr(job_tasks, "CLEANUP_CATEGORIES", ("hours",))
+    monkeypatch.setattr(job_tasks, "DIRECTORY_PAGE_CLEANUP_SECONDS", 0)
+    monkeypatch.setattr(job_tasks, "CLEANUP_SCAN_ROWS", 2)
+    monkeypatch.setattr(job_tasks, "CLEANUP_BATCH_ROWS", 1)
+    try:
+        assert job_tasks.cleanup_store_task.run()["hours"] == 0
+        cursor = json.loads(redis_client.hget(cursor_key, "hours"))
+        assert cursor[1] == "acc-1"
+        assert datetime.fromisoformat(cursor[2]).utcoffset() is not None
+        # 每次调用新建 Session，并重新读取真实 Redis，不借用上次内存状态。
+        assert job_tasks.cleanup_store_task.run()["hours"] == 1
+        assert job_tasks.cleanup_store_task.run()["hours"] == 1
+        for _ in range(3):
+            assert job_tasks.cleanup_store_task.run()["hours"] == 0
+        with factory() as observer:
+            assert set(
+                observer.exec(
+                    select(CampaignReportHour.campaign_id).where(
+                        CampaignReportHour.tenant_id == seed.tenant_id
+                    )
+                ).all()
+            ) == {"recent-0", "recent-1", "recent-2"}
+    finally:
+        redis_client.delete(cursor_key)

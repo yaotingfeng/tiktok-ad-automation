@@ -446,3 +446,36 @@ def test_parent_only_directory_request_still_reads_children(
     ).one()
     assert run.query["ids"] == []
     assert run.query["parent_ids"] == ["parent-1"]
+
+
+@pytest.mark.parametrize("kind", ["campaign", "adgroup", "ad", "creative"])
+def test_type_presence_includes_deleted_objects_in_every_layer(
+    session, sync_seed, kind
+):
+    now = datetime.now(UTC)
+    obj = _ad_object(sync_seed, "acc-1", "LEGACY_SMART_PLUS")
+    obj.kind = kind
+    obj.operation_status = "DELETED"
+    session.add(obj)
+    # 即使没有上级记录或对象已经删除，实际类型仍须刷新所有周期层级。
+    result = directory_ad_types(
+        session,
+        tenant_id=sync_seed.tenant_id,
+        advertiser_ids=["acc-1", "acc-2"],
+        active_ids=[],
+        now=now,
+    )
+    assert result["acc-1"]["LEGACY_SMART_PLUS"] == ("campaign", "adgroup", "ad")
+    assert result["acc-2"] == PROBES
+
+
+def test_unknown_historical_type_does_not_mean_empty_active_account(session, sync_seed):
+    session.add(_ad_object(sync_seed, "acc-1", "UNKNOWN_HISTORICAL"))
+    result = directory_ad_types(
+        session,
+        tenant_id=sync_seed.tenant_id,
+        advertiser_ids=["acc-1"],
+        active_ids=["acc-1"],
+        now=datetime.now(UTC),
+    )
+    assert result == {"acc-1": PROBES}

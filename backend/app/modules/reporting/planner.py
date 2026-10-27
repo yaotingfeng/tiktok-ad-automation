@@ -529,14 +529,7 @@ def plan_day_closeout(session: Session, plan: AdSyncBc, *, now: datetime) -> int
         session.connection()
         .execute(
             text("""
-        WITH planned AS MATERIALIZED (
-          SELECT ids.advertiser_id,j.kind,j.end_date
-          FROM report_sync_job j
-          CROSS JOIN LATERAL jsonb_array_elements_text(j.advertiser_ids) ids(advertiser_id)
-          WHERE j.tenant_id=:tenant AND j.bc_id=:bc AND j.actor_id=:actor
-            AND j.frozen_route=CAST(:route AS jsonb) AND j.priority=:closeout
-            AND j.start_date=j.end_date AND j.end_date BETWEEN :first_day AND :last_day),
-        owned AS (
+        WITH owned AS (
           SELECT a.advertiser_id, a.timezone,
             (CAST(:now AS timestamptz) AT TIME ZONE a.timezone)::date AS today
           FROM advertiser_account a JOIN ad_sync_account o
@@ -546,27 +539,52 @@ def plan_day_closeout(session: Session, plan: AdSyncBc, *, now: datetime) -> int
           SELECT *, today-1 AS day, today::timestamp AT TIME ZONE timezone AS midnight
           FROM owned)
         SELECT y.advertiser_id,y.day,k.kind FROM yesterday y
+        LEFT JOIN LATERAL (
+          SELECT true AS found FROM ad_report_day f WHERE f.tenant_id=:tenant
+            AND f.advertiser_id=y.advertiser_id AND f.stat_date=y.day LIMIT 1
+        ) ad ON true
+        LEFT JOIN LATERAL (
+          SELECT true AS found FROM material_report_day f WHERE ad.found IS NULL
+            AND f.tenant_id=:tenant AND f.advertiser_id=y.advertiser_id AND f.stat_date=y.day LIMIT 1
+        ) mat ON true
         CROSS JOIN (VALUES ('ad_day'),('material_day')) k(kind)
         LEFT JOIN report_sync_state s ON s.tenant_id=:tenant
           AND s.advertiser_id=y.advertiser_id AND s.stat_date=y.day AND s.report_kind=k.kind
         WHERE (s.last_success_at IS NULL OR s.last_success_at<=y.midnight)
-          AND NOT EXISTS (SELECT 1 FROM planned p WHERE p.advertiser_id=y.advertiser_id
-            AND p.end_date=y.day AND p.kind=k.kind)
-          AND (EXISTS (SELECT 1 FROM ad_report_day f WHERE f.tenant_id=:tenant
-                AND f.advertiser_id=y.advertiser_id AND f.stat_date=y.day)
-            OR EXISTS (SELECT 1 FROM material_report_day f WHERE f.tenant_id=:tenant
-                AND f.advertiser_id=y.advertiser_id AND f.stat_date=y.day))
+          AND (ad.found OR mat.found)
         ORDER BY y.day,k.kind,y.advertiser_id
         """),
             {
                 "tenant": plan.tenant_id,
                 "bc": plan.bc_id,
                 "now": now,
+            },
+        )
+        .all()
+    )
+    # 先证明昨天仍有缺口；已完成的BC不再每轮扫描全部收尾历史。
+    if not rows:
+        return 0
+    planned = set(
+        session.connection()
+        .execute(
+            text("""
+        SELECT ids.advertiser_id,j.end_date,j.kind FROM report_sync_job j
+        CROSS JOIN LATERAL jsonb_array_elements_text(j.advertiser_ids) ids(advertiser_id)
+        WHERE j.tenant_id=:tenant AND j.bc_id=:bc AND j.actor_id=:actor
+          AND j.frozen_route=CAST(:route AS jsonb) AND j.priority=:closeout
+          AND j.start_date=j.end_date AND j.end_date BETWEEN :first_day AND :last_day
+          AND ids.advertiser_id=ANY(:accounts)
+    """),
+            {
+                "tenant": plan.tenant_id,
+                "bc": plan.bc_id,
                 "actor": plan.actor_id,
                 "route": json.dumps(plan.frozen_route),
                 "closeout": CLOSEOUT_PRIORITY,
-                "first_day": now.astimezone(UTC).date() - timedelta(days=2),
-                "last_day": now.astimezone(UTC).date(),
+                "first_day": min(row.day for row in rows),
+                "last_day": max(row.day for row in rows),
+                "accounts": sorted({row.advertiser_id for row in rows}),
             },
         )
         .all()
@@ -575,6 +593,8 @@ def plan_day_closeout(session: Session, plan: AdSyncBc, *, now: datetime) -> int
     # planned 按本轮日期一次展开，避免对每个账户重复扫描完整任务历史。
     grouped: dict[tuple[str, date], list[str]] = {}
     for advertiser, day, kind in rows:
+        if (advertiser, day, kind) in planned:
+            continue
         grouped.setdefault((kind, day), []).append(advertiser)
     count = 0
     for (kind, day), advertisers in grouped.items():

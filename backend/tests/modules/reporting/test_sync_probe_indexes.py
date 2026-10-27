@@ -181,6 +181,8 @@ def test_sync_probe_indexes_roundtrip_and_reduce_scans(monkeypatch, record_prope
                     is None
                 )
         command.upgrade(config, REVISION)
+        # 0044 往返验证结束后，按最新 head 与模型核对后续新增索引。
+        command.upgrade(config, "head")
         command.check(config)
         repeated = measure()
         assert {k: v["rows"] for k, v in repeated.items()} == {

@@ -16,7 +16,6 @@ from app.integrations.tiktok.contracts.context import FrozenTikTokRoute
 from app.jobs.outbox import enqueue_after_commit
 from app.modules.accounts.routing import verify_route
 from app.modules.ads.directory_dispatch import enqueue_directory_step
-from app.modules.ads.models import AdObject
 from app.modules.ads.sync_models import AdDirectoryRun
 
 DIRECTORY_AD_TYPES = ("REGULAR", "LEGACY_SMART_PLUS", "SMART_PLUS")
@@ -95,16 +94,30 @@ def directory_ad_types(
     accounts = sorted(set(advertiser_ids))
     if not accounts:
         return {}
+    session.flush()
     used: dict[str, set[str]] = {}
-    for advertiser_id, ad_type in session.exec(
-        select(AdObject.advertiser_id, AdObject.ad_type)
-        .where(
-            AdObject.tenant_id == tenant_id,
-            col(AdObject.advertiser_id).in_(accounts),
-        )
-        .distinct()
+    # 三种类型只需证明存在，不能为找一个类型回表遍历整个账户的广告历史。
+    # 保留任意对象存在性，未知历史类型也不能被误当作“目录全空”的活跃账户。
+    for advertiser_id, ad_type in session.connection().execute(
+        text("""
+        SELECT a.advertiser_id, used.ad_type
+        FROM unnest(CAST(:accounts AS text[])) a(advertiser_id)
+        JOIN LATERAL (
+          SELECT true FROM ad_object o
+          WHERE o.tenant_id=:tenant AND o.advertiser_id=a.advertiser_id LIMIT 1
+        ) present ON true
+        LEFT JOIN LATERAL (
+          SELECT t.ad_type FROM unnest(CAST(:types AS text[])) t(ad_type)
+          JOIN LATERAL (
+            SELECT true FROM ad_object o
+            WHERE o.tenant_id=:tenant AND o.advertiser_id=a.advertiser_id
+              AND o.ad_type=t.ad_type LIMIT 1
+          ) found ON true
+        ) used ON true
+        """),
+        {"tenant": tenant_id, "accounts": accounts, "types": list(DIRECTORY_AD_TYPES)},
     ):
-        used.setdefault(advertiser_id, set()).add(ad_type)
+        used.setdefault(advertiser_id, set()).add(ad_type or "")
     probes = {
         _probe_partition(advertiser_id, ad_type): (advertiser_id, ad_type)
         for advertiser_id in accounts

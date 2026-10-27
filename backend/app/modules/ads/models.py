@@ -58,6 +58,8 @@ class AdObject(SQLModel, table=True):
             name="ck_ad_object_source",
         ),
         CheckConstraint("published_version > 0", name="ck_ad_object_version"),
+        # 类型存在性包括任意层级及已删除对象，三键匹配后首条即可结束。
+        Index("ix_ad_object_type", "tenant_id", "advertiser_id", "ad_type"),
         Index(
             "ix_ad_object_parent",
             "tenant_id",

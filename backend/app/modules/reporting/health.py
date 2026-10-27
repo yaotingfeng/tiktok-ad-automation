@@ -1,5 +1,6 @@
 """按账户当地当前日监测延迟和覆盖，有界重建缺口；告警与恢复持久可见。"""
 
+import json
 import logging
 from datetime import UTC, datetime, timedelta
 
@@ -30,6 +31,7 @@ from app.modules.reporting.planner import (
     plan_hot,
     plan_material,
 )
+from app.modules.reporting.query_budget import QueryBudgetExceeded, query_budget
 from app.modules.reporting.store_models import (
     AdSyncBc,
     ReportSyncHealth,
@@ -41,6 +43,7 @@ logger = logging.getLogger(__name__)
 SLO = FRESHNESS["ad_day"]
 REPAIR_INTERVAL = timedelta(minutes=2)
 MAX_REPAIR_ACCOUNTS = 50
+REPAIR_BUDGET_SECONDS = 2
 
 
 def measure_health(session, plan, *, now, accounts=None):
@@ -258,8 +261,14 @@ def _rescue_queued_actions(session, plan, *, now):
     return count
 
 
-def observe_health(session, plan, *, now):
-    metrics, issues, repairs = measure_health(session, plan, now=now)
+def observe_health(session, plan, *, now, deadline=None):
+    remaining = (
+        10
+        if deadline is None
+        else max(0, (deadline - datetime.now(UTC)).total_seconds())
+    )
+    with query_budget(session, seconds=remaining):
+        metrics, issues, repairs = measure_health(session, plan, now=now)
     status = "DEGRADED" if issues else "HEALTHY"
     row = session.get(ReportSyncHealth, (plan.tenant_id, plan.bc_id))
     if row is None:
@@ -296,13 +305,17 @@ def observe_health(session, plan, *, now):
                     session.connection().execute(text("SHOW lock_timeout")).scalar_one()
                 )
                 session.connection().execute(text("SET LOCAL lock_timeout='100ms'"))
-                _repair_health(session, plan, row, repairs, now)
+                with query_budget(session, seconds=REPAIR_BUDGET_SECONDS):
+                    _repair_health(session, plan, row, repairs, now)
+                    session.flush()
                 session.connection().execute(
                     text("SELECT set_config('lock_timeout', :value, true)"),
                     {"value": previous},
                 )
-        except DBAPIError as error:
-            if getattr(error.orig, "sqlstate", None) not in {"55P03", "57014"}:
+        except (DBAPIError, QueryBudgetExceeded) as error:
+            if isinstance(error, DBAPIError) and getattr(
+                error.orig, "sqlstate", None
+            ) not in {"55P03", "57014"}:
                 raise
             logger.warning(
                 "sync health repair deferred: tenant=%s bc=%s",
@@ -329,7 +342,41 @@ def _repair_health(session, plan, row, repairs, now):
         sorted(repairs["links"])[:MAX_REPAIR_ACCOUNTS],
         lambda tz: _hot_window(tz, now),
     ).items():
+        # 已有同冻结范围、同当前日窗口的待领工作保留原退避；证据变化交给
+        # wake_link_dependencies复核，健康告警本身不是重新扫描素材的证据。
+        covered = set(
+            session.connection()
+            .execute(
+                text("""
+            SELECT a.advertiser_id FROM unnest(CAST(:ids AS text[])) a(advertiser_id)
+            JOIN LATERAL (
+              SELECT j.id FROM report_sync_job j
+              WHERE j.tenant_id=:tenant AND j.bc_id=:bc AND j.actor_id=:actor
+                AND j.frozen_route=CAST(:route AS jsonb)
+                AND j.kind='material_links' AND j.status IN ('QUEUED','WAITING')
+                AND j.advertiser_ids=jsonb_build_array(a.advertiser_id)
+                AND j.campaign_ids='[]'::jsonb AND j.priority<=2
+                AND j.start_date=:start AND j.end_date=:end
+                AND (j.claimed_until IS NULL OR j.claimed_until<=:now)
+              LIMIT 1 FOR UPDATE SKIP LOCKED
+            ) pending ON true
+        """),
+                {
+                    "tenant": plan.tenant_id,
+                    "bc": plan.bc_id,
+                    "actor": plan.actor_id,
+                    "route": json.dumps(plan.frozen_route),
+                    "ids": ids,
+                    "start": start,
+                    "end": end,
+                    "now": now,
+                },
+            )
+            .scalars()
+        )
         for advertiser in ids:
+            if advertiser in covered:
+                continue
             count += bool(
                 enqueue_job(
                     session,
@@ -384,7 +431,7 @@ def check_health():
                 session.connection().execute(text("SET LOCAL statement_timeout='5s'"))
                 plan = session.get(AdSyncBc, key)
                 if plan is not None and plan.enabled:
-                    observe_health(session, plan, now=now)
+                    observe_health(session, plan, now=now, deadline=deadline)
                     count += 1
         except Exception:
             logger.exception("sync health check failed tenant=%s bc=%s", *key)

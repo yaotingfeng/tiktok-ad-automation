@@ -280,7 +280,7 @@ def claim_jobs(
     lane: str | None = None,
     backfill_group: str | None = None,
 ) -> list[ReportSyncJob]:
-    """按持久游标轮转租户；实时事实先均衡类型在途，类型内保留创建顺序。"""
+    """按持久游标轮转租户；事实均衡类型在途，类型内保留各 lane 的顺序。"""
     if lane not in {None, "live", "closeout", "links", "backfill"}:
         raise ValueError("invalid report lane")
     lane_filter = "" if lane is None else f"AND {lane_predicate(lane=lane, alias='j')}"
@@ -315,15 +315,20 @@ def claim_jobs(
     )
     if lane == "links":
         global_order = "due_at, created_at, id"
-    partition = "j.tenant_id, j.kind" if lane == "live" else "j.tenant_id"
-    rank_column = "kind_prefix" if lane == "live" else "rn"
+    balance_kinds = lane == "live" or (lane == "backfill" and backfill_group != "links")
+    partition = "j.tenant_id, j.kind" if balance_kinds else "j.tenant_id"
+    rank_column = "kind_prefix" if balance_kinds else "rn"
     rank_expression = (
         f"COALESCE(SUM(GREATEST(1, jsonb_array_length(j.advertiser_ids))) OVER "
         f"(PARTITION BY {partition} ORDER BY {local_order} "
         "ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING), 0)"
         if lane == "live"
         else f"ROW_NUMBER() OVER (PARTITION BY {partition} ORDER BY {local_order})"
+        + (" - 1" if balance_kinds else "")
     )
+    eligible = """(j.status IN ('QUEUED','WAITING') AND j.due_at <= :now
+              AND (j.claimed_until IS NULL OR j.claimed_until <= :now)
+              OR j.status = 'RUNNING' AND (j.claimed_until IS NULL OR j.claimed_until <= :now))"""
     ranking = f"""
         candidates AS (
             SELECT j.id, j.tenant_id, j.kind, {priority} AS priority,
@@ -331,40 +336,58 @@ def claim_jobs(
                    {rank_expression} AS {rank_column}
             FROM report_sync_job j
             LEFT JOIN report_dispatch_cursor c ON c.tenant_id = j.tenant_id
-            WHERE (j.status IN ('QUEUED','WAITING') AND j.due_at <= :now
-              AND (j.claimed_until IS NULL OR j.claimed_until <= :now)
-              OR j.status = 'RUNNING' AND (j.claimed_until IS NULL OR j.claimed_until <= :now))
-              {lane_filter})
+            WHERE {eligible} {lane_filter})
     """
-    if lane == "live":
+    if balance_kinds:
         # 广告可批量读多个账户，素材只能单账户；类型负载按账户覆盖而非任务数均衡。
         # 前缀只计本候选之前的分配：先选负载较空的类型，再承担本批账户，避免
         # 单槽时大批次因自身成本较高永远排在单账户任务之后。总窗口仍按任务计数。
+        # 历史事实窗口按任务数均衡，避免数千素材任务挡住广告/账户事实；同类
+        # 仍按有效优先级和 due_at 轮转，退避与续步不插队。仅复用一次候选扫描，
+        # 不逐类型重复扫描积压。这里是类型在途均衡，不是持久的类型派发游标：
+        # 可运行类型多于槽位时，不承诺跨轮严格轮转。空闲份额仍可被其它类型借用。
+        running = (
+            "SUM(GREATEST(1, jsonb_array_length(j.advertiser_ids)))"
+            if lane == "live"
+            else "COUNT(*)"
+        )
         ranking += f""",
         inflight AS (
             SELECT j.tenant_id, j.kind,
-                   SUM(GREATEST(1, jsonb_array_length(j.advertiser_ids))) AS running
+                   {running} AS running
             FROM report_sync_job j
             WHERE j.status = 'RUNNING' AND j.claimed_until > :now
-              AND {lane_predicate(lane="live", alias="j")}
+              {lane_filter}
             GROUP BY j.tenant_id, j.kind),
         ranked AS (
             SELECT c.*, ROW_NUMBER() OVER (
                 PARTITION BY c.tenant_id
                 ORDER BY COALESCE(i.running, 0) + c.kind_prefix,
-                         c.created_at, c.priority, c.id) AS rn
+                         {", ".join(f"c.{column}" for column in global_order.split(", "))}) AS rn
             FROM candidates c LEFT JOIN inflight i
               ON i.tenant_id = c.tenant_id AND i.kind = c.kind)
         """
     else:
         ranking += ", ranked AS (SELECT * FROM candidates)"
+    # 限额用于实际拿到行锁的任务；不能先截断 ID 再跳锁，否则被锁的队首会
+    # 吞掉本轮空槽。有序候选逐个按主键拿锁，拿满即停；LATERAL 内的行锁
+    # 阻止优化器把它改成再次扫描全部候选的 hash join，也不锁租户游标。
     ids = (
         session.connection()
         .execute(
             text(f"""
         WITH {ranking}
-        SELECT id FROM ranked
-        ORDER BY rn, last_dispatched_at NULLS FIRST, {global_order} LIMIT :limit"""),
+        SELECT picked.id FROM (
+            SELECT r.id FROM ranked r
+            ORDER BY r.rn, r.last_dispatched_at NULLS FIRST,
+                     {", ".join(f"r.{column}" for column in global_order.split(", "))}
+        ) ordered
+        CROSS JOIN LATERAL (
+            SELECT j.id FROM report_sync_job j
+            WHERE j.id = ordered.id AND {eligible} {lane_filter}
+            FOR UPDATE OF j SKIP LOCKED
+        ) picked
+        LIMIT :limit"""),
             parameters={"now": now, "lane_now": now, "limit": limit},
         )
         .scalars()

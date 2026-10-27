@@ -58,6 +58,7 @@ from app.modules.reporting.lanes import (
 )
 from app.modules.reporting.metrics import parse_decimal
 from app.modules.reporting.partitions import ensure_month_partitions
+from app.modules.reporting.query_budget import QueryBudgetExceeded, query_budget
 from app.modules.reporting.query_models import QuerySnapshot, QuerySnapshotRow
 from app.modules.reporting.store_models import (
     AdSyncBc,
@@ -90,6 +91,10 @@ BACKFILL_DISPATCH_WINDOW = 6
 # 目录消息发布后超过此时长仍未被领取，视为丢失并重新入队。
 DIRECTORY_MESSAGE_LOST_AFTER = timedelta(hours=6)
 TARGETED_MESSAGE_LOST_AFTER = timedelta(minutes=2)
+# 一轮周期目录分批推进；此游标不占用账户筛选或规则相位的进度键。
+DIRECTORY_PLAN_PROGRESS = "directory_cycle_v1"
+DIRECTORY_PLAN_ACCOUNTS = 64
+DIRECTORY_PLAN_SECONDS = 3
 
 register_dispatch_task("reporting.job_step", "ads-reporting")
 register_dispatch_task("reporting.backfill_step", "ads-backfill")
@@ -532,6 +537,116 @@ def _defer_plan(plan, retry_at):
         setattr(plan, field, max(getattr(plan, field), retry_at))
 
 
+def _plan_directory_step(session, plan, *, accounts, now):
+    """稳定账户ID游标；成功批次才推进，单个慢账户退避后不阻挡其余账户。"""
+    accounts = sorted(set(accounts))
+    scope = sha256(
+        json.dumps(
+            [
+                str(plan.tenant_id),
+                plan.bc_id,
+                str(plan.actor_id),
+                plan.frozen_route,
+                accounts,
+            ],
+            sort_keys=True,
+        ).encode()
+    ).hexdigest()
+    state: dict[str, Any] = dict(
+        plan.screening_progress.get(DIRECTORY_PLAN_PROGRESS) or {}
+    )
+    if state.get("scope") != scope:
+        state = {
+            "scope": scope,
+            "anchor": plan.next_directory_at.isoformat(),
+            "after": "",
+            "batch_size": DIRECTORY_PLAN_ACCOUNTS,
+            "deferred": {},
+        }
+    anchor = datetime.fromisoformat(state["anchor"])
+    owned = set(accounts)
+    deferred = {a: at for a, at in state.get("deferred", {}).items() if a in owned}
+    retry = sorted(a for a, at in deferred.items() if datetime.fromisoformat(at) <= now)
+    fresh = [a for a in accounts if a > state["after"] and a not in deferred]
+    size = max(1, min(DIRECTORY_PLAN_ACCOUNTS, int(state["batch_size"])))
+    batch = (retry + fresh)[:size]
+    if batch:
+        try:
+            with (
+                session.begin_nested(),
+                query_budget(session, seconds=DIRECTORY_PLAN_SECONDS),
+            ):
+                due = directory_due_accounts(
+                    session,
+                    tenant_id=plan.tenant_id,
+                    bc_id=plan.bc_id,
+                    actor_id=plan.actor_id,
+                    frozen_route=plan.frozen_route,
+                    advertiser_ids=batch,
+                    active_ids=plan.last_active_advertiser_ids,
+                    now=now,
+                )
+                request_directory(
+                    session,
+                    tenant_id=plan.tenant_id,
+                    bc_id=plan.bc_id,
+                    actor_id=plan.actor_id,
+                    frozen_route=plan.frozen_route,
+                    advertiser_ids=due,
+                    scope="directory",
+                    ad_types=directory_ad_types(
+                        session,
+                        tenant_id=plan.tenant_id,
+                        advertiser_ids=due,
+                        active_ids=plan.last_active_advertiser_ids,
+                        now=now,
+                    ),
+                )
+                session.flush()
+        except (DBAPIError, QueryBudgetExceeded) as error:
+            if (
+                isinstance(error, DBAPIError)
+                and getattr(error.orig, "sqlstate", None) != "57014"
+            ):
+                raise
+            state["batch_size"] = max(1, size // 2)
+            if len(batch) == 1:
+                # 失败账户仍持久保留为未完成；只让其他账户继续，不将其伪记为完成。
+                deferred[batch[0]] = (now + timedelta(minutes=5)).isoformat()
+            logger.warning(
+                "directory planning batch deferred: tenant=%s bc=%s accounts=%s",
+                plan.tenant_id,
+                plan.bc_id,
+                len(batch),
+            )
+        else:
+            advanced = [a for a in batch if a not in deferred]
+            if advanced:
+                state["after"] = max(state["after"], *advanced)
+            for advertiser in batch:
+                deferred.pop(advertiser, None)
+            state["batch_size"] = min(DIRECTORY_PLAN_ACCOUNTS, size * 2)
+    state["deferred"] = deferred
+    remaining = [a for a in accounts if a > state["after"] and a not in deferred]
+    if not remaining and not deferred:
+        plan.screening_progress = {
+            k: v
+            for k, v in plan.screening_progress.items()
+            if k != DIRECTORY_PLAN_PROGRESS
+        }
+        plan.next_directory_at = _advance(anchor, now, planner.DIRECTORY_INTERVAL)
+    else:
+        plan.screening_progress = {
+            **plan.screening_progress,
+            DIRECTORY_PLAN_PROGRESS: state,
+        }
+        plan.next_directory_at = (
+            now + timedelta(seconds=5)
+            if remaining
+            else min(datetime.fromisoformat(at) for at in deferred.values())
+        )
+
+
 def _plan_one(
     database_engine,
     redis_client,
@@ -627,35 +742,7 @@ def _plan_one(
                         )
                         # 全量目录（含已删除）已覆盖只读在投对象的需求，周期只发这一种；
                         # 无消耗账户按天刷新，未使用类型只探测广告系列。
-                        due = directory_due_accounts(
-                            session,
-                            tenant_id=plan.tenant_id,
-                            bc_id=plan.bc_id,
-                            actor_id=plan.actor_id,
-                            frozen_route=plan.frozen_route,
-                            advertiser_ids=accounts,
-                            active_ids=plan.last_active_advertiser_ids,
-                            now=now,
-                        )
-                        request_directory(
-                            session,
-                            tenant_id=plan.tenant_id,
-                            bc_id=plan.bc_id,
-                            frozen_route=plan.frozen_route,
-                            actor_id=plan.actor_id,
-                            advertiser_ids=due,
-                            scope="directory",
-                            ad_types=directory_ad_types(
-                                session,
-                                tenant_id=plan.tenant_id,
-                                advertiser_ids=due,
-                                active_ids=plan.last_active_advertiser_ids,
-                                now=now,
-                            ),
-                        )
-                        plan.next_directory_at = _advance(
-                            plan.next_directory_at, now, planner.DIRECTORY_INTERVAL
-                        )
+                        _plan_directory_step(session, plan, accounts=accounts, now=now)
                         session.connection().execute(
                             text(
                                 "SELECT set_config('statement_timeout', :value, true)"
@@ -1055,7 +1142,12 @@ def _cleanup_candidates(session, model, *, cursor, limit):
     if cursor:
         values = []
         for column, value in zip(keys, cursor, strict=True):
-            kind = column.type.python_type
+            try:
+                kind = column.type.python_type
+            except NotImplementedError:
+                # SQLModel AutoString 不实现 python_type，实际存储类型由 impl 给出。
+                # UUID 和带时区日期仍按原类型恢复，不能把整个复合游标当字符串。
+                kind = column.type.impl.python_type
             values.append(
                 datetime.fromisoformat(value) if kind is datetime else kind(value)
             )

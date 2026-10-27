@@ -702,10 +702,11 @@ spec:
           image: __APP_IMAGE__
           imagePullPolicy: IfNotPresent
           resources:
-            requests: {cpu: "500m", memory: 1536Mi}
+            requests: {cpu: "500m", memory: 2560Mi}
             limits: {cpu: "3", memory: 3Gi}
-          # 实时消费者不再抓取后台全量/历史依赖；发布仍由单槽 ads-publish 执行。
-          command: [celery, -A, "app.jobs.celery_app:celery_app", worker, -Q, ads-live-directory, --pool, prefork, --concurrency, "8", --loglevel=INFO, --hostname, "ads-live-directory@%h"]
+          # 实时消费者不抓取后台全量/历史依赖；发布仍由单槽 ads-publish 执行。
+          # 8槽实测约95%被远端I/O占用；12槽预计2.2–2.4Gi，池上限增加12连接。
+          command: [celery, -A, "app.jobs.celery_app:celery_app", worker, -Q, ads-live-directory, --pool, prefork, --concurrency, "12", --loglevel=INFO, --hostname, "ads-live-directory@%h"]
           readinessProbe:
             exec:
               command: [python, -c, "import socket; from app.jobs.celery_app import celery_app; r=celery_app.control.ping(destination=['ads-live-directory@'+socket.gethostname()], timeout=5); raise SystemExit(0 if r else 1)"]

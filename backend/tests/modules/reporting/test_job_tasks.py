@@ -1396,11 +1396,17 @@ def test_directory_query_cancel_preserves_hot_and_material_jobs(
         planner.MATERIAL_INTERVAL,
         allow_backfill=False,
     )
-    assert timeout_seen == ["8s"]
+    assert len(timeout_seen) == 1
+    timeout = timeout_seen[0]
+    timeout_ms = (
+        float(timeout[:-2]) if timeout.endswith("ms") else float(timeout[:-1]) * 1000
+    )
+    assert 0 < timeout_ms <= job_tasks.DIRECTORY_PLAN_SECONDS * 1000
     with factory() as session:
         plan = session.get(AdSyncBc, (seed.tenant_id, "bc-a"))
         assert plan.next_hot_at > now and plan.next_material_at > now
         assert plan.next_directory_at > now
+        assert plan.screening_progress[job_tasks.DIRECTORY_PLAN_PROGRESS]["after"] == ""
         assert plan.disabled_reason is None
         kinds = set(
             session.exec(
