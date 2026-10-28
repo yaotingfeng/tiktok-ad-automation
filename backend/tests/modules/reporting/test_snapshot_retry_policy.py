@@ -95,11 +95,19 @@ def test_snapshot_retry_delay_uses_actual_local_day_only(
             )
             assert job.attempts == attempt
             assert job.due_at == NOW + timedelta(seconds=seconds)
-        assert (
-            jobs._handle_error(session, job, DomainError(error, "synthetic"))
-            == "FAILED"
-        )
-        assert job.attempts == 5 and job.status == "FAILED"
+        if kind == "material_links":
+            assert (
+                jobs._handle_error(session, job, DomainError(error, "synthetic"))
+                == "WAITING"
+            )
+            assert job.attempts == 0 and job.status == "WAITING"
+            assert job.due_at == NOW + timedelta(minutes=5)
+        else:
+            assert (
+                jobs._handle_error(session, job, DomainError(error, "synthetic"))
+                == "FAILED"
+            )
+            assert job.attempts == 5 and job.status == "FAILED"
         session.commit()
 
 
@@ -116,3 +124,26 @@ def test_exhausted_today_snapshot_allows_new_periodic_job(committed_sync_seed):
         session.commit()
     replacement = enqueue(factory, seed, start=LOCAL_TODAY, end=LOCAL_TODAY)
     assert replacement.id != original.id and replacement.attempts == 0
+
+
+@pytest.mark.usefixtures("retry_clock")
+def test_material_link_snapshot_drift_recycles_retry_budget(
+    committed_sync_seed,
+):
+    seed, factory = committed_sync_seed
+    original = enqueue(factory, seed, start=LOCAL_TODAY, end=LOCAL_TODAY)
+    with factory() as session:
+        job = session.get(ReportSyncJob, original.id)
+        job.kind = "material_links"
+        job.priority = 2
+        job.attempts = jobs.MAX_PROVIDER_RETRIES
+        job.status = "WAITING"
+        error = DomainError("report_snapshot_changed", "synthetic")
+
+        assert jobs._handle_error(session, job, error) == "WAITING"
+        assert job.status == "WAITING"
+        assert job.attempts == 0
+        assert job.finished_at is None
+        assert job.due_at == NOW + timedelta(minutes=5)
+        assert job.error_code == "report_snapshot_changed"
+        session.commit()

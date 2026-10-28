@@ -183,7 +183,7 @@ def test_pending_evidence_has_hard_byte_bound(monkeypatch):
     assert not cache["entries"]
 
 
-def test_continuous_page_drift_exhausts_real_job_retry_budget(committed_sync_seed):
+def test_continuous_page_drift_recycles_real_job_retry_budget(committed_sync_seed):
     from sqlmodel import select
 
     from app.modules.reporting.jobs import MAX_PROVIDER_RETRIES
@@ -212,14 +212,17 @@ def test_continuous_page_drift_exhausts_real_job_retry_budget(committed_sync_see
             )
 
     reader = DriftingReader()
-    for _ in range(30):
-        if step(factory, job_id, reader) == "FAILED":
-            break
-    else:
-        pytest.fail("持续分页变化必须消耗有限重试，不能无限续步")
+    for _ in range(MAX_PROVIDER_RETRIES * 3):
+        step(factory, job_id, reader)
+        with factory() as session:
+            if (session.get(ReportSyncJob, job_id).progress.get("snapshot_recovery") or {}).get(
+                "count", 0
+            ):
+                break
     with factory() as session:
         job = session.get(ReportSyncJob, job_id)
-        assert job.attempts == MAX_PROVIDER_RETRIES
+        assert job.status == "WAITING"
+        assert job.progress["snapshot_recovery"]["count"] >= 1
         assert job.error_code == "report_snapshot_changed"
         assert not session.exec(select(MaterialPostLink)).all()
         assert not session.exec(select(MaterialLinkScan)).all()

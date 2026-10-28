@@ -64,6 +64,7 @@ MATERIAL_BACKFILL_STEP_SECONDS = 30
 MATERIAL_SPLIT_ROWS = 5_000
 MAX_PROVIDER_RETRIES = 5
 MATERIAL_SNAPSHOT_RETRY_SECONDS = (5, 10, 20, 30, 60)
+MATERIAL_LINK_SNAPSHOT_RECOVERY_DELAY = timedelta(minutes=5)
 LEASE = timedelta(seconds=240)
 _CONTRACT_ERRORS = frozenset(
     {
@@ -1238,6 +1239,27 @@ def _handle_error(session, job: ReportSyncJob, error: DomainError) -> str:
             for key, value in job.progress.items()
             if key not in {"material_paging", "basic_paging"}
         }
+    if (
+        error.code == "report_snapshot_changed"
+        and job.kind == "material_links"
+        and job.attempts >= MAX_PROVIDER_RETRIES
+    ):
+        # 素材帖子集合会随平台新数据持续变化；把这种一致性重建失败写成终态，
+        # 会让历史缺口永久停在 FAILED。清掉本轮定位游标并循环等待，下一轮
+        # 重新建立完整证据；正向映射仍只在完整查询通过后发布。
+        now = datetime.now(UTC)
+        job.attempts = 0
+        job.status = "WAITING"
+        job.finished_at = None
+        job.due_at = now + MATERIAL_LINK_SNAPSHOT_RECOVERY_DELAY
+        recovery = job.progress.get("snapshot_recovery", {})
+        job.progress = job.progress | {
+            "snapshot_recovery": {
+                "count": int(recovery.get("count", 0)) + 1,
+                "at": now.isoformat(),
+            }
+        }
+        return "WAITING"
     if error.code == "report_truncation_risk":
         if _split(session, job):
             job.status, job.finished_at = "COMPLETE", datetime.now(UTC)
