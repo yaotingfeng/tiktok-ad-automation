@@ -20,8 +20,9 @@ from app.modules.reporting.store_models import ReportSyncJob
 ACTIVE = ("QUEUED", "WAITING")
 logger = logging.getLogger(__name__)
 
-# 先收窄到现有部分索引覆盖的活动关联，再检查 JSON 游标；不能为找到少量旧
-# 工作沿全历史排序扫描。物化边界也避免优化器把外层 JSON 谓词推回历史扫描。
+# 先收窄到现有部分索引覆盖的活动关联，再检查 JSON 游标；维护归并只是
+# 尽力而为，不需要按全历史 created_at 排序。排序会把大租户所有活动关联
+# 拉入一次排序，反而和健康覆盖争抢 I/O；下一轮继续取有限候选即可。
 RECONCILE_CANDIDATES_SQL = """
 WITH active_links AS MATERIALIZED (
     SELECT id, created_at, progress ? 'coalesced_v1' AS coalesced
@@ -29,7 +30,7 @@ WITH active_links AS MATERIALIZED (
     WHERE kind='material_links' AND status IN ('QUEUED','WAITING')
 )
 SELECT id FROM active_links WHERE NOT coalesced
-ORDER BY created_at, id LIMIT :limit
+LIMIT :limit
 """
 
 WAKE_CANDIDATES_SQL = """
