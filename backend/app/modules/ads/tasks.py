@@ -20,6 +20,9 @@ from app.core.config import settings
 from app.core.context import TenantContext
 from app.core.db import engine
 from app.core.errors import DomainError
+
+# 最大重试次数限制，防止死循环（数据库错误导致的重试）
+MAX_CLAIM_GENERATION = 100
 from app.integrations.tiktok.contracts.ads import DirectoryQuery
 from app.integrations.tiktok.gateway import open_tiktok_gateway
 from app.integrations.tiktok.sdk import AccountAdmissionDeferred
@@ -168,6 +171,21 @@ def run_directory_step(
                 and run.claimed_until > now
             ):
                 return "FAILED"
+
+            # 检查重试次数上限，防止死循环
+            if run.claim_generation >= MAX_CLAIM_GENERATION:
+                run.status, run.error_code = "FAILED", "max_retries_exceeded"
+                run.completed_at = now
+                run.claim_token = run.claimed_until = None
+                enqueue_directory_refill(session, run)
+                session.commit()
+                logger.error(
+                    "directory publish failed: run=%s generation=%s reason=max_retries_exceeded",
+                    run_id,
+                    claim_generation,
+                )
+                return "FAILED"
+
             run.claim_generation += 1
             run.claim_token = run.claimed_until = None
             run.status, run.error_code = "WAITING_REMOTE", "directory_publish_retry"
