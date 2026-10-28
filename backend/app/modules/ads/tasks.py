@@ -229,7 +229,7 @@ def _run_directory_step(
                 AdDirectoryRun.id == run_id,
                 AdDirectoryRun.tenant_id == context.tenant_id,
             )
-            .with_for_update()
+            .with_for_update(skip_locked=True)
         ).one_or_none()
         if run is None:
             raise DomainError("directory_run_not_found", "目录同步运行不存在")
