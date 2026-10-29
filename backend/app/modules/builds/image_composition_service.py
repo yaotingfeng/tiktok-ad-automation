@@ -1411,13 +1411,7 @@ def edit_creative_units(
             unit.model_copy(update={"position": index}),
             snapshots.get(unit.id),
         )
-    was_applied = draft.applied_image_rule_revision == draft.revision
-    _bump_revision(session, draft, expected_revision)
-    if was_applied:
-        draft.applied_image_rule_revision = draft.revision
-    from .carousel_music_tasks import queue_music_preparation
-
-    queue_music_preparation(session, scope, draft)
+    finish_creative_mutation(session, scope, draft, expected_revision)
     return _receipt(
         session,
         scope,
@@ -1431,6 +1425,17 @@ def edit_creative_units(
             ],
         },
     )
+
+
+def finish_creative_mutation(session, scope, draft, expected_revision):
+    """用户内容编辑统一推进草稿版本，并在同一事务登记真实配乐准备任务。"""
+    was_applied = draft.applied_image_rule_revision == draft.revision
+    _bump_revision(session, draft, expected_revision)
+    if was_applied:
+        draft.applied_image_rule_revision = draft.revision
+    from .carousel_music_tasks import queue_music_preparation
+
+    queue_music_preparation(session, scope, draft)
 
 
 def prepare_image_candidates(session, context, draft, prep):
@@ -1573,6 +1578,27 @@ def add_candidate_images(
         return replay
     _editable(session, draft)
     state = _state(session, draft)
+    snapshot, added = include_candidate_images(
+        session, scope, draft, state, drama_id, material_ids
+    )
+    _bump_revision(session, draft, expected_revision)
+    return _receipt(
+        session,
+        scope,
+        request_id,
+        fp,
+        {
+            "revision": draft.revision,
+            "snapshot_id": snapshot.id,
+            "added": added,
+        },
+    )
+
+
+def include_candidate_images(
+    session, scope, draft, state, drama_id, material_ids, *, reuse_existing=False
+):
+    """事务内显式加入图片：公共加图和预设加载共用，调用者负责一次 CAS/回执。"""
     if drama_id not in {d.drama_id for d in _dramas(session, scope)}:
         raise DomainError("image_edit_invalid", "剧目不属于当前草稿")
     if not material_ids or len(set(material_ids)) != len(material_ids):
@@ -1590,6 +1616,8 @@ def add_candidate_images(
         if state.snapshot_id
         else set()
     )
+    if reuse_existing and set(material_ids) <= known:
+        return session.get(ImageCandidateSnapshot, state.snapshot_id), 0
     snapshot = ImageCandidateSnapshot(
         tenant_id=scope.tenant_id,
         draft_id=scope.draft_id,
@@ -1649,18 +1677,7 @@ def add_candidate_images(
     snapshot.summary = {"added": len(set(material_ids) - known), "removed": 0}
     state.snapshot_id = snapshot.id
     _sync_candidate_counts(session, scope, snapshot.id)
-    _bump_revision(session, draft, expected_revision)
-    return _receipt(
-        session,
-        scope,
-        request_id,
-        fp,
-        {
-            "revision": draft.revision,
-            "snapshot_id": snapshot.id,
-            "added": len(set(material_ids) - known),
-        },
-    )
+    return snapshot, len(set(material_ids) - known)
 
 
 _DIFF_FIELDS = (

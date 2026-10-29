@@ -167,4 +167,8 @@ from app.modules.builds.image_composition_state import (  # noqa: E402,F401
     ImageCompositionState,
 )
 from app.modules.materials import reissue_models  # noqa: E402, F401
+from app.modules.materials.carousel_models import (  # noqa: E402, F401
+    CarouselPresetItem,
+    CarouselPresetVersion,
+)
 from app.modules.reporting import store_models  # noqa: E402, F401

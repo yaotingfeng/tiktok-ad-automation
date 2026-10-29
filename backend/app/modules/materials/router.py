@@ -14,7 +14,7 @@ from app.core.context import TenantContext
 from app.core.db import engine
 from app.core.errors import DomainError
 from app.core.pagination import Page, count_rows
-from app.modules.materials import catalog
+from app.modules.materials import carousel_api, catalog
 from app.modules.materials.content_identity import content_key
 from app.modules.materials.models import (
     AccountMaterial,
@@ -58,6 +58,7 @@ from app.modules.materials.uploads import (
 from app.modules.tenants.permissions import require_tenant
 
 router = APIRouter(prefix="/tenants/{tenant_id}/materials", tags=["materials"])
+router.include_router(carousel_api.router)
 BCID = Annotated[str, Query(min_length=1, max_length=128)]
 Limit = Annotated[int, Query(ge=1, le=100)]
 Cursor = Annotated[str | None, Query(max_length=8192)]

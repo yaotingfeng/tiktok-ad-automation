@@ -124,7 +124,7 @@ def acquire_original_use(
 
 def release_original_use(session: Session, *, use_id: UUID, nonce: UUID) -> bool:
     use = session.get(OriginalUse, use_id)
-    if use is None or use.nonce != nonce:
+    if use is None or use.nonce != nonce or use.purpose == "carousel_preset":
         return False
     from .ingest_models import TemporaryMaterialObject
 
@@ -173,3 +173,67 @@ def release_object_uses(
         use.revision += 1
     session.flush()
     return len(uses)
+
+
+def retain_preset_original(session, *, context, material_id, version_id):
+    """库版本仅保留尚存的当前原件；不按原上传 BC 推断所有权或复活已清理对象。
+
+    与 cleanup 使用相同的 material→object 锁。清理已开始时关闭新增引用，
+    返回无原件保留；版本的素材记录 FK 仍然有效，执行时必须另行验证目标来源。
+    """
+    from .ingest_models import TemporaryMaterialObject
+    from .models import MaterialFile
+
+    file = session.exec(
+        select(MaterialFile)
+        .where(
+            MaterialFile.tenant_id == context.tenant_id, MaterialFile.id == material_id
+        )
+        .with_for_update()
+    ).one()
+    obj = session.exec(
+        select(TemporaryMaterialObject).where(
+            TemporaryMaterialObject.tenant_id == context.tenant_id,
+            TemporaryMaterialObject.material_id == file.id,
+            TemporaryMaterialObject.generation == file.current_object_generation,
+        )
+    ).first()
+    if obj is None:
+        return None
+    obj = locked_object(session, object_id=obj.id, current=True)
+    cleanup = session.exec(
+        select(ObjectCleanup.id).where(
+            ObjectCleanup.tenant_id == obj.tenant_id,
+            ObjectCleanup.material_id == obj.material_id,
+            ObjectCleanup.generation == obj.generation,
+        )
+    ).first()
+    if obj.status != "verified" or obj.reservation_released_at or cleanup:
+        return None
+    prior = session.exec(
+        select(OriginalUse).where(
+            OriginalUse.tenant_id == context.tenant_id,
+            OriginalUse.material_id == material_id,
+            OriginalUse.generation == obj.generation,
+            OriginalUse.purpose == "carousel_preset",
+            OriginalUse.operation_id == version_id,
+            OriginalUse.status == "active",
+        )
+    ).first()
+    if prior:
+        return prior
+    now = datetime.now(UTC)
+    use = OriginalUse(
+        tenant_id=context.tenant_id,
+        bc_id=obj.bc_id,
+        material_id=material_id,
+        generation=obj.generation,
+        actor_id=context.actor_id,
+        purpose="carousel_preset",
+        operation_id=version_id,
+        permission_issued_at=now,
+        expires_at=now,
+    )
+    session.add(use)
+    session.flush()
+    return use

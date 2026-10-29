@@ -159,6 +159,17 @@ def schedule_cleanup(
     if obj.storage_provider == "external":
         return None
     evidence = _receipt(session, obj, source_receipt_id)
+    # 可复用库持续保留仍存在的原件，不能先置 cleanup_pending 使合法来源消失。
+    if session.exec(
+        select(OriginalUse.id).where(
+            OriginalUse.tenant_id == obj.tenant_id,
+            OriginalUse.material_id == obj.material_id,
+            OriginalUse.generation == obj.generation,
+            OriginalUse.purpose == "carousel_preset",
+            OriginalUse.status == "active",
+        )
+    ).first():
+        return None
     cleanup = session.exec(
         select(ObjectCleanup).where(
             ObjectCleanup.tenant_id == obj.tenant_id,
@@ -240,6 +251,7 @@ def _active_uses(session: Session, obj: TemporaryMaterialObject) -> list[Origina
     ).all()
     active = []
     for use in uses:
+        # carousel_preset 是不可变库版本的持续引用，不能按 expires_at 自动释放。
         # Local preview permission ends at its hard 5-minute authorization bound.
         # Validation has an enforced prefork process lifetime plus a guard margin.
         locally_ended = use.purpose == "preview" and use.expires_at <= now
