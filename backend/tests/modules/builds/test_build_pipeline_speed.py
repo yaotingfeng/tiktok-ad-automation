@@ -122,6 +122,42 @@ def test_ad_waits_for_in_progress_cover_without_relocking(
     assert not writes
 
 
+def test_repeated_cover_wait_backs_off_but_ready_ad_still_creates_once(
+    executable, redis_client, monkeypatch
+):
+    from app.modules.materials.models import AccountMaterial
+
+    ad_id, _, job_id, _ = ready_ad_with_cover_job(
+        executable, redis_client, cover_status="PENDING"
+    )
+    writes = _ad_wire(monkeypatch)
+    db = executable[0]
+    for expected_delay in (15, 30, 60, 60):
+        with Session(db) as session, session.begin():
+            session.get(ExecutionStep, ad_id).due_at = datetime.now(UTC) - timedelta(
+                seconds=1
+            )
+        assert _process(executable, redis_client, ad_id) == "PENDING"
+        with Session(db) as session:
+            ad = session.get(ExecutionStep, ad_id)
+            assert (
+                expected_delay - 2
+                <= (ad.due_at - datetime.now(UTC)).total_seconds()
+                <= expected_delay
+            )
+            assert ad.request_body is None
+    assert writes == []
+    with Session(db) as session, session.begin():
+        job = session.get(MaterialCoverJob, job_id)
+        job.status, job.known_image_id = "READY", "ready-cover"
+        session.get(AccountMaterial, job.asset_id).image_id = "ready-cover"
+        session.get(ExecutionStep, ad_id).due_at = datetime.now(UTC) - timedelta(
+            seconds=1
+        )
+    assert _process(executable, redis_client, ad_id) == "SUCCEEDED"
+    assert len(writes) == 1
+
+
 @pytest.mark.parametrize("stale", [False, True])
 def test_transient_cover_failure_makes_ad_wait_until_recovery_window_ends(
     executable, redis_client, monkeypatch, stale

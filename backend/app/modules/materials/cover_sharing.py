@@ -19,6 +19,7 @@ from sqlmodel import Session, col, select
 from sqlmodel.sql.expression import SelectOfScalar
 
 from app.core.context import TenantContext
+from app.core.diagnostics import emit, error_fields
 from app.core.errors import DomainError
 from app.integrations.tiktok.bounded_resources import bounded_session
 from app.integrations.tiktok.contracts import materials as types
@@ -1474,12 +1475,77 @@ def run_shared_cover(
                 _continue(db, context, batch, claims)
     except Exception as error:
         outcome = "error"
+        emit(
+            "cover_share_failed",
+            tenant_id=str(context.tenant_id),
+            job_id=str(first.id),
+            batch_id=batch_id,
+            phase=phase,
+            armed_this_turn=armed_this_turn,
+            **error_fields(error),
+        )
         error_code = (
             error.code if isinstance(error, DomainError) else type(error).__name__
         )
         # 即使清理客户端失败也不能重发已 armed 的批次；先保存读回调度。
         with Session(database_engine) as db, db.begin():
             current = _locked_batch(db, context, batch) if batch else None
+            # 本次刚置 armed 后，本地准入可在 HTTP 前拒绝。保留 armed 会使未发送
+            # 批次永远扫描不存在的图片。只凭本调用的明确未发送证据解除，历史
+            # UNKNOWN、已收到回执、清理失败及丢失任一成员租约均不能走此分支。
+            definitely_not_sent = (
+                isinstance(error, AccountAdmissionDeferred)
+                and error.admission_source == "local"
+            ) or (isinstance(error, RemoteCallError) and error.effect == "NOT_SENT")
+            if (
+                current
+                and batch is not None
+                and armed_this_turn
+                and phase == "share"
+                and definitely_not_sent
+                and current.status == "SENDING"
+                and current.armed_at == batch.armed_at
+                and current.request_id is None
+                and not current.failed_infos
+            ):
+                unsent = [
+                    covers._fenced(db, context, identity, claim)
+                    for identity, claim in claims.items()
+                ]
+                if unsent and all(
+                    job is not None
+                    and job.share_batch_id == current.id
+                    and job.request_armed_at == current.armed_at
+                    and job.known_image_id is None
+                    and job.candidate_image_id is None
+                    for job in unsent
+                ):
+                    # 已 armed 的批次身份受数据库不可变约束保护。保留旧批次
+                    # 和明确未发送结论；仅把当前仍持有租约的成员交回正常规划。
+                    current.status, current.error_code = (
+                        "BLOCKED",
+                        "cover_share_not_sent",
+                    )
+                    delay = (
+                        max(1, (error.retry_after_ms + 999) // 1000)
+                        if isinstance(error, AccountAdmissionDeferred)
+                        else 5
+                    )
+                    for job in unsent:
+                        assert job is not None
+                        job.request_armed_at = None
+                        job.share_batch_id = None
+                        covers._queue(db, job, read=False, delay=delay)
+                    outcome = "retry_not_sent"
+                    emit(
+                        "cover_share_not_sent",
+                        tenant_id=str(context.tenant_id),
+                        batch_id=str(current.id),
+                        member_count=len(unsent),
+                        retry_after_seconds=delay,
+                        **error_fields(error),
+                    )
+                    return
             unknown = bool(current and current.armed_at)
             code = (
                 error.code if isinstance(error, DomainError) else "cover_share_unknown"

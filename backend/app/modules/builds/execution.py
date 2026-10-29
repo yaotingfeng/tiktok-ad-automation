@@ -11,6 +11,7 @@ from celery import current_task  # type: ignore[import-untyped]
 from sqlmodel import Session, col, select
 
 from app.core.context import TenantContext
+from app.core.diagnostics import emit, error_fields, span
 from app.core.errors import DomainError
 from app.integrations.tiktok.bounded_resources import bounded_session
 from app.integrations.tiktok.contracts.builds import (
@@ -643,6 +644,22 @@ def _ready_ad_mappings(
         or (not mapping_fresh(assets.get(material_id)) and material_id in distributing)
         for material_id in missing
     ):
+        emit(
+            "ad_dependency_wait",
+            tenant_id=str(context.tenant_id),
+            submission_id=str(claim.submission_id),
+            step_id=str(claim.step_id),
+            missing_material_ids=[str(value) for value in missing],
+            covers=[
+                {
+                    "job_id": str(job.id),
+                    "batch_id": str(job.share_batch_id) if job.share_batch_id else None,
+                    "status": job.status,
+                    "error_code": job.error_code,
+                }
+                for job in covers
+            ],
+        )
         raise DomainError(
             "material_refresh_required", "正在等待目标素材与封面就绪", retryable=True
         )
@@ -1028,16 +1045,44 @@ def process_step(
                 )
                 # 收到实际 ID 后先提交，再退出拥有的客户端；停用/撤权不抹除在途回执。
                 try:
-                    with Session(database_engine) as receipt, receipt.begin():
+                    with (
+                        span(
+                            "build_receipt",
+                            tenant_id=str(context.tenant_id),
+                            step_id=str(claim.step_id),
+                            submission_id=str(claim.submission_id),
+                            remote_id=result.remote_id,
+                        ),
+                        Session(database_engine) as receipt,
+                        receipt.begin(),
+                    ):
                         outcome = record_created(receipt, claim=claim, result=result)
                 except Exception:
-                    with Session(database_engine) as receipt, receipt.begin():
+                    with (
+                        span(
+                            "build_receipt_fallback",
+                            tenant_id=str(context.tenant_id),
+                            step_id=str(claim.step_id),
+                            submission_id=str(claim.submission_id),
+                            remote_id=result.remote_id,
+                        ),
+                        Session(database_engine) as receipt,
+                        receipt.begin(),
+                    ):
                         outcome = preserve_created_receipt(
                             receipt, claim=claim, result=result
                         )
             return outcome
     except Exception as error:
         if armed:
+            emit(
+                "build_armed_error",
+                tenant_id=str(context.tenant_id),
+                submission_id=str(claim.submission_id),
+                step_id=str(claim.step_id),
+                receipt_received=result is not None,
+                **error_fields(error),
+            )
             with Session(database_engine) as session, session.begin():
                 if result is not None:
                     return preserve_created_receipt(session, claim=claim, result=result)

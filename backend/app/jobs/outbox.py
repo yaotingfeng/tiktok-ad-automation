@@ -371,6 +371,9 @@ def flush_dispatch(limit: int = 100) -> int:
                             kwargs=kwargs,
                             task_id=str(record.id),
                             queue=queue,
+                            headers={
+                                "diagnostic_due_at": record.available_at.timestamp()
+                            },
                             # Redis 0最高：短投递tick优先于builds业务积压；报表纯补位
                             # 仍让出control。只改消费优先级，不改持久公平次序和正文。
                             **(

@@ -2,7 +2,7 @@
 
 import json
 from collections.abc import Callable, Iterator
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
@@ -15,6 +15,7 @@ from sqlmodel import Session, col, select
 from app.core.config import settings
 from app.core.context import TenantContext
 from app.core.credentials import decrypt_credentials
+from app.core.diagnostics import span
 from app.core.errors import DomainError
 from app.integrations.tiktok.adapters.ads_read import (
     ADS_OPERATIONS,
@@ -75,6 +76,7 @@ from app.integrations.tiktok.official.authorization import (
     material_authorization as api_material_authorization,
 )
 from app.integrations.tiktok.official.scenes import OfficialScenesGateway
+from app.integrations.tiktok.request_diagnostics import trace_sdk_request
 from app.integrations.tiktok.response_capture import (
     ResponseObserver,
     capture_sdk_response,
@@ -475,16 +477,29 @@ def open_tiktok_gateway(
     ) -> Iterator[None]:
         if deadline != task_deadline:
             raise DomainError("read_deadline_invalid", "调用期限与任务不一致")
-        authorize(advertiser_id, operation)
-        with admit(advertiser_id, operation):
+        diagnostic = operation.startswith(("materials.", "build."))
+        fields = {
+            "tenant_id": str(context.tenant_id),
+            "bc_id": route.bc_id,
+            "advertiser_id": advertiser_id,
+            "operation": operation,
+        }
+        with span("request_scope", **fields) if diagnostic else nullcontext():
             authorize(advertiser_id, operation)
-            with capture_sdk_response(
-                official,
-                operation=operation,
-                advertiser_id=advertiser_id,
-                observer=response_observer,
-            ):
-                yield
+            with admit(advertiser_id, operation):
+                authorize(advertiser_id, operation)
+                with (
+                    trace_sdk_request(official, **fields)
+                    if diagnostic
+                    else nullcontext(),
+                    capture_sdk_response(
+                        official,
+                        operation=operation,
+                        advertiser_id=advertiser_id,
+                        observer=response_observer,
+                    ),
+                ):
+                    yield
 
     def check_report_request(operation: str, arguments: dict[str, Any]) -> None:
         # 合并账户读取必须逐一核验；BC 报表只能读取本次冻结绑定的 BC。

@@ -12,6 +12,7 @@ from uuid import UUID
 from app.core.config import settings
 from app.core.db import engine
 from app.core.errors import DomainError
+from app.jobs import diagnostics as _diagnostics  # noqa: F401 - 注册任务诊断信号
 from app.jobs.celery_app import celery_app
 
 _ALLOWED_QUEUES = frozenset(
