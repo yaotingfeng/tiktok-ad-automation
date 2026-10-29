@@ -50,7 +50,7 @@ class DockerPod:
     def __init__(self, containers):
         self.containers = containers
 
-    def __call__(self, container, *args, data=None):
+    def __call__(self, container, *args, data=None, idempotent=False):
         stdin = ["-i"] if data is not None else []
         return run(
             ["docker", "exec", *stdin, self.containers[container], *args], data=data
