@@ -3,13 +3,12 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 from billiard.exceptions import SoftTimeLimitExceeded
-from sqlmodel import select
 
 from app.core.db import engine
 from app.integrations.tiktok.contracts.report_reader import RawReportPage
 from app.integrations.tiktok.sdk import AccountAdmissionDeferred
 from app.modules.reporting import job_tasks, planner
-from app.modules.reporting.store_models import AdSyncAccount, AdSyncBc, ReportSyncJob
+from app.modules.reporting.store_models import AdSyncAccount, AdSyncBc
 
 NOW = datetime(2026, 10, 12, 13, tzinfo=UTC)
 
@@ -107,11 +106,10 @@ def test_scan_commits_completed_plan_before_later_timeout(
         pass
     with factory() as s:
         plan = s.get(AdSyncBc, (seed.tenant_id, "bc-a"))
-        assert plan is not None and plan.next_hot_at > NOW
-        assert s.exec(
-            select(ReportSyncJob).where(ReportSyncJob.tenant_id == seed.tenant_id)
-        ).all()
-    # 每个 BC 拿到独立 8 秒读取预算，已提交的前一个计划不能被后续超时回滚。
+        # 跨BC按阶段轮转，第二BC超时前第一BC的筛查已独立提交，事实尚待其下一轮。
+        assert plan is not None and plan.active_screened_at == NOW
+        assert plan.last_active_advertiser_ids == ["acc-1"]
+    # 每个BC读取预算受剩余总预算约束，前阶段提交不能被另一BC超时撤销。
     assert len(deadlines) == 2 and deadlines[1] > deadlines[0]
     assert all(
         timedelta(seconds=7) < deadline - started <= timedelta(seconds=8)

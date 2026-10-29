@@ -170,6 +170,9 @@ def ensure_bc_plans(
     _refresh_owners(session, tenant_id=scope_tenant)
     for plan in session.exec(plan_query.where(col(AdSyncBc.enabled).is_(True))).all():
         align_rule_sync_phase(session, plan, now=now)
+        from app.modules.reporting.planning_steps import schedule_scope_changes
+
+        schedule_scope_changes(session, plan)
     return enabled
 
 
@@ -271,9 +274,20 @@ def due_plans(session, *, now: datetime, limit: int = 50) -> list[AdSyncBc]:
                 (AdSyncBc.next_hot_at <= now)
                 | (AdSyncBc.next_material_at <= now)
                 | (AdSyncBc.next_daily_at <= now)
-                | (AdSyncBc.next_directory_at <= now),
+                | (AdSyncBc.next_directory_at <= now)
+                | (
+                    col(AdSyncBc.screening_progress)["planning_steps_v1"][
+                        "pending"
+                    ].astext
+                    == "true"
+                ),
             )
-            .order_by(col(AdSyncBc.next_hot_at))
+            .order_by(
+                col(AdSyncBc.screening_progress)["planning_steps_v1"]["last_turn"]
+                .astext.asc()
+                .nulls_first(),
+                col(AdSyncBc.next_hot_at),
+            )
             .limit(limit)
             .with_for_update(skip_locked=True)
         ).all()
@@ -304,15 +318,16 @@ def screen_active(
 def batch_accounts(
     session, *, tenant_id, advertiser_ids: Sequence[str], days: int
 ) -> list[list[str]]:
-    """按近 7 天单日最大广告行数估计每个账户的行量，合并到不超过 5 个且预估 ≤ 1.5 万行。"""
+    """按近7天已发布广告状态的最大行数估量；未知账户保留默认值及正常分页。"""
     sizes = dict(
         session.connection()
         .execute(
             text("""
-        SELECT advertiser_id, MAX(n) FROM (
-          SELECT advertiser_id, stat_date, COUNT(*) n FROM ad_report_day
-          WHERE tenant_id=:t AND advertiser_id = ANY(:a) AND stat_date >= CURRENT_DATE - 7
-          GROUP BY advertiser_id, stat_date) x GROUP BY advertiser_id"""),
+        SELECT advertiser_id, MAX(row_count) FROM report_sync_state
+          WHERE tenant_id=:t AND advertiser_id = ANY(:a)
+            AND report_kind='ad_day' AND last_success_at IS NOT NULL
+            AND stat_date >= CURRENT_DATE - 7
+          GROUP BY advertiser_id"""),
             {"t": tenant_id, "a": list(advertiser_ids)},
         )
         .all()
@@ -373,12 +388,18 @@ CONFIRMED_EMPTY_KINDS = ("ad_day", "account_day", "material_day")
 
 
 def mark_confirmed_empty(
-    session, plan: AdSyncBc, *, inactive: Sequence[str], window_fn, now: datetime
+    session,
+    plan: AdSyncBc,
+    *,
+    inactive: Sequence[str],
+    window_fn,
+    now: datetime,
+    observed_at: datetime | None = None,
 ) -> int:
     """平台筛查确认这些账户在窗口内无消耗：补齐从未成功或失败的日期为完成 0 行。
 
     有事实的日期保留原有行数与成功时间；筛查不能代替完整报表读取。
-    完整确认空桶采用 PG 的实际完成时刻，和报表发布水位使用同一个时钟。
+    完整确认空桶默认采用 PG 完成时刻；跨轮规划传入 observed_at 时保留筛查证据时点。
     """
     del now  # 计划时钟不作为发布水位；窗口日期已由 window_fn 决定。
     if not inactive:
@@ -404,6 +425,9 @@ def mark_confirmed_empty(
     completed_at = (
         session.connection().execute(text("SELECT clock_timestamp()")).scalar_one()
     )
+    # 跨轮规划的零桶证据只能沿用真实筛查时点，不能把排队时间变成新成功。
+    if observed_at is not None:
+        completed_at = min(completed_at, observed_at)
     keys = """
         SELECT a.advertiser_id, k.report_kind, CAST(:start AS date) + d.day_offset AS stat_date
         FROM unnest(CAST(:accounts AS text[])) AS a(advertiser_id)
@@ -430,6 +454,7 @@ def mark_confirmed_empty(
                 AND s.advertiser_id=candidates.advertiser_id
                 AND s.report_kind=candidates.report_kind AND s.stat_date=candidates.stat_date
             WHERE s.status IS DISTINCT FROM 'COMPLETE'
+              AND (s.last_success_at IS NULL OR s.last_success_at<=:completed)
             """),
                 params,
             )
@@ -446,7 +471,8 @@ def mark_confirmed_empty(
                 status='COMPLETE',row_count=0,
                 error_code=CASE WHEN existing.status='COMPLETE' THEN existing.error_code ELSE NULL END,
                 last_success_at=EXCLUDED.last_success_at,updated_at=EXCLUDED.updated_at
-            WHERE existing.status<>'COMPLETE' OR existing.row_count=0
+            WHERE (existing.status<>'COMPLETE' OR existing.row_count=0)
+              AND (existing.last_success_at IS NULL OR existing.last_success_at<=EXCLUDED.last_success_at)
             """),
             params,
         )
@@ -523,7 +549,9 @@ def plan_hot(
     return count
 
 
-def plan_day_closeout(session: Session, plan: AdSyncBc, *, now: datetime) -> int:
+def plan_day_closeout(
+    session: Session, plan: AdSyncBc, *, now: datetime, accounts=None
+) -> int:
     """当地零点后为昨日有事实的账户收尾；成功水位与原计划防止重复规划。"""
     rows = (
         session.connection()
@@ -534,7 +562,8 @@ def plan_day_closeout(session: Session, plan: AdSyncBc, *, now: datetime) -> int
             (CAST(:now AS timestamptz) AT TIME ZONE a.timezone)::date AS today
           FROM advertiser_account a JOIN ad_sync_account o
             ON o.tenant_id=a.tenant_id AND o.advertiser_id=a.advertiser_id
-          WHERE a.tenant_id=:tenant AND o.owner_bc_id=:bc),
+          WHERE a.tenant_id=:tenant AND o.owner_bc_id=:bc
+            AND (:all_accounts OR a.advertiser_id=ANY(:accounts))),
         yesterday AS (
           SELECT *, today-1 AS day, today::timestamp AT TIME ZONE timezone AS midnight
           FROM owned)
@@ -558,6 +587,8 @@ def plan_day_closeout(session: Session, plan: AdSyncBc, *, now: datetime) -> int
                 "tenant": plan.tenant_id,
                 "bc": plan.bc_id,
                 "now": now,
+                "all_accounts": accounts is None,
+                "accounts": list(accounts or []),
             },
         )
         .all()
@@ -574,6 +605,7 @@ def plan_day_closeout(session: Session, plan: AdSyncBc, *, now: datetime) -> int
         WHERE j.tenant_id=:tenant AND j.bc_id=:bc AND j.actor_id=:actor
           AND j.frozen_route=CAST(:route AS jsonb) AND j.priority=:closeout
           AND j.start_date=j.end_date AND j.end_date BETWEEN :first_day AND :last_day
+          AND j.advertiser_ids ?| CAST(:accounts AS text[])
           AND ids.advertiser_id=ANY(:accounts)
     """),
             {
@@ -733,6 +765,8 @@ def daily_window(now: datetime):
 
 def plan_daily(session, plan, *, active_32d, now) -> int:
     """每日修正已结束的日期；未执行的旧回刷覆盖重叠日期，不按天复制整月任务。"""
+    if not active_32d:
+        return 0
     pending = session.exec(
         select(
             col(ReportSyncJob.kind),
@@ -746,6 +780,9 @@ def plan_daily(session, plan, *, active_32d, now) -> int:
             ReportSyncJob.frozen_route == plan.frozen_route,
             ReportSyncJob.priority >= 3,
             col(ReportSyncJob.status).in_(["QUEUED", "RUNNING", "WAITING"]),
+            text("advertiser_ids ?| CAST(:daily_accounts AS text[])").bindparams(
+                daily_accounts=list(active_32d)
+            ),
         )
     ).all()
     covered = {}
@@ -798,7 +835,7 @@ def plan_daily(session, plan, *, active_32d, now) -> int:
     return count
 
 
-def plan_history(session, plan, *, now) -> int:
+def plan_history(session, plan, *, now, accounts=None, progress=None) -> int:
     """授权后一次：开户日至回刷窗口之前，按 30 天切片；已规划的账户不再重复。
 
     历史只回补广告日和素材日；系列小时报按需拉取，账户对账只在 32 天回刷内做。
@@ -815,6 +852,11 @@ def plan_history(session, plan, *, now) -> int:
             AdSyncAccount.tenant_id == plan.tenant_id,
             AdSyncAccount.owner_bc_id == plan.bc_id,
             col(AdSyncAccount.history_planned_at).is_(None),
+            *(
+                [col(AdSyncAccount.advertiser_id).in_(accounts)]
+                if accounts is not None
+                else []
+            ),
         )
     ).all()
     for owner, account in rows:
@@ -822,9 +864,14 @@ def plan_history(session, plan, *, now) -> int:
             continue  # 开户时间未知：等账户目录补齐后再规划
         end = local_today(account.timezone, now) - timedelta(days=REFRESH_DAYS)
         start = account.remote_created_at.astimezone(ZoneInfo(account.timezone)).date()
+        if progress is not None and account.advertiser_id in progress:
+            start = max(start, date.fromisoformat(progress[account.advertiser_id]))
+        completed = True
         if start <= end:
-            ensure_month_partitions_for_range(session, start, end)
-            for s, e in _shards(start, end):
+            # 单账户多年历史也按原30日窗口提交续点，不能仅按账户缩批仍反复回滚。
+            stop = min(end, start + timedelta(days=29)) if progress is not None else end
+            ensure_month_partitions_for_range(session, start, stop)
+            for s, e in _shards(start, stop):
                 count += bool(
                     enqueue_job(
                         session,
@@ -847,7 +894,13 @@ def plan_history(session, plan, *, now) -> int:
                         **_common(plan),
                     )
                 )
-        owner.history_planned_at = now
+            if progress is not None and stop < end:
+                progress[account.advertiser_id] = (stop + timedelta(days=1)).isoformat()
+                completed = False
+        if completed:
+            owner.history_planned_at = now
+            if progress is not None:
+                progress.pop(account.advertiser_id, None)
     session.flush()
     return count
 
