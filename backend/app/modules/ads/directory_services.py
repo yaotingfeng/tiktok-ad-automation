@@ -10,6 +10,16 @@ STATUS_SERVICE = "status"
 IDENTITY_SERVICE = "identity"
 
 
+def pending_directory_condition():
+    # 固定业务状态必须与 0062 在途部分索引谓词一致；绑定状态参数会使
+    # PostgreSQL generic plan 无法证明谓词，退回扫描账户终态历史。
+    # 仅用于未别名的 AdDirectoryRun 查询；租户/账户/冻结授权仍由调用方绑定。
+    return text(
+        "ad_directory_run.status IN "
+        "('QUEUED','RUNNING','ADMISSION_WAIT','WAITING_REMOTE')"
+    )
+
+
 def directory_service(run):
     # 子页只补素材身份；即使源广告服务当前状态，也不继承它的保底槽。
     from app.modules.ads.material_directory_children import is_material_child

@@ -12,7 +12,11 @@ from sqlmodel import Session, col, select
 from app.core.config import settings
 from app.integrations.tiktok.contracts.ads import EntityKind, EntityRef
 from app.modules.ads.directory_requests import request_directory
-from app.modules.ads.directory_services import IDENTITY_SERVICE, promote_status_requests
+from app.modules.ads.directory_services import (
+    IDENTITY_SERVICE,
+    pending_directory_condition,
+    promote_status_requests,
+)
 from app.modules.ads.material_directory_children import is_material_child
 from app.modules.ads.sync_models import AdDirectoryRun
 from app.modules.automation_rules.models import AutomationRule
@@ -34,7 +38,6 @@ _AD_TYPES = {
     "SMART_PLUS": "LEGACY_SMART_PLUS",
     "MANUAL": "REGULAR",
 }
-_ACTIVE = ("QUEUED", "RUNNING", "ADMISSION_WAIT", "WAITING_REMOTE")
 
 
 def rule_accounts(
@@ -101,7 +104,7 @@ def refresh_report_directory(
                 AdDirectoryRun.frozen_route == job.frozen_route,
                 AdDirectoryRun.workload == "live",
                 col(AdDirectoryRun.advertiser_id).in_(job.advertiser_ids),
-                col(AdDirectoryRun.status).in_(_ACTIVE),
+                pending_directory_condition(),
             )
         ).all()
     with diagnostics.stage("directory_facts_query"):
