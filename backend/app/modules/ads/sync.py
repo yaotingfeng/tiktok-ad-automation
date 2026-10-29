@@ -29,6 +29,7 @@ from app.modules.ads.directory_requests import request_directory
 from app.modules.ads.directory_services import (
     STATUS_SERVICE,
     directory_service,
+    pending_directory_condition,
     promote_status_requests,
 )
 from app.modules.ads.models import AdMaterialReference, AdObject
@@ -612,9 +613,7 @@ def _queue_missing_parents(
                 AdDirectoryRun.actor_id == run.actor_id,
                 AdDirectoryRun.frozen_route == run.frozen_route,
                 AdDirectoryRun.ad_type == run.ad_type,
-                col(AdDirectoryRun.status).in_(
-                    ["QUEUED", "RUNNING", "ADMISSION_WAIT", "WAITING_REMOTE"]
-                ),
+                pending_directory_condition(),
             )
         ).all()
         status_requests = []
