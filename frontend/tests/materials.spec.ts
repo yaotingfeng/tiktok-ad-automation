@@ -828,3 +828,89 @@ test("混合文件登记保留选择顺序并显式发送媒体类型", async ({
       [2, "IMAGE"],
     ])
 })
+
+test("已验真待分发图片可从上传队列放弃且只登记取消", async ({ page }) => {
+  const { ingestBoundary, queueLocation } = await import("./fixtures/ingest")
+  const fixture = await ingestBoundary(page, { count: 1 })
+  const file = fixture.files.get(0)!
+  Object.assign(file, {
+    media_type: "IMAGE",
+    mime_type: "image/png",
+    file_name: "待分发图片.png",
+    received_bytes: file.size,
+    platform_status: "stored",
+    temporary_storage_status: "verified",
+    operation_status: "idle",
+    task_id: null,
+    upload_id: "completed-image-upload",
+    operation_revision: 7,
+  })
+  Object.assign(fixture.summary, {
+    uploaded_count: 1,
+    reserved_bytes: file.size,
+    stored_bytes: file.size,
+  })
+  await page.goto(queueLocation)
+  const cancel = page.getByRole("button", { name: "放弃此文件", exact: true })
+  await expect(cancel).toBeEnabled()
+  await cancel.click()
+  await expect
+    .poll(
+      () =>
+        fixture.calls.filter((call) => call.path.endsWith("/cancel")).length,
+    )
+    .toBe(1)
+  const request = fixture.calls.find((call) => call.path.endsWith("/cancel"))!
+  expect(request.method).toBe("POST")
+  expect(request.path).toContain(`/files/${file.material_id}/cancel`)
+  expect(request.body).toEqual({
+    generation: 1,
+    upload_id: "completed-image-upload",
+    operation_revision: 7,
+  })
+  await expect(page.getByText("等待清理原件", { exact: true })).toBeVisible()
+  await expect(cancel).toHaveCount(0)
+  expect(fixture.summary.reserved_bytes).toBe(file.size)
+  expect(fixture.summary.stored_bytes).toBe(file.size)
+  expect(fixture.summary.cleaned_count).toBe(0)
+  expect(fixture.puts).toHaveLength(0)
+  expect(
+    fixture.calls
+      .filter((call) => call.method === "POST")
+      .map((call) => call.path),
+  ).toEqual([request.path])
+})
+
+for (const [label, patch] of [
+  ["视频", { media_type: "VIDEO" }],
+  ["已有分发任务", { task_id: U }],
+  ["平台上传中", { platform_status: "uploading" }],
+  ["原件未验真", { temporary_storage_status: "stored" }],
+  ["接收字节不完整", { received_bytes: 0 }],
+  ["操作结果未知", { operation_status: "result_unknown" }],
+] as const) {
+  test(`已接收的${label}不开放图片待分发取消入口`, async ({ page }) => {
+    const { ingestBoundary, queueLocation } = await import("./fixtures/ingest")
+    const fixture = await ingestBoundary(page, { count: 1 })
+    const file = fixture.files.get(0)!
+    Object.assign(file, {
+      media_type: "IMAGE",
+      mime_type: "image/png",
+      file_name: "范围核验图片.png",
+      received_bytes: file.size,
+      platform_status: "stored",
+      temporary_storage_status: "verified",
+      operation_status: "idle",
+      task_id: null,
+      ...patch,
+    })
+    await page.goto(queueLocation)
+    await expect(page.getByText(file.file_name, { exact: true })).toBeVisible()
+    await expect(
+      page.getByRole("button", { name: "放弃此文件", exact: true }),
+    ).toHaveCount(0)
+    expect(fixture.calls.some((call) => call.path.endsWith("/cancel"))).toBe(
+      false,
+    )
+  })
+}

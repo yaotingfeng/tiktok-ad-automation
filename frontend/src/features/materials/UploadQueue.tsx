@@ -198,11 +198,18 @@ export function UploadQueue({
           )}
           {write &&
             summary &&
-            row.original.received_bytes < row.original.size &&
             row.original.operation_status === "idle" &&
-            ["waiting_capacity", "receiving"].includes(
-              row.original.temporary_storage_status,
-            ) && (
+            ((row.original.received_bytes < row.original.size &&
+              ["waiting_capacity", "receiving"].includes(
+                row.original.temporary_storage_status,
+              )) ||
+              // 已验真待图片分发仍占用暂存额度，允许用户登记取消意图。
+              // 清理与额度释放继续由服务端引用保护和删除回读决定。
+              (row.original.media_type === "IMAGE" &&
+                row.original.received_bytes === row.original.size &&
+                row.original.temporary_storage_status === "verified" &&
+                row.original.platform_status === "stored" &&
+                row.original.task_id === null)) && (
               <Button
                 size="sm"
                 variant="ghost"
