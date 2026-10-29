@@ -1,4 +1,4 @@
-import { IMAGE_DEMO_STRUCTURE } from "./image-delivery"
+import { IMAGE_DEMO_STRUCTURE } from "./image-structure"
 // 批量搭建领域的私有数据：草稿、预览、提交、执行步骤。
 import type {
   AudienceTargeting,

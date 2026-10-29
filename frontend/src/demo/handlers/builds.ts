@@ -1,9 +1,9 @@
+import { IMAGE_DEMO_STRUCTURE } from "../fixtures/image-structure"
 import { imageState } from "../fixtures/image-composition-state"
 import {
   findImageUnit,
   freezeImageDemo,
   imageDeliveries,
-  IMAGE_DEMO_STRUCTURE,
 } from "../fixtures/image-delivery"
 // 体验版假后端：批量搭建领域（builds）
 

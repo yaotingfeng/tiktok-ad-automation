@@ -108,6 +108,7 @@ function Preparation({
     [tab, setTab] = useState("dramas"),
     [error, setError] = useState<unknown>(),
     [busy, setBusy] = useState(false),
+    [imageRulesPending, setImageRulesPending] = useState(false),
     [forbidden, setForbidden] = useState(false),
     [material, setMaterial] = useState<DraftDramaPublic | null>(null),
     [selectedImageDramas, setSelectedImageDramas] = useState<
@@ -172,7 +173,8 @@ function Preparation({
   })
   const imageReady =
     current?.media_kind !== "CAROUSEL" ||
-    (imageState.data?.preview_ready === true &&
+    (!imageRulesPending &&
+      imageState.data?.preview_ready === true &&
       !imageState.isError &&
       imageState.data.revision === current.revision)
   const previewReady =
@@ -689,6 +691,7 @@ function Preparation({
           write={allowed && !busy && current.status !== "PREPARING"}
           drama={material}
           selectedDramas={selectedImageDramas}
+          onRulesPendingChange={setImageRulesPending}
           onCloseDrama={() => setMaterial(null)}
           onChanged={() => void summary.refetch()}
         />

@@ -137,6 +137,7 @@ def read_remote_preview(
     response: Response,
     session: SessionDep,
     user: CurrentUser,
+    bc_id: Annotated[str | None, Query(min_length=1, max_length=128)] = None,
 ) -> RemoteMaterialPreview:
     context = require_tenant(
         session, actor_id=user.id, tenant_id=tenant_id, action="read"
@@ -150,6 +151,7 @@ def read_remote_preview(
             redis_client=redis_client,
             context=context,
             material_id=material_id,
+            bc_id=bc_id,
         )
     response.headers["Cache-Control"] = "no-store"
     return result

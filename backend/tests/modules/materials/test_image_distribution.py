@@ -1038,3 +1038,97 @@ def test_target_unsent_retry_keeps_exact_operation_and_unknown_never_retries(
     with Session(engine) as db, db.begin(), pytest.raises(DomainError) as error:
         retry_unsent_image_target(db, context=env["context"], distribution_id=task)
     assert error.value.code == "material_retry_not_allowed" and wire[0] == []
+
+
+@pytest.mark.parametrize("other_origin", [False, True])
+def test_scoped_image_preview_after_cleanup_cannot_read_another_bc(
+    image_env, wire, redis_client, other_origin
+):
+    from app.core.errors import DomainError
+    from app.modules.accounts.models import BCAccountAccess, TenantBC
+    from app.modules.materials.catalog import original_preview, remote_preview
+
+    env = dict(image_env)
+    with Session(engine) as db, db.begin():
+        material = db.get(MaterialFile, env["material_id"])
+        if other_origin:
+            db.add(TenantBC(tenant_id=env["context"].tenant_id, bc_id="old-origin-bc"))
+            db.flush()
+            material = MaterialFile(**material.model_dump(exclude={"id"}))
+            material.bc_id = "old-origin-bc"
+            material.object_key = f"test/{material.id}"
+            db.add(material)
+            db.flush()
+            env["material_id"] = material.id
+        material.storage_state = "unavailable"
+        # 原件正常清理；也覆盖原上传 BC 无平台授权但当前 BC 有真实副本。
+        db.add(TenantBC(tenant_id=env["context"].tenant_id, bc_id="other-draft-bc"))
+    seed_image(env)
+    with Session(engine) as db, pytest.raises(DomainError):
+        original_preview(db, context=env["context"], material_id=env["material_id"])
+    kwargs = {
+        "database_engine": engine,
+        "redis_client": redis_client,
+        "context": env["context"],
+        "material_id": env["material_id"],
+    }
+    with pytest.raises(DomainError):
+        remote_preview(**kwargs, bc_id="other-draft-bc")
+    assert wire[0] == []
+    data = image_info()
+    data["list"][0]["image_url"] = "https://image.example.invalid/current"
+    wire[1].append(data)
+    preview = remote_preview(**kwargs, bc_id=env["bc_id"])
+    assert preview.bc_id == env["bc_id"] and preview.image_id == "source-image"
+    with Session(engine) as db, db.begin():
+        db.get(
+            BCAccountAccess,
+            (
+                env["context"].tenant_id,
+                env["bc_id"],
+                "actual-account",
+                env["connection_id"],
+            ),
+        ).authorized = False
+    with pytest.raises(DomainError):
+        remote_preview(**kwargs, bc_id=env["bc_id"])
+    # 只发生一次平台图片 GET，没有补传、共享或异步任务副作用。
+    assert len(wire[0]) == 1 and wire[0][0][0] == "GET"
+    with Session(engine) as db:
+        assert not db.exec(
+            select(MaterialAssetOperation).where(
+                MaterialAssetOperation.material_id == env["material_id"]
+            )
+        ).all()
+
+
+def test_image_preview_api_forwards_explicit_bc_scope(image_env, wire, monkeypatch):
+    import os
+    from datetime import timedelta
+
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from app.core.config import settings
+    from app.core.errors import DomainError, domain_error_handler
+    from app.core.security import create_access_token
+    from app.modules.accounts.models import TenantBC
+    from app.modules.materials.router import router
+
+    seed_image(image_env)
+    with Session(engine) as db, db.begin():
+        db.add(TenantBC(tenant_id=image_env["context"].tenant_id, bc_id="no-image-bc"))
+    monkeypatch.setattr(settings, "REDIS_URL", os.environ["TEST_REDIS_URL"])
+    app = FastAPI()
+    app.add_exception_handler(DomainError, domain_error_handler)
+    app.include_router(router, prefix="/api")
+    with TestClient(app) as client:
+        client.headers["Authorization"] = "Bearer " + create_access_token(
+            image_env["context"].actor_id, timedelta(minutes=5)
+        )
+        path = f"/api/tenants/{image_env['context'].tenant_id}/materials/{image_env['material_id']}/remote-preview"
+        response = client.get(path, params={"bc_id": "no-image-bc"})
+        assert response.status_code == 409
+        assert response.json()["code"] == "material_remote_source_unavailable"
+        assert client.get(path, params={"bc_id": ""}).status_code == 422
+    assert wire[0] == []

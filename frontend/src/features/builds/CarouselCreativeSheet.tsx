@@ -38,6 +38,7 @@ import {
 } from "./imageWorkspaceState"
 export function CarouselCreativeSheet({
   tenantId,
+  bcId,
   draftId,
   drama,
   revision: serverRevision,
@@ -50,6 +51,7 @@ export function CarouselCreativeSheet({
   onClose,
 }: {
   tenantId: string
+  bcId: string
   draftId: string
   drama: DraftDramaPublic
   revision: number
@@ -322,6 +324,7 @@ export function CarouselCreativeSheet({
                   </Field>
                 </FieldGroup>
                 <CarouselCreativeCard
+                  bcId={bcId}
                   tenantId={tenantId}
                   draftId={draftId}
                   revision={revision}

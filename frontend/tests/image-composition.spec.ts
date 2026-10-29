@@ -35,7 +35,7 @@ test("图片整批规则先查看差异，取消不写入组合", async ({ page 
 })
 
 async function imageBoundary(page: import("@playwright/test").Page) {
-  const base = await buildsBoundary(page)
+  const base = await buildsBoundary(page, { miniSelected: true })
   Object.assign(base.summary, {
     media_kind: "CAROUSEL",
     structure_override: {},
@@ -52,6 +52,7 @@ async function imageBoundary(page: import("@playwright/test").Page) {
   const state = {
     revision: 1,
     active_generation: 1,
+    preview_ready: false,
     applied_rule_revision: 1,
     snapshot_id: D,
     rule,
@@ -869,4 +870,197 @@ test("候选第二页恢复排除后游标重置且保留已选图片，摘要�
     picker.getByRole("checkbox", { name: "已选图片.jpg" }),
   ).toBeChecked()
   expect(invalid).toEqual([])
+})
+
+// 最终审查回归：清理原件后仍须按当前 BC 辨认图片，读取不得隐式上传。
+for (const failure of [
+  "cleaned",
+  "original-url",
+  "revoked",
+  "remote-url",
+] as const) {
+  test(`轮播缩略图有界授权回退 ${failure}`, async ({ page }) => {
+    await imageBoundary(page)
+    const reads: string[] = [],
+      writes: string[] = []
+    await page.route("**/materials/**", async (route) => {
+      const request = route.request(),
+        url = new URL(request.url())
+      if (request.method() !== "GET") writes.push(url.pathname)
+      if (url.pathname.endsWith("/preview")) {
+        reads.push("original")
+        return failure === "original-url"
+          ? route.fulfill({ json: { url: "/missing-original.png" } })
+          : route.fulfill({ status: 409, json: { detail: "upload_not_ready" } })
+      }
+      if (url.pathname.endsWith("/remote-preview")) {
+        reads.push("remote")
+        expect(url.searchParams.get("bc_id")).toBe(BC)
+        return failure === "revoked"
+          ? route.fulfill({ status: 403, json: { detail: "source_revoked" } })
+          : route.fulfill({
+              json: {
+                media_type: "IMAGE",
+                bc_id: BC,
+                image_id: "platform-image",
+                url:
+                  failure === "remote-url"
+                    ? "/missing-remote.png"
+                    : "/thumbnail.svg",
+              },
+            })
+      }
+      return route.fallback()
+    })
+    await page.route("**/missing-*.png", (route) =>
+      route.fulfill({ status: 404 }),
+    )
+    await page.route("**/thumbnail.svg", (route) =>
+      route.fulfill({
+        contentType: "image/svg+xml",
+        body: '<svg xmlns="http://www.w3.org/2000/svg" width="80" height="80"><rect width="80" height="80" fill="gray"/></svg>',
+      }),
+    )
+    await page.goto(`/tenants/${T}/build-drafts/${D}?bc_id=${BC}`)
+    await page
+      .getByRole("button", { name: "查看与调整轮播", exact: true })
+      .first()
+      .click()
+    const sheet = page.getByRole("dialog", { name: /查看与调整轮播/ })
+    if (failure === "revoked" || failure === "remote-url") {
+      await expect(
+        sheet.getByText("图片 1 · 预览不可用", { exact: true }),
+      ).toBeVisible()
+    } else {
+      const image = sheet.getByRole("img", { name: "图片 1", exact: true })
+      await expect(image).toBeVisible()
+      await expect
+        .poll(() => image.evaluate((img: HTMLImageElement) => img.naturalWidth))
+        .toBe(80)
+    }
+    expect(reads.filter((v) => v === "original")).toHaveLength(3)
+    expect(reads.filter((v) => v === "remote")).toHaveLength(3)
+    expect(writes).toEqual([])
+  })
+}
+
+for (const mode of ["batch", "drama"] as const) {
+  test(`就绪草稿本地规则阻止冻结旧配置 ${mode}`, async ({ page }) => {
+    const env = await imageBoundary(page)
+    env.state.preview_ready = true
+    await page.goto(`/tenants/${T}/build-drafts/${D}?bc_id=${BC}`)
+    const preview = page.getByRole("button", {
+      name: "生成搭建预览",
+      exact: true,
+    })
+    await expect(preview).toBeEnabled()
+    if (mode === "batch")
+      await page.getByLabel("每轮播张数", { exact: true }).fill("3")
+    else {
+      await page
+        .getByRole("button", { name: "查看与调整轮播", exact: true })
+        .first()
+        .click()
+      const sheet = page.getByRole("dialog", { name: /查看与调整轮播/ })
+      await sheet.getByRole("button", { name: "本剧规则", exact: true }).click()
+      await sheet.getByLabel("每轮播张数", { exact: true }).fill("3")
+      await sheet.getByRole("button", { name: "完成", exact: true }).click()
+    }
+    await expect(preview).toBeDisabled()
+    // 绕过按钮 disabled 调用已挂载的 React 回调，单独验证创建处理器的门槛。
+    await preview.evaluate((button) => {
+      const key = Object.keys(button).find((key) =>
+        key.startsWith("__reactProps$"),
+      )!
+      ;(button as unknown as Record<string, { onClick: () => void }>)[
+        key
+      ].onClick()
+    })
+    expect(
+      env.requests.filter(
+        (r) => r.method === "POST" && r.path.endsWith("/previews"),
+      ),
+    ).toHaveLength(0)
+    env.state.preview_ready = false
+    await page
+      .getByRole("button", { name: "查看生成结果", exact: true })
+      .click()
+    const diff = page.getByRole("dialog", { name: "查看生成结果", exact: true })
+    await diff.getByRole("button", { name: "返回修改" }).click()
+    await expect(preview).toBeDisabled()
+    await page
+      .getByRole("button", { name: "查看生成结果", exact: true })
+      .click()
+    await diff.getByRole("button", { name: "应用并生成" }).click()
+    await expect(page.getByText("生成中 1/15", { exact: false })).toBeVisible()
+    env.state.applied_rule_revision = env.state.revision
+    env.summary.revision = env.state.revision
+    env.state.preview_ready = true
+    env.state.run = { ...env.state.run, status: "APPLIED" }
+    await expect(preview).toBeEnabled()
+    expect(
+      env.requests.filter(
+        (r) => r.method === "POST" && r.path.endsWith("/previews"),
+      ),
+    ).toHaveLength(0)
+  })
+}
+
+test("本地规则不阻止查询已有预览", async ({ page }) => {
+  const env = await imageBoundary(page)
+  env.state.preview_ready = true
+  await page.addInitScript(
+    ({ tenant, draft }) => {
+      sessionStorage.setItem(`build-preview:${tenant}:${draft}`, "1")
+    },
+    { tenant: T, draft: D },
+  )
+  await page.goto(`/tenants/${T}/build-drafts/${D}?bc_id=${BC}`)
+  await page.getByLabel("每轮播张数", { exact: true }).fill("3")
+  const recovery = page.getByRole("button", {
+    name: "查询原预览结果",
+    exact: true,
+  })
+  await expect(recovery).toBeEnabled()
+  await recovery.click()
+  await expect
+    .poll(
+      () =>
+        env.requests.filter(
+          (r) => r.method === "GET" && r.path.includes("/previews/"),
+        ).length,
+    )
+    .toBeGreaterThan(0)
+  expect(
+    env.requests.filter(
+      (r) => r.method === "POST" && r.path.endsWith("/previews"),
+    ),
+  ).toHaveLength(0)
+})
+
+test("本地批次和逐剧编辑共同保留门槛，重载后只读服务端规则", async ({
+  page,
+}) => {
+  const env = await imageBoundary(page)
+  env.state.preview_ready = true
+  await page.goto(`/tenants/${T}/build-drafts/${D}?bc_id=${BC}`)
+  await page.getByLabel("每轮播张数", { exact: true }).fill("3")
+  await page
+    .getByRole("button", { name: "查看与调整轮播", exact: true })
+    .first()
+    .click()
+  const sheet = page.getByRole("dialog", { name: /查看与调整轮播/ })
+  await sheet.getByRole("button", { name: "本剧规则", exact: true }).click()
+  await sheet.getByLabel("每轮播张数", { exact: true }).fill("4")
+  await sheet.getByRole("button", { name: "恢复整批配置" }).click()
+  await sheet.getByRole("button", { name: "完成", exact: true }).click()
+  await expect(
+    page.getByRole("button", { name: "生成搭建预览", exact: true }),
+  ).toBeDisabled()
+  page.on("dialog", (dialog) => dialog.accept())
+  await page.reload()
+  await expect(page.getByLabel("每轮播张数", { exact: true })).toHaveValue("5")
+  await expect(
+    page.getByRole("button", { name: "生成搭建预览", exact: true }),
+  ).toBeEnabled()
 })

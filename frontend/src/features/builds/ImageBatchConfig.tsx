@@ -41,6 +41,7 @@ export function ImageBatchConfig({
   selectedDramas,
   onCloseDrama,
   onChanged,
+  onRulesPendingChange,
 }: {
   tenantId: string
   summary: DraftSummary
@@ -49,6 +50,7 @@ export function ImageBatchConfig({
   drama: DraftDramaPublic | null
   onCloseDrama: () => void
   onChanged: () => void
+  onRulesPendingChange: (pending: boolean) => void
 }) {
   const draftId = summary.draft_id,
     path = imagePath(tenantId, draftId),
@@ -92,6 +94,10 @@ export function ImageBatchConfig({
     activeRun = current?.run ?? runQuery.data ?? run,
     working = activeRun?.status === "PENDING",
     disabled = !write || busy || working || !current
+  const dirty = !!localRule || !!localPatches
+  useEffect(() => {
+    onRulesPendingChange(dirty || busy)
+  }, [dirty, busy, onRulesPendingChange])
   const changed = () => {
     void state.refetch()
     onChanged()
@@ -113,9 +119,11 @@ export function ImageBatchConfig({
         },
       })
       setPlan(result.data)
+      // 先读回已保存但尚未应用的新 revision，再清除本地编辑，避免短暂放行旧预览。
+      await state.refetch({ throwOnError: true })
+      onChanged()
       setLocalRule(null)
       setLocalPatches(null)
-      changed()
     } catch (e) {
       setError(e)
     } finally {
@@ -140,15 +148,10 @@ export function ImageBatchConfig({
     }
   }
   const unapplied =
-    !!localRule ||
-    !!localPatches ||
-    current?.applied_rule_revision !== current?.revision
+    dirty || current?.applied_rule_revision !== current?.revision
   return (
     <>
-      <BuildGuard
-        dirty={!!localRule || !!localPatches}
-        title="有尚未查看生成结果的图片规则"
-      />
+      <BuildGuard dirty={dirty} title="有尚未查看生成结果的图片规则" />
       <Card>
         <CardHeader>
           <CardTitle>整批图片规则</CardTitle>
@@ -287,6 +290,7 @@ export function ImageBatchConfig({
       )}
       {drama && current && (
         <CarouselCreativeSheet
+          bcId={summary.bc_id}
           tenantId={tenantId}
           draftId={draftId}
           drama={drama}

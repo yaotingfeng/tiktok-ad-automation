@@ -28,40 +28,66 @@ import { imageApi, imagePath, musicLabel, change } from "./imageCompositionApi"
 import type { ImageEditorState } from "./imageWorkspaceState"
 export function ImageThumb({
   tenantId,
+  bcId,
   id,
   index,
 }: {
   tenantId: string
+  bcId: string
   id: string
   index: number
 }) {
+  const [remoteOnly, setRemoteOnly] = useState(false)
+  const [failed, setFailed] = useState(false)
   const query = useQuery({
-    queryKey: ["image-thumbnail", tenantId, id],
-    queryFn: async ({ signal }) =>
-      (
-        await MaterialsService.readOriginalPreview({
-          path: { tenant_id: tenantId, material_id: id },
-          signal,
-        })
-      ).data,
+    queryKey: ["image-thumbnail", tenantId, bcId, id, remoteOnly],
+    queryFn: async ({ signal }) => {
+      const path = { tenant_id: tenantId, material_id: id }
+      // 原件是临时资源；失效后只读当前 BC 已授权的平台副本，不补传或猜 URL。
+      if (!remoteOnly) {
+        try {
+          const { data } = await MaterialsService.readOriginalPreview({
+            path,
+            signal,
+          })
+          return { url: data.url, source: "original" as const }
+        } catch (error) {
+          if (signal.aborted) throw error
+        }
+      }
+      const { data } = await MaterialsService.readRemotePreview({
+        path,
+        query: { bc_id: bcId },
+        signal,
+      })
+      return { url: data.url, source: "remote" as const }
+    },
     retry: false,
+    refetchOnWindowFocus: false,
     staleTime: 30000,
   })
-  return query.data ? (
+  return query.data && !failed ? (
     <img
       src={query.data.url}
       alt={`图片 ${index + 1}`}
       className="size-20 rounded object-contain"
+      onError={() => {
+        // URL 本身也可能过期。最多原件、平台各一次，平台失败后明确停止。
+        if (query.data.source === "original") setRemoteOnly(true)
+        else setFailed(true)
+      }}
     />
   ) : (
     <span className="text-xs text-muted-foreground">
       图片 {index + 1}
-      {query.isError ? " · 预览不可用" : " · 加载中"}
+      {query.isError || failed ? " · 预览不可用" : " · 加载中"}
     </span>
   )
 }
+
 export function CarouselCreativeCard({
   tenantId,
+  bcId,
   draftId,
   revision,
   unit,
@@ -74,6 +100,7 @@ export function CarouselCreativeCard({
   onAdd,
 }: {
   tenantId: string
+  bcId: string
   draftId: string
   revision: number
   unit: ImageUnitPublic
@@ -194,7 +221,13 @@ export function CarouselCreativeCard({
               }}
               className="flex flex-col gap-1"
             >
-              <ImageThumb tenantId={tenantId} id={id} index={i} />
+              <ImageThumb
+                key={`${tenantId}:${bcId}:${id}`}
+                tenantId={tenantId}
+                bcId={bcId}
+                id={id}
+                index={i}
+              />
               {write && (
                 <div className="flex gap-1">
                   <Button

@@ -14,17 +14,6 @@ import {
 import type { DemoDraft } from "./builds-data"
 import { DEMO_DRAMAS, DEMO_ADVERTISERS } from "./world"
 
-export const IMAGE_DEMO_STRUCTURE = {
-  group_generation_mode: "FIXED",
-  group_count: 1,
-  group_material_allocation: "SHARED",
-  max_materials_per_group: null,
-  ad_generation_mode: "BY_MATERIAL",
-  max_materials_per_ad: 6,
-  ads_per_group: null,
-  ad_material_allocation: null,
-  creative_count: 1,
-} as const
 export interface DemoImageUnit {
   preview: PreviewUnit
   group: FrozenGroup

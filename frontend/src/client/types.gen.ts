@@ -12819,7 +12819,12 @@ export type materialsReadRemotePreviewData = {
          */
         material_id: string;
     };
-    query?: never;
+    query?: {
+        /**
+         * Bc Id
+         */
+        bc_id?: string | null;
+    };
     url: '/api/tenants/{tenant_id}/materials/{material_id}/remote-preview';
 };
 

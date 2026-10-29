@@ -33,6 +33,7 @@ def remote_preview(
     redis_client: Any,
     context: TenantContext,
     material_id: UUID,
+    bc_id: str | None = None,
 ) -> RemoteMaterialPreview:
     """Read-only fixed-source gateway with a bounded child budget.
 
@@ -59,7 +60,10 @@ def remote_preview(
         ).one_or_none()
         if material is None:
             raise storage_error("material_not_found")
-        # 先取原上传 BC 的合法来源，再取其他真实副本；授权与实际 BC 在 SQL 中关联。
+        if bc_id is not None:
+            require_bc(db, context=context, bc_id=bc_id, action="read")
+        # 草稿缩略图只读指定 BC 的真实副本；素材库未指定时仍可读租户合法来源。
+        # 授权与实际 BC 在 SQL 中关联，不能拿原上传 BC 代替当前草稿 BC。
         grant = (
             usable_grants(
                 tenant_id=context.tenant_id,
@@ -85,6 +89,7 @@ def remote_preview(
                     & (col(AccountMaterial.is_carousel_usable).is_(True)),
                 ),
                 grant,
+                *([AccountMaterial.bc_id == bc_id] if bc_id is not None else []),
             )
             .order_by(
                 case((col(AccountMaterial.bc_id) == material.bc_id, 0), else_=1),
