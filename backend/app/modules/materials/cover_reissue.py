@@ -152,7 +152,13 @@ def create_cover_replacement(
             (
                 old.status == "UNKNOWN"
                 and old.error_code
-                in {"cover_result_unknown", "cover_search_incomplete"}
+                # 已发共享后的回读格式异常同样是未知结果。只有用户明确
+                # 接受重复图片、且无任何已知 ID/回执时才允许新代上传。
+                in {
+                    "cover_result_unknown",
+                    "cover_search_incomplete",
+                    "cover_schema_unsupported",
+                }
             )
             or (old.status == "BLOCKED" and old.error_code == "cover_claim_lost")
         )
@@ -269,28 +275,32 @@ def create_cover_replacement(
         col(ExecutionStep.lease_token).is_(None),
         col(ExecutionStep.dispatch_id).is_(None),
     )
-    waiting = session.exec(
-        select(MaterialCoverJob)
-        .where(
-            MaterialCoverJob.tenant_id == tenant_id,
-            MaterialCoverJob.bc_id == old.bc_id,
-            MaterialCoverJob.material_id == old.material_id,
-            col(MaterialCoverJob.advertiser_id).in_(target_accounts),
-            col(MaterialCoverJob.id).in_(dependent_jobs),
-            MaterialCoverJob.purpose == "BUILD",
-            MaterialCoverJob.status == "BLOCKED",
-            MaterialCoverJob.error_code == "cover_source_unavailable",
-            col(MaterialCoverJob.superseded_by_id).is_(None),
-            col(MaterialCoverJob.share_batch_id).is_(None),
-            col(MaterialCoverJob.request_armed_at).is_(None),
-            col(MaterialCoverJob.known_image_id).is_(None),
-            col(MaterialCoverJob.candidate_image_id).is_(None),
-            col(MaterialCoverJob.claim_token).is_(None),
-            col(MaterialCoverJob.dispatch_id).is_(None),
-        )
-        .order_by(col(MaterialCoverJob.id))
-        .with_for_update()
-    ).all() if old.purpose == "SOURCE" else []
+    waiting = (
+        session.exec(
+            select(MaterialCoverJob)
+            .where(
+                MaterialCoverJob.tenant_id == tenant_id,
+                MaterialCoverJob.bc_id == old.bc_id,
+                MaterialCoverJob.material_id == old.material_id,
+                col(MaterialCoverJob.advertiser_id).in_(target_accounts),
+                col(MaterialCoverJob.id).in_(dependent_jobs),
+                MaterialCoverJob.purpose == "BUILD",
+                MaterialCoverJob.status == "BLOCKED",
+                MaterialCoverJob.error_code == "cover_source_unavailable",
+                col(MaterialCoverJob.superseded_by_id).is_(None),
+                col(MaterialCoverJob.share_batch_id).is_(None),
+                col(MaterialCoverJob.request_armed_at).is_(None),
+                col(MaterialCoverJob.known_image_id).is_(None),
+                col(MaterialCoverJob.candidate_image_id).is_(None),
+                col(MaterialCoverJob.claim_token).is_(None),
+                col(MaterialCoverJob.dispatch_id).is_(None),
+            )
+            .order_by(col(MaterialCoverJob.id))
+            .with_for_update()
+        ).all()
+        if old.purpose == "SOURCE"
+        else []
+    )
     resumed = []
     for job in waiting:
         covers.request_cover_retry(session, context=context, job_id=job.id)

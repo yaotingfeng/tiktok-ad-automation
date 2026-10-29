@@ -67,3 +67,24 @@ def test_unknown_share_transport_is_never_rearmed(source_env, redis_client, wire
     wire[1].extend([page([]), page([])])
     drive(source_env, redis_client, identity, read=True)
     assert sum(call[0] == "POST" for call in wire[0]) == 1
+
+
+def test_shared_cover_retries_incomplete_search_without_another_share(
+    source_env, redis_client, wire
+):
+    identity = matrix(source_env, 1, 1)[0]
+    incomplete = page([])
+    incomplete["page_info"].update(total_number=1, total_page=1)
+    wire[1].extend(
+        [
+            {"list": [image(0)]},
+            page([]),
+            {"failed_infos": {}},
+            incomplete,
+            page([image(0, target_id=True)]),
+        ]
+    )
+    drive(source_env, redis_client, identity)
+    drive(source_env, redis_client, identity, read=True)
+    assert job_state(identity).status == "READY"
+    assert sum(call[0] == "POST" for call in wire[0]) == 1

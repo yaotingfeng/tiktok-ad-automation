@@ -255,7 +255,14 @@ def parse_page(*, query: BuildReadQuery, response: McpBusinessResponse) -> Build
             or not isinstance(response.data, dict)
         ):
             raise readback_error(response.evidence)
-        rows, pages, total = [response.data], 1, 1
+        # portfolio/get 的账户归属由已授权请求参数限定，响应只返回
+        # portfolio ID/type/content；它不回显 advertiser_id。只补查询
+        # 范围，绝不补创意内容；若平台实际返回账户则保留并核对它。
+        rows, pages, total = (
+            [{"advertiser_id": query.intent.advertiser_id, **response.data}],
+            1,
+            1,
+        )
     else:
         rows, pages, total = page_rows(
             data=response.data, page=query.page, evidence=response.evidence

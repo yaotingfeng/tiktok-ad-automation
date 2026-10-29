@@ -566,7 +566,8 @@ def _cover_recovering(job: Any) -> bool:
     if job.status in _COVER_IN_PROGRESS:
         return True
     # 超出自动接续时长后按原规则落定失败，避免广告无限等待。
-    if job.created_at < datetime.now(UTC) - AUTO_RECOVERY_AGE:
+    recovery_started = max(job.created_at, job.request_armed_at or job.created_at)
+    if recovery_started < datetime.now(UTC) - AUTO_RECOVERY_AGE:
         return False
     if job.status == "UNKNOWN":
         return job.error_code != "cover_receipt_ambiguous"

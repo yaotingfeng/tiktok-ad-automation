@@ -139,7 +139,11 @@ class ApiBuildOperations:
                     _request_timeout=(min(5.0, budget), min(30.0, budget)),
                 ).get()
                 raw = json.loads(client.last_response.data)
-                if isinstance(raw, dict) and type(raw.get("code")) is int and raw["code"] != 0:
+                if (
+                    isinstance(raw, dict)
+                    and type(raw.get("code")) is int
+                    and raw["code"] != 0
+                ):
                     message = raw.get("message")
                     logger.error(
                         "official TikTok create rejected: kind=%s code=%s message=%s",
@@ -192,7 +196,11 @@ class ApiBuildOperations:
             )
 
         try:
-            return self._requests.invoke(operation, advertiser_id, send)
+            # ROAS/预算从原始 JSON 保留十进制文本，不能先经 SDK float
+            # 再被严格金额契约误判缺失；复用官方读取器已有的精确数值路径。
+            return self._requests.invoke(
+                operation, advertiser_id, send, exact_numbers=True
+            )
         except DomainError as error:
             if error.code not in {"tiktok_response_error", "read_deadline_exceeded"}:
                 raise
