@@ -377,7 +377,7 @@ def _ensure_cover(
     if (
         not asset
         or asset.status != "available"
-        or not asset.video_id.strip()
+        or not (asset.video_id or "").strip()
         or not asset.verified_at
     ):
         return AssetPreparation(state="blocked", reason_code="cover_video_not_ready")
@@ -454,6 +454,7 @@ def _ensure_cover(
                 )
         _access(session, context, job)
         return _result(session, job)
+    assert asset.video_id is not None
     identity = uuid4()
     job = MaterialCoverJob(
         id=identity,

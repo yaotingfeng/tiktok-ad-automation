@@ -70,7 +70,7 @@ def _material(
     row = _locked_material(session, context, material_id)
     if row.media_type != "VIDEO":
         raise DomainError(
-            "image_distribution_pending", "图片等待专用平台分发，不支持视频上传"
+            "image_pipeline_required", "图片必须使用图片分发任务，不能进入视频上传"
         )
     if require_stored and row.storage_state != "stored":
         raise DomainError("original_unavailable", "素材原文件尚未完整入库")
@@ -328,7 +328,7 @@ def _has_verified_mapping(
             col(AccountMaterial.verified_at).is_not(None),
         )
     ).first()
-    return bool(asset and asset.video_id.strip())
+    return bool(asset and (asset.video_id or "").strip())
 
 
 def _save_attempt_evidence(
@@ -408,6 +408,11 @@ def request_source_retry(
     An unknown/verifying send never changes account or becomes a blind retry.
     Each new attempt records its actual selected connection/account permanently.
     """
+    candidate = _locked_material(session, context, material_id)
+    if candidate.media_type == "IMAGE":
+        from .image_distribution import request_image_retry
+
+        return request_image_retry(session, context=context, material_id=material_id)
     material = _material(session, context, material_id, require_stored=False)
     if material.current_object_generation is not None:
         from .source_url_uploads import request_url_retry

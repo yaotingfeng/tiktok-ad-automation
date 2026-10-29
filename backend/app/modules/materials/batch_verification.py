@@ -51,6 +51,8 @@ def try_verify_batch(
     with Session(database_engine) as db, db.begin():
         anchor = single._load_distribution(db, context, distribution_id)
         anchor_op = db.get(MaterialAssetOperation, anchor.operation_id)
+        if anchor_op and anchor_op.remote_response.get("media_type") == "IMAGE":
+            return False
         if (
             anchor_op is None
             or anchor.superseded_by_id is not None

@@ -122,6 +122,37 @@ class SDKMaterialOperations(sdk_assets.MaterialReadAdapter):
                     "tiktok_response_error", effect="UNKNOWN", evidence=CallEvidence()
                 ) from None
 
+    def read_image_preview(
+        self, *, advertiser_id: str, image_id: str, budget: contracts.RemoteCallBudget
+    ) -> contracts.ImagePreview:
+        # 历史官方图片证据的实际字段为 image_url；单次精确账户/ID读取，不缓存。
+        response = self._bulk_response(
+            advertiser_id=advertiser_id,
+            identities=(image_id,),
+            images=True,
+            budget=budget,
+        )
+        assert isinstance(response.data, dict)
+        rows = sdk_assets.video_rows(response.data)
+        if len(rows) != 1:
+            raise DomainError("image_preview_unavailable", "图片预览暂不可用")
+        row = rows[0]
+        record = sdk_assets.image_record(
+            row, advertiser_id=advertiser_id, evidence=response.evidence
+        )
+        url = cover_sdk._url(row.get("image_url"))
+        if (
+            record.image_id != image_id
+            or record.is_carousel_usable is not True
+            or not url
+            or not record.width
+            or not record.height
+        ):
+            raise DomainError("image_preview_unavailable", "图片预览暂不可用")
+        return contracts.ImagePreview(
+            advertiser_id, image_id, url, record.width, record.height, response.evidence
+        )
+
     def _upload_video(
         self,
         request: contracts.URLVideoUpload | contracts.FileVideoUpload,

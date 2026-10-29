@@ -165,7 +165,7 @@ def _records(
     material = _locked_material(db, context, material_id)
     if material.media_type != "VIDEO":
         raise DomainError(
-            "image_distribution_pending", "图片等待专用平台分发，不支持视频上传"
+            "image_pipeline_required", "图片必须使用图片分发任务，不能进入视频上传"
         )
     obj = db.exec(
         select(TemporaryMaterialObject)
@@ -344,10 +344,12 @@ def request_url_retry(
         db, tenant_id=context.tenant_id, actor_id=context.actor_id, action="upload"
     )
     material = _locked_material(db, context, material_id)
-    if material.media_type != "VIDEO":
-        raise DomainError(
-            "image_distribution_pending", "图片等待专用平台分发，不支持视频上传"
-        )
+    if material.media_type == "IMAGE":
+        from .image_distribution import request_image_retry
+
+        if source_advertiser_id is not None:
+            raise DomainError("image_source_frozen", "图片重试不能更换冻结来源账户")
+        return request_image_retry(db, context=context, material_id=material_id)
     obj = db.exec(
         select(TemporaryMaterialObject).where(
             TemporaryMaterialObject.tenant_id == context.tenant_id,

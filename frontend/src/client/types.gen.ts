@@ -29,9 +29,17 @@ export type AccountAsset = {
      */
     connection_id: string;
     /**
+     * Media Type
+     */
+    media_type?: 'VIDEO' | 'IMAGE';
+    /**
      * Video Id
      */
-    video_id: string;
+    video_id?: string | null;
+    /**
+     * Is Carousel Usable
+     */
+    is_carousel_usable?: boolean | null;
     /**
      * Mid
      */
@@ -3364,7 +3372,7 @@ export type MaterialReissueInput = {
     /**
      * Kind
      */
-    kind: 'VIDEO' | 'COVER';
+    kind: 'VIDEO' | 'IMAGE' | 'COVER';
     /**
      * Old Id
      */
@@ -3398,7 +3406,7 @@ export type MaterialReissueReceipt = {
     /**
      * Kind
      */
-    kind: 'VIDEO' | 'COVER';
+    kind: 'VIDEO' | 'IMAGE' | 'COVER';
     /**
      * Old Id
      */
@@ -5488,7 +5496,15 @@ export type RemoteMaterialPreview = {
     /**
      * Video Id
      */
-    video_id: string;
+    video_id?: string | null;
+    /**
+     * Image Id
+     */
+    image_id?: string | null;
+    /**
+     * Media Type
+     */
+    media_type?: 'VIDEO' | 'IMAGE';
     /**
      * Width
      */
@@ -5500,7 +5516,7 @@ export type RemoteMaterialPreview = {
     /**
      * Duration
      */
-    duration: number;
+    duration?: number | null;
     /**
      * Format
      */

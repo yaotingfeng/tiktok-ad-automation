@@ -25,6 +25,7 @@ from app.modules.materials.models import (
 from tests.migration_database import (
     historical_database,
     insert_historical_account,
+    insert_historical_asset,
     insert_historical_bc,
     insert_historical_material,
 )
@@ -88,7 +89,7 @@ def test_history_is_preserved_and_new_route_evidence_cannot_be_rewritten_or_drop
                 status="available",
                 verified_at=datetime.now(UTC),
             )
-            db.add(asset)
+            insert_historical_asset(db, asset)
             db.flush()
             identity = {
                 **scope,

@@ -107,6 +107,12 @@ class MCPMaterialOperations(MaterialReadAdapter):
             "material_channel_unverified", effect="NOT_SENT", evidence=CallEvidence()
         )
 
+    def read_image_preview(
+        self, *, advertiser_id: str, image_id: str, budget: contracts.RemoteCallBudget
+    ) -> contracts.ImagePreview:
+        # 退役通道不新增图片预览能力，也不发送任何替代请求。
+        raise DomainError("material_channel_unverified", "当前通道不支持图片预览")
+
     def upload_image_url(
         self, request: contracts.URLImageUpload, *, budget: contracts.RemoteCallBudget
     ) -> contracts.ImageReceipt:

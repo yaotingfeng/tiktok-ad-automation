@@ -360,7 +360,7 @@ def _bind_operation(
             material_id=material_id,
             advertiser_id=advertiser_id,
         )
-        if path == "existing_target" and mapping and mapping.video_id.strip():
+        if path == "existing_target" and mapping and (mapping.video_id or "").strip():
             operation.status = "verifying"
             operation.remote_response = {
                 **operation.remote_response,
@@ -487,6 +487,21 @@ def _ensure_target_asset(
     readiness: MaterialReadiness,
     seed_owner: bool,
 ) -> AssetPreparation:
+    if material.media_type == "IMAGE":
+        from .image_distribution import prepare_image_targets
+        from .repository import asset_public
+
+        result = prepare_image_targets(
+            route, (material.id,), (advertiser_id,), session=session, context=context
+        ).items[0]
+        if result.state == "ready":
+            image_mapping = session.get(AccountMaterial, result.asset_id)
+            assert image_mapping is not None
+            return AssetPreparation(state="ready", mapping=asset_public(image_mapping))
+        return AssetPreparation(
+            state="blocked" if result.state == "blocked" else "queued",
+            task_id=result.task_id,
+        )
     # 两个入口均已在当前事务核验权限并锁定素材；后续选源/去重/seed只有一份。
     material_id = material.id
     if (
@@ -1202,6 +1217,28 @@ def run_distribution(
     read_only: bool = False,
 ) -> None:
     """一次持久发送；来源和恢复读取各自遵守工作进程期限与准入。"""
+    with Session(database_engine) as image_db:
+        image_dist = image_db.get(MaterialDistribution, distribution_id)
+        image_file = (
+            image_db.get(MaterialFile, image_dist.material_id)
+            if image_dist and image_dist.tenant_id == context.tenant_id
+            else None
+        )
+        if image_file and image_file.media_type == "IMAGE":
+            from .image_distribution import run_image_distribution
+
+            return run_image_distribution(
+                database_engine=database_engine,
+                redis_client=redis_client,
+                context=context,
+                distribution_id=distribution_id,
+                kind=kind,
+                operation_id=operation_id,
+                revision=revision,
+                recovery_claim_id=recovery_claim_id,
+                s3=s3,
+                read_only=read_only,
+            )
     if kind not in {"prepare", "verify"} or (read_only and kind != "verify"):
         raise DomainError("invalid_asset_task", "目标素材工作任务无效")
     # 旧队列消息必须在授权查询、素材锁及恢复分支之前退出；否则来源已完成

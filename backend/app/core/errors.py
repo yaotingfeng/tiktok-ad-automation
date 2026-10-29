@@ -3,6 +3,15 @@ from fastapi.responses import JSONResponse
 
 # Register exact business codes here; never infer status from provider text.
 ERROR_HTTP_STATUS: dict[str, int] = {
+    "image_source_unavailable": 409,
+    "image_preview_unavailable": 409,
+    "image_not_carousel_usable": 409,
+    "image_share_failed": 409,
+    "image_reconciliation_ambiguous": 409,
+    "image_source_frozen": 409,
+    "image_material_required": 422,
+    "image_distribution_limit": 422,
+    "image_pipeline_required": 422,
     "material_tool_not_configured": 422,
     "material_onboarding_invalid": 422,
     "material_onboarding_conflict": 409,

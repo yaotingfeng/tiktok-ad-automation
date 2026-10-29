@@ -168,6 +168,8 @@ def create_video_replacement(
     if old.superseded_by_id:
         # 跨提交竞争不继承另一提交的接替许可；外层应返回原授权结果。
         _reject()
+    if material.media_type != "VIDEO":
+        _reject()
     positive_keys = {
         "video_id",
         "mid",

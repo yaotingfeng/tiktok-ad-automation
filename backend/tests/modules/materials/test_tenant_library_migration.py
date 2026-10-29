@@ -60,9 +60,10 @@ def test_consumer_foreign_keys_keep_tenant_and_original_upload_keeps_bc(session)
             for fk in inspector.get_foreign_keys(table)
             if fk["referred_table"] == "material_file"
         ]
-        assert [fk["constrained_columns"] for fk in keys] == [
-            ["tenant_id", "material_id"]
-        ]
+        expected = [["tenant_id", "material_id"]]
+        if table == "account_material":
+            expected.append(["tenant_id", "material_id", "media_type"])
+        assert sorted(fk["constrained_columns"] for fk in keys) == sorted(expected)
     for table in (
         "object_upload",
         "material_upload_attempt",
@@ -160,7 +161,10 @@ def test_historical_upgrade_preserves_rows_and_refuses_cross_bc_downgrade(monkey
                 )
             )
             db.flush()
-            db.add(
+            from tests.migration_database import insert_historical_asset
+
+            insert_historical_asset(
+                db,
                 AccountMaterial(
                     tenant_id=owner.tenant_id,
                     bc_id="bc-b",
@@ -170,7 +174,7 @@ def test_historical_upgrade_preserves_rows_and_refuses_cross_bc_downgrade(monkey
                     video_id="copy-b",
                     status="available",
                     verified_at=datetime.now(UTC),
-                )
+                ),
             )
         with pytest.raises(RuntimeError, match="cross-BC"):
             command.downgrade(config, "material_share_receipts")

@@ -63,6 +63,18 @@ class SourcePreview:
 
 
 @dataclass(frozen=True)
+class ImagePreview:
+    """Fresh account-scoped image_url; never persist in mappings or identity logs."""
+
+    advertiser_id: str
+    image_id: str
+    image_url: str = field(repr=False)
+    width: int
+    height: int
+    evidence: CallEvidence = field(default_factory=CallEvidence)
+
+
+@dataclass(frozen=True)
 class VideoCover:
     url: str | None = field(repr=False)
     width: int
@@ -199,6 +211,10 @@ class AssetShareReceipt:
 
 
 class MaterialOperations(Protocol):
+    def read_image_preview(
+        self, *, advertiser_id: str, image_id: str, budget: RemoteCallBudget
+    ) -> ImagePreview: ...
+
     def read_videos(
         self,
         *,

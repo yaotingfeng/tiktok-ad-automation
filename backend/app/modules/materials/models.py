@@ -84,6 +84,7 @@ class MaterialFile(SQLModel, table=True):
     __tablename__ = "material_file"
     __table_args__ = (
         UniqueConstraint("tenant_id", "id", name="uq_material_tenant_id"),
+        UniqueConstraint("tenant_id", "id", "media_type", name="uq_material_typed_id"),
         UniqueConstraint("tenant_id", "bc_id", "id", name="uq_material_tenant_bc_id"),
         ForeignKeyConstraint(
             ["tenant_id", "bc_id"], ["tenant_bc.tenant_id", "tenant_bc.bc_id"]
@@ -407,7 +408,17 @@ class MaterialResponseArchive(SQLModel, table=True):
 class AccountMaterial(SQLModel, table=True):
     __tablename__ = "account_material"
     __table_args__ = (
+        route_constraint("account_material", "frozen_route", connection=True),
         tenant_material_reference(),
+        ForeignKeyConstraint(
+            ["tenant_id", "material_id", "media_type"],
+            ["material_file.tenant_id", "material_file.id", "material_file.media_type"],
+            name="fk_account_material_type",
+        ),
+        CheckConstraint(
+            "(media_type = 'VIDEO' AND video_id IS NOT NULL AND is_carousel_usable IS NULL) OR (media_type = 'IMAGE' AND video_id IS NULL AND cover_url IS NULL)",
+            name="ck_account_material_type",
+        ),
         access_reference(),
         UniqueConstraint(
             "tenant_id",
@@ -428,7 +439,7 @@ class AccountMaterial(SQLModel, table=True):
             name="ck_account_material_status",
         ),
         CheckConstraint(
-            f"status != 'available' OR ({VIDEO_ID_NONEMPTY} AND verified_at IS NOT NULL)",
+            f"status != 'available' OR (verified_at IS NOT NULL AND ((media_type = 'VIDEO' AND {VIDEO_ID_NONEMPTY}) OR (media_type = 'IMAGE' AND image_id IS NOT NULL AND length(btrim(image_id)) > 0 AND is_carousel_usable IS TRUE)))",
             name="ck_account_material_verified",
         ),
     )
@@ -438,7 +449,12 @@ class AccountMaterial(SQLModel, table=True):
     material_id: UUID
     advertiser_id: str = Field(max_length=128)
     connection_id: UUID
-    video_id: str
+    frozen_route: dict[str, Any] | None = Field(
+        default=None, sa_column=Column(JSONB(none_as_null=True), nullable=True)
+    )
+    media_type: str = Field(default="VIDEO", max_length=16)
+    video_id: str | None = None
+    is_carousel_usable: bool | None = None
     mid: str | None = None
     image_id: str | None = None
     cover_url: str | None = None

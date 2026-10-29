@@ -43,11 +43,18 @@ def abandon_transport(
         .with_for_update()
     ).all()
     for operation in operations:
+        # 已知主图资格失败的精确回读证明平台读取结束，允许用户放弃原件。
+        image_completed = (
+            operation.remote_response.get("media_type") == "IMAGE"
+            and operation.remote_response.get("image_read_complete") is True
+            and operation.status == "failed"
+        )
         if (
             operation.remote_response.get("generation") != obj.generation
-            or operation.remote_response.get("send_armed")
+            or (operation.remote_response.get("send_armed") and not image_completed)
             or operation.status not in {"failed", "confirmed_absent"}
             or operation.remote_response.get("video_id")
+            or (operation.remote_response.get("image_id") and not image_completed)
             or (operation.claimed_until and operation.claimed_until > datetime.now(UTC))
         ):
             raise storage_error("original_in_use")

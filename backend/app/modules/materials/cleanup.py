@@ -94,7 +94,20 @@ def _receipt(
         not attempt
         or not asset
         or asset.connection_id != attempt.connection_id
-        or asset.video_id != operation.remote_response.get("video_id")
+        or asset.media_type != file.media_type
+        or (
+            file.media_type == "VIDEO"
+            and asset.video_id != operation.remote_response.get("video_id")
+        )
+        or (
+            file.media_type == "IMAGE"
+            and (
+                asset.image_id != operation.remote_response.get("image_id")
+                or asset.is_carousel_usable is not True
+                or operation.remote_response.get("confirmation_source")
+                != "image_readback"
+            )
+        )
         or asset.verified_at is None
         or asset.verified_at < obj.digest_verified_at
     ):
@@ -103,7 +116,11 @@ def _receipt(
         "source_receipt_id": str(source_receipt_id),
         "asset_id": str(asset.id),
         "advertiser_id": asset.advertiser_id,
-        "video_id": asset.video_id,
+        **(
+            {"image_id": asset.image_id}
+            if file.media_type == "IMAGE"
+            else {"video_id": asset.video_id}
+        ),
         "sha256": obj.sha256,
         "video_md5": obj.video_md5,
         "expected_bytes": obj.expected_bytes,

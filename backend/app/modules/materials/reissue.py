@@ -18,7 +18,7 @@ from app.modules.tenants.permissions import require_tenant
 class MaterialReissueInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
     request_id: UUID
-    kind: Literal["VIDEO", "COVER"]
+    kind: Literal["VIDEO", "IMAGE", "COVER"]
     old_id: UUID
     accepted_duplicate_materials: StrictBool
 
@@ -35,14 +35,14 @@ class MaterialReissueReceipt(BaseModel):
     request_id: UUID
     submission_id: UUID
     bc_id: str
-    kind: Literal["VIDEO", "COVER"]
+    kind: Literal["VIDEO", "IMAGE", "COVER"]
     old_id: UUID
     replacement_id: UUID
     accepted_duplicate_materials: Literal[True] = True
 
 
 def _receipt(row: Any) -> MaterialReissueReceipt:
-    video = row.kind == "VIDEO"
+    video = row.kind in {"VIDEO", "IMAGE"}
     return MaterialReissueReceipt(
         authorization_id=row.id,
         request_id=row.request_id,
@@ -103,7 +103,7 @@ def authorize_material_reissue(
         return _receipt(requested)
     old_column = (
         MaterialReissueAuthorization.old_distribution_id
-        if body.kind == "VIDEO"
+        if body.kind in {"VIDEO", "IMAGE"}
         else MaterialReissueAuthorization.old_cover_job_id
     )
     prior = session.exec(
@@ -125,10 +125,16 @@ def authorize_material_reissue(
     if not submission:
         raise DomainError("resource_not_found", "原提交不存在")
     # helper 只操作原冻结依赖。它与不可变授权、outbox 共用一个事务；任一失败全部回滚。
-    if body.kind == "VIDEO":
+    if body.kind in {"VIDEO", "IMAGE"}:
         from .video_reissue import create_video_replacement
 
-        details = create_video_replacement(
+        if body.kind == "IMAGE":
+            from .image_reissue import create_image_replacement
+
+            replacement = create_image_replacement
+        else:
+            replacement = create_video_replacement
+        details = replacement(
             session,
             tenant_id=tenant_id,
             actor_id=actor_id,

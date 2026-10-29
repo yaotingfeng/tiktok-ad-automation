@@ -344,7 +344,7 @@ def test_rejected_image_queues_cleanup_without_releasing_unconfirmed_bytes(
         assert obj.reserved_bytes == 0 and obj.reservation_released_at is not None
 
 
-def test_image_handoff_survives_abandonment_but_cancel_respects_active_use(
+def test_image_original_cancel_respects_active_use_after_handoff_removal(
     validation_case,
     monkeypatch,
 ):
@@ -379,8 +379,6 @@ def test_image_handoff_survives_abandonment_but_cancel_respects_active_use(
         obj.reserved_at = obj.received_at = obj.digest_verified_at = datetime.now(
             UTC
         ) - timedelta(days=3)
-        result = _evaluate(db, object_id=object_id, now=datetime.now(UTC), enqueue=True)
-        assert result["reason"] == "image_distribution_pending" and not result["queued"]
         use = acquire_original_use(
             db,
             context=context,
@@ -390,6 +388,15 @@ def test_image_handoff_survives_abandonment_but_cancel_respects_active_use(
             lifetime_seconds=300,
         )
         use_id, nonce = use.id, use.nonce
+        for historical_use in db.exec(
+            select(OriginalUse).where(OriginalUse.material_id == material_id)
+        ).all():
+            historical_use.created_at = historical_use.permission_issued_at = (
+                datetime.now(UTC) - timedelta(days=3)
+            )
+        db.flush()
+        result = _evaluate(db, object_id=object_id, now=datetime.now(UTC), enqueue=True)
+        assert result["reason"] == "original_use_active" and not result["queued"]
         request_identity = IngestIdentity(
             generation=obj.generation,
             upload_id=obj.s3_upload_id,
@@ -461,7 +468,7 @@ def test_image_cannot_enter_video_source_retry(session, context):
     session.flush()
     with pytest.raises(DomainError) as caught:
         request_source_retry(session, context=context, material_id=row.id)
-    assert caught.value.code == "image_distribution_pending"
+    assert caught.value.code == "image_source_unavailable"
 
 
 def test_video_manifest_digest_preserves_existing_resume_identity(api):
@@ -567,7 +574,7 @@ def test_parallel_completion_preserves_selection_order(api):
         "unsupported_image",
         "image_pixel_limit",
         "image_type_mismatch",
-        "image_distribution_pending",
+        "image_pipeline_required",
     ],
 )
 def test_image_failures_have_public_actionable_codes(code):

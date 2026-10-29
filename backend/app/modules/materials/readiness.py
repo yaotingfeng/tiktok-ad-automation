@@ -67,8 +67,6 @@ def load_material(
     material = session.exec(statement).first()
     if material is None:
         raise DomainError("material_not_found", "未找到当前租户 BC 素材")
-    if material.media_type != "VIDEO":
-        raise DomainError("image_distribution_pending", "图片等待专用平台分发")
     return material
 
 
@@ -148,7 +146,7 @@ def mapping_fresh(asset: AccountMaterial | None) -> bool:
     return bool(
         asset
         and asset.status == "available"
-        and asset.video_id.strip()
+        and (asset.video_id or "").strip()
         and asset.verified_at
     )
 
@@ -436,9 +434,15 @@ def get_material_readiness_batch(
     )
     result: dict[UUID, MaterialReadiness] = {}
     for material in materials:
-        if material.media_type != "VIDEO":
-            result[material.id] = blocked(
-                DomainError("image_distribution_pending", "图片等待专用平台分发")
+        if material.media_type == "IMAGE":
+            from .image_distribution import image_readiness
+
+            result[material.id] = image_readiness(
+                session,
+                context=context,
+                route=route,
+                material=material,
+                advertiser_id=advertiser_id,
             )
             continue
         mapping = mappings.get(material.id)
@@ -466,7 +470,7 @@ def get_material_readiness_batch(
                     state="ready", path="existing_target", mapping=asset_public(mapping)
                 )
                 continue
-            if (mapping and mapping.video_id.strip()) or operation:
+            if (mapping and (mapping.video_id or "").strip()) or operation:
                 if not material.video_md5 or len(material.video_md5) != 32:
                     raise DomainError(
                         "material_digest_missing", "素材缺少可核实内容摘要"

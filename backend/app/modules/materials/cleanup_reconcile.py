@@ -168,15 +168,6 @@ def _evaluate(
         or obj.status not in SCAN_STATUSES
     ):
         return {**result, "reason": "not_reserved"}
-    # T2 已验真的图片等待专用平台分发接管；没有平台回执不等于被遗弃。
-    # 仅保护当前 handoff，显式取消及失败图片仍走正常证据清理。
-    if (
-        file.media_type == "IMAGE"
-        and obj.status == "verified"
-        and row.status == "stored"
-        and row.dispatch_id is None
-    ):
-        return {**result, "reason": "image_distribution_pending"}
     if obj.claimed_until is not None and obj.claimed_until > now:
         return {**result, "reason": "owner_busy"}
     last_use = db.exec(

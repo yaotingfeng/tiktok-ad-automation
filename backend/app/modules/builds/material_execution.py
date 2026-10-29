@@ -468,7 +468,7 @@ def recover_material_results(*, database_engine: Any, limit: int = 100) -> int:
                     or not readiness.mapping
                     or readiness.mapping.material_id != step.material_id
                     or readiness.mapping.advertiser_id != frozen.advertiser_id
-                    or not readiness.mapping.video_id.strip()
+                    or not (readiness.mapping.video_id or "").strip()
                 ):
                     # A historic distribution receipt is not proof of a current
                     # target mapping. Keep uncertainty; never call an upload-capable

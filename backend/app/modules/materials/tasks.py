@@ -210,4 +210,7 @@ def repair_dispatches(limit: int = 100) -> int:
     from .distribution import repair_material_dispatches
 
     with Session(engine) as session, session.begin():
-        return repair_material_dispatches(session, limit=limit)
+        from .image_distribution import repair_image_handoffs
+
+        recovered = repair_image_handoffs(session, limit=limit)
+        return recovered + repair_material_dispatches(session, limit=limit)

@@ -432,25 +432,33 @@ def validate_original(
             "object_id": str(current.id),
             "generation": current.generation,
         }
-        # 图片主图由独立分发阶段接手，不得进入视频上传/封面链路。
-        # verified + stored + 无 dispatch 是待图片平台分发，不是平台可用。
-        row.dispatch_id = (
-            None
-            if file.media_type == "IMAGE"
-            else enqueue_after_commit(
+        if file.media_type == "IMAGE":
+            # 与验真同一事务登记出站消息；恢复扫描负责历史未登记 handoff。
+            from .image_distribution import enqueue_image_original
+
+            row.dispatch_id = None
+            try:
+                with session.begin_nested():
+                    row.dispatch_id = enqueue_image_original(
+                        session, context=context, material=file, obj=current, row=row
+                    )
+            except DomainError as error:
+                row.dispatch_id, row.error_code = None, error.code
+        else:
+            row.dispatch_id = enqueue_after_commit(
                 session,
                 context=context,
                 task_name="materials.upload_original",
                 task_key=f"source-ingest:{current.id}:{current.generation}",
                 payload=payload,
             )
-        )
         transition_ingest_file(
             session,
             tenant_id=current.tenant_id,
             file_id=row.id,
             expected_revision=row.revision,
             status="stored",
+            error_code=row.error_code,
         )
 
 

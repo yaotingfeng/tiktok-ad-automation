@@ -11,7 +11,9 @@ class AccountAsset(BaseModel):
     bc_id: str
     advertiser_id: str
     connection_id: UUID
-    video_id: str
+    media_type: Literal["VIDEO", "IMAGE"] = "VIDEO"
+    video_id: str | None = None
+    is_carousel_usable: bool | None = None
     mid: str | None = None
     image_id: str | None = None
     cover_url: str | None = None
@@ -21,7 +23,16 @@ class AccountAsset(BaseModel):
     @model_validator(mode="after")
     def available_requires_verified_identity(self) -> Self:
         if self.status == "available" and (
-            not self.video_id.strip() or not self.verified_at
+            not self.verified_at
+            or (self.media_type == "VIDEO" and not (self.video_id or "").strip())
+            or (
+                self.media_type == "IMAGE"
+                and (
+                    self.video_id is not None
+                    or not (self.image_id or "").strip()
+                    or self.is_carousel_usable is not True
+                )
+            )
         ):
             raise ValueError("available asset requires a verified video identity")
         return self
@@ -219,8 +230,10 @@ class RemoteMaterialPreview(BaseModel):
 
     url: str = Field(repr=False)
     advertiser_id: str
-    video_id: str
+    video_id: str | None = None
+    image_id: str | None = None
+    media_type: Literal["VIDEO", "IMAGE"] = "VIDEO"
     width: int
     height: int
-    duration: float
+    duration: float | None = None
     format: str

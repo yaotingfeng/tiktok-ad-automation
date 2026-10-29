@@ -325,7 +325,14 @@ def release_source_account(
     if not locked.remote_response.get("source_slot_held"):
         return False
     if locked.status != "succeeded" and not (
-        locked.status == "failed" and not locked.remote_response.get("send_armed")
+        locked.status == "failed"
+        and (
+            not locked.remote_response.get("send_armed")
+            or (
+                locked.remote_response.get("media_type") == "IMAGE"
+                and locked.remote_response.get("image_read_complete") is True
+            )
+        )
     ):
         raise DomainError(
             "material_result_pending", "源操作结果未核实，不能释放来源占用"

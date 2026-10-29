@@ -49,7 +49,7 @@ class MaterialReissueAuthorization(SQLModel, table=True):
             )
         ),
         CheckConstraint(
-            "(kind = 'VIDEO' AND old_distribution_id IS NOT NULL AND new_distribution_id IS NOT NULL "
+            "(kind IN ('VIDEO','IMAGE') AND old_distribution_id IS NOT NULL AND new_distribution_id IS NOT NULL "
             "AND old_distribution_id != new_distribution_id AND old_cover_job_id IS NULL AND new_cover_job_id IS NULL) OR "
             "(kind = 'COVER' AND old_cover_job_id IS NOT NULL AND new_cover_job_id IS NOT NULL "
             "AND old_cover_job_id != new_cover_job_id AND old_distribution_id IS NULL AND new_distribution_id IS NULL)",

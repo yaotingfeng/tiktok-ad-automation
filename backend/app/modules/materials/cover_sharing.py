@@ -68,6 +68,7 @@ def _content_material_ids(
     material = db.get(MaterialFile, target.material_id, populate_existing=True)
     if (
         material is None
+        or material.media_type != "VIDEO"
         or material.tenant_id != context.tenant_id
         or material.video_md5 != target.video_md5
     ):

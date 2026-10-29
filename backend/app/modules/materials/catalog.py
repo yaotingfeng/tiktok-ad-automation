@@ -79,7 +79,11 @@ def remote_preview(
                 AccountMaterial.material_id == material_id,
                 AccountMaterial.status == "available",
                 col(AccountMaterial.verified_at).is_not(None),
-                AccountMaterial.video_id != "",
+                or_(
+                    col(AccountMaterial.video_id) != "",
+                    (col(AccountMaterial.media_type) == "IMAGE")
+                    & (col(AccountMaterial.is_carousel_usable).is_(True)),
+                ),
                 grant,
             )
             .order_by(
@@ -95,6 +99,54 @@ def remote_preview(
             )
         source_id = source.id
         bc_id = source.bc_id
+        if material.media_type == "IMAGE":
+            from app.modules.accounts.routing import freeze_route
+
+            from .image_distribution import image_ready
+
+            route = freeze_route(
+                db, context=context, bc_id=bc_id, connection_id=source.connection_id
+            )
+            if not image_ready(source, route):
+                raise DomainError(
+                    "image_source_unavailable", "图片授权代数已改变，请重新核实"
+                )
+            image_id, account = source.image_id, source.advertiser_id
+        else:
+            image_id = None
+    if image_id:
+        from app.integrations.tiktok.contracts.materials import RemoteCallBudget
+        from app.integrations.tiktok.gateway import open_tiktok_gateway
+        from app.jobs.admission import admission_policy
+
+        with open_tiktok_gateway(
+            database_engine=database_engine,
+            redis_client=redis_client,
+            context=context,
+            route=route,
+            task_deadline=deadline,
+        ) as gateway:
+            image = gateway.materials.read_image_preview(
+                advertiser_id=account,
+                image_id=image_id,
+                budget=RemoteCallBudget(
+                    deadline,
+                    READ_HARD_LIMIT,
+                    admission_policy(
+                        "materials.get_images", channel=route.channel
+                    ).lease_ms,
+                ),
+            )
+        return RemoteMaterialPreview(
+            bc_id=bc_id,
+            advertiser_id=account,
+            media_type="IMAGE",
+            image_id=image.image_id,
+            url=image.image_url,
+            width=image.width,
+            height=image.height,
+            format="image",
+        )
     preview = read_remote_source(
         database_engine=database_engine,
         redis_client=redis_client,
