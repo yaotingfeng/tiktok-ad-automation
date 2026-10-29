@@ -152,7 +152,10 @@ class TokenPayload(SQLModel):
 
 # 广告管理的复合外键及任务表在普通应用进程也必须登记，不能只依赖迁移导入。
 from app.modules.ad_management import models as ad_management_models  # noqa: E402, F401
-from app.modules.builds import image_composition_models  # noqa: E402, F401
+from app.modules.builds import (  # noqa: E402
+    carousel_music_models,  # noqa: E402,F401
+    image_composition_models,  # noqa: E402, F401
+)
 from app.modules.builds.image_composition_state import (  # noqa: E402,F401
     ImageCandidateExclusion,
     ImageCandidateItem,

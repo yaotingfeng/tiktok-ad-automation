@@ -3,6 +3,18 @@ from fastapi.responses import JSONResponse
 
 # Register exact business codes here; never infer status from provider text.
 ERROR_HTTP_STATUS: dict[str, int] = {
+    "music_request_invalid": 422,
+    "music_cursor_invalid": 422,
+    "music_channel_unsupported": 409,
+    "music_selection_required": 409,
+    "music_not_found": 404,
+    "music_timeout": 504,
+    "music_request_failed": 502,
+    "music_read_incomplete": 502,
+    "unsupported_music_schema": 502,
+    "music_admission_deferred": 429,
+    "music_retry_exhausted": 409,
+    "music_request_superseded": 409,
     "image_composition_busy": 409,
     "image_candidates_busy": 409,
     "image_candidates_incomplete": 409,
@@ -433,6 +445,7 @@ _STATUS_MESSAGES = {
     429: "调用额度暂不可用",
     502: "外部服务返回异常，请联系管理员",
     503: "服务暂不可用",
+    504: "外部服务响应超时，请稍后重试",
     500: "内部服务错误",
 }
 

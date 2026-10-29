@@ -1,0 +1,935 @@
+"""配乐从真实激活入口排队；平台只在 SDK 传输边界替换。"""
+
+import json
+from datetime import UTC, datetime
+from io import BytesIO
+from urllib.parse import parse_qs, urlsplit
+from uuid import UUID, uuid4
+
+import pytest
+from sqlmodel import Session, select
+from urllib3.response import HTTPResponse
+
+from app.core.config import settings
+from app.core.credentials import encrypt_credentials
+from app.modules.accounts.models import TikTokConnection
+from app.modules.builds.carousel_music import advance_music, request_music
+from app.modules.builds.carousel_music_models import MusicSelectionJob
+from app.modules.builds.image_composition_models import DraftCreativeUnit
+from app.modules.builds.image_composition_service import (
+    adopt_candidates,
+    refresh_candidates,
+    resolve_image_scope,
+)
+from app.modules.builds.models import BuildDraft
+from app.modules.materials.models import AccountMaterial
+from tests.integrations.tiktok.test_music_adapters import envelope, music_row
+from tests.migration_database import historical_database
+from tests.modules.accounts.conftest import app_config as app_config  # noqa: F401
+from tests.modules.accounts.conftest import policy as policy
+from tests.modules.builds.test_drafts import create_intent
+from tests.modules.builds.test_image_composition_migration import scaffold
+from tests.modules.builds.test_image_composition_service import (  # noqa: F401
+    apply_rule,
+    finish_candidate_snapshot,
+)
+from tests.modules.builds.test_image_composition_service import (
+    image_draft as image_draft,
+)
+from tests.modules.conftest import create_context
+from tests.modules.materials.test_tenant_materials import material
+
+
+def test_activation_enqueues_actual_music_jobs(session, image_draft):
+    from sqlmodel import select
+
+    from app.modules.builds.carousel_music_models import MusicSelectionJob
+
+    units = apply_rule(session, image_draft)
+    finish_music_preparation(session)
+    jobs = session.exec(select(MusicSelectionJob)).all()
+    assert len(jobs) == 2
+    assert {j.targets[0]["unit_id"] for j in jobs} == {
+        str(UUID(u["id"])) for u in units if len(u["ordered_material_ids"]) > 1
+    }
+    assert all(j.dispatch_id for j in jobs)
+
+
+@pytest.fixture
+def music_case(monkeypatch, policy):
+    monkeypatch.setattr(settings, "TIKTOK_CALL_POLICIES", {"base": policy.model_dump()})
+    with historical_database(monkeypatch, "head") as (engine, _):
+        with Session(engine) as session:
+            context = create_context(session)
+            intent = create_intent(session, context)
+            intent["drama_lines"] = ["Moon"]
+            draft, drama = scaffold(session, context, intent)
+            scope = resolve_image_scope(session, context=context, draft_id=draft.id)
+            connection = session.get(TikTokConnection, scope.route.connection_id)
+            connection.credential_ciphertext = encrypt_credentials(
+                tenant_id=context.tenant_id,
+                value={"access_token": "synthetic", "scope": "[2,6]"},
+            )
+            from app.modules.accounts.connection_models import ConnectionAuthorization
+
+            auth = session.exec(
+                select(ConnectionAuthorization).where(
+                    ConnectionAuthorization.connection_id == scope.route.connection_id
+                )
+            ).one()
+            auth.scopes = ["6"]
+            for index in range(7):
+                row = material(session, context, f"Moon_{index}.jpg", bc="bc-draft")
+                row.media_type, row.sha256 = "IMAGE", f"{index:064x}"
+                row.width, row.height = 1080, 1920
+                session.flush()
+                session.add(
+                    AccountMaterial(
+                        tenant_id=context.tenant_id,
+                        bc_id=scope.bc_id,
+                        material_id=row.id,
+                        advertiser_id="account-A",
+                        connection_id=scope.route.connection_id,
+                        media_type="IMAGE",
+                        video_id=None,
+                        image_id=f"image-{index}",
+                        mid=f"mid-{index}",
+                        is_carousel_usable=True,
+                        status="available",
+                        verified_at=datetime.now(UTC),
+                        frozen_route=scope.route.model_dump(mode="json"),
+                    )
+                )
+            session.flush()
+            progress = refresh_candidates(session, scope, uuid4(), draft.revision)
+            progress = finish_candidate_snapshot(session, scope, progress)
+            adopt_candidates(
+                session, scope, uuid4(), draft.revision, progress["snapshot_id"]
+            )
+            apply_rule(session, (draft, drama, scope))
+            finish_music_preparation(session)
+            session.commit()
+        yield engine, scope
+
+
+@pytest.fixture
+def wire(monkeypatch):
+    state = {
+        "calls": [],
+        "rows": [music_row("recommended", duration=15)],
+        "hook": None,
+        "error": None,
+        "total": None,
+    }
+
+    def http(_pool, _method, url, **_kwargs):
+        query = parse_qs(urlsplit(url).query)
+        state["calls"].append((urlsplit(url).path, query))
+        if "/music/" in url:
+            if state["hook"]:
+                state["hook"]()
+            if state["error"]:
+                raise state["error"]
+            body = envelope(
+                state["rows"], page=int(query["page"][0]), total=state["total"]
+            )
+        elif "share" in url:
+            body = {"code": 0, "data": {}}
+        else:
+            identity = json.loads(query["image_ids"][0])[0]
+            body = {
+                "code": 0,
+                "data": {
+                    "list": [
+                        {
+                            "image_id": identity,
+                            "material_id": identity.replace("image-", "mid-"),
+                            "width": 1080,
+                            "height": 1920,
+                            "is_carousel_usable": True,
+                            "image_url": f"https://images.example.test/{identity}?fresh=secret",
+                        }
+                    ]
+                },
+            }
+        return HTTPResponse(
+            body=BytesIO(json.dumps(body).encode()), status=200, preload_content=False
+        )
+
+    monkeypatch.setattr("urllib3.connectionpool.HTTPSConnectionPool.urlopen", http)
+    return state
+
+
+def job_ids(engine):
+    with Session(engine) as session:
+        return session.exec(
+            select(MusicSelectionJob.id).order_by(MusicSelectionJob.id)
+        ).all()
+
+
+def run_job(engine, redis, identity):
+    with Session(engine) as session:
+        generation = session.get(MusicSelectionJob, identity).generation
+    return advance_music(
+        identity, generation, database_engine=engine, redis_client=redis
+    )
+
+
+def test_real_recommend_fresh_urls_first_window_and_no_draft_revision(
+    music_case, wire, redis_client
+):
+    engine, scope = music_case
+    with Session(engine) as session:
+        revision = session.get(BuildDraft, scope.draft_id).revision
+    wire["total"] = 101
+    wire["rows"] = [music_row(f"zero-{i}", duration=0) for i in range(99)] + [
+        music_row("recommended", duration=15)
+    ]
+    result = run_job(engine, redis_client, job_ids(engine)[0])
+    assert result["status"] == "READY", result
+    music_calls = [q for path, q in wire["calls"] if "/music/" in path]
+    assert len(music_calls) == 1
+    assert len(json.loads(music_calls[0]["filtering"][0])["image_urls"]) == 3
+    with Session(engine) as session:
+        job = session.get(MusicSelectionJob, UUID(result["job_id"]))
+        assert job.seed_advertiser_id == "account-A"
+        assert "secret" not in json.dumps(job.model_dump(mode="json"))
+        assert session.get(BuildDraft, scope.draft_id).revision == revision
+        unit = session.get(
+            DraftCreativeUnit,
+            (
+                scope.tenant_id,
+                scope.draft_id,
+                job.active_generation,
+                UUID(job.targets[0]["unit_id"]),
+            ),
+        )
+        assert unit.music_id == "recommended" and unit.music_revision > 0
+
+
+def test_manual_choice_wins_late_recommendation_and_replay(
+    music_case, wire, redis_client
+):
+    engine, scope = music_case
+    identity = job_ids(engine)[0]
+    request = uuid4()
+
+    def choose():
+        with Session(engine) as session, session.begin():
+            job = session.get(MusicSelectionJob, identity)
+            unit = session.get(
+                DraftCreativeUnit,
+                (
+                    scope.tenant_id,
+                    scope.draft_id,
+                    job.active_generation,
+                    UUID(job.targets[0]["unit_id"]),
+                ),
+            )
+            args = (
+                session,
+                scope,
+                unit.id,
+                unit.revision,
+                unit.music_revision,
+                request,
+                "SET_MANUAL",
+                "manual",
+            )
+            first = request_music(*args)
+            assert request_music(*args) == first
+
+    wire["hook"] = choose
+    assert run_job(engine, redis_client, identity)["status"] == "READY"
+    with Session(engine) as session:
+        job = session.get(MusicSelectionJob, identity)
+        unit = session.get(
+            DraftCreativeUnit,
+            (
+                scope.tenant_id,
+                scope.draft_id,
+                job.active_generation,
+                UUID(job.targets[0]["unit_id"]),
+            ),
+        )
+        assert unit.music_id == "manual" and unit.music_protected
+
+
+@pytest.mark.parametrize("when", ["before", "during"])
+def test_current_build_role_required_before_work_and_publication(
+    music_case, wire, redis_client, when
+):
+    from app.modules.tenants.models import TenantMembership
+
+    engine, scope = music_case
+
+    def revoke():
+        with Session(engine) as session, session.begin():
+            session.get(
+                TenantMembership, (scope.tenant_id, scope.actor_id)
+            ).role = "viewer"
+
+    if when == "before":
+        revoke()
+    else:
+        wire["hook"] = revoke
+    result = run_job(engine, redis_client, job_ids(engine)[0])
+    assert result["status"] == "FAILED"
+    with Session(engine) as session:
+        assert not session.exec(
+            select(DraftCreativeUnit).where(DraftCreativeUnit.music_id == "recommended")
+        ).all()
+    if when == "before":
+        assert not wire["calls"]
+
+
+def test_zero_duration_needs_selection_not_invalid(music_case, wire, redis_client):
+    wire["rows"] = [music_row("zero", duration=0)]
+    engine, scope = music_case
+    identity = job_ids(engine)[0]
+    result = run_job(engine, redis_client, identity)
+    assert result["error_code"] == "music_selection_required"
+    with Session(engine) as session:
+        job = session.get(MusicSelectionJob, identity)
+        unit = session.get(
+            DraftCreativeUnit,
+            (
+                scope.tenant_id,
+                scope.draft_id,
+                job.active_generation,
+                UUID(job.targets[0]["unit_id"]),
+            ),
+        )
+        assert unit.music_status == "NEEDS_SELECTION" and unit.music_id is None
+
+
+def test_activation_only_enqueues_bounded_preparation(session, image_draft):
+    from app.modules.builds.carousel_music_models import MusicPreparationRun
+    from app.modules.builds.carousel_music_tasks import advance_music_preparation
+
+    apply_rule(session, image_draft)
+    runs = session.exec(select(MusicPreparationRun)).all()
+    assert len(runs) == 1
+    assert not session.exec(select(MusicSelectionJob)).all()
+    assert runs[0].dispatch_id
+    result = advance_music_preparation(session, runs[0].id, runs[0].generation)
+    assert result["status"] == "READY"
+    assert len(session.exec(select(MusicSelectionJob)).all()) == 2
+
+
+def finish_music_preparation(session):
+    from app.modules.builds.carousel_music_models import MusicPreparationRun
+    from app.modules.builds.carousel_music_tasks import advance_music_preparation
+
+    for run in session.exec(
+        select(MusicPreparationRun).where(MusicPreparationRun.status == "PENDING")
+    ).all():
+        while run.status == "PENDING":
+            advance_music_preparation(session, run.id, run.generation)
+
+
+@pytest.mark.parametrize("mode", ["FIXED", "SINGLE"])
+def test_manual_new_unit_uses_configured_song_without_recommend(
+    music_case, wire, redis_client, mode
+):
+    from app.modules.builds.image_composition_commands import Create
+    from app.modules.builds.image_composition_schemas import ImageRule
+    from app.modules.builds.image_composition_service import (
+        _unit_value,
+        edit_creative_units,
+    )
+    from app.modules.builds.image_composition_state import ImageCompositionState
+
+    engine, scope = music_case
+    with Session(engine) as session, session.begin():
+        draft = session.get(BuildDraft, scope.draft_id)
+        state = session.get(ImageCompositionState, (scope.tenant_id, scope.draft_id))
+        state.rule = (
+            ImageRule(music_mode="FIXED", fixed_music_id="configured").model_dump(
+                mode="json"
+            )
+            if mode == "FIXED"
+            else ImageRule(single_music_id="configured").model_dump(mode="json")
+        )
+        unit = session.exec(
+            select(DraftCreativeUnit).where(DraftCreativeUnit.music_status == "PENDING")
+        ).first()
+        ids = _unit_value(session, unit).ordered_material_ids
+        edit_creative_units(
+            session,
+            scope,
+            uuid4(),
+            draft.revision,
+            Create(
+                kind="CREATE",
+                drama_id=unit.drama_id,
+                material_ids=ids if mode == "FIXED" else ids[:1],
+                allow_reuse=True,
+            ),
+        )
+        finish_music_preparation(session)
+        identity = session.exec(
+            select(MusicSelectionJob.id).where(
+                MusicSelectionJob.parameters["music_id"].astext == "configured"
+            )
+        ).first()
+    wire["rows"] = [music_row("configured", duration=0)]
+    assert run_job(engine, redis_client, identity)["status"] == "READY"
+    assert len(wire["calls"]) == 1
+    assert wire["calls"][0][1]["search_type"] == ["SEARCH_BY_MUSIC_ID"]
+
+
+def test_timeout_retries_bounded_and_explicit_retry_replays(
+    music_case, wire, redis_client
+):
+    from urllib3.exceptions import ReadTimeoutError
+
+    engine, scope = music_case
+    identity = job_ids(engine)[0]
+    wire["error"] = ReadTimeoutError(None, None, "synthetic")
+    for attempt in range(3):
+        result = run_job(engine, redis_client, identity)
+        assert result["attempts"] == attempt + 1
+    assert result["status"] == "FAILED" and result["error_code"] == "music_timeout"
+    with Session(engine) as session, session.begin():
+        job = session.get(MusicSelectionJob, identity)
+        unit = session.get(
+            DraftCreativeUnit,
+            (
+                scope.tenant_id,
+                scope.draft_id,
+                job.active_generation,
+                UUID(job.targets[0]["unit_id"]),
+            ),
+        )
+        args = (
+            session,
+            scope,
+            unit.id,
+            unit.revision,
+            unit.music_revision,
+            uuid4(),
+            "RETRY",
+        )
+        first = request_music(*args)
+        assert request_music(*args) == first
+        retry_id = UUID(first["job_ids"][0])
+        assert retry_id != identity
+    wire["error"] = None
+    assert run_job(engine, redis_client, retry_id)["status"] == "READY"
+
+
+def test_worker_claim_duplicate_repair_and_redis_replay(
+    music_case, wire, redis_client, redis_key_prefix
+):
+    from datetime import timedelta
+
+    from app.jobs.models import PendingDispatch
+    from app.modules.builds.carousel_music_tasks import process_music, repair_music
+
+    engine, scope = music_case
+    identity = job_ids(engine)[0]
+    with Session(engine) as session, session.begin():
+        job = session.get(MusicSelectionJob, identity)
+        job.status, job.claim = "RUNNING", uuid4()
+        job.repair_after = datetime.now(UTC) + timedelta(seconds=60)
+    assert run_job(engine, redis_client, identity)["status"] == "RUNNING"
+    assert not wire["calls"]
+    with Session(engine) as session, session.begin():
+        job = session.get(MusicSelectionJob, identity)
+        job.repair_after = datetime.now(UTC) - timedelta(seconds=1)
+        dispatch = session.get(PendingDispatch, job.dispatch_id)
+        dispatch.published_at = datetime.now(UTC)
+        payload, original = dispatch.payload, dispatch.id
+    assert repair_music(database_engine=engine) == 1
+    with Session(engine) as session:
+        dispatch = session.get(PendingDispatch, original)
+        assert dispatch.published_at is None and dispatch.payload == payload
+    queue = redis_key_prefix + ":music"
+    try:
+        redis_client.rpush(queue, json.dumps(payload), json.dumps(payload))
+        for _ in range(2):
+            process_music(
+                database_engine=engine,
+                redis_client=redis_client,
+                tenant_id=scope.tenant_id,
+                actor_id=scope.actor_id,
+                payload=json.loads(redis_client.lpop(queue)),
+            )
+    finally:
+        redis_client.delete(queue)
+    assert len([path for path, _ in wire["calls"] if "/music/" in path]) == 1
+
+
+def test_2000_combinations_100_accounts_bounded_deduped_jobs(music_case, wire):
+    from app.modules.accounts.models import AdvertiserAccount, BCAccountAccess
+    from app.modules.builds.carousel_music_models import MusicPreparationRun
+    from app.modules.builds.carousel_music_tasks import (
+        advance_music_preparation,
+        queue_music_preparation,
+    )
+    from app.modules.builds.image_composition import music_rule_digest
+    from app.modules.builds.image_composition_models import DraftCreativeUnitItem
+    from app.modules.builds.image_composition_schemas import ImageRule
+    from app.modules.builds.models import DraftAccount
+    from app.modules.materials.models import MaterialFile
+
+    engine, scope = music_case
+    with Session(engine) as session, session.begin():
+        draft = session.get(BuildDraft, scope.draft_id)
+        sample = session.exec(select(DraftCreativeUnit)).first()
+        draft.active_image_generation = 2
+        for index in range(99):
+            name = f"target-{index}"
+            session.add(
+                AdvertiserAccount(tenant_id=scope.tenant_id, advertiser_id=name)
+            )
+            session.flush()
+            session.add(
+                BCAccountAccess(
+                    tenant_id=scope.tenant_id,
+                    bc_id=scope.bc_id,
+                    advertiser_id=name,
+                    connection_id=scope.route.connection_id,
+                )
+            )
+            session.flush()
+            session.add(
+                DraftAccount(
+                    tenant_id=scope.tenant_id,
+                    draft_id=scope.draft_id,
+                    advertiser_id=name,
+                    bc_id=scope.bc_id,
+                    connection_id=scope.route.connection_id,
+                    currency="USD",
+                    timezone="UTC",
+                    first_line=index + 2,
+                )
+            )
+        rule_digest = music_rule_digest(ImageRule(images_per_unit=5), 5)
+        materials = []
+        units = []
+        memberships = []
+        first_ids = None
+        for index in range(2001):
+            ids = [uuid4() for _ in range(5)] if index < 2000 else first_ids
+            if index == 0:
+                first_ids = ids
+            if index < 2000:
+                for position, identity in enumerate(ids):
+                    materials.append(
+                        MaterialFile(
+                            id=identity,
+                            tenant_id=scope.tenant_id,
+                            bc_id=scope.bc_id,
+                            media_type="IMAGE",
+                            file_name=f"Moon-{index}-{position}.jpg",
+                            object_key=f"synthetic/{identity}",
+                            byte_size=100,
+                            storage_state="stored",
+                            sha256=f"{index * 5 + position:064x}",
+                        )
+                    )
+            unit = DraftCreativeUnit(
+                tenant_id=scope.tenant_id,
+                draft_id=scope.draft_id,
+                generation=2,
+                bc_id=scope.bc_id,
+                drama_id=sample.drama_id,
+                kind="CAROUSEL",
+                position=index + 1,
+                content_digest=f"{index if index < 2000 else 0:064x}",
+                music_status="PENDING",
+                music_rule_digest=rule_digest,
+                music_request_generation=1,
+            )
+            units.append(unit)
+            memberships.extend(
+                DraftCreativeUnitItem(
+                    tenant_id=scope.tenant_id,
+                    draft_id=scope.draft_id,
+                    generation=2,
+                    unit_id=unit.id,
+                    position=position + 1,
+                    bc_id=scope.bc_id,
+                    drama_id=sample.drama_id,
+                    material_id=identity,
+                    kind="CAROUSEL",
+                    media_type="IMAGE",
+                )
+                for position, identity in enumerate(ids)
+            )
+        session.add_all(materials)
+        session.flush()
+        session.add_all(units)
+        session.flush()
+        session.add_all(memberships)
+        run_id = queue_music_preparation(session, scope, draft)
+    # 实际事务回滚模拟扫描进程在提交前中断；恢复仍从原持久游标开始。
+    with Session(engine) as session:
+        result = advance_music_preparation(session, run_id, 1)
+        assert result["processed"] == 20 and result["status"] == "PENDING"
+        session.rollback()
+    chunks = []
+    for _ in range(102):
+        with Session(engine) as session, session.begin():
+            run = session.get(MusicPreparationRun, run_id)
+            before = run.processed
+            result = advance_music_preparation(session, run_id, run.generation)
+            chunks.append(result["processed"] - before)
+            if result["status"] == "READY":
+                break
+    assert max(chunks) == 20 and sum(chunks) == 2001
+    with Session(engine) as session:
+        jobs = session.exec(
+            select(MusicSelectionJob).where(MusicSelectionJob.active_generation == 2)
+        ).all()
+        assert len(jobs) == 2000 and sum(len(j.targets) for j in jobs) == 2001
+        assert len(session.exec(select(DraftAccount)).all()) == 100
+    assert not wire["calls"]
+
+
+def test_source_image_preparation_waits_for_true_target_readback(
+    music_case, wire, redis_client, monkeypatch, policy
+):
+    from app.modules.materials.image_distribution import run_image_distribution
+    from app.modules.materials.models import MaterialDistribution
+    from tests.modules.builds.test_drafts import account
+
+    engine, scope = music_case
+    monkeypatch.setattr(
+        settings,
+        "TIKTOK_CALL_POLICIES",
+        {"base": {**policy.model_dump(), "lease_ms": 970000}},
+    )
+    identity = job_ids(engine)[0]
+    with Session(engine) as session, session.begin():
+        account(session, scope.context, identity="account-B")
+        job = session.get(MusicSelectionJob, identity)
+        target_material = UUID(job.material_ids[0])
+        source = session.exec(
+            select(AccountMaterial).where(
+                AccountMaterial.material_id == target_material
+            )
+        ).one()
+        source.advertiser_id = "account-B"
+    result = run_job(engine, redis_client, identity)
+    assert result["status"] == "PENDING" and result["attempts"] == 0
+    assert not wire["calls"]
+    with Session(engine) as session:
+        dist_id = session.exec(
+            select(MaterialDistribution.id).where(
+                MaterialDistribution.material_id == target_material
+            )
+        ).one()
+    run_image_distribution(
+        database_engine=engine,
+        redis_client=redis_client,
+        context=scope.context,
+        distribution_id=dist_id,
+        kind="prepare",
+    )
+    with Session(engine) as session:
+        assert session.get(MaterialDistribution, dist_id).status == "verifying"
+    assert run_job(engine, redis_client, identity)["attempts"] == 0
+    assert not any("/music/" in p for p, _ in wire["calls"])
+    run_image_distribution(
+        database_engine=engine,
+        redis_client=redis_client,
+        context=scope.context,
+        distribution_id=dist_id,
+        kind="verify",
+    )
+    with Session(engine) as session:
+        assert session.get(MaterialDistribution, dist_id).status == "ready"
+    assert run_job(engine, redis_client, identity)["status"] == "READY"
+    assert len([p for p, _ in wire["calls"] if "/music/" in p]) == 1
+
+
+def test_old_generation_result_only_reused_through_new_job(
+    music_case, wire, redis_client
+):
+    from app.modules.builds.carousel_music_tasks import queue_music_preparation
+    from app.modules.builds.image_composition_models import DraftCreativeUnitItem
+
+    engine, scope = music_case
+    identity = job_ids(engine)[0]
+
+    def switch():
+        with Session(engine) as session, session.begin():
+            draft = session.get(BuildDraft, scope.draft_id)
+            job = session.get(MusicSelectionJob, identity)
+            unit = session.get(
+                DraftCreativeUnit,
+                (scope.tenant_id, scope.draft_id, 1, UUID(job.targets[0]["unit_id"])),
+            )
+            session.add(
+                DraftCreativeUnit(
+                    **{**unit.model_dump(), "generation": 2, "music_status": "PENDING"}
+                )
+            )
+            session.flush()
+            items = session.exec(
+                select(DraftCreativeUnitItem).where(
+                    DraftCreativeUnitItem.unit_id == unit.id
+                )
+            ).all()
+            for item in items:
+                session.add(
+                    DraftCreativeUnitItem(**{**item.model_dump(), "generation": 2})
+                )
+            draft.active_image_generation = 2
+            queue_music_preparation(session, scope, draft)
+            finish_music_preparation(session)
+
+    wire["hook"] = switch
+    assert run_job(engine, redis_client, identity)["status"] == "CANCELLED"
+    with Session(engine) as session:
+        old = session.get(MusicSelectionJob, identity)
+        new = session.exec(
+            select(MusicSelectionJob).where(MusicSelectionJob.active_generation == 2)
+        ).one()
+        new_id = new.id
+        assert (
+            old.fingerprint == new.fingerprint
+            and old.result["music_id"] == "recommended"
+        )
+        unit = session.get(
+            DraftCreativeUnit,
+            (scope.tenant_id, scope.draft_id, 2, UUID(new.targets[0]["unit_id"])),
+        )
+        assert unit.music_id is None
+    wire["hook"] = None
+    assert run_job(engine, redis_client, new_id)["status"] == "READY"
+    assert len([p for p, _ in wire["calls"] if "/music/" in p]) == 1
+
+
+def test_explicit_recommend_changes_song_once_and_preserves_replay(
+    music_case, wire, redis_client
+):
+    engine, scope = music_case
+    identity = job_ids(engine)[0]
+    assert run_job(engine, redis_client, identity)["status"] == "READY"
+    with Session(engine) as session, session.begin():
+        job = session.get(MusicSelectionJob, identity)
+        unit = session.get(
+            DraftCreativeUnit,
+            (
+                scope.tenant_id,
+                scope.draft_id,
+                job.active_generation,
+                UUID(job.targets[0]["unit_id"]),
+            ),
+        )
+        args = (
+            scope,
+            unit.id,
+            unit.revision,
+            unit.music_revision,
+            uuid4(),
+            "RECOMMEND",
+        )
+        result = request_music(session, *args)
+        new_id = UUID(result["job_ids"][0])
+    wire["rows"] = [music_row("new-song", duration=12)]
+    assert run_job(engine, redis_client, new_id)["status"] == "READY"
+    with Session(engine) as session, session.begin():
+        assert request_music(session, *args) == result
+        unit = session.get(
+            DraftCreativeUnit,
+            (scope.tenant_id, scope.draft_id, 1, args[1]),
+        )
+        assert unit.music_id == "new-song"
+    assert run_job(engine, redis_client, new_id)["status"] == "READY"
+    assert len([p for p, _ in wire["calls"] if "/music/" in p]) == 2
+
+
+def test_pending_explicit_intent_survives_unchanged_real_regeneration(
+    music_case, wire, redis_client
+):
+    from app.modules.builds.image_composition_schemas import ImageRule
+    from app.modules.builds.image_composition_service import (
+        advance_composition,
+        apply_composition,
+        preview_composition,
+    )
+
+    engine, scope = music_case
+    identity = job_ids(engine)[0]
+    assert run_job(engine, redis_client, identity)["status"] == "READY"
+    with Session(engine) as session, session.begin():
+        job = session.get(MusicSelectionJob, identity)
+        unit_id = UUID(job.targets[0]["unit_id"])
+        unit = session.get(
+            DraftCreativeUnit, (scope.tenant_id, scope.draft_id, 1, unit_id)
+        )
+        accepted = request_music(
+            session,
+            scope,
+            unit_id,
+            unit.revision,
+            unit.music_revision,
+            uuid4(),
+            "RECOMMEND",
+        )
+        explicit_id = UUID(accepted["job_ids"][0])
+
+    def regenerate():
+        with Session(engine) as session, session.begin():
+            draft = session.get(BuildDraft, scope.draft_id)
+            plan = preview_composition(
+                session,
+                scope,
+                uuid4(),
+                draft.revision,
+                ImageRule(),
+                {},
+                "PRESERVE_MANUAL",
+            )
+            run = apply_composition(
+                session, scope, plan["plan_id"], uuid4(), draft.revision
+            )
+            assert (
+                advance_composition(session, run["run_id"], run["generation"])["status"]
+                == "APPLIED"
+            )
+            finish_music_preparation(session)
+
+    wire["hook"] = regenerate
+    wire["rows"] = [music_row("explicit-new", duration=10)]
+    assert run_job(engine, redis_client, explicit_id)["status"] == "CANCELLED"
+    with Session(engine) as session:
+        old = session.get(MusicSelectionJob, explicit_id)
+        new = session.exec(
+            select(MusicSelectionJob).where(
+                MusicSelectionJob.active_generation == 2,
+                MusicSelectionJob.fingerprint == old.fingerprint,
+            )
+        ).one()
+        new_id = new.id
+    wire["hook"] = None
+    assert run_job(engine, redis_client, new_id)["status"] == "READY"
+    with Session(engine) as session:
+        assert (
+            session.get(
+                DraftCreativeUnit, (scope.tenant_id, scope.draft_id, 2, unit_id)
+            ).music_id
+            == "explicit-new"
+        )
+    assert len([p for p, _ in wire["calls"] if "/music/" in p]) == 2
+
+
+def test_preparation_repair_reuses_dispatch_and_stale_generation_is_noop(music_case):
+    from datetime import timedelta
+
+    from app.jobs.models import PendingDispatch
+    from app.modules.builds.carousel_music_models import MusicPreparationRun
+    from app.modules.builds.carousel_music_tasks import (
+        advance_music_preparation,
+        queue_music_preparation,
+        repair_music_preparation,
+    )
+
+    engine, scope = music_case
+    with Session(engine) as session, session.begin():
+        draft = session.get(BuildDraft, scope.draft_id)
+        identity = queue_music_preparation(session, scope, draft)
+        run = session.get(MusicPreparationRun, identity)
+        run.repair_after = datetime.now(UTC) - timedelta(seconds=1)
+        dispatch = session.get(PendingDispatch, run.dispatch_id)
+        original, payload = dispatch.id, dispatch.payload
+        dispatch.published_at = datetime.now(UTC)
+    assert repair_music_preparation(database_engine=engine) == 1
+    with Session(engine) as session, session.begin():
+        dispatch = session.get(PendingDispatch, original)
+        assert dispatch.published_at is None and dispatch.payload == payload
+        assert advance_music_preparation(session, identity, 99)["processed"] == 0
+        assert advance_music_preparation(session, identity, 1)["status"] == "READY"
+        assert len(session.exec(select(MusicSelectionJob)).all()) == 2
+
+
+def test_schema_upgrade_preserves_selected_unit_and_requires_draft_scope(monkeypatch):
+    from alembic import command
+    from sqlalchemy.exc import IntegrityError
+
+    from tests.modules.builds.test_image_composition_migration import unit
+
+    with historical_database(monkeypatch, "0052_image_candidate_build") as (
+        engine,
+        config,
+    ):
+        with Session(engine) as session, session.begin():
+            context = create_context(session)
+            draft, drama = scaffold(session, context, create_intent(session, context))
+            existing = unit(draft, drama, music_id="existing", music_revision=3)
+            existing.music_status = "READY"
+            session.add(existing)
+            identity, draft_id, revision = existing.id, draft.id, draft.revision
+        command.upgrade(config, "head")
+        with Session(engine) as session:
+            restored = session.get(
+                DraftCreativeUnit, (context.tenant_id, draft_id, 1, identity)
+            )
+            assert (restored.music_id, restored.music_revision) == ("existing", 3)
+            assert session.get(BuildDraft, draft_id).revision == revision
+            assert not session.exec(select(MusicSelectionJob)).all()
+            session.add(
+                MusicSelectionJob(
+                    tenant_id=uuid4(),
+                    draft_id=draft_id,
+                    bc_id="foreign",
+                    actor_id=context.actor_id,
+                    active_generation=1,
+                    fingerprint="a" * 64,
+                    route={},
+                    parameters={},
+                    material_ids=[],
+                    targets=[],
+                )
+            )
+            with pytest.raises(IntegrityError):
+                session.flush()
+
+
+def test_deduped_job_skips_stale_twenty_subscribers_then_serves_remaining(
+    music_case, wire, redis_client
+):
+    from app.modules.builds.image_composition_commands import Duplicate
+    from app.modules.builds.image_composition_service import edit_creative_units
+
+    engine, scope = music_case
+    identity = job_ids(engine)[0]
+    with Session(engine) as session, session.begin():
+        job = session.get(MusicSelectionJob, identity)
+        unit_id = UUID(job.targets[0]["unit_id"])
+        draft = session.get(BuildDraft, scope.draft_id)
+        for _ in range(21):
+            edit_creative_units(
+                session,
+                scope,
+                uuid4(),
+                draft.revision,
+                Duplicate(kind="DUPLICATE", unit_id=unit_id),
+            )
+        finish_music_preparation(session)
+        assert len(job.targets) == 22
+        for target in job.targets[:20]:
+            unit = session.get(
+                DraftCreativeUnit,
+                (scope.tenant_id, scope.draft_id, 1, UUID(target["unit_id"])),
+            )
+            request_music(
+                session,
+                scope,
+                unit.id,
+                unit.revision,
+                unit.music_revision,
+                uuid4(),
+                "SET_MANUAL",
+                "manual",
+            )
+    first = run_job(engine, redis_client, identity)
+    assert first["status"] == "PENDING" and first["processed"] == 20
+    assert not wire["calls"]
+    assert run_job(engine, redis_client, identity)["status"] == "READY"
+    assert len([p for p, _ in wire["calls"] if "/music/" in p]) == 1

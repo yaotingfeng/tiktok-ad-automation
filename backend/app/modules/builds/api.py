@@ -644,3 +644,6 @@ def update_delivery(
 from .image_composition_api import router as image_composition_router  # noqa: E402
 
 router.include_router(image_composition_router)
+from .carousel_music_api import router as carousel_music_router  # noqa: E402
+
+router.include_router(carousel_music_router)

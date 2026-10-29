@@ -1010,6 +1010,9 @@ def advance_composition(
                 run.status = "APPLIED"
                 _bump_revision(session, draft, draft.revision)
                 draft.applied_image_rule_revision = draft.revision
+                from .carousel_music_tasks import queue_music_preparation
+
+                queue_music_preparation(session, scope, draft)
             else:
                 from app.modules.builds.image_composition_tasks import queue_run
 
@@ -1371,14 +1374,10 @@ def edit_creative_units(
         affected.append(old.id)
     elif command.kind == "SET_MUSIC":
         old = by_id[command.unit_id]
+        from .carousel_music import manual_selection
+
         units[units.index(old)] = old.model_copy(
-            update={
-                "music_id": command.music_id,
-                "music_protected": True,
-                "music_status": "READY",
-                "music_revision": old.music_revision + 1,
-                "music_request_generation": old.music_request_generation + 1,
-            }
+            update=manual_selection(old, command.music_id)
         )
         snapshots[old.id] = {"selection_source": "MANUAL"}
         affected.append(old.id)
@@ -1416,6 +1415,9 @@ def edit_creative_units(
     _bump_revision(session, draft, expected_revision)
     if was_applied:
         draft.applied_image_rule_revision = draft.revision
+    from .carousel_music_tasks import queue_music_preparation
+
+    queue_music_preparation(session, scope, draft)
     return _receipt(
         session,
         scope,
