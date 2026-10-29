@@ -34,12 +34,13 @@ PHASES = (
     "history",
     "directory",
 )
-# 每个筛查/后台批之间给两对实时事实批；无实时工作时跳过空位，后台继续用预算。
+# 每个后台批之间给筛查一页和两对实时事实批；筛查不再等待40个阶段才续下一页。
+# 无对应工作时跳过空位，仍由入口跨BC逐阶段公平轮转。
 PHASE_ORDER = tuple(
     item
     for phase in PHASES
-    if phase not in {"hot", "material"}
-    for item in (phase, "hot", "material", "hot", "material")
+    if phase not in {"screen_hot", "hot", "material"}
+    for item in ("screen_hot", "hot", "material", "hot", "material", phase)
 )
 BATCH = 64
 SECONDS = 3
@@ -256,6 +257,9 @@ def _execute(
                         )
                 if state.get("live", {}).get("done"):
                     state["live"]["done"] = False
+                if now - at >= planner.HOT_INTERVAL:
+                    # 老轮终于完成时保留其真实证据水位，立即再读当前轮，不能冒充刚筛查。
+                    state["screen_hot"] = _new(now)
             else:
                 state["daily"] = _new(at, active=active)
                 state["empty_daily"] = _new(at, active=active)
@@ -320,10 +324,20 @@ def _execute(
         state[phase] = _new(datetime.fromisoformat(state["live"]["at"]))
 
 
-def plan_step(database_engine, redis_client, key, *, now, allow_backfill, budget=8):
+def plan_step(
+    database_engine,
+    redis_client,
+    key,
+    *,
+    now,
+    allow_backfill,
+    budget=8,
+    screen_budget=8,
+):
     """最多一个阶段事务；返回是否前进，空转阶段不会消耗后续BC的时间预算。"""
     from app.modules.reporting import job_tasks
 
+    started = monotonic()
     with Session(database_engine) as session, session.begin():
         plan = session.exec(
             select(AdSyncBc)
@@ -356,25 +370,47 @@ def plan_step(database_engine, redis_client, key, *, now, allow_backfill, budget
         missing_set = set(missing)
         valid_accounts = [a for a in accounts if a not in missing_set]
         phase = None
-        for offset in range(len(PHASE_ORDER)):
-            index = (state["phase"] + offset) % len(PHASE_ORDER)
-            if _eligible(
-                state,
-                PHASE_ORDER[index],
-                plan,
-                now,
-                allow_backfill,
-                accounts if PHASE_ORDER[index] == "directory" else valid_accounts,
-            ):
-                phase = PHASE_ORDER[index]
+        phase_cursor = state["phase"]
+        available = max(0, budget - (monotonic() - started))
+        # SDK在剩余不足2秒时拒绝建连接；外部页要拿到本入口可用的完整读取片。
+        can_screen = available >= 2 and budget + 0.05 >= screen_budget
+        if (
+            state.get("screen_waiting_since")
+            and can_screen
+            and _eligible(
+                state, "screen_hot", plan, now, allow_backfill, valid_accounts
+            )
+        ):
+            phase = "screen_hot"
+        if phase is None:
+            for offset in range(len(PHASE_ORDER)):
+                index = (phase_cursor + offset) % len(PHASE_ORDER)
+                candidate = PHASE_ORDER[index]
+                if not _eligible(
+                    state,
+                    candidate,
+                    plan,
+                    now,
+                    allow_backfill,
+                    accounts if candidate == "directory" else valid_accounts,
+                ):
+                    continue
+                if candidate.startswith("screen_") and not can_screen:
+                    if candidate == "screen_hot":
+                        state.setdefault("screen_waiting_since", now.isoformat())
+                    continue
+                phase = candidate
                 state["phase"] = (index + 1) % len(PHASE_ORDER)
                 break
         if phase is None:
             state["last_turn"] = datetime.now(UTC).isoformat()
             _save(plan, state)
             return False
+        if phase == "screen_hot":
+            state.pop("screen_waiting_since", None)
         before = copy.deepcopy(state)
-        budget = min(budget, 8 if phase.startswith("screen_") else SECONDS)
+        full_budget = 8 if phase.startswith("screen_") else SECONDS
+        budget = min(available, full_budget)
         try:
             with session.begin_nested(), query_budget(session, seconds=budget):
                 _execute(
@@ -419,7 +455,27 @@ def plan_step(database_engine, redis_client, key, *, now, allow_backfill, budget
                 }:
                     plan.disabled_reason = error.code
                     delay = timedelta(minutes=5)
-            if phase == "directory":
+            deadline_error = (
+                isinstance(error, QueryBudgetExceeded)
+                or (
+                    isinstance(error, DBAPIError)
+                    and getattr(error.orig, "sqlstate", None) == "57014"
+                )
+                or (
+                    isinstance(error, DomainError)
+                    and error.code
+                    in {
+                        "read_deadline_exceeded",
+                        "tiktok_call_deadline_exceeded",
+                    }
+                )
+            )
+            if deadline_error and budget < full_budget - 0.1:
+                # 入口余量不足不证明64户批次本身过慢；保留当前轮位置，下次给完整片。
+                state["phase"] = phase_cursor
+                if phase == "screen_hot":
+                    state.setdefault("screen_waiting_since", now.isoformat())
+            elif phase == "directory":
                 plan.next_directory_at = now + delay
                 state["directory_retry"] = (now + delay).isoformat()
             else:
@@ -435,10 +491,13 @@ def plan_step(database_engine, redis_client, key, *, now, allow_backfill, budget
                             now + timedelta(minutes=5)
                         ).isoformat()
             logger.warning(
-                "report planning phase deferred: bc=%s phase=%s error=%s",
+                "report planning phase deferred: bc=%s phase=%s error=%s code=%s budget=%.3f",
                 plan.bc_id,
                 phase,
                 type(error).__name__,
+                getattr(error, "code", None)
+                or getattr(getattr(error, "orig", None), "sqlstate", None),
+                budget,
             )
         # 时钟只在广告和素材都完整规划后推进；相位锚点不使用失败重试时刻。
         if (
@@ -456,11 +515,15 @@ def plan_step(database_engine, redis_client, key, *, now, allow_backfill, budget
                 )
                 state["live"]["clock_advanced"] = True
             at = datetime.fromisoformat(state["live"]["at"])
-            if at != now and any(
-                planner.local_today(tz, at) != planner.local_today(tz, now)
-                for tz in {timezones[a] for a in valid_accounts}
+            if now - at >= planner.HOT_INTERVAL or (
+                at != now
+                and any(
+                    planner.local_today(tz, at) != planner.local_today(tz, now)
+                    for tz in {timezones[a] for a in valid_accounts}
+                )
             ):
-                # 跨当地午夜的旧轮先完整提交，再立即发现新当地日，不能跳到15分钟后。
+                # 旧轮已跨周期/当地午夜，完成后立即追赶；不能再等未来格点使早批超过SLO。
+                # force_live只请求当前工作，保留已配置的下一规则相位。
                 state["force_live"] = True
             state["live"]["done"] = True
         if "daily" in state and all(
@@ -490,12 +553,16 @@ def run_plan(
     allow_backfill,
     one_step=False,
     time_budget=None,
+    screen_budget=None,
 ):
     # 测试/恢复可传历史逻辑时钟；运行预算始终使用单调时钟而非业务日期。
     remaining = (deadline - now).total_seconds() if time_budget is None else time_budget
     stop = monotonic() + max(0, min(10, remaining))
+    screen_budget = (
+        min(8, max(2, remaining - 0.1)) if screen_budget is None else screen_budget
+    )
     advanced = False
-    while monotonic() < stop:
+    while stop - monotonic() >= 2:
         try:
             worked = plan_step(
                 database_engine,
@@ -503,7 +570,8 @@ def run_plan(
                 key,
                 now=now,
                 allow_backfill=allow_backfill,
-                budget=max(0.05, stop - monotonic()),
+                budget=max(0, stop - monotonic()),
+                screen_budget=screen_budget,
             )
         except SoftTimeLimitExceeded:
             # 当前事务已退出并回滚；之前各批次仍已提交，下轮继续持久游标。

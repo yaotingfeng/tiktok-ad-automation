@@ -2,6 +2,7 @@
 
 from datetime import UTC, datetime, timedelta
 
+import pytest
 from sqlalchemy import text
 from sqlalchemy.exc import DBAPIError
 from sqlmodel import select
@@ -94,8 +95,9 @@ def test_late_sql_cancel_keeps_screen_and_both_live_facts(
         assert {"ad_day", "material_day"} <= kinds
 
 
+@pytest.mark.parametrize("page_seconds", [0, 5])
 def test_thousands_of_accounts_progress_many_batches_and_cover_both_facts(
-    monkeypatch, committed_sync_seed, redis_client
+    monkeypatch, committed_sync_seed, redis_client, page_seconds
 ):
     from app.modules.accounts.models import AdvertiserAccount, BCAccountAccess
     from app.modules.reporting.store_models import AdSyncAccount
@@ -146,6 +148,7 @@ def test_thousands_of_accounts_progress_many_batches_and_cover_both_facts(
         plan.last_active_advertiser_ids = accounts
         small = session.get(AdSyncBc, (seed.tenant_id, "bc-b"))
         small.next_daily_at = small.next_directory_at = now + timedelta(days=1)
+        small.last_active_advertiser_ids = ["acc-2"]
         session.execute(
             text(
                 "UPDATE advertiser_account SET timezone='UTC' WHERE tenant_id=:tenant"
@@ -161,9 +164,31 @@ def test_thousands_of_accounts_progress_many_batches_and_cover_both_facts(
         ).one()
         access.active = False
     pages = []
+    from app.modules.reporting import planning_steps as steps
+
+    clock = [0.0]
+    if page_seconds:
+        monkeypatch.setattr(job_tasks.time, "monotonic", lambda: clock[0])
+        monkeypatch.setattr(steps, "monotonic", lambda: clock[0])
+        execute = steps._execute
+
+        def timed(*args):
+            result = execute(*args)
+            if not args[3].startswith("screen_"):
+                clock[0] += 0.5
+            return result
+
+        monkeypatch.setattr(steps, "_execute", timed)
+
+    read_budget = [8.0]
 
     class Reader:
         def bc_spend(self, *, bc_id, page, **kwargs):
+            if page_seconds:
+                assert read_budget[0] >= page_seconds, (
+                    "cannot start 5s page with a tail budget"
+                )
+                clock[0] += page_seconds
             pages.append((bc_id, page))
             values = accounts if bc_id == "bc-a" else ["acc-2"]
             return RawReportPage(
@@ -176,11 +201,16 @@ def test_thousands_of_accounts_progress_many_batches_and_cover_both_facts(
                 len(values),
             )
 
-    monkeypatch.setattr(job_tasks, "_reader_for", lambda **kwargs: _ctx(Reader()))
+    def reader_for(**kwargs):
+        read_budget[0] = (kwargs["deadline"] - datetime.now(UTC)).total_seconds()
+        return _ctx(Reader())
+
+    monkeypatch.setattr(job_tasks, "_reader_for", reader_for)
     from time import monotonic
 
     samples = []
-    for attempt in range(4):
+    screened_at_attempt = None
+    for attempt in range(30 if page_seconds else 4):
         started = monotonic()
         job_tasks.plan_due_runs(
             database_engine=engine,
@@ -212,16 +242,24 @@ def test_thousands_of_accounts_progress_many_batches_and_cover_both_facts(
                 }
             )
             if attempt == 0:
-                assert len(covered["ad_day"]) > 64
-                assert len(covered["material_day"]) > 64
+                assert len(covered["ad_day"]) > (0 if page_seconds else 64)
+                assert len(covered["material_day"]) > (0 if page_seconds else 64)
                 assert (
                     "acc-2" in covered["ad_day"] and "acc-2" in covered["material_day"]
                 )
-            if all(set(accounts) <= values for values in covered.values()):
+            screened = plan.screening_progress["planning_steps_v1"]["screen_hot"][
+                "done"
+            ]
+            if screened and screened_at_attempt is None:
+                screened_at_attempt = attempt + 1
+            if all(set(accounts) <= values for values in covered.values()) and screened:
                 break
     assert all(set(accounts) <= values for values in covered.values()), samples
-
-    assert {page for bc, page in pages if bc == "bc-a"} == {1, 2, 3, 4, 5}
+    assert screened, samples
+    if page_seconds:
+        assert screened_at_attempt <= 6, samples
+        assert attempt * 30 < 15 * 60, samples
+    assert [page for bc, page in pages if bc == "bc-a"] == [1, 2, 3, 4, 5]
 
 
 def test_soft_timeout_does_not_replay_completed_screen_or_hot_batch(
@@ -272,7 +310,7 @@ def test_soft_timeout_does_not_replay_completed_screen_or_hot_batch(
             redis_client,
             (seed.tenant_id, "bc-a"),
             now,
-            now + timedelta(seconds=2),
+            now + timedelta(seconds=3),
             planner.HOT_INTERVAL,
             planner.MATERIAL_INTERVAL,
             allow_backfill=False,
@@ -293,7 +331,7 @@ def test_soft_timeout_does_not_replay_completed_screen_or_hot_batch(
         redis_client,
         (seed.tenant_id, "bc-a"),
         now,
-        now + timedelta(seconds=2),
+        now + timedelta(seconds=3),
         planner.HOT_INTERVAL,
         planner.MATERIAL_INTERVAL,
         allow_backfill=False,
@@ -764,13 +802,13 @@ def test_actual_entry_passes_only_remaining_budget_after_prior_phase(
     def timed(*args, **kwargs):
         budgets.append(kwargs["time_budget"])
         result = original(*args, **kwargs)
-        clock[0] += 9.5 if len(budgets) == 1 else 1
+        clock[0] += 7.5 if len(budgets) == 1 else 1
         return result
 
     monkeypatch.setattr(job_tasks, "_plan_one", timed)
     job_tasks.plan_due_runs(database_engine=engine, redis_client=redis_client, now=now)
     assert len(budgets) == 2
-    assert budgets[0] == 10 and budgets[1] <= 0.5
+    assert budgets[0] == 10 and budgets[1] <= 2.5
 
 
 def test_daily_completion_crossing_midnight_immediately_catches_up(
@@ -881,17 +919,27 @@ def test_live_batches_get_a_turn_between_each_background_phase(
         "_execute",
         lambda _session, _plan, _state, phase, *_args: phases.append(phase),
     )
-    for _ in range(10):
+    for _ in range(12):
         steps.plan_step(
             engine, redis_client, (seed.tenant_id, "bc-a"), now=now, allow_backfill=True
         )
     assert phases.count("hot") == phases.count("material") == 4
+    assert phases.count("screen_hot") == 2
     for _ in range(30):
         steps.plan_step(
             engine, redis_client, (seed.tenant_id, "bc-a"), now=now, allow_backfill=True
         )
     assert set(phases) == set(steps.PHASES)
 
+    with factory() as session, session.begin():
+        plan = session.get(AdSyncBc, (seed.tenant_id, "bc-a"))
+        state = plan.screening_progress[steps.KEY]
+        state = {
+            **state,
+            "screen_hot": {**state["screen_hot"], "done": True},
+            "screen_daily": {**state["screen_daily"], "done": True},
+        }
+        plan.screening_progress = {steps.KEY: state}
     clock = [0.0]
     phases.clear()
     monkeypatch.setattr(steps, "monotonic", lambda: clock[0])

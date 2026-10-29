@@ -283,6 +283,12 @@ def due_plans(session, *, now: datetime, limit: int = 50) -> list[AdSyncBc]:
                 ),
             )
             .order_by(
+                # 只提升确实因入口余量不足而未读到下一页的BC，一页成功或真实退避即清。
+                col(AdSyncBc.screening_progress)["planning_steps_v1"][
+                    "screen_waiting_since"
+                ]
+                .astext.asc()
+                .nulls_last(),
                 col(AdSyncBc.screening_progress)["planning_steps_v1"]["last_turn"]
                 .astext.asc()
                 .nulls_first(),
