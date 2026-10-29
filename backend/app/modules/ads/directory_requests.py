@@ -27,6 +27,7 @@ from app.modules.ads.directory_services import (
     STATUS_SERVICE,
 )
 from app.modules.ads.sync_models import AdDirectoryRun
+from app.modules.reporting import diagnostics
 
 DIRECTORY_AD_TYPES = ("REGULAR", "LEGACY_SMART_PLUS", "SMART_PLUS")
 # 每个目录层级与广告类型一个运行：(层级, 广告类型, 每页条数)。
@@ -257,13 +258,14 @@ def request_directory(
         raise DomainError("directory_request_invalid", "目录对象超出账户范围")
     context = TenantContext(tenant_id=tenant_id, actor_id=actor_id, role="operator")
     for advertiser in advertiser_ids:
-        verify_route(
-            session,
-            context=context,
-            route=route,
-            advertiser_id=advertiser,
-            capability="read",
-        )
+        with diagnostics.stage("directory_verify_routes"):
+            verify_route(
+                session,
+                context=context,
+                route=route,
+                advertiser_id=advertiser,
+                capability="read",
+            )
     now = now or datetime.now(UTC)
     payload = [
         frozen_route,
@@ -282,9 +284,10 @@ def request_directory(
     # 每次操作后的回读都必须晚于该次写入；旧排队任务的请求序号也可能已经过时。
     request_id = uuid4() if scope == "targeted" else slot_id
     # 同一槽并发请求串行检查，避免重复插入目录任务。
-    session.connection().execute(
-        text("SELECT pg_advisory_xact_lock(:key)"), {"key": slot_id.int % (2**63)}
-    )
+    with diagnostics.stage("directory_slot_lock"):
+        session.connection().execute(
+            text("SELECT pg_advisory_xact_lock(:key)"), {"key": slot_id.int % (2**63)}
+        )
     created = 0
     refill_run = None
     for advertiser_id in advertiser_ids:
@@ -358,27 +361,28 @@ def request_directory(
                         continue
                     # 调度元数据不进入查询摘要，也不发送给平台。显式请求保持独立。
                     query[PERIODIC_KEY] = True
-                existing = session.exec(
-                    select(AdDirectoryRun)
-                    .where(
-                        AdDirectoryRun.tenant_id == tenant_id,
-                        AdDirectoryRun.advertiser_id == advertiser_id,
-                        AdDirectoryRun.partition_key == partition,
-                        AdDirectoryRun.bc_id == bc_id,
-                        AdDirectoryRun.actor_id == actor_id,
-                        AdDirectoryRun.frozen_route == frozen_route,
-                        col(AdDirectoryRun.query).op("?")(PERIODIC_KEY) == periodic,
-                        # 已被领取的运行可能已读过首页，不能代替本次刷新。
-                        (col(AdDirectoryRun.request_id) == request_id)
-                        | and_(
-                            scope == "directory",
-                            col(AdDirectoryRun.status) == "QUEUED",
-                            col(AdDirectoryRun.claim_token).is_(None),
-                        ),
-                    )
-                    .limit(1)
-                    .with_for_update()
-                ).first()
+                with diagnostics.stage("directory_existing"):
+                    existing = session.exec(
+                        select(AdDirectoryRun)
+                        .where(
+                            AdDirectoryRun.tenant_id == tenant_id,
+                            AdDirectoryRun.advertiser_id == advertiser_id,
+                            AdDirectoryRun.partition_key == partition,
+                            AdDirectoryRun.bc_id == bc_id,
+                            AdDirectoryRun.actor_id == actor_id,
+                            AdDirectoryRun.frozen_route == frozen_route,
+                            col(AdDirectoryRun.query).op("?")(PERIODIC_KEY) == periodic,
+                            # 已被领取的运行可能已读过首页，不能代替本次刷新。
+                            (col(AdDirectoryRun.request_id) == request_id)
+                            | and_(
+                                scope == "directory",
+                                col(AdDirectoryRun.status) == "QUEUED",
+                                col(AdDirectoryRun.claim_token).is_(None),
+                            ),
+                        )
+                        .limit(1)
+                        .with_for_update()
+                    ).first()
                 if existing is not None:
                     # 冷转热后校准间隔缩短：复用原身份提前未开始的延期任务。
                     if (
@@ -412,21 +416,25 @@ def request_directory(
                 )
                 session.add(run)
                 if scope == "targeted":
-                    session.flush()
+                    with diagnostics.stage("directory_flush"):
+                        session.flush()
                     if dispatch_immediately:
-                        enqueue_directory_step(session, run, initial=True)
+                        with diagnostics.stage("directory_outbox"):
+                            enqueue_directory_step(session, run, initial=True)
                     elif refill_run is None:
                         refill_run = run
                 created += 1
-    session.flush()
+    with diagnostics.stage("directory_flush"):
+        session.flush()
     if refill_run is not None:
         # 整批只发一次同事务唤醒，空槽无需等待 Beat；统一派发器先服务已有积压。
         # 使用请求专属键，不能吞掉同一运行完成后的补位信号。
-        enqueue_after_commit(
-            session,
-            context=context,
-            task_name="reporting.plan_due",
-            task_key=f"directory-request-refill:{refill_run.id}:{refill_run.claim_generation}",
-            payload={"dispatch_only": True},
-        )
+        with diagnostics.stage("directory_outbox"):
+            enqueue_after_commit(
+                session,
+                context=context,
+                task_name="reporting.plan_due",
+                task_key=f"directory-request-refill:{refill_run.id}:{refill_run.claim_generation}",
+                payload={"dispatch_only": True},
+            )
     return created

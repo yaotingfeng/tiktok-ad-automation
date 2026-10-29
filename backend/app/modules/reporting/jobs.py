@@ -965,7 +965,8 @@ def _run(
             return None
         if spark_identity.resolve_spark_videos(session, job, reader):
             return None
-        overview_ads = _material_link_overview_ads(session, job)
+        with diagnostics.stage("links_overview_candidates"):
+            overview_ads = _material_link_overview_ads(session, job)
         complete = material_links.refresh_material_links(
             session,
             tenant_id=t,
@@ -984,7 +985,8 @@ def _run(
         )
         # 本页已证实的广告身份立即补目录，不能被后续概览分页或旧帖二分搜索挡住。
         # 补读与本页关联同事务提交；复用有界、含删除对象且按冻结路由去重的原请求。
-        request_link_directory(session, job, now=datetime.now(UTC))
+        with diagnostics.stage("links_directory_request"):
+            request_link_directory(session, job, now=datetime.now(UTC))
         # JSONB 的原地修改需要显式通知 ORM；每个续步都持久化已经完成的页和关联。
         from sqlalchemy.orm.attributes import flag_modified
 

@@ -6,6 +6,7 @@ from datetime import UTC, datetime
 
 from sqlalchemy import text
 
+from app.modules.reporting import diagnostics
 from app.modules.reporting.material_value import (
     MATERIAL_WINDOW_VALUES_SQL,
     material_value_parameters,
@@ -56,6 +57,7 @@ def _scope(configuration):
     return {k: v for k, v in identity.items() if v is not None}, sorted(videos)
 
 
+@diagnostics.timed("links_spark_candidates")
 def pending_spark_links(session, job):
     """已有归属且本轮尚未核验内容的帖子；完成扫描不代表这些读取已经执行。"""
     checked = set(job.progress.get("spark_identity_checked", []))
@@ -100,6 +102,7 @@ def pending_spark_links(session, job):
     )
 
 
+@diagnostics.timed("links_spark_resolve")
 def resolve_spark_videos(session, job, reader) -> bool:
     """每步至多一个物理请求；同广告最多缓存50个摘要，成功/缺失均不循环重查。"""
     checked = set(job.progress.get("spark_identity_checked", []))

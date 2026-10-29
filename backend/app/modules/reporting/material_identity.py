@@ -3,6 +3,7 @@
 from sqlalchemy import text
 
 from app.core.errors import DomainError
+from app.modules.reporting import diagnostics
 from app.modules.reporting.material_value import (
     MATERIAL_WINDOW_VALUES_SQL,
     material_value_parameters,
@@ -12,6 +13,7 @@ from app.modules.reporting.material_value import (
 ASSET_BATCH = 20  # file/video/ad/search 当前 material_ids 上限；不同于 video_ids。
 
 
+@diagnostics.timed("links_asset_candidates")
 def pending_asset_ids(session, job):
     """尚未在本轮读取的精确 MID；也供终页判断是否仍有可立即执行的身份工作。"""
     checked = set(job.progress.get("asset_identity_checked", []))
@@ -49,6 +51,7 @@ def pending_asset_ids(session, job):
     )
 
 
+@diagnostics.timed("links_asset_resolve")
 def resolve_asset_videos(session, job, reader) -> bool:
     """每续步至多一次精确读取；只更新已证实归属、同账户同日期的非 Spark 视频。"""
     checked = set(job.progress.get("asset_identity_checked", []))

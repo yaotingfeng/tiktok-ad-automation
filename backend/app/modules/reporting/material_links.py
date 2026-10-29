@@ -29,6 +29,7 @@ from sqlmodel import Session
 
 from app.core.errors import DomainError
 from app.integrations.tiktok.contracts.report_reader import RawReportPage
+from app.modules.reporting import diagnostics
 from app.modules.reporting.link_queries import QueryMembershipReader
 from app.modules.reporting.material_value import (
     MATERIAL_WINDOW_VALUES_SQL,
@@ -92,6 +93,7 @@ def post_video_map(
     return {(r.adv, r.mid): r.vid for r in rows}
 
 
+@diagnostics.timed("links_needs")
 def needs_material_links(
     session: Session,
     *,
@@ -119,6 +121,7 @@ DEPENDENCY_MAX_RECHECK = timedelta(hours=6)
 NEGATIVE_SCAN_TTL = timedelta(hours=6)
 
 
+@diagnostics.timed("links_missing_ids")
 def missing_video_ids(
     session: Session,
     *,
@@ -144,6 +147,7 @@ def missing_video_ids(
     )
 
 
+@diagnostics.timed("links_spark_bridges")
 def _missing_spark_bridges(session, tenant_id, advertiser_id, *, start, end):
     """缺广告内素材 ID 的已定位 Spark；布尔值表示目录已提供完整素材证据。"""
     rows = session.connection().execute(
@@ -196,6 +200,7 @@ def dependency_changed(session, job):
     return directory_signature(session, job) != job.progress.get("dependency_signature")
 
 
+@diagnostics.timed("links_directory_signature")
 def directory_signature(session, job):
     # 目录热刷新会更新 observed_at，但相同素材身份不属于新证据，不能因此反复唤醒。
     return (
@@ -271,6 +276,7 @@ def directory_signature(session, job):
     )
 
 
+@diagnostics.timed("links_wait_dependencies")
 def wait_for_dependencies(session, job, *, now):
     missing = missing_video_ids(
         session,
@@ -304,7 +310,8 @@ def wait_for_dependencies(session, job, *, now):
     )
     from app.modules.reporting.directory_refresh import request_link_directory
 
-    request_link_directory(session, job, now=now)
+    with diagnostics.stage("links_directory_request"):
+        request_link_directory(session, job, now=now)
     signature = directory_signature(session, job)
     unchanged = (
         set(job.progress.get("waiting_ids", [])) == missing
@@ -358,6 +365,7 @@ def wait_for_dependencies(session, job, *, now):
     return True
 
 
+@diagnostics.timed("links_unlinked")
 def _unlinked(
     session: Session,
     tenant_id: UUID,
@@ -441,6 +449,7 @@ def _overview_link(
     )
 
 
+@diagnostics.timed("links_upsert")
 def _upsert_links(session: Session, values: list[dict[str, Any]]) -> None:
     if not values:
         return
@@ -460,6 +469,7 @@ def _upsert_links(session: Session, values: list[dict[str, Any]]) -> None:
     )
 
 
+@diagnostics.timed("links_candidate_ads")
 def _candidate_ads(
     session: Session,
     tenant_id: UUID,
@@ -501,6 +511,7 @@ def _candidate_ads(
 AD_FILTER_LIMIT = 200
 
 
+@diagnostics.timed("links_locate_post")
 def _locate_post_step(state, *, read_ad_posts, first, last):
     """单帖二分路径与当前查询页持久化；每步最多一次平台读取。
 
@@ -578,6 +589,7 @@ def _locate_post_step(state, *, read_ad_posts, first, last):
     return False, None
 
 
+@diagnostics.timed("links_resolve_local")
 def _resolve_videos(
     session: Session,
     tenant_id: UUID,
@@ -628,6 +640,7 @@ def _scan_scope(start=None, end=None, overview_ad_ids=()):
     ).hexdigest()
 
 
+@diagnostics.timed("links_scan_signature")
 def _scan_signature(
     session, tenant_id, advertiser_id, ids, start=None, end=None, overview_ad_ids=()
 ):
@@ -684,6 +697,7 @@ def _scan_evidence_started_at(
     return started_at if started_at.tzinfo is not None and started_at <= now else None
 
 
+@diagnostics.timed("links_refresh")
 def refresh_material_links(
     session: Session,
     *,
