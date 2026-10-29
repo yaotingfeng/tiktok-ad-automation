@@ -157,7 +157,8 @@ def test_large_backlog_is_not_rescanned_for_each_ranking_and_capacity(
            next_page, coverage, created_at, kind, ad_type, workload)
         SELECT gen_random_uuid(), :tenant, 'acc-1', 'bc-a', :actor, :connection,
           'OFFICIAL_API', CAST(:route AS jsonb), gen_random_uuid(),
-          lpad(i::text,64,'0'), jsonb_build_object('ids',jsonb_build_array(i::text)),
+          lpad(i::text,64,'0'), jsonb_build_object('ids',jsonb_build_array(i::text),
+            'directory_service_v1',CASE WHEN i%4=0 THEN 'status' ELSE 'identity' END),
           'QUEUED',1,1,'PENDING',:now,'ad','SMART_PLUS',
           CASE WHEN i%2=0 THEN 'live' ELSE 'background' END
         FROM generate_series(1,:count) i
