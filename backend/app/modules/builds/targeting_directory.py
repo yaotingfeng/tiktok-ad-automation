@@ -18,6 +18,7 @@ from app.modules.tenants.permissions import require_tenant
 
 from .models import DraftAccount
 from .scene_job_models import SceneJob
+from .scene_schemas import CREATIVE_COMPILER_REVISION
 from .targeting_schemas import TargetingAccount, TargetingDirectory
 
 
@@ -26,6 +27,7 @@ def _eligible(
     route: FrozenTikTokRoute,
     draft_id: UUID | None,
     minis_id: str | None,
+    media_kind: str,
 ):
     now = datetime.now(UTC)
     grants = usable_grants(
@@ -61,6 +63,8 @@ def _eligible(
             authorization,
             SceneJob.tenant_id == context.tenant_id,
             SceneJob.bc_id == route.bc_id,
+            SceneJob.media_kind == media_kind,
+            SceneJob.compiler_contract_revision == CREATIVE_COMPILER_REVISION,
             col(SceneJob.connection_id) == route.connection_id,
         )
     )
@@ -141,6 +145,7 @@ def region_directory(
     route: FrozenTikTokRoute,
     draft_id: UUID | None = None,
     minis_id: str | None = None,
+    media_kind: str = "VIDEO",
 ) -> TargetingDirectory:
     require_tenant(
         session, actor_id=context.actor_id, tenant_id=context.tenant_id, action="read"
@@ -148,7 +153,7 @@ def region_directory(
     verify_route(
         session, context=context, route=route, advertiser_id=None, capability="read"
     )
-    valid, eligible = _eligible(context, route, draft_id, minis_id)
+    valid, eligible = _eligible(context, route, draft_id, minis_id, media_kind)
     verified = select(
         func.count(func.distinct(valid.c.advertiser_id))
     ).scalar_subquery()
@@ -222,6 +227,7 @@ def draft_directory(
         route=route,
         draft_id=draft.id,
         minis_id=next(iter(targets)),
+        media_kind=draft.media_kind,
     )
     result.revision = draft.revision
     result.unavailable_region_codes = sorted(
@@ -255,7 +261,9 @@ def account_regions(
     verify_route(
         session, context=context, route=route, advertiser_id=None, capability="read"
     )
-    _, eligible = _eligible(context, route, draft.id, next(iter(targets)))
+    _, eligible = _eligible(
+        context, route, draft.id, next(iter(targets)), draft.media_kind
+    )
     query = select(DraftAccount.advertiser_id).where(
         col(DraftAccount.tenant_id) == context.tenant_id,
         col(DraftAccount.draft_id) == draft.id,

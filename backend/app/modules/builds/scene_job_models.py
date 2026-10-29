@@ -10,11 +10,15 @@ from sqlalchemy import (
     DateTime,
     ForeignKeyConstraint,
     Index,
+    String,
     UniqueConstraint,
     text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlmodel import Field, SQLModel
+
+from .image_composition_schemas import MediaKind
+from .scene_schemas import CREATIVE_COMPILER_REVISION
 
 # 历史不可变路由缺少 binding_revision 时固定为代数 0；新路由显式记录绑定代数。
 _ROUTE_VALID = """
@@ -80,6 +84,9 @@ class SceneJob(SQLModel, table=True):
             ],
         ),
         CheckConstraint(
+            "media_kind IN ('VIDEO','CAROUSEL')", name="ck_scene_media_kind"
+        ),
+        CheckConstraint(
             "status IN ('PENDING','COMPLETE','BLOCKED','STALE','FAILED')",
             name="ck_build_scene_job_status",
         ),
@@ -136,6 +143,12 @@ class SceneJob(SQLModel, table=True):
     provider_connection_id: UUID | None = None
     application_id: str | None = Field(default=None, max_length=255)
     minis_id: str | None = Field(default=None, max_length=255)
+    media_kind: MediaKind = Field(
+        default="VIDEO", sa_column=Column(String(16), nullable=False)
+    )
+    compiler_contract_revision: str = Field(
+        default=CREATIVE_COMPILER_REVISION, max_length=64
+    )
     scope_basis: str = Field(max_length=64)
     capability_job_id: UUID | None = None
     status: str = Field(default="PENDING", max_length=16)

@@ -11,6 +11,7 @@ from app.modules.builds.catalog import materials_page
 from app.modules.builds.drafts import create_draft, edit_material_groups, prepare_draft
 from app.modules.builds.models import BuildDraft, DraftDrama
 from tests.modules.builds.test_drafts import account, create_intent, finish, ready_links
+from tests.modules.builds.video_source import VIDEO_SOURCE
 from tests.modules.materials.test_tenant_materials import material
 
 
@@ -73,7 +74,7 @@ def test_matching_continuation_does_not_repeat_content_when_representative_chang
     session, context
 ):
     from app.modules.builds.drafts import _materials_page
-    from app.modules.builds.models import DraftGroupMaterial, DraftPreparation
+    from app.modules.builds.models import DraftPreparation
 
     a = material(session, context, "Moon-a.mp4", bc="bc-a")
     a.sha256, a.video_md5 = "a" * 64, "b" * 32
@@ -105,9 +106,9 @@ def test_matching_continuation_does_not_repeat_content_when_representative_chang
     _materials_page(session, context, draft, prep)
     session.flush()
     chosen = session.exec(
-        select(DraftGroupMaterial).where(
-            DraftGroupMaterial.draft_id == draft_id,
-            DraftGroupMaterial.drama_id == drama.drama_id,
+        select(*VIDEO_SOURCE.c).where(
+            VIDEO_SOURCE.c.draft_id == draft_id,
+            VIDEO_SOURCE.c.drama_id == drama.drama_id,
         )
     ).all()
     assert [row.material_id for row in chosen] == [a.id]

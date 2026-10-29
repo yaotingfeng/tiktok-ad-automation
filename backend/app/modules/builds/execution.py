@@ -172,6 +172,7 @@ def _current_scene(
             session, context=context, preview_id=frozen.preview_id
         ),
         selected_identity=selected_identity or None,
+        media_kind="VIDEO",
     )
     targeting = frozen.scene_snapshot.get("field_constraints", {}).get(
         "audience_targeting"
@@ -721,6 +722,7 @@ def _prepare_scene_dependency(
                 advertiser_id=frozen.advertiser_id,
                 link_id=frozen.link_id,
                 route=claim.route,
+                media_kind="VIDEO",
                 selected_identity={
                     key: frozen.scene_snapshot["creative_fields"]["creative_info"][key]
                     for key in (

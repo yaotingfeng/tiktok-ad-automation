@@ -24,7 +24,7 @@ from app.modules.providers.models import (
 from app.modules.providers.repository import get_connection
 from app.modules.tenants.permissions import require_tenant
 
-from .models import BuildDraft, DraftDrama, DraftGroupMaterial, DraftInput
+from .models import BuildDraft, DraftDrama, DraftInput
 from .schemas import ManualLinkInput
 
 
@@ -308,7 +308,10 @@ def save_manual_link(
         if row.manual_link == value:
             return draft.revision
         if row.drama_id:
-            for model in (DraftGroupMaterial, DraftDrama):
+            from .video_units import delete_video_units
+
+            delete_video_units(session, draft, drama_id=row.drama_id)
+            for model in (DraftDrama,):
                 SASession.execute(
                     session,
                     delete(model).where(

@@ -14,6 +14,7 @@ from app.modules.builds.drafts import (
 from app.modules.builds.models import DraftDrama, DraftInput, DraftPreparation
 from app.modules.providers.models import LinkPreparationItem
 from tests.modules.builds.test_drafts import account, finish, ready_links
+from tests.modules.builds.video_source import VIDEO_SOURCE
 from tests.modules.materials.test_tenant_materials import material
 
 
@@ -257,7 +258,7 @@ def test_large_account_input_advances_one_page_without_combination_expansion(
 def test_refresh_preserves_manual_groups_rebuilds_auto_and_new_provider_config_gets_new_task(
     session, context, intent
 ):
-    from app.modules.builds.models import BuildDraft, DraftGroupMaterial
+    from app.modules.builds.models import BuildDraft
 
     keep = material(session, context, "Moon keep.mp4", bc="bc-draft")
     material(session, context, "Short Drama old.mp4", bc="bc-draft")
@@ -291,7 +292,7 @@ def test_refresh_preserves_manual_groups_rebuilds_auto_and_new_provider_config_g
     )
     finish(session, context, refreshed)
     selected = session.exec(
-        select(DraftGroupMaterial).where(DraftGroupMaterial.draft_id == draft_id)
+        select(*VIDEO_SOURCE.c).where(VIDEO_SOURCE.c.draft_id == draft_id)
     ).all()
     assert [row.material_id for row in selected if row.drama_id == moon.drama_id] == [
         keep.id

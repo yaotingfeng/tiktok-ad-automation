@@ -724,12 +724,13 @@ def test_mini_choice_rejects_stale_or_wrong_target_without_saving(
 def test_mini_choice_queues_only_scene_refresh_and_preserves_prepared_inputs(
     job_env, wire, redis_client
 ):
+    from app.modules.builds.image_composition_models import DraftCreativeUnit
     from app.modules.builds.mini_selection import ChooseMiniRequest, choose_mini
-    from app.modules.builds.models import DraftDrama, DraftGroupMaterial, DraftInput
+    from app.modules.builds.models import DraftDrama, DraftInput
 
     env = job_env
     draft_id, revision, catalog = selection_draft(env, wire, redis_client)
-    models = (DraftAccount, DraftDrama, DraftGroupMaterial, DraftInput)
+    models = (DraftAccount, DraftDrama, DraftCreativeUnit, DraftInput)
 
     def snapshot(db):
         return [

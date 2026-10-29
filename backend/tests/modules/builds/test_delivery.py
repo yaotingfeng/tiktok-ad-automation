@@ -14,7 +14,8 @@ def test_delivery_save_preserves_groups_and_obsoletes_preview(
 
     from app.modules.builds import previews
     from app.modules.builds.delivery_service import save_delivery
-    from app.modules.builds.models import BuildDraft, DraftGroupMaterial
+    from app.modules.builds.image_composition_models import DraftCreativeUnit
+    from app.modules.builds.models import BuildDraft
     from app.modules.builds.preview_models import BuildPreview
     from app.modules.builds.schemas import DeliveryChange
     from tests.modules.builds.test_previews import drain
@@ -23,7 +24,7 @@ def test_delivery_save_preserves_groups_and_obsoletes_preview(
     before = [
         r.model_dump()
         for r in session.exec(
-            select(DraftGroupMaterial).where(DraftGroupMaterial.draft_id == prepared)
+            select(DraftCreativeUnit).where(DraftCreativeUnit.draft_id == prepared)
         ).all()
     ]
     assert before
@@ -53,7 +54,7 @@ def test_delivery_save_preserves_groups_and_obsoletes_preview(
     after = [
         r.model_dump()
         for r in session.exec(
-            select(DraftGroupMaterial).where(DraftGroupMaterial.draft_id == prepared)
+            select(DraftCreativeUnit).where(DraftCreativeUnit.draft_id == prepared)
         ).all()
     ]
     assert before == after

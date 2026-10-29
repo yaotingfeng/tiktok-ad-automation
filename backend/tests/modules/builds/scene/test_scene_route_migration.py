@@ -191,7 +191,12 @@ def test_historical_scene_migration_preserves_ids_and_facts_without_inventing_ro
             )
         command.upgrade(config, "mcp02")
         with Session(engine) as db:
-            restored = db.get(SceneJob, job_id)
+            scene_table = Table(
+                "build_scene_job", MetaData(), autoload_with=db.connection()
+            )
+            restored = db.execute(
+                select(scene_table).where(scene_table.c.id == job_id)
+            ).one()
             assert (
                 restored.id == job_id and restored.connection_id == route.connection_id
             )
@@ -225,7 +230,14 @@ def test_historical_scene_migration_preserves_ids_and_facts_without_inventing_ro
             (DraftScenePreparation, (context.tenant_id, prep_id)),
         ):
             with Session(engine) as db, pytest.raises(IntegrityError):
-                db.get(model, key).frozen_route = route.model_dump(mode="json")
+                if model is SceneJob:
+                    db.execute(
+                        scene_table.update()
+                        .where(scene_table.c.id == key)
+                        .values(frozen_route=route.model_dump(mode="json"))
+                    )
+                else:
+                    db.get(model, key).frozen_route = route.model_dump(mode="json")
                 db.commit()
 
 

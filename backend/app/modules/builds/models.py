@@ -318,6 +318,8 @@ class DraftDrama(SQLModel, table=True):
 
 
 class DraftGroupMaterial(SQLModel, table=True):
+    """退役草稿表，仅为历史迁移/schema 审计保留；当前读写使用 DraftCreativeUnit。"""
+
     __tablename__ = "draft_group_material"
     __table_args__ = (
         ForeignKeyConstraint(

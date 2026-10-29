@@ -204,7 +204,12 @@ def _catalog(
         connection_id=draft.execution_connection_id,
     )
     return account, account_catalog(
-        session, context=context, account=account, route=route, resource=resource
+        session,
+        context=context,
+        account=account,
+        route=route,
+        resource=resource,
+        media_kind=draft.media_kind,
     )
 
 
@@ -215,6 +220,7 @@ def account_catalog(
     account: str,
     route: FrozenTikTokRoute,
     resource: Literal["identity", "minis"] = "minis",
+    media_kind: str = "VIDEO",
 ) -> SceneJob | None:
     from .scene import _account_scope
 
@@ -230,6 +236,7 @@ def account_catalog(
             SceneJob.tenant_id == context.tenant_id,
             SceneJob.bc_id == route.bc_id,
             SceneJob.advertiser_id == account,
+            SceneJob.media_kind == media_kind,
             SceneJob.connection_id == route.connection_id,
             col(SceneJob.resource).in_(ready_resources),
             select(SceneJobPage.id)
@@ -253,6 +260,7 @@ def account_catalog(
         advertiser_id=account,
         minis_id=job.minis_id,
         route=route,
+        media_kind=job.media_kind,
     )
     return job if scope["basis"] == job.scope_basis else None
 
@@ -456,13 +464,21 @@ def reuse_minis_catalog(
     if job.minis_id is None:
         return
     source = account_catalog(
-        session, context=context, account=job.advertiser_id, route=route
+        session,
+        context=context,
+        account=job.advertiser_id,
+        route=route,
+        media_kind=job.media_kind,
     )
     selected = catalog_options(session, source, minis_id=job.minis_id) if source else []
     if len(selected) != 1:
         source = None
     common = _fresh_mini_independent_scene(
-        session, context=context, account=job.advertiser_id, route=route
+        session,
+        context=context,
+        account=job.advertiser_id,
+        route=route,
+        media_kind=job.media_kind,
     )
     if source is None and common is None:
         return
@@ -569,6 +585,7 @@ def _fresh_mini_independent_scene(
     context: TenantContext,
     account: str,
     route: FrozenTikTokRoute,
+    media_kind: str,
 ) -> SceneJob | None:
     from .scene import _account_scope
 
@@ -578,6 +595,7 @@ def _fresh_mini_independent_scene(
             SceneJob.tenant_id == context.tenant_id,
             SceneJob.bc_id == route.bc_id,
             SceneJob.advertiser_id == account,
+            SceneJob.media_kind == media_kind,
             SceneJob.connection_id == route.connection_id,
             SceneJob.status == "COMPLETE",
             col(SceneJob.expires_at) > datetime.now(UTC),
@@ -596,6 +614,7 @@ def _fresh_mini_independent_scene(
             advertiser_id=account,
             minis_id=candidate.minis_id,
             route=route,
+            media_kind=candidate.media_kind,
         )
         if scope["basis"] == candidate.scope_basis:
             return candidate

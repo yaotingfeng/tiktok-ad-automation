@@ -26,7 +26,6 @@ from app.modules.builds.models import (
     BuildDraft,
     DraftAccount,
     DraftDrama,
-    DraftGroupMaterial,
     DraftInput,
     DraftPreparation,
 )
@@ -41,6 +40,7 @@ from app.modules.providers.models import (
 from app.modules.providers.schemas import link_reuse_key
 from app.modules.strategies.models import Strategy, StrategyVersion
 from app.modules.strategies.service import create_strategy
+from tests.modules.builds.video_source import VIDEO_SOURCE
 from tests.modules.materials.test_tenant_materials import material
 from tests.modules.strategies.test_versions import config
 
@@ -403,7 +403,7 @@ def test_preparation_matches_all_material_pages_once_per_drama(
     ready_links(session, context, task_id, intent)
     finish(session, context, task_id)
     rows = session.exec(
-        select(DraftGroupMaterial).where(DraftGroupMaterial.draft_id == draft_id)
+        select(*VIDEO_SOURCE.c).where(VIDEO_SOURCE.c.draft_id == draft_id)
     ).all()
     assert len(rows) == 207
     assert sum(row.material_id == shared.id for row in rows) == 2
@@ -481,9 +481,9 @@ def test_new_strategy_draft_keeps_material_match_order_in_source_package(
     finish(session, context, task_id)
 
     rows = session.exec(
-        select(DraftGroupMaterial)
-        .where(DraftGroupMaterial.draft_id == draft_id)
-        .order_by(DraftGroupMaterial.group_no, DraftGroupMaterial.position)
+        select(*VIDEO_SOURCE.c)
+        .where(VIDEO_SOURCE.c.draft_id == draft_id)
+        .order_by(VIDEO_SOURCE.c.group_no, VIDEO_SOURCE.c.position)
     ).all()
     assert [(row.group_no, row.position) for row in rows] == [
         (1, 1),

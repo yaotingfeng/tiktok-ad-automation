@@ -8,6 +8,7 @@ from app.modules.builds.drafts import create_draft
 from app.modules.builds.preview_models import PreviewAdMaterial
 from tests.modules.builds.test_previews import drain
 from tests.modules.builds.test_previews import prepared as prepared
+from tests.modules.builds.video_source import VIDEO_SOURCE
 from tests.modules.strategies.test_api import headers
 
 
@@ -138,7 +139,9 @@ def test_legacy_preview_summary_falls_back_to_group_materials_for_ad_allocations
     def digest_without_ad_allocations(db, row):
         # Historical previews lacked these rows; construct that snapshot before
         # freezing so the immutability guard remains active throughout the test.
-        db.execute(delete(PreviewAdMaterial).where(PreviewAdMaterial.preview_id == row.id))
+        db.execute(
+            delete(PreviewAdMaterial).where(PreviewAdMaterial.preview_id == row.id)
+        )
         return original_digest(db, row)
 
     monkeypatch.setattr(previews, "_digest_units", digest_without_ad_allocations)
@@ -146,9 +149,7 @@ def test_legacy_preview_summary_falls_back_to_group_materials_for_ad_allocations
         session, context=context, draft_id=prepared, expected_revision=1
     )
     drain(session, context, preview)
-    summary = previews.get_preview_summary(
-        session, context=context, preview_id=preview
-    )
+    summary = previews.get_preview_summary(session, context=context, preview_id=preview)
     units = previews.get_preview_units(
         session, context=context, preview_id=preview
     ).items
@@ -161,8 +162,7 @@ def test_legacy_preview_summary_falls_back_to_group_materials_for_ad_allocations
     assert dramas.status_code == 200
     assert dramas.json()["items"]
     assert all(
-        drama["material_allocation_count"] > 0
-        for drama in dramas.json()["items"]
+        drama["material_allocation_count"] > 0 for drama in dramas.json()["items"]
     )
 
 
@@ -217,16 +217,16 @@ def test_group_mutation_replay_preserves_applied_revision_and_current_groups(
 ):
     from sqlmodel import select
 
-    from app.modules.builds.models import DraftDrama, DraftGroupMaterial
+    from app.modules.builds.models import DraftDrama
 
     drama = session.exec(
         select(DraftDrama).where(DraftDrama.draft_id == prepared)
     ).first()
     materials = session.exec(
-        select(DraftGroupMaterial.material_id)
+        select(VIDEO_SOURCE.c.material_id)
         .where(
-            DraftGroupMaterial.draft_id == prepared,
-            DraftGroupMaterial.drama_id == drama.drama_id,
+            VIDEO_SOURCE.c.draft_id == prepared,
+            VIDEO_SOURCE.c.drama_id == drama.drama_id,
         )
         .limit(2)
     ).all()
@@ -254,9 +254,9 @@ def test_group_mutation_replay_preserves_applied_revision_and_current_groups(
     )
     assert client.patch(url, json=body, headers=headers(context)).json() == first.json()
     actual = session.exec(
-        select(DraftGroupMaterial.material_id).where(
-            DraftGroupMaterial.draft_id == prepared,
-            DraftGroupMaterial.drama_id == drama.drama_id,
+        select(VIDEO_SOURCE.c.material_id).where(
+            VIDEO_SOURCE.c.draft_id == prepared,
+            VIDEO_SOURCE.c.drama_id == drama.drama_id,
         )
     ).all()
     assert actual == [materials[1]]

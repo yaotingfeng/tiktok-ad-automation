@@ -44,7 +44,9 @@ def _parse_utc_schedule(value: str | None) -> datetime | None:
     try:
         return datetime.strptime(value, "%Y-%m-%d %H:%M:%S")
     except ValueError:
-        raise ValueError("schedule timestamps must use UTC YYYY-MM-DD HH:MM:SS") from None
+        raise ValueError(
+            "schedule timestamps must use UTC YYYY-MM-DD HH:MM:SS"
+        ) from None
 
 
 class StrategyConfig(BaseModel):
@@ -55,7 +57,9 @@ class StrategyConfig(BaseModel):
     bid_strategy: Literal["HIGHEST_VALUE", "TARGET_ROAS"] = "HIGHEST_VALUE"
     # 创建状态与排期统一使用 UTC，避免服务端和广告账户时区混用。
     creation_status: Literal["ENABLE", "DISABLE"] = "ENABLE"
-    schedule_type: Literal["SCHEDULE_FROM_NOW", "SCHEDULE_START_END"] = "SCHEDULE_FROM_NOW"
+    schedule_type: Literal["SCHEDULE_FROM_NOW", "SCHEDULE_START_END"] = (
+        "SCHEDULE_FROM_NOW"
+    )
     schedule_start_time: str | None = None
     schedule_end_time: str | None = None
     targeting: AudienceTargeting = Field(default_factory=AudienceTargeting)
@@ -77,14 +81,23 @@ class StrategyConfig(BaseModel):
     def validate_structure(self, info: ValidationInfo) -> StrategyConfig:
         """确保结构、状态与 UTC 排期字段满足创建合同。"""
         if self.schedule_type == "SCHEDULE_FROM_NOW":
-            if self.schedule_start_time is not None or self.schedule_end_time is not None:
-                raise ValueError("SCHEDULE_FROM_NOW must not include schedule timestamps")
+            if (
+                self.schedule_start_time is not None
+                or self.schedule_end_time is not None
+            ):
+                raise ValueError(
+                    "SCHEDULE_FROM_NOW must not include schedule timestamps"
+                )
         else:
             if self.schedule_start_time is None or self.schedule_end_time is None:
                 raise ValueError("SCHEDULE_START_END requires start and end timestamps")
         parsed_start = _parse_utc_schedule(self.schedule_start_time)
         parsed_end = _parse_utc_schedule(self.schedule_end_time)
-        if parsed_start is not None and parsed_end is not None and parsed_end <= parsed_start:
+        if (
+            parsed_start is not None
+            and parsed_end is not None
+            and parsed_end <= parsed_start
+        ):
             raise ValueError("schedule_end_time must be later than schedule_start_time")
         if self.group_generation_mode == "FIXED":
             if self.group_count is None:
@@ -220,3 +233,20 @@ class ValidationResult(BaseModel):
     valid: bool
     errors: list[ValidationIssue]
     scene_check_pending: bool = True
+
+
+class StructureEstimateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    config: StrategyConfig
+    unit_counts: list[Annotated[int, Field(ge=0, le=100_000, strict=True)]] = Field(
+        min_length=1, max_length=1000
+    )
+    account_count: int = Field(default=1, ge=0, le=10_000, strict=True)
+
+
+class StructureEstimatePublic(BaseModel):
+    campaign_count: int
+    adgroup_count: int
+    ad_count: int
+    daily_budget_sum: Decimal
+    dramas: tuple[tuple[tuple[int, ...], ...], ...]

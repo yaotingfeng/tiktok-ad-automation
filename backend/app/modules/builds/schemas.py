@@ -28,12 +28,14 @@ class DeliveryConfig(BaseModel):
             if value is None:
                 return None
             import re
+
             if not re.fullmatch(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}", value):
                 raise ValueError("排期时间必须为 UTC YYYY-MM-DD HH:MM:SS")
             try:
                 return datetime.strptime(value, "%Y-%m-%d %H:%M:%S").replace(tzinfo=UTC)
             except ValueError as exc:
                 raise ValueError("排期时间不是有效日期") from exc
+
         start, end = parse(self.schedule_start_time), parse(self.schedule_end_time)
         if self.schedule_mode == "IMMEDIATE" and (start or end):
             raise ValueError("立即开始不应填写排期时间")
@@ -41,7 +43,9 @@ class DeliveryConfig(BaseModel):
             raise ValueError("指定时间开启必须填写开始时间")
         if self.schedule_mode == "START_AT" and end is not None:
             raise ValueError("指定时间开启不应填写结束时间")
-        if self.schedule_mode == "START_END" and (start is None or end is None or end <= start):
+        if self.schedule_mode == "START_END" and (
+            start is None or end is None or end <= start
+        ):
             raise ValueError("结束时间必须晚于开始时间")
         return self
 
@@ -213,6 +217,8 @@ class DraftInputPublic(BaseModel):
 
 
 class DraftMaterialPublic(BaseModel):
+    """VIDEO 当前单元成员视图：group_no 固定为 1，position 是原分组展平后的稳定顺序。"""
+
     material_id: UUID
     file_name: str
     source_bc_id: str

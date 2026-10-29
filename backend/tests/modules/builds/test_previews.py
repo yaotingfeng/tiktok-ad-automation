@@ -7,6 +7,7 @@ from uuid import UUID, uuid4
 import pytest
 from sqlmodel import select
 
+from app.core.errors import DomainError
 from app.modules.builds import previews
 from app.modules.builds.drafts import create_draft, edit_material_groups, prepare_draft
 from app.modules.builds.models import BuildDraft, DraftDrama, DraftInput
@@ -24,6 +25,7 @@ from app.modules.providers.models import ProviderApplication
 from app.modules.strategies.models import StrategyVersion
 from app.modules.strategies.service import append_version
 from tests.modules.builds.test_drafts import account, finish, ready_links
+from tests.modules.builds.video_source import VIDEO_SOURCE
 from tests.modules.materials.test_tenant_materials import material
 from tests.modules.strategies.test_versions import config
 
@@ -467,7 +469,6 @@ def test_strategy_structure_matrix_persists_material_ads_and_frozen_contract(
     expected_ads,
 ):
     """四种策略均经真实预览写入 PlannedAd/PreviewAdMaterial 后再核对合同。"""
-    from app.modules.builds.models import DraftGroupMaterial
 
     source = session.get(BuildDraft, prepared)
     assert source is not None
@@ -488,15 +489,31 @@ def test_strategy_structure_matrix_persists_material_ads_and_frozen_contract(
     )
     # 使用固定 20 条离线素材，让第四个矩阵精确得到每组 10 个广告。
     rows = session.exec(
-        select(DraftGroupMaterial)
-        .where(DraftGroupMaterial.draft_id == draft_id)
-        .order_by(DraftGroupMaterial.drama_id, DraftGroupMaterial.position)
+        select(*VIDEO_SOURCE.c)
+        .where(VIDEO_SOURCE.c.draft_id == draft_id)
+        .order_by(VIDEO_SOURCE.c.drama_id, VIDEO_SOURCE.c.position)
     ).all()
     seen_by_drama = {}
     for row in rows:
         seen_by_drama[row.drama_id] = seen_by_drama.get(row.drama_id, 0) + 1
         if seen_by_drama[row.drama_id] > 20:
-            session.delete(row)
+            from app.modules.builds.image_composition_models import (
+                DraftCreativeUnit,
+                DraftCreativeUnitItem,
+            )
+
+            item = session.get(
+                DraftCreativeUnitItem,
+                (row.tenant_id, row.draft_id, row.generation, row.unit_id, 1),
+            )
+            session.delete(item)
+            session.flush()
+            session.delete(
+                session.get(
+                    DraftCreativeUnit,
+                    (row.tenant_id, row.draft_id, row.generation, row.unit_id),
+                )
+            )
     session.flush()
     base_scene = previews.read_scene_context(
         session,
@@ -1492,3 +1509,61 @@ def test_failed_preview_retry_rejects_changed_draft(session, context, prepared):
         previews.generate_preview(
             session, context=context, draft_id=prepared, expected_revision=1
         )
+
+
+def test_batch_cap_blocks_before_any_account_expansion(session, context, prepared):
+    draft = session.get(BuildDraft, prepared)
+    draft.structure_override = {
+        "group_generation_mode": "FIXED",
+        "group_count": 100,
+        "group_material_allocation": "SHARED",
+        "max_materials_per_group": None,
+        "ad_generation_mode": "FIXED",
+        "ads_per_group": 20,
+        "ad_material_allocation": "SHARED",
+        "max_materials_per_ad": None,
+        "creative_count": 1,
+    }
+    session.flush()
+    with pytest.raises(DomainError, match="拆批"):
+        previews.generate_preview(
+            session,
+            context=context,
+            draft_id=prepared,
+            expected_revision=draft.revision,
+        )
+    assert not session.exec(
+        select(BuildPreview).where(BuildPreview.draft_id == prepared)
+    ).all()
+
+
+def test_preview_freezes_effective_structure_override(session, context, prepared):
+    draft = session.get(BuildDraft, prepared)
+    draft.structure_override = {
+        "group_generation_mode": "FIXED",
+        "group_count": 1,
+        "group_material_allocation": "SHARED",
+        "max_materials_per_group": None,
+        "ad_generation_mode": "BY_MATERIAL",
+        "ads_per_group": None,
+        "ad_material_allocation": None,
+        "max_materials_per_ad": 6,
+        "creative_count": 3,
+    }
+    session.flush()
+    preview_id = previews.generate_preview(
+        session, context=context, draft_id=prepared, expected_revision=draft.revision
+    )
+    drain(session, context, preview_id)
+    frozen = session.get(BuildPreview, preview_id)
+    assert frozen.config["max_materials_per_ad"] == 6
+    assert frozen.config["creative_count"] == 3
+    assert frozen.budget == Decimal("100")
+    assert (
+        len(
+            session.exec(
+                select(PlannedAd).where(PlannedAd.preview_id == preview_id)
+            ).all()
+        )
+        == 72
+    )

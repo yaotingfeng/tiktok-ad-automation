@@ -420,6 +420,8 @@ import type {
   strategiesSavedRequestResponse,
   strategiesSetStateData,
   strategiesSetStateResponse,
+  strategiesStructureEstimateData,
+  strategiesStructureEstimateResponse,
   strategiesValidateData,
   strategiesValidateResponse,
   strategiesVersionData,
@@ -685,6 +687,7 @@ export const DEMO_OPERATIONS = {
   "strategies-get_strategies": { method: "GET", path: "/api/tenants/{tenant_id}/strategies", query: {"active":"boolean","limit":"number"} },
   "strategies-saved_request": { method: "GET", path: "/api/tenants/{tenant_id}/strategy-save-requests/{request_id}", query: {} },
   "strategies-set_state": { method: "PATCH", path: "/api/tenants/{tenant_id}/strategies/{strategy_id}", query: {} },
+  "strategies-structure_estimate": { method: "POST", path: "/api/tenants/{tenant_id}/strategies/structure-estimate", query: {} },
   "strategies-validate": { method: "POST", path: "/api/tenants/{tenant_id}/strategies/validate", query: {} },
   "strategies-version": { method: "GET", path: "/api/tenants/{tenant_id}/strategy-versions/{version_id}", query: {} },
   "strategies-versions": { method: "GET", path: "/api/tenants/{tenant_id}/strategies/{strategy_id}/versions", query: {"limit":"number"} },
@@ -925,6 +928,7 @@ export interface DemoOperationTypes {
   "strategies-get_strategies": { data: strategiesGetStrategiesData; response: strategiesGetStrategiesResponse }
   "strategies-saved_request": { data: strategiesSavedRequestData; response: strategiesSavedRequestResponse }
   "strategies-set_state": { data: strategiesSetStateData; response: strategiesSetStateResponse }
+  "strategies-structure_estimate": { data: strategiesStructureEstimateData; response: strategiesStructureEstimateResponse }
   "strategies-validate": { data: strategiesValidateData; response: strategiesValidateResponse }
   "strategies-version": { data: strategiesVersionData; response: strategiesVersionResponse }
   "strategies-versions": { data: strategiesVersionsData; response: strategiesVersionsResponse }

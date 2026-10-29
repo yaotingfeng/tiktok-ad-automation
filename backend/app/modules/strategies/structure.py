@@ -1,12 +1,8 @@
-"""纯素材结构规划。
-
-规划器只根据已经确认的素材和策略配置生成内存计划；它不查询数据库或平台，
-也不会在素材不足时偷偷补素材。广告创意复制放在两层素材分配完成之后，保证
-同一个基础广告的复制广告始终引用完全相同的素材集合。
-"""
+"""以不可拆分创意单元规划两层分配，最后复制文案；计数和实际计划共用规则。"""
 
 from collections.abc import Iterable
 from dataclasses import dataclass
+from decimal import Decimal, localcontext
 from random import Random
 from typing import Protocol
 from uuid import UUID
@@ -20,170 +16,183 @@ from app.modules.strategies.schemas import (
     StrategyConfig,
 )
 
+MAX_UNITS_PER_AD = 50
 
-class NamedMaterial(Protocol):
-    # 规划器只读取冻结素材 ID；文件名不参与分组，也不要求草稿映射重复保存。
+
+class NamedCreativeUnit(Protocol):
     @property
-    def material_id(self) -> UUID: ...
+    def unit_id(self) -> UUID: ...
 
 
 @dataclass(frozen=True)
-class AdMaterialPlan:
+class AdCreativePlan:
     base_ad_no: int
-    material_ids: tuple[UUID, ...]
+    unit_ids: tuple[UUID, ...]
     copies: tuple[CopyChoice, ...]
 
 
 @dataclass(frozen=True)
-class GroupPlan:
+class GroupCreativePlan:
     group_no: int
-    material_ids: tuple[UUID, ...]
-    ads: tuple[AdMaterialPlan, ...]
+    unit_ids: tuple[UUID, ...]
+    ads: tuple[AdCreativePlan, ...]
 
 
-def _stable_material_ids(materials: Iterable[NamedMaterial]) -> tuple[UUID, ...]:
-    """保留素材包冻结顺序，并按首次出现的 ID 去重。"""
-    seen: set[UUID] = set()
-    result: list[UUID] = []
-    for item in materials:
-        if item.material_id not in seen:
-            seen.add(item.material_id)
-            result.append(item.material_id)
-    return tuple(result)
+@dataclass(frozen=True)
+class StructureEstimate:
+    campaign_count: int
+    adgroup_count: int
+    ad_count: int
+    daily_budget_sum: Decimal
+    # 每个剧目的广告组，每组按基础广告展示单元数；与最终文案版本分开。
+    dramas: tuple[tuple[tuple[int, ...], ...], ...]
 
 
-def _average_slices(
-    material_ids: tuple[UUID, ...], unit_count: int
-) -> tuple[tuple[UUID, ...], ...]:
-    """把连续素材切成 unit_count 段，余数依次放到前面的段。"""
-    if unit_count > len(material_ids):
-        raise DomainError("invalid_material_allocation", "invalid_material_allocation")
-    width, remainder = divmod(len(material_ids), unit_count)
-    result: list[tuple[UUID, ...]] = []
-    cursor = 0
-    for index in range(unit_count):
-        size = width + (1 if index < remainder else 0)
-        result.append(material_ids[cursor : cursor + size])
-        cursor += size
-    return tuple(result)
+def _sizes(
+    count: int,
+    *,
+    mode: str,
+    fixed: int | None,
+    allocation: str | None,
+    maximum: int | None,
+    fixed_limit: int,
+) -> tuple[int, ...]:
+    if mode == "FIXED":
+        if allocation not in {"SHARED", "SEQUENTIAL_AVERAGE"}:
+            raise DomainError(
+                "configuration_invalid", "固定数量必须指定创意单元分配方式"
+            )
+        if fixed is None or fixed > fixed_limit:
+            raise DomainError("configuration_invalid", "固定数量超过本地安全上限")
+        if allocation == "SEQUENTIAL_AVERAGE" and fixed > count:
+            raise DomainError(
+                "invalid_material_allocation", "invalid_material_allocation"
+            )
+        if not count:
+            return ()
+        if allocation == "SHARED":
+            return (count,) * fixed
+        width, remainder = divmod(count, fixed)
+        return tuple(width + (i < remainder) for i in range(fixed))
+    assert maximum is not None
+    width, remainder = divmod(count, maximum)
+    return (maximum,) * width + ((remainder,) if remainder else ())
 
 
-def _bounded_slices(
-    material_ids: tuple[UUID, ...], max_materials: int
-) -> tuple[tuple[UUID, ...], ...]:
-    """按素材上限依次切片；尾段允许少于上限。"""
-    return tuple(
-        material_ids[index : index + max_materials]
-        for index in range(0, len(material_ids), max_materials)
+def _structure_sizes(count: int, config: StrategyConfig) -> tuple[tuple[int, ...], ...]:
+    group_sizes = _sizes(
+        count,
+        mode=config.group_generation_mode,
+        fixed=config.group_count,
+        allocation=config.group_material_allocation,
+        maximum=config.max_materials_per_group,
+        fixed_limit=MAX_FIXED_GROUP_COUNT,
     )
+    groups: list[tuple[int, ...]] = []
+    total = 0
+    for size in group_sizes:
+        ads = _sizes(
+            size,
+            mode=config.ad_generation_mode,
+            fixed=config.ads_per_group,
+            allocation=config.ad_material_allocation,
+            maximum=config.max_materials_per_ad,
+            fixed_limit=MAX_FIXED_ADS_PER_GROUP,
+        )
+        total += len(ads) * config.creative_count
+        if total > MAX_TOTAL_PLANNED_ADS:
+            raise DomainError(
+                "configuration_invalid", "策略展开广告数量超过本地安全上限"
+            )
+        if any(value > MAX_UNITS_PER_AD for value in ads):
+            raise DomainError("creative_count_exceeded", "单广告最多 50 个创意单元")
+        groups.append(ads)
+    return tuple(groups)
 
 
-def _allocate_groups(
-    material_ids: tuple[UUID, ...], config: StrategyConfig
-) -> tuple[tuple[UUID, ...], ...]:
-    if config.group_generation_mode == "FIXED" and (
-        config.group_count is None or config.group_count > MAX_FIXED_GROUP_COUNT
-    ):
-        raise DomainError("configuration_invalid", "固定广告组数量超过本地安全上限")
-    if not material_ids:
-        # 没有素材时不生成空广告组；平均模式仍需明确报告数量不足。
-        if (
-            config.group_generation_mode == "FIXED"
-            and config.group_material_allocation == "SEQUENTIAL_AVERAGE"
-        ):
-            assert config.group_count is not None
-            return _average_slices(material_ids, config.group_count)
-        return ()
-
-    if config.group_generation_mode == "BY_MATERIAL":
-        assert config.max_materials_per_group is not None
-        return _bounded_slices(material_ids, config.max_materials_per_group)
-
-    assert config.group_count is not None
-    if config.group_material_allocation == "SHARED":
-        return tuple(material_ids for _ in range(config.group_count))
-    assert config.group_material_allocation == "SEQUENTIAL_AVERAGE"
-    return _average_slices(material_ids, config.group_count)
-
-
-def _allocate_ads(
-    material_ids: tuple[UUID, ...], config: StrategyConfig
-) -> tuple[tuple[UUID, ...], ...]:
-    if config.ad_generation_mode == "FIXED" and (
-        config.ads_per_group is None or config.ads_per_group > MAX_FIXED_ADS_PER_GROUP
-    ):
-        raise DomainError("configuration_invalid", "固定每组广告数量超过本地安全上限")
-    if not material_ids:
-        if (
-            config.ad_generation_mode == "FIXED"
-            and config.ad_material_allocation == "SEQUENTIAL_AVERAGE"
-        ):
-            assert config.ads_per_group is not None
-            return _average_slices(material_ids, config.ads_per_group)
-        return ()
-
-    if config.ad_generation_mode == "BY_MATERIAL":
-        assert config.max_materials_per_ad is not None
-        return _bounded_slices(material_ids, config.max_materials_per_ad)
-
-    assert config.ads_per_group is not None
-    if config.ad_material_allocation == "SHARED":
-        return tuple(material_ids for _ in range(config.ads_per_group))
-    assert config.ad_material_allocation == "SEQUENTIAL_AVERAGE"
-    return _average_slices(material_ids, config.ads_per_group)
+def estimate_batch_structure(
+    unit_counts: Iterable[int], *, account_count: int, config: StrategyConfig
+) -> StructureEstimate:
+    """在账户笛卡尔积/广告对象分配前校验整批；不读取图片成员，不倍增预算。"""
+    if type(account_count) is not int or account_count < 0:
+        raise ValueError("Invalid account count")
+    if account_count == 0:
+        return StructureEstimate(0, 0, 0, Decimal(0), ())
+    campaigns = groups = ads = 0
+    dramas = []
+    for count in unit_counts:
+        if type(count) is not int or count < 0:
+            raise ValueError("Invalid unit count")
+        sizes = _structure_sizes(count, config)
+        dramas.append(sizes)
+        campaigns += bool(sizes) * account_count
+        groups += len(sizes) * account_count
+        ads += (
+            sum(len(group) for group in sizes) * config.creative_count * account_count
+        )
+        if ads > MAX_TOTAL_PLANNED_ADS:
+            raise DomainError(
+                "configuration_invalid", "全批预计广告超过 10,000 条，请拆批"
+            )
+    budget_units = groups if config.budget_strategy == "ADGROUP" else campaigns
+    # Money 最多 38 位，再乘工程上限，不能受 Decimal 默认 28 位精度截断。
+    with localcontext() as arithmetic:
+        arithmetic.prec = 50
+        budget = config.budget * budget_units
+    return StructureEstimate(campaigns, groups, ads, budget, tuple(dramas))
 
 
-def _unique_copies(pool: tuple[CopyChoice, ...]) -> tuple[CopyChoice, ...]:
-    """过滤空正文并按正文去重，沿用文案池的稳定顺序。"""
-    unique: dict[str, CopyChoice] = {}
-    for choice in pool:
-        if choice.text.strip() and choice.text not in unique:
-            unique[choice.text] = choice
-    return tuple(unique.values())
+def _slices(ids: tuple[UUID, ...], sizes: tuple[int, ...], shared: bool):
+    offset = 0
+    for size in sizes:
+        yield ids if shared else ids[offset : offset + size]
+        offset += size
 
 
 def plan_structure(
-    materials: Iterable[NamedMaterial],
+    units: Iterable[NamedCreativeUnit],
     *,
     config: StrategyConfig,
     pool: tuple[CopyChoice, ...],
     seed: int,
-) -> tuple[GroupPlan, ...]:
-    """生成广告组、基础广告素材集合及创意复制后的纯内存计划。"""
-    copies = _unique_copies(pool)
+) -> tuple[GroupCreativePlan, ...]:
+    # 单元身份去重：相同图片不同曲目、明确复制的单元不可按素材或内容摘要合并。
+    unit_ids = tuple(dict.fromkeys(item.unit_id for item in units))
+    unique: dict[str, CopyChoice] = {}
+    for choice in pool:
+        if choice.text.strip() and choice.text not in unique:
+            unique[choice.text] = choice
+    copies = tuple(unique.values())
     if config.creative_count > len(copies):
         raise DomainError("copy_pool_exhausted", "copy_pool_exhausted")
-
-    material_ids = _stable_material_ids(materials)
-    group_material_sets = _allocate_groups(material_ids, config)
-    # 在创建广告/创意 tuple 前先计算最终展开规模，避免固定组数、固定广告数
-    # 与创意复制组合成百万级内存计划。该上限高于当前正常批量策略，且不替代
-    # 场景阶段对平台单广告组上限的核验。
-    planned_ad_count = 0
-    for group_ids in group_material_sets:
-        if config.ad_generation_mode == "FIXED":
-            assert config.ads_per_group is not None
-            base_ad_count = config.ads_per_group
-        else:
-            assert config.max_materials_per_ad is not None
-            base_ad_count = (
-                len(group_ids) + config.max_materials_per_ad - 1
-            ) // config.max_materials_per_ad
-        planned_ad_count += base_ad_count * config.creative_count
-        if planned_ad_count > MAX_TOTAL_PLANNED_ADS:
-            raise DomainError(
-                "configuration_invalid", "策略展开广告数量超过本地安全上限"
-            )
+    sizes = _structure_sizes(len(unit_ids), config)
+    group_sizes = _sizes(
+        len(unit_ids),
+        mode=config.group_generation_mode,
+        fixed=config.group_count,
+        allocation=config.group_material_allocation,
+        maximum=config.max_materials_per_group,
+        fixed_limit=MAX_FIXED_GROUP_COUNT,
+    )
     rng = Random(seed)
-    groups: list[GroupPlan] = []
-
-    for group_no, group_ids in enumerate(group_material_sets, start=1):
-        ad_material_sets = _allocate_ads(group_ids, config)
-        ads: list[AdMaterialPlan] = []
-        for base_ad_no, ad_ids in enumerate(ad_material_sets, start=1):
-            # 基础广告先固定素材集合和文案池抽样；后续执行阶段再按 creative_no 展开。
-            selected = tuple(rng.sample(copies, config.creative_count))
-            ads.append(AdMaterialPlan(base_ad_no, ad_ids, selected))
-        groups.append(GroupPlan(group_no, group_ids, tuple(ads)))
-
+    groups = []
+    for group_no, (ids, ad_sizes) in enumerate(
+        zip(
+            _slices(
+                unit_ids, group_sizes, config.group_material_allocation == "SHARED"
+            ),
+            sizes,
+            strict=True,
+        ),
+        1,
+    ):
+        ads = tuple(
+            AdCreativePlan(
+                base_ad_no, ad_ids, tuple(rng.sample(copies, config.creative_count))
+            )
+            for base_ad_no, ad_ids in enumerate(
+                _slices(ids, ad_sizes, config.ad_material_allocation == "SHARED"), 1
+            )
+        )
+        groups.append(GroupCreativePlan(group_no, ids, ads))
     return tuple(groups)

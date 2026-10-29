@@ -1,3 +1,4 @@
+import { demoStructureEstimate } from "../fixtures/structure-estimate"
 import type {
   MemberPublic,
   StrategyConfig_Input,
@@ -446,4 +447,12 @@ handle("tenants-post_member_user", ({ path, body }) => {
   demoCreatedMembers.push(newMember)
 
   return newMember
+})
+
+handle("strategies-structure_estimate", ({ body }) => {
+  try {
+    return demoStructureEstimate(body)
+  } catch {
+    return demoError(422, "configuration_invalid", "当前结构无法生成")
+  }
 })

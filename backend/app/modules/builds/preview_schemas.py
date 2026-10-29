@@ -53,7 +53,7 @@ def build_structure_summary(
     )
     return (
         f"{campaign_count} 个系列、{group_count} 个广告组、{per_group}、"
-        f"创意数量 {creative_count}、最终 {ad_count} 个广告、{per_ad}；"
+        f"每基础广告文案版本数 K={creative_count}、最终 {ad_count} 个广告、{per_ad}；"
         f"广告组{generation_mode_label(group_generation_mode)}，广告{generation_mode_label(ad_generation_mode)}；"
         f"去重素材 {unique_material_count} 个，分配引用 {material_allocation_count} 次"
     )

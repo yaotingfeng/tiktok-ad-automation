@@ -4,7 +4,7 @@ import unicodedata
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
-from app.modules.builds.scene_schemas import SceneContext
+from app.modules.builds.scene_schemas import CREATIVE_COMPILER_REVISION, SceneContext
 from app.modules.strategies.schemas import StrategyConfig
 
 
@@ -53,9 +53,18 @@ def final_ad_count_exceeded(
 
 
 def scene_reasons(
-    config: StrategyConfig, scene: SceneContext, currency: str
+    config: StrategyConfig,
+    scene: SceneContext,
+    currency: str,
+    *,
+    media_kind: str = "VIDEO",
 ) -> list[str]:
     reasons = list(scene.reason_codes)
+    if (
+        scene.media_kind != media_kind
+        or scene.compiler_contract_revision != CREATIVE_COMPILER_REVISION
+    ):
+        reasons.append("scene_format_unverified")
     if not scene.supported and not reasons:
         reasons.append("scene_unsupported")
     if currency != config.currency:

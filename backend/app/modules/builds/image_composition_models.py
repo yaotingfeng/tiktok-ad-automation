@@ -1,4 +1,4 @@
-"""新草稿创意事实；视频回填与旧 CRUD 切换须在 P3 同步完成，禁止双写镜像。"""
+"""当前草稿统一创意单元及有序成员事实。"""
 
 from typing import Any, Literal
 from uuid import UUID, uuid4
@@ -109,6 +109,10 @@ class DraftCreativeUnit(SQLModel, table=True):
     music_snapshot: dict[str, Any] = Field(
         default_factory=dict, sa_column=Column(JSONB, nullable=False)
     )
+
+    @property
+    def unit_id(self) -> UUID:
+        return self.id
 
 
 class DraftCreativeUnitItem(SQLModel, table=True):

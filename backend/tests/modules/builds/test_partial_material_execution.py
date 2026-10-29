@@ -19,7 +19,6 @@ from app.modules.builds import (
 from app.modules.builds.cover_execution import validate_ad_assets
 from app.modules.builds.execution_models import ExecutionStep
 from app.modules.builds.execution_schemas import StepClaim
-from app.modules.builds.models import DraftGroupMaterial
 from app.modules.builds.preview_models import (
     BuildUnit,
     PreviewAdMaterial,
@@ -29,19 +28,20 @@ from app.modules.builds.routes import load_preview_route
 from app.modules.materials.models import AccountMaterial
 from tests.modules.builds.test_previews import drain
 from tests.modules.builds.test_previews import prepared as prepared
+from tests.modules.builds.video_source import VIDEO_SOURCE
 
 
 @pytest.fixture
 def partial(session, context, prepared, monkeypatch):
     rows = session.exec(
-        select(DraftGroupMaterial)
+        select(*VIDEO_SOURCE.c)
         .where(
-            DraftGroupMaterial.draft_id == prepared,
+            VIDEO_SOURCE.c.draft_id == prepared,
         )
         .order_by(
-            col(DraftGroupMaterial.drama_id),
-            col(DraftGroupMaterial.group_no),
-            col(DraftGroupMaterial.position),
+            col(VIDEO_SOURCE.c.drama_id),
+            col(VIDEO_SOURCE.c.group_no),
+            col(VIDEO_SOURCE.c.position),
         )
     ).all()
     drama = rows[0].drama_id
@@ -288,7 +288,9 @@ def test_unavailable_material_and_unknown_ad_recovery_preserve_frozen_rows(
         )
     ).all()
     assert before_ad_materials and before_skipped
-    before_ad_material_snapshot = sorted(row.model_dump_json() for row in before_ad_materials)
+    before_ad_material_snapshot = sorted(
+        row.model_dump_json() for row in before_ad_materials
+    )
     before_skipped_snapshot = sorted(row.model_dump_json() for row in before_skipped)
     ad = session.exec(
         select(ExecutionStep).where(
@@ -331,5 +333,11 @@ def test_unavailable_material_and_unknown_ad_recovery_preserve_frozen_rows(
             PreviewSkippedMaterial.preview_id == partial.preview,
         )
     ).all()
-    assert sorted(row.model_dump_json() for row in after_ad_materials) == before_ad_material_snapshot
-    assert sorted(row.model_dump_json() for row in after_skipped) == before_skipped_snapshot
+    assert (
+        sorted(row.model_dump_json() for row in after_ad_materials)
+        == before_ad_material_snapshot
+    )
+    assert (
+        sorted(row.model_dump_json() for row in after_skipped)
+        == before_skipped_snapshot
+    )

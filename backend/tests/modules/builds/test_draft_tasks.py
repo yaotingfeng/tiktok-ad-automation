@@ -10,11 +10,11 @@ from app.modules.builds.drafts import continue_draft, create_draft, prepare_draf
 from app.modules.builds.models import (
     BuildDraft,
     DraftDrama,
-    DraftGroupMaterial,
     DraftPreparation,
 )
 from app.modules.tenants.models import TenantMembership
 from tests.modules.builds.test_drafts import account, ready_links
+from tests.modules.builds.video_source import VIDEO_SOURCE
 from tests.modules.materials.test_tenant_materials import material
 
 
@@ -116,7 +116,7 @@ def test_twenty_two_dramas_match_without_scheduled_sleeps(
         raise AssertionError("material matching did not finish")
     assert all(row.matched_count == 25 for row in rows)
     selected = session.exec(
-        select(DraftGroupMaterial).where(DraftGroupMaterial.draft_id == draft)
+        select(*VIDEO_SOURCE.c).where(VIDEO_SOURCE.c.draft_id == draft)
     ).all()
     assert len(selected) == 550
     record_property("matching_seconds", perf_counter() - started)
@@ -142,7 +142,7 @@ def test_material_batch_preserves_all_pages_and_selection_positions(
     )
     session.expire_all()
     selected = session.exec(
-        select(DraftGroupMaterial).where(DraftGroupMaterial.draft_id == draft)
+        select(*VIDEO_SOURCE.c).where(VIDEO_SOURCE.c.draft_id == draft)
     ).all()
     assert {row.material_id for row in selected} == {row.id for row in expected}
     assert len(selected) == 205
@@ -219,7 +219,7 @@ def test_material_batch_error_rolls_back_partial_selection(
     session.expire_all()
     assert session.get(DraftPreparation, task).status == "BLOCKED"
     assert not session.exec(
-        select(DraftGroupMaterial).where(DraftGroupMaterial.draft_id == draft)
+        select(*VIDEO_SOURCE.c).where(VIDEO_SOURCE.c.draft_id == draft)
     ).all()
     assert all(
         row.material_state == "pending"

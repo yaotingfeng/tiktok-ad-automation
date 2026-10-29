@@ -6,15 +6,20 @@ limits its English copy pool to 1..100 characters; it is not a TikTok quota.
 
 from typing import Any
 
-REVISION = "minis-constraints-2026-10-12-v4-local-budget"
+REVISION = "minis-unit-constraints-2026-10-29-v5"
 PLATFORM_COPY_LENGTH_LIMIT: int | None = None
 COPY_LENGTH_LIMIT = 100
 COPY_LENGTH_MEASUREMENT = "characters"
 
 
-def constraints_for(currency: str) -> tuple[dict[str, Any], tuple[str, ...]]:
+def constraints_for(
+    currency: str, *, media_kind: str = "VIDEO"
+) -> tuple[dict[str, Any], tuple[str, ...]]:
     # 预算是本地参数规则；历史广告组不是账户资格，新账户也能直接配置预算。
     reasons: list[str] = []
+    if media_kind == "CAROUSEL":
+        # 单账户历史创建不能证明本账户/本合同的轮播资格，待独立格式证据后开放。
+        reasons.append("carousel_format_unverified")
     minimum, maximum, precision = "50", "10000000", "0.01"
     constraints: dict[str, Any] = {
         "revision": REVISION,
@@ -25,19 +30,25 @@ def constraints_for(currency: str) -> tuple[dict[str, Any], tuple[str, ...]]:
             "ad": "cjk_weighted",
         },
         "emoji_allowed": False,
+        "media_kind": media_kind,
         "max_creatives_per_ad": 50,
+        "max_images_per_unit": 35 if media_kind == "CAROUSEL" else None,
         "max_ads_per_adgroup": 30,
         # 当前 Smart+ Minis 账户回读事实仅证明 AUTOMATIC；在取得账户级
         # MANUAL allowlist 证据前，不能把手动性别/年龄/语言选择发送到创建接口。
         "targeting_optimization_modes": ("AUTOMATIC",),
         "roas_bid": {"minimum": "0.01", "maximum": "1000"},
         # 金额范围沿用现有 USD 规则，不再额外读取广告组目录。
-        "adgroup_daily_budget": ({
-            "currency": "USD",
-            "minimum_inclusive": minimum,
-            "maximum_exclusive": maximum,
-            "precision": precision,
-        } if currency == "USD" else None),
+        "adgroup_daily_budget": (
+            {
+                "currency": "USD",
+                "minimum_inclusive": minimum,
+                "maximum_exclusive": maximum,
+                "precision": precision,
+            }
+            if currency == "USD"
+            else None
+        ),
         "budget_capabilities": {
             "campaign_daily_budget": "verified",
             "adgroup_daily_budget": "verified" if currency == "USD" else "unverified",

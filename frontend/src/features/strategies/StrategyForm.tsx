@@ -896,7 +896,7 @@ export function StrategyForm({
                         "max_materials_per_ad",
                         maxMaterialsPerAd,
                         setMaxMaterialsPerAd,
-                        "每个广告最多使用的素材数量；按素材顺序拆分。",
+                        "M 为每广告最多创意单元数；一个视频或完整轮播为一个单元。",
                       )}
                     {adGenerationMode === "FIXED" &&
                       Number(adsPerGroup) > 1 &&
@@ -920,7 +920,7 @@ export function StrategyForm({
                       "creative_count",
                       creativeCount,
                       setCreativeCount,
-                      "基础广告完成素材分配后，每个广告复制的创意数量。",
+                      "K 为每基础广告的文案版本数；每个基础广告生成 K 条广告，复用相同的完整创意单元。",
                     )}
                   </FieldGroup>
                 </section>
@@ -1191,7 +1191,7 @@ export function StrategyForm({
             </CardHeader>
             <CardContent className="flex flex-col gap-2 text-sm">
               <p>
-                素材先按广告组规则分配，再按广告规则生成基础广告；创意数量只复制已分配素材的广告。
+                先分广告组，再按创意单元生成基础广告，最后按文案版本数 K 复制广告。
               </p>
               <p>本批所有有效剧目覆盖全部有效目标账户。策略不保存账户池。</p>
               <p>提交具体搭建预览后，Campaign、Ad Group、Ad 直接启用。</p>
@@ -1200,6 +1200,7 @@ export function StrategyForm({
         </form>
         <aside className="flex min-w-0 flex-col gap-6">
           <StrategyStructureExample
+            tenantId={tenantId}
             groupGenerationMode={groupGenerationMode}
             groupCount={positiveInteger(groupCount) ? Number(groupCount) : null}
             groupMaterialAllocation={groupMaterialAllocation}

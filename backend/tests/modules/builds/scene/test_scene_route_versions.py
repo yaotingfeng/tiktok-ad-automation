@@ -209,7 +209,7 @@ def test_draft_account_resolution_uses_its_explicit_connection_without_default(
 @pytest.mark.parametrize(
     "gateway_case", ["OFFICIAL_API", "OFFICIAL_MCP"], indirect=True
 )
-def test_actual_scene_scope_preserves_legacy_digest_and_distinguishes_rebinding(
+def test_actual_scene_scope_versions_format_contract_and_distinguishes_rebinding(
     database_engine, scene_case
 ):
     from app.core.config import settings
@@ -240,6 +240,8 @@ def test_actual_scene_scope_preserves_legacy_digest_and_distinguishes_rebinding(
         access = scope["access"]
         historical = {
             "route": stored,
+            "media_kind": "VIDEO",
+            "compiler_contract_revision": scene.CREATIVE_COMPILER_REVISION,
             "scene_contract_revision": scene.SCENE_CONTRACT_REVISION,
             "constraints_revision": scene_constraints.REVISION,
             "max_age_seconds": settings.SCENE_MAX_AGE_SECONDS,
@@ -272,3 +274,51 @@ def test_actual_scene_scope_preserves_legacy_digest_and_distinguishes_rebinding(
         digests.add(new_digest)
     assert "binding_revision" not in stored
     assert legacy.binding_revision == current.binding_revision == 0
+
+
+def test_scene_formats_and_compiler_versions_never_share_cache(
+    database_engine, scene_case
+):
+    from types import SimpleNamespace
+
+    from app.modules.builds.scene import _assemble_scene, scene_scope_basis
+    from app.modules.builds.scene_job_models import SceneJob
+    from app.modules.builds.scene_jobs import ensure_scene_preparation
+
+    case = scene_case
+    kwargs = {
+        "context": case["context"],
+        "bc_id": case["route"].bc_id,
+        "advertiser_id": case["advertiser_id"],
+        "link_id": case["link_id"],
+        "route": case["route"],
+    }
+    with Session(database_engine) as db, db.begin():
+        video = ensure_scene_preparation(db, **kwargs, media_kind="VIDEO")
+        carousel = ensure_scene_preparation(db, **kwargs, media_kind="CAROUSEL")
+        assert video.job_id != carousel.job_id
+        assert db.get(SceneJob, carousel.job_id).media_kind == "CAROUSEL"
+        scope = _scope(db, **kwargs, media_kind="CAROUSEL")
+        assert scope["basis"] != _scope(db, **kwargs, media_kind="VIDEO")["basis"]
+        scene = _assemble_scene(
+            scope=scope,
+            facts={
+                "identity": {
+                    "matches": [{"identity_id": "i", "identity_type": "TT_USER"}]
+                }
+            },
+            reasons=[],
+            evidence_ids=(),
+            capability=SimpleNamespace(scope_verified=True, can_build=True),
+            locally_operable=True,
+        )
+        assert not scene.supported
+        assert "carousel_format_unverified" in scene.reason_codes
+        assert scene.creative_fields["creative_info"]["ad_format"] == "CAROUSEL_ADS"
+    basis = scene_scope_basis(route=case["route"], business={}, media_kind="CAROUSEL")
+    assert basis != scene_scope_basis(
+        route=case["route"],
+        business={},
+        media_kind="CAROUSEL",
+        compiler_contract_revision="next",
+    )

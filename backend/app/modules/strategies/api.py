@@ -13,6 +13,8 @@ from app.modules.strategies.schemas import (
     StrategyConfig,
     StrategyPublic,
     StrategyStateRequest,
+    StructureEstimatePublic,
+    StructureEstimateRequest,
     ValidationResult,
     VersionPublic,
 )
@@ -50,6 +52,24 @@ def validate(
     )
     errors = service.validate_strategy(session, context=context, config=body)
     return ValidationResult(valid=not errors, errors=errors)
+
+
+@router.post("/strategies/structure-estimate", response_model=StructureEstimatePublic)
+def structure_estimate(
+    tenant_id: UUID,
+    body: StructureEstimateRequest,
+    session: SessionDep,
+    user: CurrentUser,
+) -> StructureEstimatePublic:
+    from dataclasses import asdict
+
+    from .structure import estimate_batch_structure
+
+    require_tenant(session, actor_id=user.id, tenant_id=tenant_id, action="read")
+    result = estimate_batch_structure(
+        body.unit_counts, account_count=body.account_count, config=body.config
+    )
+    return StructureEstimatePublic(**asdict(result))
 
 
 @router.post("/strategies", response_model=VersionPublic, status_code=201)

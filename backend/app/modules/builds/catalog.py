@@ -4,7 +4,7 @@ from collections.abc import Mapping
 from typing import Literal, cast
 from uuid import UUID
 
-from sqlalchemy import and_, func, or_
+from sqlalchemy import and_, func
 from sqlalchemy.orm import aliased
 from sqlmodel import Session, col, select
 
@@ -14,10 +14,13 @@ from app.core.pagination import Page, count_rows
 from app.modules.accounts.resolver import decode_cursor, encode_cursor
 from app.modules.builds.draft_catalog import current_image_drama_clause
 from app.modules.builds.drafts import get_draft
+from app.modules.builds.image_composition_models import (
+    DraftCreativeUnit,
+    DraftCreativeUnitItem,
+)
 from app.modules.builds.models import (
     DraftAccount,
     DraftDrama,
-    DraftGroupMaterial,
     DraftInput,
     DraftPreparation,
 )
@@ -331,72 +334,75 @@ def materials_page(
         "draft": str(draft_id),
         "revision": str(draft.revision),
         "drama": str(drama_id),
-        "view": "materials",
+        "view": "video-unit-materials",
     }
     after = _page(scope, cursor, limit)
     try:
         group, position = (int(part) for part in after.split(":")) if after else (0, 0)
-        if min(group, position) < 0:
+        if min(group, position) < 0 or (after and group != 1):
             raise ValueError
     except ValueError:
         raise DomainError("invalid_cursor", "分页游标无效") from None
-    other = aliased(DraftGroupMaterial)
+    if draft.media_kind != "VIDEO":
+        raise DomainError("draft_media_kind_mismatch", "图片草稿须读取创意单元")
+    other = aliased(DraftCreativeUnitItem)
     shared = (
         select(other.material_id)
         .where(
             other.tenant_id == context.tenant_id,
             other.draft_id == draft_id,
             other.drama_id != drama_id,
-            other.material_id == DraftGroupMaterial.material_id,
+            other.material_id == DraftCreativeUnitItem.material_id,
         )
         .exists()
     )
     query = (
-        select(DraftGroupMaterial, MaterialFile, shared)
+        select(DraftCreativeUnit, DraftCreativeUnitItem, MaterialFile, shared)
+        .join(
+            DraftCreativeUnitItem,
+            and_(
+                col(DraftCreativeUnitItem.tenant_id) == DraftCreativeUnit.tenant_id,
+                col(DraftCreativeUnitItem.draft_id) == DraftCreativeUnit.draft_id,
+                col(DraftCreativeUnitItem.generation) == DraftCreativeUnit.generation,
+                col(DraftCreativeUnitItem.unit_id) == DraftCreativeUnit.id,
+            ),
+        )
         .join(
             MaterialFile,
             and_(
-                col(MaterialFile.tenant_id) == DraftGroupMaterial.tenant_id,
-                col(MaterialFile.id) == DraftGroupMaterial.material_id,
+                col(MaterialFile.tenant_id) == DraftCreativeUnitItem.tenant_id,
+                col(MaterialFile.id) == DraftCreativeUnitItem.material_id,
             ),
         )
         .where(
-            DraftGroupMaterial.tenant_id == context.tenant_id,
-            DraftGroupMaterial.draft_id == draft_id,
-            DraftGroupMaterial.drama_id == drama_id,
+            DraftCreativeUnit.tenant_id == context.tenant_id,
+            DraftCreativeUnit.draft_id == draft_id,
+            DraftCreativeUnit.drama_id == drama_id,
+            DraftCreativeUnit.kind == "VIDEO",
+            DraftCreativeUnit.generation == 1,
         )
     )
     total = count_rows(session, query)
-    query = query.where(
-        or_(
-            col(DraftGroupMaterial.group_no) > group,
-            and_(
-                col(DraftGroupMaterial.group_no) == group,
-                col(DraftGroupMaterial.position) > position,
-            ),
-        )
-    )
     rows = session.exec(
-        query.order_by(
-            col(DraftGroupMaterial.group_no), col(DraftGroupMaterial.position)
-        ).limit(limit + 1)
+        query.where(col(DraftCreativeUnit.position) > position)
+        .order_by(col(DraftCreativeUnit.position))
+        .limit(limit + 1)
     ).all()
     return Page(
         items=[
             DraftMaterialPublic(
-                material_id=row.material_id,
+                material_id=item.material_id,
                 file_name=file.file_name,
                 source_bc_id=file.bc_id,
                 content_key=content_key(file),
-                group_no=row.group_no,
-                position=row.position,
+                group_no=1,
+                position=unit.position,
                 shared_with_other_drama=bool(is_shared),
             )
-            for row, file, is_shared in rows[:limit]
+            for unit, item, file, is_shared in rows[:limit]
         ],
         next_cursor=encode_cursor(
-            scope=scope,
-            last_id=f"{rows[limit - 1][0].group_no}:{rows[limit - 1][0].position}",
+            scope=scope, last_id=f"1:{rows[limit - 1][0].position}"
         )
         if len(rows) > limit
         else None,

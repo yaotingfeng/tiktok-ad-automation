@@ -92,6 +92,10 @@ class CreativeUnitContent(ImmutableModel):
             raise ValueError("同一创意内不能重复引用素材")
         if self.kind == "VIDEO" and len(self.ordered_material_ids) != 1:
             raise ValueError("视频单元只能引用一个视频")
+        if self.kind == "VIDEO" and (
+            self.music_status != "NOT_REQUIRED" or self.music_id is not None
+        ):
+            raise ValueError("视频单元必须为 NOT_REQUIRED 且不能配置音乐")
         if self.music_status == "READY" and self.music_id is None:
             raise ValueError("READY 创意必须选择音乐")
         if self.kind == "CAROUSEL" and self.music_status == "NOT_REQUIRED":

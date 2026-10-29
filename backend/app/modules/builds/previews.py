@@ -26,9 +26,9 @@ from app.modules.builds.batch_numbers import (
 from app.modules.builds.drafts import get_draft
 from app.modules.builds.execution_models import Submission
 from app.modules.builds.models import (
+    BuildDraft,
     DraftAccount,
     DraftDrama,
-    DraftGroupMaterial,
     DraftInput,
 )
 from app.modules.builds.preview_materials import (
@@ -90,8 +90,12 @@ from app.modules.providers.models import (
 from app.modules.strategies.naming import local_display_drama_id, render_names
 from app.modules.strategies.schemas import StrategyConfig
 from app.modules.strategies.service import get_copies, get_version
-from app.modules.strategies.structure import plan_structure
+from app.modules.strategies.structure import estimate_batch_structure, plan_structure
 from app.modules.tenants.permissions import require_tenant
+
+from .image_composition_models import DraftCreativeUnit
+from .structure import effective_structure_config
+from .video_units import ordered_units, video_material_ids
 
 """Preview planning is local and never dispatches target assets or ads."""
 
@@ -173,6 +177,35 @@ def _record(preview: BuildPreview, value: Any) -> None:
     preview.progress["digest"] = _hash(preview.progress.get("digest", ""), value)
 
 
+def _bump_preview_retry_revision(
+    session: Session, draft: BuildDraft, expected_revision: int
+) -> None:
+    from .carousel_music_models import MusicPreparationRun, MusicSelectionJob
+    from .drafts import _bump_revision
+
+    if draft.media_kind == "CAROUSEL":
+        # 重试只是新预览尝试，不能借版本提升取消仍在扫描的批量配乐意图。
+        for model in (MusicPreparationRun, MusicSelectionJob):
+            if (
+                session.exec(
+                    select(model.id).where(
+                        model.tenant_id == draft.tenant_id,
+                        model.draft_id == draft.id,
+                        model.active_generation == draft.active_image_generation,
+                        col(model.status).in_(["PENDING", "RUNNING"]),
+                    )
+                ).first()
+                is not None
+            ):
+                raise DomainError(
+                    "music_preparation_pending", "配乐准备尚未结束，请稍后重试预览"
+                )
+    was_applied = draft.applied_image_rule_revision == draft.revision
+    _bump_revision(session, draft, expected_revision)
+    if was_applied:
+        draft.applied_image_rule_revision = draft.revision
+
+
 def generate_preview(
     session: Session, *, context: TenantContext, draft_id: UUID, expected_revision: int
 ) -> UUID:
@@ -218,9 +251,7 @@ def generate_preview(
         ):
             raise DomainError("preview_already_submitted", "已提交的预览不能重试生成")
         # FAILED 记录受数据库冻结保护；只提升草稿版本，复用已准备的输入创建新预览。
-        from app.modules.builds.drafts import _bump_revision
-
-        _bump_revision(session, draft, expected_revision)
+        _bump_preview_retry_revision(session, draft, expected_revision)
         session.flush()
         identity = generate_preview(
             session,
@@ -241,7 +272,41 @@ def generate_preview(
     # 必填目标在排队前检查，避免展开全部剧目×账户后才发现整批无法搭建。
     require_preview_mini(session, context=context, draft=draft)
     chosen_identity = require_preview_identity(session, context=context, draft=draft)
-    config = get_version(session, context=context, version_id=draft.strategy_version_id)
+    config = effective_structure_config(
+        get_version(session, context=context, version_id=draft.strategy_version_id),
+        draft.structure_override,
+    )
+    # 在账户广告展开前按当前有效单元计数，避免整批乘法绕过单策略上限。
+    unit_counts = session.exec(
+        select(func.count(col(DraftCreativeUnit.id)))
+        .where(
+            DraftCreativeUnit.tenant_id == context.tenant_id,
+            DraftCreativeUnit.draft_id == draft.id,
+            DraftCreativeUnit.generation
+            == (1 if draft.media_kind == "VIDEO" else draft.active_image_generation),
+            select(DraftInput.id)
+            .where(
+                DraftInput.tenant_id == context.tenant_id,
+                DraftInput.draft_id == draft.id,
+                DraftInput.kind == "drama",
+                DraftInput.drama_id == DraftCreativeUnit.drama_id,
+                DraftInput.status == "ready",
+            )
+            .exists(),
+        )
+        .group_by(col(DraftCreativeUnit.drama_id))
+    ).all()
+    account_count = session.exec(
+        select(func.count())
+        .select_from(DraftAccount)
+        .where(
+            DraftAccount.tenant_id == context.tenant_id,
+            DraftAccount.draft_id == draft.id,
+        )
+    ).one()
+    estimate_batch_structure(unit_counts, account_count=account_count, config=config)
+    if draft.media_kind != "VIDEO":
+        raise DomainError("preview_contract_unavailable", "图片预览需要 V2 冻结合同")
     targeting = effective_targeting(session, context, draft)
     directory = draft_directory(session, context=context, draft_id=draft.id)
     if directory.state != "READY":
@@ -466,36 +531,16 @@ def _snapshot_drama(
         if p.get("planned"):
             p.update(drama_after=p["current_drama"], current_drama=None, planned=False)
             return
-        number = session.exec(
-            select(DraftGroupMaterial.group_no)
-            .where(
-                DraftGroupMaterial.tenant_id == preview.tenant_id,
-                DraftGroupMaterial.draft_id == preview.draft_id,
-                DraftGroupMaterial.drama_id == drama_id,
-                DraftGroupMaterial.group_no > p["group_after"],
-            )
-            .order_by(col(DraftGroupMaterial.group_no))
-            .limit(1)
-        ).first()
-        if number is None:
+        draft = session.get(BuildDraft, preview.draft_id)
+        assert draft is not None
+        source_units = ordered_units(session, draft, drama_id=drama_id)
+        source_materials = video_material_ids(session, draft, drama_id=drama_id)
+        if not source_units:
             p.update(drama_after=p["current_drama"], current_drama=None)
             return
-        source_materials = session.exec(
-            select(DraftGroupMaterial)
-            .where(
-                DraftGroupMaterial.tenant_id == preview.tenant_id,
-                DraftGroupMaterial.draft_id == preview.draft_id,
-                DraftGroupMaterial.drama_id == drama_id,
-            )
-            .order_by(
-                col(DraftGroupMaterial.group_no), col(DraftGroupMaterial.position)
-            )
-        ).all()
         pool = get_copies(session, context=context, version_id=config.copy_pool_version)
         seed = int(_hash("", [preview.id, drama_id]), 16)
-        plans = plan_structure(
-            source_materials, config=config, pool=tuple(pool), seed=seed
-        )
+        plans = plan_structure(source_units, config=config, pool=tuple(pool), seed=seed)
         for group_plan in plans:
             group = PreviewDramaGroup(
                 **_scope(preview), drama_id=drama_id, group_no=group_plan.group_no
@@ -503,7 +548,8 @@ def _snapshot_drama(
             session.add(group)
             session.flush()
             _record(preview, group.model_dump(mode="json"))
-            for position, material_id in enumerate(group_plan.material_ids, 1):
+            for position, unit_id in enumerate(group_plan.unit_ids, 1):
+                material_id = source_materials[unit_id]
                 material_row = PreviewGroupMaterial(
                     **_scope(preview),
                     drama_id=drama_id,
@@ -514,7 +560,8 @@ def _snapshot_drama(
                 session.add(material_row)
                 _record(preview, material_row.model_dump(mode="json"))
             for ad_plan in group_plan.ads:
-                for position, material_id in enumerate(ad_plan.material_ids, 1):
+                for position, unit_id in enumerate(ad_plan.unit_ids, 1):
+                    material_id = source_materials[unit_id]
                     mapping = PreviewAdMaterial(
                         **_scope(preview),
                         drama_id=drama_id,
@@ -666,6 +713,7 @@ def _expand_unit(
                 link_id=drama.link_id,
                 route=route,
                 selected_identity=p.get("selected_identity"),
+                media_kind="VIDEO",
             )
         except DomainError as error:
             if error.code not in {

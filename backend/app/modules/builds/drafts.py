@@ -32,7 +32,6 @@ from app.modules.builds.models import (
     BuildDraft,
     DraftAccount,
     DraftDrama,
-    DraftGroupMaterial,
     DraftInput,
     DraftPreparation,
     DraftPreparationRequest,
@@ -65,7 +64,9 @@ from app.modules.strategies.models import Strategy
 from app.modules.strategies.service import get_version_record
 from app.modules.tenants.permissions import require_tenant
 
+from .image_composition_models import DraftCreativeUnitItem
 from .manual_links import materialize, resolve_provider, validate_manual_links
+from .video_units import add_video_unit, delete_video_units
 
 # Engineering request bounds, independent of TikTok limits. Account processing
 # remains paged even when the draft contains tens of thousands of pasted lines.
@@ -378,14 +379,7 @@ def prepare_draft(
     for drama in dramas:
         if drama.material_state == "manual":
             continue
-        SASession.execute(
-            session,
-            delete(DraftGroupMaterial).where(
-                col(DraftGroupMaterial.tenant_id) == context.tenant_id,
-                col(DraftGroupMaterial.draft_id) == draft.id,
-                col(DraftGroupMaterial.drama_id) == drama.drama_id,
-            ),
-        )
+        delete_video_units(session, draft, drama_id=drama.drama_id)
         drama.material_state, drama.material_cursor, drama.matched_count = (
             "pending",
             None,
@@ -771,6 +765,7 @@ def _scenes_page(
                 link_id=link_id,
                 route=route,
                 selected_identity=identity,
+                media_kind=draft.media_kind,
             )
             session.add(
                 DraftSceneDependency(
@@ -832,6 +827,7 @@ def _scenes_page(
             link_id=link_id,
             route=route,
             selected_identity=identity,
+            media_kind=draft.media_kind,
         )
         dependency.job_id = result.job_id
         dependency.status = {
@@ -1119,32 +1115,28 @@ def _materials_page(
         # 保留最初冻结的文件 ID，不让同一视频重复进入素材包。分组由预览
         # 规划器根据冻结的素材包顺序决定，草稿阶段只保存一个稳定的源分组。
         exists = session.exec(
-            select(DraftGroupMaterial.material_id)
+            select(DraftCreativeUnitItem.material_id)
             .join(
                 MaterialFile,
-                (col(MaterialFile.tenant_id) == DraftGroupMaterial.tenant_id)
-                & (col(MaterialFile.id) == DraftGroupMaterial.material_id),
+                (col(MaterialFile.tenant_id) == DraftCreativeUnitItem.tenant_id)
+                & (col(MaterialFile.id) == DraftCreativeUnitItem.material_id),
             )
             .where(
-                col(DraftGroupMaterial.tenant_id) == context.tenant_id,
-                col(DraftGroupMaterial.draft_id) == draft.id,
-                col(DraftGroupMaterial.drama_id) == drama.drama_id,
+                col(DraftCreativeUnitItem.tenant_id) == context.tenant_id,
+                col(DraftCreativeUnitItem.draft_id) == draft.id,
+                col(DraftCreativeUnitItem.drama_id) == drama.drama_id,
                 material_content_key_expression() == item.content_key,
             )
         ).first()
         if exists is not None:
             continue
         index = drama.matched_count
-        session.add(
-            DraftGroupMaterial(
-                tenant_id=context.tenant_id,
-                draft_id=draft.id,
-                drama_id=drama.drama_id,
-                bc_id=draft.bc_id,
-                group_no=1,
-                position=index + 1,
-                material_id=item.material_id,
-            )
+        add_video_unit(
+            session,
+            draft,
+            drama_id=drama.drama_id,
+            material_id=item.material_id,
+            position=index + 1,
         )
         drama.matched_count += 1
     if page.next_cursor is not None and page.next_cursor == drama.material_cursor:
@@ -1268,6 +1260,7 @@ def edit_material_groups(
             select(MaterialFile).where(
                 MaterialFile.tenant_id == context.tenant_id,
                 col(MaterialFile.id).in_(chunk),
+                MaterialFile.media_type == "VIDEO",
                 material_visible(tenant_id=context.tenant_id),
             )
         ).all()
@@ -1282,29 +1275,11 @@ def edit_material_groups(
                 )
             content_keys.add(key)
     revision = _bump_revision(session, draft, expected_revision)
-    SASession.execute(
-        session,
-        delete(DraftGroupMaterial).where(
-            col(DraftGroupMaterial.tenant_id) == context.tenant_id,
-            col(DraftGroupMaterial.draft_id) == draft.id,
-            col(DraftGroupMaterial.drama_id) == drama_id,
-        ),
-    )
-    for group_no, group in enumerate(groups, 1):
-        for position, identity in enumerate(group, 1):
-            session.add(
-                DraftGroupMaterial(
-                    tenant_id=context.tenant_id,
-                    draft_id=draft.id,
-                    drama_id=drama_id,
-                    bc_id=draft.bc_id,
-                    group_no=group_no,
-                    position=position,
-                    material_id=identity,
-                )
-            )
-        if group_no % PAGE_SIZE == 0:
-            session.flush()
+    delete_video_units(session, draft, drama_id=drama_id)
+    for position, identity in enumerate(identities, 1):
+        add_video_unit(
+            session, draft, drama_id=drama_id, material_id=identity, position=position
+        )
     drama.matched_count, drama.material_state, drama.material_cursor = (
         len(identities),
         "manual",
@@ -1429,7 +1404,8 @@ def update_draft(
                 state.snapshot_id, state.drama_patches = None, {}
         reset_models = (DraftAccount, DraftInput)
     else:
-        reset_models = (DraftGroupMaterial, DraftDrama, DraftAccount, DraftInput)
+        delete_video_units(session, draft)
+        reset_models = (DraftDrama, DraftAccount, DraftInput)
     for model in reset_models:
         SASession.execute(
             session,

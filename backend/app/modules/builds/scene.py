@@ -27,8 +27,9 @@ from app.modules.providers.models import (
 from app.modules.tenants.permissions import require_tenant
 
 from . import scene_constraints as limits
+from .image_composition_schemas import MediaKind
 from .scene_models import SceneReadState
-from .scene_schemas import SceneContext, SceneResource
+from .scene_schemas import CREATIVE_COMPILER_REVISION, SceneContext, SceneResource
 
 HARD_LIMIT = 45
 CLAIM_SECONDS = 60
@@ -63,18 +64,26 @@ def _require_bounded_worker() -> None:
         raise DomainError("scene_worker_unbounded", "场景刷新需要有界后台任务")
 
 
-SCENE_CONTRACT_REVISION = "dual-channel-scene-2026-10-12-v7-strategy-validation"
+SCENE_CONTRACT_REVISION = "creative-unit-scene-2026-10-29-v8"
 
 
-def scene_scope_basis(*, route: FrozenTikTokRoute, business: dict[str, Any]) -> str:
+def scene_scope_basis(
+    *,
+    route: FrozenTikTokRoute,
+    business: dict[str, Any],
+    media_kind: MediaKind = "VIDEO",
+    compiler_contract_revision: str = CREATIVE_COMPILER_REVISION,
+) -> str:
     """只散列冻结授权与稳定业务依据；令牌字节/目录run/观察时间不属于输入。"""
     route_basis = route.model_dump(mode="json")
-    # 旧六字段冻结路由等价于绑定代数 0；保持其历史摘要，避免令已有场景无故失效。
+    # 六字段路由与绑定代数 0 仍等价；媒体/编译合同升级会明确使旧场景失效。
     # 这里只规范化哈希输入，不回写历史 JSON；重新接入后的非零代数必须参与摘要。
     if route.binding_revision == 0:
         route_basis.pop("binding_revision")
     basis = {
         "route": route_basis,
+        "media_kind": media_kind,
+        "compiler_contract_revision": compiler_contract_revision,
         "scene_contract_revision": SCENE_CONTRACT_REVISION,
         "constraints_revision": limits.REVISION,
         "max_age_seconds": settings.SCENE_MAX_AGE_SECONDS,
@@ -92,6 +101,7 @@ def _account_scope(
     minis_id: str | None,
     route: FrozenTikTokRoute,
     lock: bool = False,
+    media_kind: MediaKind = "VIDEO",
 ) -> dict[str, Any]:
     if route.tenant_id != context.tenant_id or route.bc_id != bc_id:
         raise DomainError("connection_bc_mismatch", "场景路由不属于当前租户或 BC")
@@ -154,7 +164,10 @@ def _account_scope(
         "grant": grant,
         "minis_id": minis_id,
         "route": route,
-        "basis": scene_scope_basis(route=route, business=business),
+        "media_kind": media_kind,
+        "basis": scene_scope_basis(
+            route=route, business=business, media_kind=media_kind
+        ),
     }
 
 
@@ -225,6 +238,7 @@ def _scope(
     link_id: UUID,
     route: FrozenTikTokRoute,
     lock: bool = False,
+    media_kind: MediaKind = "VIDEO",
 ) -> dict[str, Any]:
     return _account_scope(
         session,
@@ -234,6 +248,7 @@ def _scope(
         minis_id=_link_target(session, context=context, link_id=link_id),
         route=route,
         lock=lock,
+        media_kind=media_kind,
     )
 
 
@@ -312,7 +327,10 @@ def _assemble_scene(
     group: dict[str, Any] = {}
     creative: dict[str, Any] = {}
     cta: dict[str, Any] = {}
-    constraints, missing = limits.constraints_for(scope["access"].currency)
+    media_kind = scope["media_kind"]
+    constraints, missing = limits.constraints_for(
+        scope["access"].currency, media_kind=media_kind
+    )
     reasons.extend(missing)
     if not scope["minis_id"]:
         reasons.append("minis_selection_required")
@@ -381,7 +399,9 @@ def _assemble_scene(
                     }
                     and value is not None
                 },
-                "ad_format": "SINGLE_VIDEO",
+                "ad_format": "SINGLE_VIDEO"
+                if media_kind == "VIDEO"
+                else "CAROUSEL_ADS",
             }
         }
     else:
@@ -415,6 +435,7 @@ def _assemble_scene(
         ).encode()
     ).hexdigest()
     return SceneContext(
+        media_kind=media_kind,
         supported=not reasons,
         reason_codes=tuple(sorted(set(reasons))),
         capability_revision=revision,
@@ -441,6 +462,7 @@ def _read_account_scene(
     minis_id: str | None,
     route: FrozenTikTokRoute,
     selected_identity: dict[str, Any] | None = None,
+    media_kind: MediaKind = "VIDEO",
 ) -> SceneContext | None:
     """同账户/Mini 的共享场景只组装一次，批次结束重新读取并比较。"""
     from app.modules.accounts.capabilities import get_capability_evidence
@@ -455,6 +477,7 @@ def _read_account_scene(
             advertiser_id=advertiser_id,
             minis_id=minis_id,
             route=route,
+            media_kind=media_kind,
         )
         now = datetime.now(UTC)
         job = session.exec(
@@ -561,6 +584,7 @@ def read_scene_context(
     link_id: UUID,
     route: FrozenTikTokRoute,
     selected_identity: dict[str, Any] | None = None,
+    media_kind: MediaKind = "VIDEO",
 ) -> SceneContext:
     # 每个链接独立核验版权方与 Mini，不借别的剧目链接取得权限。
     # 只有同账户、同 Mini、同冻结路由的场景事实可在本地短批次复用。
@@ -574,6 +598,7 @@ def read_scene_context(
             link_id=None if local_read_batch_active(session) else link_id,
             minis_id=minis_id,
             route=route,
+            media_kind=media_kind,
             selected_identity=selected_identity,
         )
         if result is None:
@@ -586,6 +611,7 @@ def read_scene_context(
                 link_id=link_id,
                 minis_id=minis_id,
                 route=route,
+                media_kind=media_kind,
                 selected_identity=selected_identity,
             )
         assert result is not None

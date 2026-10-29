@@ -1983,6 +1983,8 @@ export type DraftListItem = {
 
 /**
  * DraftMaterialPublic
+ *
+ * VIDEO 当前单元成员视图：group_no 固定为 1，position 是原分组展平后的稳定顺序。
  */
 export type DraftMaterialPublic = {
     /**
@@ -8359,6 +8361,47 @@ export type StrategyStateRequest = {
      * Name
      */
     name?: string | null;
+};
+
+/**
+ * StructureEstimatePublic
+ */
+export type StructureEstimatePublic = {
+    /**
+     * Campaign Count
+     */
+    campaign_count: number;
+    /**
+     * Adgroup Count
+     */
+    adgroup_count: number;
+    /**
+     * Ad Count
+     */
+    ad_count: number;
+    /**
+     * Daily Budget Sum
+     */
+    daily_budget_sum: string;
+    /**
+     * Dramas
+     */
+    dramas: Array<Array<Array<number>>>;
+};
+
+/**
+ * StructureEstimateRequest
+ */
+export type StructureEstimateRequest = {
+    config: StrategyConfig_Input;
+    /**
+     * Unit Counts
+     */
+    unit_counts: Array<number>;
+    /**
+     * Account Count
+     */
+    account_count?: number;
 };
 
 /**
@@ -15287,6 +15330,36 @@ export type strategiesValidateResponses = {
 };
 
 export type strategiesValidateResponse = strategiesValidateResponses[keyof strategiesValidateResponses];
+
+export type strategiesStructureEstimateData = {
+    body: StructureEstimateRequest;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+    };
+    query?: never;
+    url: '/api/tenants/{tenant_id}/strategies/structure-estimate';
+};
+
+export type strategiesStructureEstimateErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type strategiesStructureEstimateError = strategiesStructureEstimateErrors[keyof strategiesStructureEstimateErrors];
+
+export type strategiesStructureEstimateResponses = {
+    /**
+     * Successful Response
+     */
+    200: StructureEstimatePublic;
+};
+
+export type strategiesStructureEstimateResponse = strategiesStructureEstimateResponses[keyof strategiesStructureEstimateResponses];
 
 export type strategiesGetOneData = {
     body?: never;

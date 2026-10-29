@@ -4,7 +4,11 @@ from dataclasses import dataclass, field, fields
 from typing import Any, Literal, Never
 from uuid import UUID
 
-SceneResource = Literal["account_roles", "identity", "minis", "cta", "vbo", "regions", "budget"]
+CREATIVE_COMPILER_REVISION = "creative-units-v2-2026-10-29"
+
+SceneResource = Literal[
+    "account_roles", "identity", "minis", "cta", "vbo", "regions", "budget"
+]
 
 
 class FrozenDict(dict[str, Any]):
@@ -37,6 +41,8 @@ class SceneContext:
     supported: bool
     reason_codes: tuple[str, ...]
     capability_revision: str
+    media_kind: Literal["VIDEO", "CAROUSEL"] = "VIDEO"
+    compiler_contract_revision: str = CREATIVE_COMPILER_REVISION
     campaign_fields: dict[str, Any] = field(default_factory=dict)
     adgroup_fields: dict[str, Any] = field(default_factory=dict)
     creative_fields: dict[str, Any] = field(default_factory=dict)

@@ -1,3 +1,4 @@
+import { demoStructureEstimate } from "../src/demo/fixtures/structure-estimate"
 import { expect, type Page, test } from "@playwright/test"
 import type {
   StrategyConfig_Output,
@@ -107,6 +108,17 @@ async function boundary(
       })
     expect(req.headers().authorization).toBe("Bearer strategy-test-token")
     const body = req.postData() ? req.postDataJSON() : undefined
+    if (path.endsWith("/strategies/structure-estimate")) {
+      try {
+        return route.fulfill({ json: demoStructureEstimate(body), headers })
+      } catch {
+        return route.fulfill({
+          status: 422,
+          json: { detail: "invalid structure" },
+          headers,
+        })
+      }
+    }
     requests.push({ path, method, query, body })
     const reply = (json: unknown, status = 200) =>
       route.fulfill({ json, status, headers })
@@ -1660,4 +1672,27 @@ test("只读策略可查看预置国家但不能更改选择", async ({ page }) 
   ).toBeDisabled()
   expect(api.requests.some((r) => r.path.includes("/targeting"))).toBe(false)
   expect(api.requests.filter((r) => r.method !== "GET")).toHaveLength(0)
+})
+
+test("结构示例读取服务器预算，试算失败后不显示旧广告数", async ({ page }) => {
+  await boundary(page)
+  await page.goto(editUrl)
+  const example = page.getByRole("region", { name: "结构与预算示例" })
+  await expect(example).toContainText("每基础广告文案版本数 K=2")
+  await expect(page.locator("#strategy-creative_count-help")).toContainText("K 为每基础广告的文案版本数")
+  await expect(example).toContainText("示例日预算合计：USD 100")
+  let observed: any
+  await page.route("**/strategies/structure-estimate", async (route) => {
+    observed = route.request().postDataJSON()
+    await route.fulfill({
+      status: 422,
+      json: { detail: "configuration_invalid" },
+    })
+  })
+  await page.getByLabel("每个广告创意数量", { exact: true }).fill("3")
+  await expect(example).toContainText("当前结构无法生成")
+  await expect(example).not.toContainText("最终 46 个广告")
+  expect(observed.unit_counts).toEqual([23])
+  expect(observed.account_count).toBe(1)
+  expect(observed.config.creative_count).toBe(3)
 })

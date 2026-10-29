@@ -946,7 +946,9 @@ function GroupDetail({ group }: { group: FrozenGroup }) {
           </p>
           {group.ads.map((ad) => (
             <div key={ad.ad_id} className="space-y-2 rounded-md bg-muted p-3">
-              <h4 className="text-sm font-semibold">SP{ad.creative_no}</h4>
+              <h4 className="text-sm font-semibold">
+                文案版本 {ad.creative_no}
+              </h4>
               <CopyField label="Ad 名称" value={ad.name} expanded />
               <p className="whitespace-pre-wrap text-sm">{ad.text}</p>
               <p className="break-all text-xs">

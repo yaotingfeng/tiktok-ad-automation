@@ -6,9 +6,9 @@ import pytest
 from sqlmodel import select
 
 from app.modules.builds import previews
-from app.modules.builds.models import DraftGroupMaterial
 from tests.modules.builds.test_previews import drain
 from tests.modules.builds.test_previews import prepared as prepared
+from tests.modules.builds.video_source import VIDEO_SOURCE
 
 
 @pytest.mark.parametrize("failed_count", [1, 10, 23])
@@ -16,12 +16,12 @@ def test_partial_materials_keep_valid_groups_and_frozen_selection(
     session, context, prepared, monkeypatch, failed_count
 ):
     selected = session.exec(
-        select(DraftGroupMaterial)
-        .where(DraftGroupMaterial.draft_id == prepared)
+        select(*VIDEO_SOURCE.c)
+        .where(VIDEO_SOURCE.c.draft_id == prepared)
         .order_by(
-            DraftGroupMaterial.drama_id,
-            DraftGroupMaterial.group_no,
-            DraftGroupMaterial.position,
+            VIDEO_SOURCE.c.drama_id,
+            VIDEO_SOURCE.c.group_no,
+            VIDEO_SOURCE.c.position,
         )
     ).all()
     drama_id = selected[0].drama_id
@@ -114,9 +114,9 @@ def test_group_limit_applies_to_retained_materials_not_skipped_ones(
     )
     failed = set(
         session.exec(
-            select(DraftGroupMaterial.material_id).where(
-                DraftGroupMaterial.draft_id == prepared,
-                DraftGroupMaterial.position.in_([1, 11, 21]),
+            select(VIDEO_SOURCE.c.material_id).where(
+                VIDEO_SOURCE.c.draft_id == prepared,
+                VIDEO_SOURCE.c.position.in_([1, 11, 21]),
             )
         ).all()
     )
@@ -157,9 +157,9 @@ def test_exclusions_are_account_scoped_paginated_authorized_and_immutable(
     from tests.modules.strategies.test_api import headers
 
     selected = session.exec(
-        select(DraftGroupMaterial)
-        .where(DraftGroupMaterial.draft_id == prepared)
-        .order_by(DraftGroupMaterial.drama_id, DraftGroupMaterial.position)
+        select(*VIDEO_SOURCE.c)
+        .where(VIDEO_SOURCE.c.draft_id == prepared)
+        .order_by(VIDEO_SOURCE.c.drama_id, VIDEO_SOURCE.c.position)
     ).all()
     drama_id = selected[0].drama_id
     failed = {r.material_id for r in selected if r.drama_id == drama_id}

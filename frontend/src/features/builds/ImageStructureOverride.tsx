@@ -135,7 +135,7 @@ export function ImageStructureOverride({
               <FieldLabel htmlFor="structure-ads">
                 {value.ad_generation_mode === "FIXED"
                   ? "每组广告数"
-                  : "每条广告最多创意数"}
+                  : "每广告最多创意单元 M"}
               </FieldLabel>
               <Input
                 id="structure-ads"
@@ -186,7 +186,7 @@ export function ImageStructureOverride({
             )}
             <Field>
               <FieldLabel htmlFor="structure-creative-count">
-                创意版本数
+                每基础广告文案版本数 K
               </FieldLabel>
               <Input
                 id="structure-creative-count"

@@ -1,4 +1,7 @@
-import { useMemo, useState } from "react"
+import { useState } from "react"
+import { useQuery } from "@tanstack/react-query"
+import { StrategiesService, type StrategyConfig_Input } from "@/client"
+import { DEFAULT_COPY_POOL } from "./queries"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import {
@@ -8,16 +11,13 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card"
-import {
-  MAX_FIXED_ADS_PER_GROUP,
-  MAX_FIXED_GROUP_COUNT,
-  normalizeDecimal,
-} from "@/features/strategies/validation"
+import { normalizeDecimal } from "@/features/strategies/validation"
 
 type GenerationMode = "FIXED" | "BY_MATERIAL"
 type Allocation = "SHARED" | "SEQUENTIAL_AVERAGE"
 
 export function StrategyStructureExample({
+  tenantId,
   groupGenerationMode,
   groupCount,
   groupMaterialAllocation,
@@ -33,6 +33,7 @@ export function StrategyStructureExample({
   bidStrategy,
   targetRoas,
 }: {
+  tenantId: string
   groupGenerationMode: GenerationMode
   groupCount: number | null
   groupMaterialAllocation: Allocation | null
@@ -49,93 +50,75 @@ export function StrategyStructureExample({
   targetRoas: string
 }) {
   const [expanded, setExpanded] = useState<number | null>(null)
-  const materialCount = 23
-  // 示例组件也可能被测试或其他页面直接传入数值，不能只依赖表单层校验。
-  const safeGroupCount =
-    typeof groupCount === "number" &&
-    Number.isSafeInteger(groupCount) &&
-    groupCount > 0 &&
-    groupCount <= MAX_FIXED_GROUP_COUNT
-      ? groupCount
-      : null
-  const safeAdsPerGroup =
-    typeof adsPerGroup === "number" &&
-    Number.isSafeInteger(adsPerGroup) &&
-    adsPerGroup > 0 &&
-    adsPerGroup <= MAX_FIXED_ADS_PER_GROUP
-      ? adsPerGroup
-      : null
-  const groups = useMemo(() => {
-    if (groupGenerationMode === "FIXED") {
-      if (safeGroupCount === null) return []
-      if (groupMaterialAllocation === "SHARED")
-        return Array.from({ length: safeGroupCount }, () => materialCount)
-      const base = Math.floor(materialCount / safeGroupCount)
-      const remainder = materialCount % safeGroupCount
-      return Array.from(
-        { length: safeGroupCount },
-        (_, i) => base + (i < remainder ? 1 : 0),
-      )
-    }
-    if (!maxMaterialsPerGroup || maxMaterialsPerGroup < 1) return []
-    return Array.from(
-      { length: Math.ceil(materialCount / maxMaterialsPerGroup) },
-      (_, i) =>
-        Math.min(
-          maxMaterialsPerGroup,
-          materialCount - i * maxMaterialsPerGroup,
-        ),
-    )
-  }, [
-    safeGroupCount,
-    groupGenerationMode,
-    groupMaterialAllocation,
-    maxMaterialsPerGroup,
-  ])
-  const adCounts = groups.map((count) => {
-    if (adGenerationMode === "FIXED") return safeAdsPerGroup || 0
-    return maxMaterialsPerAd && maxMaterialsPerAd > 0
-      ? Math.ceil(count / maxMaterialsPerAd)
-      : 0
-  })
-  const adMaterialCounts = (groupMaterialCount: number) => {
-    if (adGenerationMode === "FIXED") {
-      const count = safeAdsPerGroup || 0
-      if (adMaterialAllocation === "SHARED")
-        return Array.from({ length: count }, () => groupMaterialCount)
-      const base = count ? Math.floor(groupMaterialCount / count) : 0
-      const remainder = count ? groupMaterialCount % count : 0
-      return Array.from(
-        { length: count },
-        (_, i) => base + (i < remainder ? 1 : 0),
-      )
-    }
-    const limit = maxMaterialsPerAd || 0
-    return limit
-      ? Array.from({ length: Math.ceil(groupMaterialCount / limit) }, (_, i) =>
-          Math.min(limit, groupMaterialCount - i * limit),
-        )
-      : []
+  const config: StrategyConfig_Input = {
+    budget,
+    currency,
+    budget_strategy: budgetStrategy,
+    bid_strategy: bidStrategy,
+    target_roas: bidStrategy === "TARGET_ROAS" ? targetRoas || null : null,
+    copy_pool_version: DEFAULT_COPY_POOL,
+    group_generation_mode: groupGenerationMode,
+    group_count: groupGenerationMode === "FIXED" ? groupCount : null,
+    group_material_allocation:
+      groupGenerationMode === "FIXED" ? groupMaterialAllocation : null,
+    max_materials_per_group:
+      groupGenerationMode === "BY_MATERIAL" ? maxMaterialsPerGroup : null,
+    ad_generation_mode: adGenerationMode,
+    ads_per_group: adGenerationMode === "FIXED" ? adsPerGroup : null,
+    ad_material_allocation:
+      adGenerationMode === "FIXED" ? adMaterialAllocation : null,
+    max_materials_per_ad:
+      adGenerationMode === "BY_MATERIAL" ? maxMaterialsPerAd : null,
+    creative_count: creativeCount,
   }
-  const baseAdCount = adCounts.reduce((sum, count) => sum + count, 0)
-  const finalAdCount = baseAdCount * (creativeCount > 0 ? creativeCount : 1)
-  const valid = groups.length > 0 && baseAdCount > 0 && creativeCount > 0
+  const estimate = useQuery({
+    queryKey: ["tenant", tenantId, "structure-example", config],
+    queryFn: async ({ signal }) =>
+      (
+        await StrategiesService.structureEstimate({
+          path: { tenant_id: tenantId },
+          body: { config, unit_counts: [23], account_count: 1 },
+          signal,
+        })
+      ).data!,
+    retry: false,
+    enabled:
+      !!budget &&
+      !!currency &&
+      (bidStrategy !== "TARGET_ROAS" || !!targetRoas) &&
+      creativeCount > 0 &&
+      (groupGenerationMode === "FIXED"
+        ? !!groupCount
+        : !!maxMaterialsPerGroup) &&
+      (adGenerationMode === "FIXED" ? !!adsPerGroup : !!maxMaterialsPerAd),
+  })
+  const allocations = estimate.data?.dramas[0] ?? []
+  const groups = allocations.map((ads) =>
+    adGenerationMode === "FIXED" && adMaterialAllocation === "SHARED"
+      ? ads[0]
+      : ads.reduce((sum, n) => sum + n, 0),
+  )
+  const adCounts = allocations.map((ads) => ads.length)
+  const finalAdCount = estimate.data?.ad_count ?? 0
+  const valid = !!estimate.data && !estimate.isError
   return (
     <Card role="region" aria-label="结构与预算示例">
       <CardHeader>
         <CardTitle>结构与预算示例</CardTitle>
         <CardDescription>
-          示例使用 23 条固定顺序素材；真实结果以搭建预览为准。
+          示例由服务器按 23 个固定顺序创意单元试算；真实结果以搭建预览为准。
         </CardDescription>
       </CardHeader>
       <CardContent className="flex flex-col gap-3">
         {!valid ? (
           <p className="text-sm text-muted-foreground">
-            填写有效数量后显示结构示例。
+            {estimate.isError
+              ? "当前结构无法生成，请核对数量与分配规则。"
+              : "填写有效数量后显示服务器结构试算。"}
           </p>
         ) : (
           <>
-            <p>1 个系列</p>
+            <p>{estimate.data?.campaign_count} 个系列</p>
             <p>{groups.length} 个广告组</p>
             <p>
               {adCounts.length
@@ -143,7 +126,7 @@ export function StrategyStructureExample({
                 : "暂无广告"}
             </p>
             <p>
-              创意数量 {creativeCount}，最终 {finalAdCount} 个广告
+              每基础广告文案版本数 K={creativeCount}，最终 {finalAdCount} 个广告
             </p>
             <p className="text-sm text-muted-foreground">
               {adGenerationMode === "BY_MATERIAL"
@@ -153,7 +136,7 @@ export function StrategyStructureExample({
             </p>
             <div className="flex flex-col gap-2">
               {groups.map((count, i) => {
-                const materialCounts = adMaterialCounts(count)
+                const materialCounts = allocations[i]
                 return (
                   <div key={i}>
                     <Button
@@ -164,18 +147,18 @@ export function StrategyStructureExample({
                     >
                       广告组 {i + 1}
                       <span>
-                        {count} 条素材 · {adCounts[i]} 个广告
+                        {count} 个创意单元 · {adCounts[i]} 个广告
                       </span>
                     </Button>
                     {expanded === i && (
                       <div className="mt-2 flex flex-wrap gap-1">
                         {materialCounts.slice(0, 100).map((n, ad) => (
                           <Badge key={ad} variant="secondary">
-                            广告 {ad + 1} · {n} 条素材
+                            广告 {ad + 1} · {n} 个创意单元
                           </Badge>
                         ))}
                         <p className="w-full text-xs text-muted-foreground">
-                          每个基础广告的素材在创意复制后保持不变。
+                          每个基础广告的完整创意单元在文案复制后保持不变。
                         </p>
                       </div>
                     )}
@@ -184,6 +167,12 @@ export function StrategyStructureExample({
               })}
             </div>
           </>
+        )}
+        {valid && (
+          <p>
+            示例日预算合计：{currency}{" "}
+            {normalizeDecimal(estimate.data!.daily_budget_sum)}
+          </p>
         )}
         <p className="wrap-anywhere">
           {budget && currency

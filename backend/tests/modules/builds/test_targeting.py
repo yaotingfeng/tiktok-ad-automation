@@ -226,7 +226,8 @@ def test_targeting_save_preserves_manual_groups_and_obsoletes_preview(
     from sqlmodel import select
 
     from app.modules.builds import previews
-    from app.modules.builds.models import BuildDraft, DraftDrama, DraftGroupMaterial
+    from app.modules.builds.image_composition_models import DraftCreativeUnit
+    from app.modules.builds.models import BuildDraft, DraftDrama
     from app.modules.builds.preview_models import BuildPreview
     from app.modules.builds.targeting_schemas import TargetingChange
     from app.modules.builds.targeting_service import save_targeting
@@ -242,7 +243,7 @@ def test_targeting_save_preserves_manual_groups_and_obsoletes_preview(
     before = [
         r.model_dump()
         for r in session.exec(
-            select(DraftGroupMaterial).where(DraftGroupMaterial.draft_id == prepared)
+            select(DraftCreativeUnit).where(DraftCreativeUnit.draft_id == prepared)
         ).all()
     ]
     assert before
@@ -264,7 +265,7 @@ def test_targeting_save_preserves_manual_groups_and_obsoletes_preview(
     after = [
         r.model_dump()
         for r in session.exec(
-            select(DraftGroupMaterial).where(DraftGroupMaterial.draft_id == prepared)
+            select(DraftCreativeUnit).where(DraftCreativeUnit.draft_id == prepared)
         ).all()
     ]
     assert before == after
@@ -302,7 +303,34 @@ def test_build_arguments_reject_unrecognized_channel_before_send():
 
     with pytest.raises(RemoteCallError) as caught:
         create_arguments(
-            attempt_id=uuid4(), intent=decode_intent("ADGROUP", group_body()), channel="unknown"
+            attempt_id=uuid4(),
+            intent=decode_intent("ADGROUP", group_body()),
+            channel="unknown",
         )
     assert caught.value.code == "invalid_build_request"
     assert caught.value.effect == "NOT_SENT"
+
+
+def test_targeting_directory_does_not_borrow_video_scene_for_carousel(
+    session, context, prepared
+):
+    from app.modules.accounts.routing import freeze_route
+    from app.modules.builds.models import BuildDraft
+    from app.modules.builds.targeting_directory import region_directory
+
+    draft = session.get(BuildDraft, prepared)
+    route = freeze_route(
+        session,
+        context=context,
+        bc_id=draft.bc_id,
+        connection_id=draft.execution_connection_id,
+    )
+    video = region_directory(
+        session, context=context, route=route, draft_id=draft.id, media_kind="VIDEO"
+    )
+    carousel = region_directory(
+        session, context=context, route=route, draft_id=draft.id, media_kind="CAROUSEL"
+    )
+    assert video.verified_account_count == 3
+    assert carousel.verified_account_count == 0
+    assert carousel.state == "PENDING"

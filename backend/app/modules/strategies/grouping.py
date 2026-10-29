@@ -5,10 +5,10 @@
 """
 
 from app.modules.strategies.structure import (
-    AdMaterialPlan,
-    GroupPlan,
-    NamedMaterial,
+    AdCreativePlan,
+    GroupCreativePlan,
+    NamedCreativeUnit,
     plan_structure,
 )
 
-__all__ = ["AdMaterialPlan", "GroupPlan", "NamedMaterial", "plan_structure"]
+__all__ = ["AdCreativePlan", "GroupCreativePlan", "NamedCreativeUnit", "plan_structure"]

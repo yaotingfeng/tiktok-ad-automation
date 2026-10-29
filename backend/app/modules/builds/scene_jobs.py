@@ -29,6 +29,7 @@ from app.modules.accounts.capability_models import CapabilityJob
 from app.modules.accounts.models import TikTokConnection
 from app.modules.tenants.permissions import require_tenant
 
+from .image_composition_schemas import MediaKind
 from .scene import (
     CLAIM_SECONDS,
     HARD_LIMIT,
@@ -40,7 +41,7 @@ from .scene import (
     read_scene_context,
 )
 from .scene_job_models import SceneJob, SceneJobPage
-from .scene_schemas import ScenePreparation, SceneResource
+from .scene_schemas import CREATIVE_COMPILER_REVISION, ScenePreparation, SceneResource
 
 TASK_NAME = "builds.refresh_scene"
 REPAIR_SECONDS = 120
@@ -83,6 +84,7 @@ def ensure_scene_preparation(
     link_id: UUID,
     route: FrozenTikTokRoute,
     selected_identity: dict[str, Any] | None = None,
+    media_kind: MediaKind = "VIDEO",
 ) -> ScenePreparation:
     """Local enqueue/reuse only; caller commits. No SDK or credential decryption."""
     require_tenant(
@@ -97,6 +99,7 @@ def ensure_scene_preparation(
             link_id=link_id,
             route=route,
             lock=True,
+            media_kind=media_kind,
         )
     except DomainError as error:
         return ScenePreparation(None, "blocked", error.code)
@@ -142,6 +145,7 @@ def ensure_scene_preparation(
                     link_id=link_id,
                     route=route,
                     selected_identity=selected_identity,
+                    media_kind=media_kind,
                 )
             return ScenePreparation(job.id, "blocked", "minis_selection_required")
         result = read_scene_context(
@@ -152,6 +156,7 @@ def ensure_scene_preparation(
             link_id=link_id,
             route=route,
             selected_identity=selected_identity,
+            media_kind=media_kind,
         )
         if result.supported:
             return ScenePreparation(job.id, "ready")
@@ -230,6 +235,8 @@ def ensure_scene_preparation(
         resource="capabilities" if scope["minis_id"] else "minis",
         minis_id=scope["minis_id"],
         scope_basis=scope["basis"],
+        media_kind=media_kind,
+        compiler_contract_revision=CREATIVE_COMPILER_REVISION,
     )
     from .mini_selection import reuse_minis_catalog
 
@@ -272,8 +279,12 @@ def _scope_for_job(
         advertiser_id=job.advertiser_id,
         minis_id=job.minis_id,
         route=load_scene_route(job),
+        media_kind=job.media_kind,
     )
-    if scope["basis"] != job.scope_basis:
+    if (
+        job.compiler_contract_revision != CREATIVE_COMPILER_REVISION
+        or scope["basis"] != job.scope_basis
+    ):
         raise DomainError("scene_refresh_stale", "场景授权或应用已更新")
     return scope
 
