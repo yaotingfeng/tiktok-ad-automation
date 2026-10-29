@@ -11,7 +11,7 @@ from uuid import UUID
 
 from billiard.exceptions import SoftTimeLimitExceeded
 from redis import Redis
-from sqlalchemy import case, delete, func, text, tuple_, update
+from sqlalchemy import delete, func, text, tuple_, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.orm import aliased
@@ -33,11 +33,9 @@ from app.modules.accounts.routing import verify_route
 from app.modules.ads.directory_calibration import calibration_interval
 from app.modules.ads.directory_dispatch import (
     PUBLISH_TASK_NAME,
-    TARGETED_TASK_NAME,
     directory_step_key,
     enqueue_directory_step,
     is_live_directory,
-    targeted_capacity,
 )
 from app.modules.ads.directory_requests import (
     directory_ad_types,
@@ -262,52 +260,10 @@ def _message_lost(session: Session, row: AdDirectoryRun, now: datetime) -> bool:
 
 
 def _dispatch_directories(session, now):
-    # 本代数、本页的投递记录已存在（无论是否已发布）就不再重复入队：积压时
-    # 若每轮重写全部运行，规划会长时间占住 control 唯一并发，使投递发布被饿死。
-    has_filters = (
-        func.coalesce(func.jsonb_array_length(AdDirectoryRun.query["ids"]), 0) > 0
-    ) | (
-        func.coalesce(func.jsonb_array_length(AdDirectoryRun.query["parent_ids"]), 0)
-        > 0
-    )
-    targeted = (col(AdDirectoryRun.workload) == "live") & has_filters
-    dependency = ~targeted & has_filters
-    current_key = func.concat(
-        case((targeted, TARGETED_TASK_NAME + ":"), else_="ads.sync_step:"),
-        col(AdDirectoryRun.id),
-        ":",
-        col(AdDirectoryRun.claim_generation),
-        ":page:",
-        col(AdDirectoryRun.next_page),
-    )
-    enqueued = (
-        select(col(PendingDispatch.id))
-        .where(
-            PendingDispatch.tenant_id == col(AdDirectoryRun.tenant_id),
-            PendingDispatch.task_key == current_key,
-        )
-        .exists()
-    )
-    # 消息发布后长时间仍未被领取，视为在领取前丢失（如任务在加锁前失败）：
-    # 换新代数重新入队。若旧消息其实仍在队列中，执行时代数不符会直接结束。
-    lost = (
-        select(col(PendingDispatch.id))
-        .where(
-            PendingDispatch.tenant_id == col(AdDirectoryRun.tenant_id),
-            PendingDispatch.task_key == current_key,
-            col(PendingDispatch.published_at)
-            < case(
-                (
-                    col(PendingDispatch.task_name) == PUBLISH_TASK_NAME,
-                    now - PUBLISH_MESSAGE_LOST_AFTER,
-                ),
-                (targeted, now - TARGETED_MESSAGE_LOST_AFTER),
-                else_=now - DIRECTORY_MESSAGE_LOST_AFTER,
-            ),
-        )
-        .exists()
-    )
-    # 并发唤醒须原子核对窗口；旧队列自然消费，不清队列或伪造完成。
+    from app.modules.ads import directory_dispatch
+    from app.modules.ads.directory_candidates import directory_candidates
+
+    # 与显式定向入口共享窗口锁；一次活动快照同时计算两池容量和公平候选。
     locked = (
         session.connection()
         .execute(
@@ -319,179 +275,29 @@ def _dispatch_directories(session, now):
     )
     if not locked:
         return 0
-    inflight, dependency_inflight = session.exec(
-        select(func.count(), func.count().filter(dependency))
-        .select_from(AdDirectoryRun)
-        .where(
-            col(AdDirectoryRun.status).in_(["QUEUED", "RUNNING", "WAITING_REMOTE"]),
-            AdDirectoryRun.channel == "OFFICIAL_API",
-            ~targeted,
-            # 已有领取记录说明本代数消息已被消费；租约过期后不再算在途，否则未判丢失的
-            # 消息判丢失前窗口被永久占满。与下方候选条件一致，过期运行会换代重新入队。
-            (enqueued & ~lost & col(AdDirectoryRun.claimed_until).is_(None))
-            | (col(AdDirectoryRun.claimed_until) > now),
-        )
-    ).one()
-    available = max(0, DIRECTORY_DISPATCH_WINDOW - inflight)
-    targeted_available = targeted_capacity(session, now)
-    if not available and not targeted_available:
+    candidates = directory_candidates(
+        session,
+        now,
+        background_window=DIRECTORY_DISPATCH_WINDOW,
+        live_window=directory_dispatch.TARGETED_DISPATCH_WINDOW,
+        batch_limit=DIRECTORY_DISPATCH_BATCH,
+        directory_lost_after=DIRECTORY_MESSAGE_LOST_AFTER,
+        publish_lost_after=PUBLISH_MESSAGE_LOST_AFTER,
+        targeted_lost_after=TARGETED_MESSAGE_LOST_AFTER,
+    )
+    available = candidates[0]["background_available"]
+    targeted_available = candidates[0]["live_available"]
+    ids = [row["id"] for row in candidates if row["id"] is not None]
+    if not ids:
         return 0
-    # 原背景总窗口内，定向依赖和全量各保底一半；空闲份额可借用。
-    # 不能把后台依赖改成 live 绕过服务分类，也不能让更早全量永久占满窗口。
-    dependency_share = DIRECTORY_DISPATCH_WINDOW // 2
-    full_share = DIRECTORY_DISPATCH_WINDOW - dependency_share
-    dependency_reserved = max(0, dependency_share - dependency_inflight)
-    full_reserved = max(0, full_share - (inflight - dependency_inflight))
-    # 旧全账户创意扫描仍降后；主目录派生的素材子页沿原请求年龄续跑，
-    # 否则会永远排在对象队尾，并在执行前被下一轮主观察淘汰。
-    legacy_creative = (col(AdDirectoryRun.kind) == "creative") & ~col(
-        AdDirectoryRun.query
-    ).op("?")(MATERIAL_CHILD_KEY)
-    creative_last = case((legacy_creative, 1), else_=0)
-    newer_scan = aliased(AdDirectoryRun)
-    # 历史素材全量扫描曾重复堆积。同一冻结授权和完整查询仅先推进最新一轮，
-    # 它成功发布后再由原 superseded 机制淘汰旧轮；不合并分页、不把旧轮记为成功。
-    newer_creative_pending = (
-        select(newer_scan.id)
-        .where(
-            newer_scan.tenant_id == AdDirectoryRun.tenant_id,
-            newer_scan.advertiser_id == AdDirectoryRun.advertiser_id,
-            newer_scan.bc_id == AdDirectoryRun.bc_id,
-            newer_scan.actor_id == AdDirectoryRun.actor_id,
-            newer_scan.frozen_route == AdDirectoryRun.frozen_route,
-            newer_scan.partition_key == AdDirectoryRun.partition_key,
-            col(newer_scan.request_sequence) > col(AdDirectoryRun.request_sequence),
-            col(newer_scan.status).in_(["QUEUED", "RUNNING", "WAITING_REMOTE"]),
-        )
-        .exists()
-    )
-    lane_ranked = (
-        select(
-            AdDirectoryRun.id,
-            func.row_number()
-            .over(
-                partition_by=(targeted, dependency, col(AdDirectoryRun.tenant_id)),
-                order_by=(
-                    targeted.desc(),
-                    creative_last,
-                    col(AdDirectoryRun.created_at),
-                    col(AdDirectoryRun.id),
-                ),
-            )
-            .label("lane_rn"),
-        ).where(
-            (targeted & (targeted_available > 0)) | (~targeted & (available > 0)),
-            col(AdDirectoryRun.status).in_(["QUEUED", "RUNNING", "WAITING_REMOTE"]),
-            AdDirectoryRun.channel == "OFFICIAL_API",
-            ~(~targeted & legacy_creative & newer_creative_pending),
-            col(AdDirectoryRun.next_attempt_at).is_(None)
-            | (col(AdDirectoryRun.next_attempt_at) <= now),
-            # 租约过期的运行会进入新代数、生成新投递标识，仍需入队。
-            col(AdDirectoryRun.claimed_until).is_(None) & (~enqueued | lost)
-            | (col(AdDirectoryRun.claimed_until) <= now),
-        )
-    ).subquery()
-    # 各lane先按真实空槽裁剪，再恢复原租户逐轮次序；小批量也不会先取同租户两类。
-    ranked = (
-        select(
-            AdDirectoryRun.id,
-            func.row_number()
-            .over(
-                partition_by=col(AdDirectoryRun.tenant_id),
-                order_by=(
-                    targeted.desc(),
-                    creative_last,
-                    col(AdDirectoryRun.created_at),
-                    col(AdDirectoryRun.id),
-                ),
-            )
-            .label("rn"),
-        )
-        .join(lane_ranked, lane_ranked.c.id == AdDirectoryRun.id)
-        .where(
-            lane_ranked.c.lane_rn
-            <= case((targeted, targeted_available), else_=available)
-        )
-    ).subquery()
-    # 先在每个服务类中沿原租户轮次排序，再裁剪到真实空槽。整个候选集合
-    # 只扫描一次；仅窗口大小的结果进入 ORM，不能把数万积压搬回 Python。
-    service_ranked = (
-        select(
-            AdDirectoryRun.id,
-            ranked.c.rn,
-            func.row_number()
-            .over(
-                partition_by=(targeted, dependency),
-                order_by=(
-                    ranked.c.rn,
-                    col(DirectoryDispatchCursor.last_dispatched_at).asc().nulls_first(),
-                    creative_last,
-                    col(AdDirectoryRun.created_at),
-                    col(AdDirectoryRun.id),
-                ),
-            )
-            .label("service_rn"),
-        )
-        .join(ranked, ranked.c.id == AdDirectoryRun.id)
-        .outerjoin(
-            DirectoryDispatchCursor,
-            col(DirectoryDispatchCursor.tenant_id) == col(AdDirectoryRun.tenant_id),
-        )
-    ).subquery()
-    reserved = (
-        targeted
-        | (
-            service_ranked.c.service_rn
-            <= case((dependency, dependency_reserved), else_=full_reserved)
-        )
-        | (DIRECTORY_DISPATCH_WINDOW < 2)
-    )
-    pool_ranked = (
-        select(
-            AdDirectoryRun.id,
-            service_ranked.c.rn,
-            func.row_number()
-            .over(
-                partition_by=(targeted,),
-                order_by=(
-                    reserved.desc(),
-                    service_ranked.c.rn,
-                    col(DirectoryDispatchCursor.last_dispatched_at).asc().nulls_first(),
-                    creative_last,
-                    col(AdDirectoryRun.created_at),
-                    col(AdDirectoryRun.id),
-                ),
-            )
-            .label("pool_rn"),
-        )
-        .join(service_ranked, service_ranked.c.id == AdDirectoryRun.id)
-        .outerjoin(
-            DirectoryDispatchCursor,
-            col(DirectoryDispatchCursor.tenant_id) == col(AdDirectoryRun.tenant_id),
-        )
-    ).subquery()
-    rows = session.exec(
+    # 候选 SQL 已按原行锁跳过竞争队首；这里只加载实际窗口内的业务对象。
+    loaded = session.exec(
         select(AdDirectoryRun)
-        .join(pool_ranked, pool_ranked.c.id == AdDirectoryRun.id)
-        .outerjoin(
-            DirectoryDispatchCursor,
-            col(DirectoryDispatchCursor.tenant_id) == col(AdDirectoryRun.tenant_id),
-        )
-        .where(
-            pool_ranked.c.pool_rn
-            <= case((targeted, targeted_available), else_=available)
-        )
-        .order_by(
-            pool_ranked.c.rn,
-            col(DirectoryDispatchCursor.last_dispatched_at).asc().nulls_first(),
-            targeted.desc(),
-            creative_last,
-            col(AdDirectoryRun.created_at),
-            col(AdDirectoryRun.id),
-        )
-        .limit(DIRECTORY_DISPATCH_BATCH)
-        .with_for_update(skip_locked=True, of=AdDirectoryRun)
+        .where(col(AdDirectoryRun.id).in_(ids))
+        .execution_options(populate_existing=True)
     ).all()
+    by_id = {row.id: row for row in loaded}
+    rows = [by_id[identity] for identity in ids]
     # 批量识别末页；全量发布保留独立队列，定向抓取/发布使用实时目录队列。
     terminal_runs = (
         set(

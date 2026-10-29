@@ -2,6 +2,7 @@
 
 import os
 from datetime import UTC, datetime
+from zoneinfo import ZoneInfo
 
 import pytest
 from sqlalchemy import text
@@ -10,6 +11,7 @@ from sqlmodel import select
 from app.core.config import settings
 from app.jobs import outbox
 from app.jobs.models import PendingDispatch
+from app.modules.accounts.models import AdvertiserAccount
 from app.modules.reporting import job_tasks
 from app.modules.reporting.jobs import enqueue_job
 from app.modules.reporting.store_models import ReportSyncJob
@@ -24,6 +26,9 @@ def test_refill_sends_committed_claim_without_waiting_for_another_tick(
     monkeypatch.setattr(settings, "REDIS_URL", os.environ["TEST_REDIS_URL"])
     now = datetime.now(UTC)
     with factory() as session, session.begin():
+        # 实时报表按账户当地日路由；UTC 与香港跨日时也必须测试 live 发送。
+        account = session.get(AdvertiserAccount, (seed.tenant_id, "acc-1"))
+        today = now.astimezone(ZoneInfo(account.timezone)).date()
         identity = enqueue_job(
             session,
             tenant_id=seed.tenant_id,
@@ -31,8 +36,8 @@ def test_refill_sends_committed_claim_without_waiting_for_another_tick(
             kind="ad_day",
             tier="hot",
             advertiser_ids=["acc-1"],
-            start=now.date(),
-            end=now.date(),
+            start=today,
+            end=today,
             actor_id=seed.actor_id,
             frozen_route=_route(seed),
         )
@@ -97,6 +102,8 @@ def test_inline_broker_failure_keeps_committed_claim_and_delivery_identity(
     monkeypatch.setattr(settings, "REDIS_URL", os.environ["TEST_REDIS_URL"])
     now = datetime.now(UTC)
     with factory() as session, session.begin():
+        account = session.get(AdvertiserAccount, (seed.tenant_id, "acc-1"))
+        today = now.astimezone(ZoneInfo(account.timezone)).date()
         identity = enqueue_job(
             session,
             tenant_id=seed.tenant_id,
@@ -104,8 +111,8 @@ def test_inline_broker_failure_keeps_committed_claim_and_delivery_identity(
             kind="ad_day",
             tier="hot",
             advertiser_ids=["acc-1"],
-            start=now.date(),
-            end=now.date(),
+            start=today,
+            end=today,
             actor_id=seed.actor_id,
             frozen_route=_route(seed),
         )
