@@ -730,6 +730,8 @@ handle("builds-preview_summary", (req) => {
   const draft = demoDrafts.find((d) => d.draft_id === preview.draft_id)
 
   return {
+    contract_version: 1 as const,
+    media_kind: "VIDEO" as const,
     preview_id: preview.preview_id,
     draft_id: preview.draft_id,
     draft_revision: preview.draft_revision,
@@ -906,6 +908,8 @@ handle("builds-frozen_unit", (req) => {
 
   // 返回单元详细信息
   return {
+    contract_version: 1 as const,
+    media_kind: "VIDEO" as const,
     unit_id,
     preview_id: demoUuid(),
     tenant_id: MAIN_TENANT_ID,
@@ -1038,3 +1042,8 @@ handle("builds-saved_mutation", (req) => {
   if (!saved) return demoError(404, "request_not_found", "请求不存在")
   return saved
 })
+
+// 此演示数据是历史视频预览；V2 广告分页只读取实际 V2 冻结记录。
+handle("builds-frozen_ads", () =>
+  demoError(409, "preview_contract_expired", "此演示预览使用历史分组详情"),
+)

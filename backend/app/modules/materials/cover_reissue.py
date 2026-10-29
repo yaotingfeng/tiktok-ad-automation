@@ -13,7 +13,10 @@ from app.modules.builds.execution_models import (
     SubmissionUnit,
 )
 from app.modules.builds.execution_state import evidence
-from app.modules.builds.preview_models import BuildUnit, PreviewGroupMaterial
+from app.modules.builds.preview_material_views import (
+    GroupMaterialView as PreviewGroupMaterial,
+)
+from app.modules.builds.preview_models import BuildUnit
 from app.modules.tenants.permissions import require_tenant
 
 from . import covers

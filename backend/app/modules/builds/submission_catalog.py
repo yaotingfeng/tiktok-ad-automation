@@ -102,7 +102,7 @@ COUNTS = (
  SELECT DISTINCT p.id submission_id,p.preview_id,g.id group_id,g.unit_id
  FROM page p JOIN execution_step ms ON ms.tenant_id=p.tenant_id AND ms.submission_id=p.id
  JOIN planned_group g ON g.tenant_id=p.tenant_id AND g.preview_id=p.preview_id AND g.unit_id=ms.unit_id
- JOIN preview_group_material m ON m.tenant_id=g.tenant_id AND m.preview_id=g.preview_id
+ JOIN frozen_group_material m ON m.tenant_id=g.tenant_id AND m.preview_id=g.preview_id
  AND m.drama_id=g.drama_id AND m.group_no=g.group_no AND m.material_id=ms.material_id
  AND NOT EXISTS (SELECT 1 FROM preview_skipped_material skipped
  WHERE skipped.tenant_id=m.tenant_id AND skipped.unit_id=g.unit_id AND skipped.material_id=m.material_id)
@@ -399,7 +399,7 @@ def get_submission_groups(
             text(
                 """WITH page AS (SELECT g.* FROM planned_group g WHERE g.tenant_id=:tenant AND g.preview_id=:preview AND g.unit_id=:unit AND (CAST(:after AS uuid) IS NULL OR g.id>:after) ORDER BY g.id LIMIT :size)
  SELECT g.id group_id,g.unit_id,g.group_no,g.name,
- (SELECT count(*) FROM preview_group_material m WHERE m.tenant_id=g.tenant_id AND m.preview_id=g.preview_id AND m.drama_id=g.drama_id AND m.group_no=g.group_no
+ (SELECT count(*) FROM frozen_group_material m WHERE m.tenant_id=g.tenant_id AND m.preview_id=g.preview_id AND m.drama_id=g.drama_id AND m.group_no=g.group_no
  AND NOT EXISTS (SELECT 1 FROM preview_skipped_material skipped WHERE skipped.tenant_id=m.tenant_id AND skipped.unit_id=g.unit_id AND skipped.material_id=m.material_id)) material_count,
  (SELECT count(*) FROM planned_ad a WHERE a.tenant_id=g.tenant_id AND a.preview_id=g.preview_id AND a.group_id=g.id) ad_count,
  """
@@ -649,15 +649,15 @@ def enrich_units(
                 + """ GROUP BY e.unit_id
 ), materials AS (
  SELECT u.id unit_id,count(m.material_id) material_count,count(DISTINCT m.material_id) unique_material_count,
- CASE WHEN EXISTS (SELECT 1 FROM preview_ad_material am0 WHERE am0.tenant_id=u.tenant_id AND am0.preview_id=u.preview_id)
-  THEN (SELECT count(*) FROM preview_ad_material am WHERE am.tenant_id=u.tenant_id AND am.preview_id=u.preview_id AND am.drama_id=u.drama_id
+ CASE WHEN EXISTS (SELECT 1 FROM preview_contract pc WHERE pc.tenant_id=u.tenant_id AND pc.preview_id=u.preview_id AND (pc.version=2 OR pc.legacy_material_layout='AD'))
+  THEN (SELECT count(*) FROM frozen_ad_material am WHERE am.tenant_id=u.tenant_id AND am.preview_id=u.preview_id AND am.drama_id=u.drama_id
     AND NOT EXISTS (SELECT 1 FROM preview_skipped_material skipped WHERE skipped.tenant_id=am.tenant_id AND skipped.unit_id=u.id AND skipped.material_id=am.material_id))
-  ELSE (SELECT count(*) FROM planned_ad a JOIN planned_group g ON g.tenant_id=a.tenant_id AND g.preview_id=a.preview_id AND g.id=a.group_id
-    JOIN preview_group_material legacy_m ON legacy_m.tenant_id=g.tenant_id AND legacy_m.preview_id=g.preview_id AND legacy_m.drama_id=g.drama_id AND legacy_m.group_no=g.group_no
+  WHEN EXISTS (SELECT 1 FROM preview_contract pc WHERE pc.tenant_id=u.tenant_id AND pc.preview_id=u.preview_id AND pc.version=1 AND pc.legacy_material_layout='GROUP') THEN (SELECT count(*) FROM planned_ad a JOIN planned_group g ON g.tenant_id=a.tenant_id AND g.preview_id=a.preview_id AND g.id=a.group_id
+    JOIN frozen_group_material legacy_m ON legacy_m.tenant_id=g.tenant_id AND legacy_m.preview_id=g.preview_id AND legacy_m.drama_id=g.drama_id AND legacy_m.group_no=g.group_no
     WHERE a.tenant_id=u.tenant_id AND a.preview_id=u.preview_id AND g.unit_id=u.id
       AND NOT EXISTS (SELECT 1 FROM preview_skipped_material skipped WHERE skipped.tenant_id=legacy_m.tenant_id AND skipped.unit_id=u.id AND skipped.material_id=legacy_m.material_id))
- END material_allocation_count
- FROM page u LEFT JOIN preview_group_material m ON m.tenant_id=u.tenant_id AND m.preview_id=u.preview_id AND m.drama_id=u.drama_id
+ ELSE 0 END material_allocation_count
+ FROM page u LEFT JOIN frozen_group_material m ON m.tenant_id=u.tenant_id AND m.preview_id=u.preview_id AND m.drama_id=u.drama_id
  AND NOT EXISTS (SELECT 1 FROM preview_skipped_material skipped WHERE skipped.tenant_id=m.tenant_id AND skipped.unit_id=u.id AND skipped.material_id=m.material_id)
  GROUP BY u.id,u.tenant_id,u.preview_id,u.drama_id
 )
@@ -864,7 +864,7 @@ def get_submission_materials(
     total = _scalar_count(
         session,
         """SELECT count(*) FROM planned_group g
-JOIN preview_group_material m ON m.tenant_id=g.tenant_id
+JOIN frozen_group_material m ON m.tenant_id=g.tenant_id
 AND m.preview_id=g.preview_id AND m.drama_id=g.drama_id
 AND m.group_no=g.group_no
 AND NOT EXISTS (SELECT 1 FROM preview_skipped_material skipped
@@ -878,7 +878,7 @@ AND g.unit_id=:unit AND g.id=:group""",
         .execute(
             text(
                 """WITH page AS (
- SELECT m.* FROM planned_group g JOIN preview_group_material m ON m.tenant_id=g.tenant_id AND m.preview_id=g.preview_id AND m.drama_id=g.drama_id AND m.group_no=g.group_no
+ SELECT m.* FROM planned_group g JOIN frozen_group_material m ON m.tenant_id=g.tenant_id AND m.preview_id=g.preview_id AND m.drama_id=g.drama_id AND m.group_no=g.group_no
  AND NOT EXISTS (SELECT 1 FROM preview_skipped_material skipped WHERE skipped.tenant_id=m.tenant_id AND skipped.unit_id=g.unit_id AND skipped.material_id=m.material_id)
  WHERE g.tenant_id=:tenant AND g.preview_id=:preview AND g.unit_id=:unit AND g.id=:group AND m.position>:after ORDER BY m.position LIMIT :size)
  SELECT m.material_id,m.position,f.file_name,f.storage_state='stored' preview_available,

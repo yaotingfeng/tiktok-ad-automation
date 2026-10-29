@@ -2519,6 +2519,10 @@ export type Frequency = {
  */
 export type FrozenAd = {
     /**
+     * Creative Units
+     */
+    creative_units?: Array<FrozenCreativeUnit>;
+    /**
      * Ad Id
      */
     ad_id: string;
@@ -2553,9 +2557,91 @@ export type FrozenAd = {
 };
 
 /**
+ * FrozenCreativeMember
+ */
+export type FrozenCreativeMember = {
+    /**
+     * Material Id
+     */
+    material_id: string;
+    /**
+     * Content Digest
+     */
+    content_digest: string | null;
+    /**
+     * File Name
+     */
+    file_name: string;
+};
+
+/**
+ * FrozenCreativeUnit
+ */
+export type FrozenCreativeUnit = {
+    /**
+     * Unit Id
+     */
+    unit_id: string;
+    /**
+     * Kind
+     */
+    kind: 'VIDEO' | 'CAROUSEL';
+    /**
+     * Generation
+     */
+    generation: number;
+    /**
+     * Content Revision
+     */
+    content_revision: number;
+    /**
+     * Music Revision
+     */
+    music_revision: number;
+    /**
+     * Content Digest
+     */
+    content_digest: string;
+    /**
+     * Music Id
+     */
+    music_id: string | null;
+    /**
+     * Music Snapshot
+     */
+    music_snapshot: {
+        [key: string]: unknown;
+    };
+    /**
+     * Members
+     */
+    members: Array<FrozenCreativeMember>;
+};
+
+/**
  * FrozenGroup
  */
 export type FrozenGroup = {
+    /**
+     * Contract Version
+     */
+    contract_version?: 1 | 2;
+    /**
+     * Material Count
+     */
+    material_count?: number | null;
+    /**
+     * Creative Unit Count
+     */
+    creative_unit_count?: number | null;
+    /**
+     * Ad Count
+     */
+    ad_count?: number | null;
+    /**
+     * Sample Material Ids
+     */
+    sample_material_ids?: Array<string>;
     /**
      * Group Id
      */
@@ -2571,11 +2657,11 @@ export type FrozenGroup = {
     /**
      * Material Ids
      */
-    material_ids: Array<string>;
+    material_ids: Array<string> | null;
     /**
      * Ads
      */
-    ads: Array<FrozenAd>;
+    ads: Array<FrozenAd> | null;
 };
 
 /**
@@ -2648,6 +2734,14 @@ export type FrozenTikTokRoute = {
  * FrozenUnit
  */
 export type FrozenUnit = {
+    /**
+     * Contract Version
+     */
+    contract_version: 1 | 2;
+    /**
+     * Media Kind
+     */
+    media_kind: 'VIDEO' | 'CAROUSEL';
     targeting?: AudienceTargeting | null;
     /**
      * Targeting Region Codes
@@ -5257,6 +5351,24 @@ export type Page_DraftMaterialPublic_ = {
 };
 
 /**
+ * Page[FrozenAd]
+ */
+export type Page_FrozenAd_ = {
+    /**
+     * Items
+     */
+    items: Array<FrozenAd>;
+    /**
+     * Next Cursor
+     */
+    next_cursor?: string | null;
+    /**
+     * Total
+     */
+    total: number;
+};
+
+/**
  * Page[FrozenGroup]
  */
 export type Page_FrozenGroup_ = {
@@ -6184,6 +6296,24 @@ export type PreviewRequest = {
  * PreviewSummary
  */
 export type PreviewSummary = {
+    /**
+     * Contract Version
+     */
+    contract_version: 1 | 2;
+    /**
+     * Media Kind
+     */
+    media_kind: 'VIDEO' | 'CAROUSEL';
+    /**
+     * Excluded Image Count
+     */
+    excluded_image_count?: number;
+    /**
+     * Excluded Images
+     */
+    excluded_images?: Array<{
+        [key: string]: unknown;
+    }>;
     targeting?: AudienceTargeting | null;
     /**
      * Excluded Dramas
@@ -16318,6 +16448,53 @@ export type buildsFrozenGroupsResponses = {
 };
 
 export type buildsFrozenGroupsResponse = buildsFrozenGroupsResponses[keyof buildsFrozenGroupsResponses];
+
+export type buildsFrozenAdsData = {
+    body?: never;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+        /**
+         * Unit Id
+         */
+        unit_id: string;
+        /**
+         * Group Id
+         */
+        group_id: string;
+    };
+    query?: {
+        /**
+         * Cursor
+         */
+        cursor?: string | null;
+        /**
+         * Limit
+         */
+        limit?: number;
+    };
+    url: '/api/tenants/{tenant_id}/build-units/{unit_id}/groups/{group_id}/ads';
+};
+
+export type buildsFrozenAdsErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type buildsFrozenAdsError = buildsFrozenAdsErrors[keyof buildsFrozenAdsErrors];
+
+export type buildsFrozenAdsResponses = {
+    /**
+     * Successful Response
+     */
+    200: Page_FrozenAd_;
+};
+
+export type buildsFrozenAdsResponse = buildsFrozenAdsResponses[keyof buildsFrozenAdsResponses];
 
 export type buildsSkippedMaterialsData = {
     body?: never;

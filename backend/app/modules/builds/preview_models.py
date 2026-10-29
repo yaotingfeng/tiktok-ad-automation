@@ -198,10 +198,17 @@ class PreviewCopy(PreviewRow, table=True):
         preview_fk(),
         drama_group_fk(),
         UniqueConstraint(
-            "tenant_id", "preview_id", "drama_id", "group_no", "base_ad_no", "creative_no",
+            "tenant_id",
+            "preview_id",
+            "drama_id",
+            "group_no",
+            "base_ad_no",
+            "creative_no",
             name="uq_preview_copy_no",
         ),
-        CheckConstraint("base_ad_no > 0 AND creative_no > 0", name="ck_preview_copy_no"),
+        CheckConstraint(
+            "base_ad_no > 0 AND creative_no > 0", name="ck_preview_copy_no"
+        ),
     )
     drama_id: UUID = Field(primary_key=True)
     group_no: int = Field(primary_key=True)
@@ -222,9 +229,16 @@ class PreviewAdMaterial(PreviewRow, table=True):
             ["tenant_id", "material_id"],
             ["material_file.tenant_id", "material_file.id"],
         ),
-        CheckConstraint("base_ad_no > 0 AND position > 0", name="ck_preview_ad_material_position"),
+        CheckConstraint(
+            "base_ad_no > 0 AND position > 0", name="ck_preview_ad_material_position"
+        ),
         UniqueConstraint(
-            "tenant_id", "preview_id", "drama_id", "group_no", "base_ad_no", "material_id",
+            "tenant_id",
+            "preview_id",
+            "drama_id",
+            "group_no",
+            "base_ad_no",
+            "material_id",
             name="uq_preview_ad_material_id",
         ),
     )
@@ -363,7 +377,11 @@ class PlannedAd(PreviewRow, table=True):
             ["planned_group.tenant_id", "planned_group.preview_id", "planned_group.id"],
         ),
         UniqueConstraint(
-            "tenant_id", "group_id", "base_ad_no", "creative_no", name="uq_planned_ad_no"
+            "tenant_id",
+            "group_id",
+            "base_ad_no",
+            "creative_no",
+            name="uq_planned_ad_no",
         ),
         CheckConstraint("base_ad_no > 0 AND creative_no > 0", name="ck_planned_ad_no"),
     )
@@ -377,3 +395,182 @@ class PlannedAd(PreviewRow, table=True):
     cta_option_ids: list[str] = Field(
         default_factory=list, sa_column=Column(JSONB, nullable=False)
     )
+
+
+class PreviewContract(PreviewRow, table=True):
+    """附加合同描述，不更新任何历史冻结正文或哈希。"""
+
+    __tablename__ = "preview_contract"
+    __table_args__ = (
+        preview_fk(),
+        CheckConstraint(
+            "(version = 1 AND media_kind = 'VIDEO' AND legacy_material_layout IS NOT NULL AND legacy_material_layout IN ('GROUP','AD','UNKNOWN')) OR (version = 2 AND media_kind IN ('VIDEO','CAROUSEL') AND legacy_material_layout IS NULL)",
+            name="ck_preview_contract",
+        ),
+    )
+    version: int
+    media_kind: str = Field(max_length=16)
+    legacy_material_layout: str | None = Field(default=None, max_length=16)
+
+
+
+class PreviewCreativeUnit(PreviewRow, table=True):
+    __tablename__ = "preview_creative_unit"
+    __table_args__ = (
+        preview_fk(),
+        ForeignKeyConstraint(
+            ["tenant_id", "drama_id"], ["provider_drama.tenant_id", "provider_drama.id"]
+        ),
+        UniqueConstraint(
+            "tenant_id",
+            "preview_id",
+            "bc_id",
+            "drama_id",
+            "id",
+            name="uq_frozen_creative_scope",
+        ),
+        UniqueConstraint(
+            "tenant_id",
+            "preview_id",
+            "drama_id",
+            "position",
+            name="uq_frozen_creative_position",
+        ),
+        CheckConstraint(
+            "position > 0 AND generation > 0 AND content_revision > 0 AND music_revision >= 0",
+            name="ck_frozen_creative_versions",
+        ),
+        CheckConstraint(
+            "(kind = 'VIDEO' AND music_id IS NULL) OR (kind = 'CAROUSEL' AND music_id IS NOT NULL AND length(trim(music_id)) > 0)",
+            name="ck_frozen_creative_kind",
+        ),
+    )
+    id: UUID = Field(primary_key=True)
+    drama_id: UUID
+    kind: str = Field(max_length=16)
+    position: int
+    generation: int
+    content_revision: int
+    music_revision: int
+    content_digest: str = Field(max_length=64)
+    music_id: str | None = Field(default=None, max_length=255)
+    music_snapshot: dict[str, Any] = Field(
+        default_factory=dict, sa_column=Column(JSONB, nullable=False)
+    )
+
+    @property
+    def unit_id(self) -> UUID:
+        return self.id
+
+
+def creative_unit_fk() -> ForeignKeyConstraint:
+    return ForeignKeyConstraint(
+        ["tenant_id", "preview_id", "bc_id", "drama_id", "creative_unit_id"],
+        [
+            "preview_creative_unit.tenant_id",
+            "preview_creative_unit.preview_id",
+            "preview_creative_unit.bc_id",
+            "preview_creative_unit.drama_id",
+            "preview_creative_unit.id",
+        ],
+    )
+
+
+class PreviewCreativeUnitItem(PreviewRow, table=True):
+    __tablename__ = "preview_creative_unit_item"
+    __table_args__ = (
+        preview_fk(),
+        creative_unit_fk(),
+        ForeignKeyConstraint(
+            ["tenant_id", "material_id"],
+            ["material_file.tenant_id", "material_file.id"],
+        ),
+        CheckConstraint("position BETWEEN 1 AND 35", name="ck_frozen_item_position"),
+        UniqueConstraint(
+            "tenant_id",
+            "preview_id",
+            "creative_unit_id",
+            "material_id",
+            name="uq_frozen_item_material",
+        ),
+    )
+    creative_unit_id: UUID = Field(primary_key=True)
+    position: int = Field(primary_key=True)
+    drama_id: UUID
+    material_id: UUID
+    # 保存实际文件摘要，绝不把聚合单元 digest 冒充文件字节摘要。
+    content_digest: str | None = Field(default=None, max_length=64)
+    file_name: str = Field(max_length=1000)
+
+
+class PreviewGroupCreativeUnit(PreviewRow, table=True):
+    __tablename__ = "preview_group_creative_unit"
+    __table_args__ = (
+        preview_fk(),
+        drama_group_fk(),
+        creative_unit_fk(),
+        CheckConstraint("position > 0", name="ck_frozen_group_unit_position"),
+        UniqueConstraint(
+            "tenant_id",
+            "preview_id",
+            "drama_id",
+            "group_no",
+            "creative_unit_id",
+            name="uq_frozen_group_unit",
+        ),
+    )
+    drama_id: UUID = Field(primary_key=True)
+    group_no: int = Field(primary_key=True)
+    position: int = Field(primary_key=True)
+    creative_unit_id: UUID
+
+
+class PreviewAdCreativeUnit(PreviewRow, table=True):
+    __tablename__ = "preview_ad_creative_unit"
+    __table_args__ = (
+        preview_fk(),
+        drama_group_fk(),
+        creative_unit_fk(),
+        CheckConstraint(
+            "base_ad_no > 0 AND position BETWEEN 1 AND 50",
+            name="ck_frozen_ad_unit_position",
+        ),
+        UniqueConstraint(
+            "tenant_id",
+            "preview_id",
+            "drama_id",
+            "group_no",
+            "base_ad_no",
+            "creative_unit_id",
+            name="uq_frozen_ad_unit",
+        ),
+    )
+    drama_id: UUID = Field(primary_key=True)
+    group_no: int = Field(primary_key=True)
+    base_ad_no: int = Field(primary_key=True)
+    position: int = Field(primary_key=True)
+    creative_unit_id: UUID
+
+
+class PreviewImageExclusion(PreviewRow, table=True):
+    """完整排除证据独立保存，摘要页面只返回有界样本。"""
+
+    __tablename__ = "preview_image_exclusion"
+    __table_args__ = (
+        preview_fk(),
+        ForeignKeyConstraint(
+            ["tenant_id", "drama_id"], ["provider_drama.tenant_id", "provider_drama.id"]
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "material_id"],
+            ["material_file.tenant_id", "material_file.id"],
+        ),
+        CheckConstraint(
+            "reason IN ('DISABLED','REMAINDER')",
+            name="ck_preview_image_exclusion_reason",
+        ),
+    )
+    drama_id: UUID = Field(primary_key=True)
+    material_id: UUID = Field(primary_key=True)
+    file_name: str = Field(max_length=1000)
+    reason: str = Field(max_length=16)

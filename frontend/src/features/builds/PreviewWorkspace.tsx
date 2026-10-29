@@ -4,6 +4,7 @@ import { useState } from "react"
 import {
   BuildsService,
   type FrozenGroup,
+  type FrozenAd,
   type PreviewSummary,
   type PreviewUnit,
 } from "@/client"
@@ -851,7 +852,13 @@ function FrozenUnitSheet({
             {groups.error && <RequestError error={groups.error} />}{" "}
             {groups.isPending && <Skeleton className="h-32" />}
             {groups.data?.items.map((group) => (
-              <GroupDetail key={group.group_id} group={group} />
+              <GroupDetail
+                key={group.group_id}
+                group={group}
+                tenantId={tenantId}
+                bcId={bcId}
+                unitId={unit.unit_id}
+              />
             ))}
             <Pager
               paging={paging}
@@ -927,35 +934,151 @@ function SkippedMaterials({
   )
 }
 
-function GroupDetail({ group }: { group: FrozenGroup }) {
+function AdDetail({ ad }: { ad: FrozenAd }) {
+  return (
+    <div className="space-y-2 rounded-md bg-muted p-3">
+      <h4 className="text-sm font-semibold">
+        基础广告 {ad.base_ad_no} · 文案版本 {ad.creative_no}
+      </h4>
+      <CopyField label="Ad 名称" value={ad.name} expanded />
+      <p className="whitespace-pre-wrap text-sm">{ad.text}</p>
+      <p className="break-all text-xs">
+        CTA：{ad.cta_option_ids.join("、") || "无 CTA"}
+      </p>
+      {ad.creative_units?.map((creative, index) => (
+        <div key={creative.unit_id} className="space-y-1 text-xs">
+          <p>
+            创意 {index + 1} ·{" "}
+            {creative.kind === "CAROUSEL"
+              ? `轮播，${creative.members.length} 张图片，配乐 ${creative.music_id}`
+              : "视频"}
+          </p>
+          <ol className="list-inside list-decimal break-all">
+            {creative.members.map((member) => (
+              <li key={member.material_id}>{member.file_name}</li>
+            ))}
+          </ol>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+function FrozenAds({
+  tenantId,
+  bcId,
+  unitId,
+  groupId,
+}: {
+  tenantId: string
+  bcId: string
+  unitId: string
+  groupId: string
+}) {
+  const [cursors, setCursors] = useState<Array<string | null>>([null])
+  const cursor = cursors[cursors.length - 1]
+  const query = useQuery({
+    queryKey: [
+      ...buildKey(tenantId, bcId),
+      "unit",
+      unitId,
+      "group",
+      groupId,
+      "ads",
+      cursor,
+    ],
+    queryFn: async ({ signal }) =>
+      (
+        await BuildsService.frozenAds({
+          path: { tenant_id: tenantId, unit_id: unitId, group_id: groupId },
+          query: { cursor, limit: 2 },
+          signal,
+        })
+      ).data,
+  })
+  return (
+    <section aria-label="冻结广告详情" className="space-y-3">
+      {query.error && (
+        <RequestError error={query.error} retry={() => void query.refetch()} />
+      )}
+      {query.isPending && <Skeleton className="h-24" />}
+      {query.data?.items.map((ad) => (
+        <AdDetail key={ad.ad_id} ad={ad} />
+      ))}
+      <div className="flex items-center justify-between gap-3">
+        <span className="text-xs text-muted-foreground">
+          共 {query.data?.total ?? "—"} 条广告 · 第 {cursors.length} 页 · 每页 2
+          条
+        </span>
+        <div className="flex gap-2">
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={query.isFetching || cursors.length === 1}
+            onClick={() => setCursors((values) => values.slice(0, -1))}
+          >
+            上一页广告
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={query.isFetching || !query.data?.next_cursor}
+            onClick={() => {
+              const next = query.data?.next_cursor
+              if (next) setCursors((values) => [...values, next])
+            }}
+          >
+            下一页广告
+          </Button>
+        </div>
+      </div>
+    </section>
+  )
+}
+
+function GroupDetail({
+  group,
+  tenantId,
+  bcId,
+  unitId,
+}: {
+  group: FrozenGroup
+  tenantId: string
+  bcId: string
+  unitId: string
+}) {
   const [open, setOpen] = useState(false)
+  const version2 = group.contract_version === 2
   return (
     <details
       className="rounded-md border p-3"
       onToggle={(event) => setOpen(event.currentTarget.open)}
     >
       <summary className="cursor-pointer text-sm">
-        第 {group.group_no} 组 · {group.material_ids.length} 份素材 ·{" "}
-        {group.ads.length} 条 SP 创意
+        第 {group.group_no} 组 ·{" "}
+        {version2 ? group.material_count : group.material_ids?.length} 份素材 ·{" "}
+        {version2 && `${group.creative_unit_count} 个完整创意 · `}
+        {version2 ? group.ad_count : group.ads?.length} 条 SP 创意
       </summary>
       {open && (
         <div className="mt-3 space-y-3">
           <CopyField label="Ad Group 名称" value={group.name} expanded />
           <p className="break-all font-mono text-xs">
-            素材 ID：{group.material_ids.join("、")}
+            {version2 ? "素材 ID 样例（最多 6 项）" : "素材 ID"}：
+            {(version2 ? group.sample_material_ids : group.material_ids)?.join(
+              "、",
+            )}
           </p>
-          {group.ads.map((ad) => (
-            <div key={ad.ad_id} className="space-y-2 rounded-md bg-muted p-3">
-              <h4 className="text-sm font-semibold">
-                文案版本 {ad.creative_no}
-              </h4>
-              <CopyField label="Ad 名称" value={ad.name} expanded />
-              <p className="whitespace-pre-wrap text-sm">{ad.text}</p>
-              <p className="break-all text-xs">
-                CTA：{ad.cta_option_ids.join("、") || "无 CTA"}
-              </p>
-            </div>
-          ))}
+          {version2 ? (
+            <FrozenAds
+              tenantId={tenantId}
+              bcId={bcId}
+              unitId={unitId}
+              groupId={group.group_id}
+            />
+          ) : (
+            group.ads?.map((ad) => <AdDetail key={ad.ad_id} ad={ad} />)
+          )}
         </div>
       )}
     </details>

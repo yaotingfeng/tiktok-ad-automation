@@ -85,6 +85,11 @@ def _project(shape: object, actual: object, path: str, missing: list[str]) -> ob
                 missing.append(child_path)
             else:
                 result[key] = _project(child, actual[key], child_path, missing)
+        # 格式互斥字段必须保留到严格 DTO 验证，不能投影掉后误判 MATCH。
+        if "ad_format" in shape:
+            for key in ("video_info", "music_info"):
+                if key in actual and key not in result and actual[key] is not None:
+                    result[key] = actual[key]
         return result
     if isinstance(shape, list):
         if not isinstance(actual, list):
@@ -92,7 +97,14 @@ def _project(shape: object, actual: object, path: str, missing: list[str]) -> ob
             return None
         return (
             [
-                _project(shape[0], item, f"{path}.{index}", missing)
+                _project(
+                    shape[index]
+                    if path == "creative_list" and index < len(shape)
+                    else shape[0],
+                    item,
+                    f"{path}.{index}",
+                    missing,
+                )
                 for index, item in enumerate(actual)
             ]
             if shape
@@ -193,12 +205,17 @@ def parse_page(*, query: BuildReadQuery, response: McpBusinessResponse) -> Build
     )
 
 
-def _equal(left: object, right: object) -> bool:
+def _equal(left: object, right: object, path: str = "") -> bool:
     if isinstance(left, dict) and isinstance(right, dict):
         return left.keys() == right.keys() and all(
-            _equal(value, right[key]) for key, value in left.items()
+            _equal(value, right[key], f"{path}.{key}") for key, value in left.items()
         )
     if isinstance(left, (list, tuple)) and isinstance(right, (list, tuple)):
+        # 每个不可拆轮播内部图片必须按顺序；外层创意保留原有多重集合语义。
+        if path.endswith(".image_ids"):
+            return len(left) == len(right) and all(
+                _equal(a, b, path) for a, b in zip(left, right, strict=True)
+            )
         remaining = list(right)
         for item in left:
             matched = next(

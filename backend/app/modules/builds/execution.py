@@ -172,7 +172,7 @@ def _current_scene(
             session, context=context, preview_id=frozen.preview_id
         ),
         selected_identity=selected_identity or None,
-        media_kind="VIDEO",
+        media_kind=frozen.media_kind,
     )
     targeting = frozen.scene_snapshot.get("field_constraints", {}).get(
         "audience_targeting"
@@ -382,7 +382,22 @@ def prepare_request(
             for key, value in snapshot["creative_fields"]["creative_info"].items()
             if key != "ad_format"
         }
-        resolved = ad_assets(mappings, text=ad.text, url=frozen.url, identity=identity)
+        from app.integrations.tiktok.contracts.builds import VideoCreative
+
+        resolved = ad_assets(
+            [
+                VideoCreative(
+                    kind="VIDEO",
+                    video_id=item["video_id"],
+                    cover_image_id=item.get("image_id"),
+                    file_name=item.get("file_name"),
+                )
+                for item in mappings
+            ],
+            text=ad.text,
+            url=frozen.url,
+            identity=identity,
+        )
         cta = session.exec(
             select(ExecutionStep).where(
                 ExecutionStep.tenant_id == step.tenant_id,
@@ -722,7 +737,7 @@ def _prepare_scene_dependency(
                 advertiser_id=frozen.advertiser_id,
                 link_id=frozen.link_id,
                 route=claim.route,
-                media_kind="VIDEO",
+                media_kind=frozen.media_kind,
                 selected_identity={
                     key: frozen.scene_snapshot["creative_fields"]["creative_info"][key]
                     for key in (

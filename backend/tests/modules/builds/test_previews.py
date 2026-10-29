@@ -8,16 +8,21 @@ import pytest
 from sqlmodel import select
 
 from app.core.errors import DomainError
+from app.integrations.tiktok.contracts.builds import VideoCreative
 from app.modules.builds import previews
 from app.modules.builds.drafts import create_draft, edit_material_groups, prepare_draft
 from app.modules.builds.models import BuildDraft, DraftDrama, DraftInput
+from app.modules.builds.preview_material_views import (
+    AdMaterialView as PreviewAdMaterial,
+)
+from app.modules.builds.preview_material_views import (
+    GroupMaterialView as PreviewGroupMaterial,
+)
 from app.modules.builds.preview_models import (
     BuildPreview,
     BuildUnit,
     PlannedAd,
     PlannedGroup,
-    PreviewAdMaterial,
-    PreviewGroupMaterial,
 )
 from app.modules.builds.previews import iter_pairs, unit_readiness
 from app.modules.builds.scene_schemas import SceneContext
@@ -707,10 +712,11 @@ def test_strategy_structure_matrix_persists_material_ads_and_frozen_contract(
         )
         body = ad_assets(
             [
-                {
-                    "video_id": f"fixture-video-{material_id}",
-                    "image_id": f"fixture-cover-{material_id}",
-                }
+                VideoCreative(
+                    kind="VIDEO",
+                    video_id=f"fixture-video-{material_id}",
+                    cover_image_id=f"fixture-cover-{material_id}",
+                )
                 for material_id in frozen_ids
             ],
             text=ad.text,
@@ -995,8 +1001,20 @@ def test_frozen_full_product_budget_and_shared_copy(session, context, prepared):
         groups = previews.get_frozen_groups(
             session, context=context, unit_id=unit.unit_id
         ).items
-        assert [len(g.material_ids) for g in groups] == [10, 10, 3]
-        copies = [tuple((ad.copy_id, ad.text) for ad in group.ads) for group in groups]
+        assert [g.material_count for g in groups] == [10, 10, 3]
+        copies = [
+            tuple(
+                (ad.copy_id, ad.text)
+                for ad in previews.get_frozen_ads(
+                    session,
+                    context=context,
+                    unit_id=unit.unit_id,
+                    group_id=group.group_id,
+                    limit=5,
+                ).items
+            )
+            for group in groups
+        ]
         if unit.drama_id in by_drama:
             assert by_drama[unit.drama_id] == copies
         by_drama[unit.drama_id] = copies
@@ -1090,7 +1108,7 @@ def test_preview_tables_frozen_and_material_upload_does_not_expand_intent(
         "build_preview",
         "build_unit",
         "planned_ad",
-        "preview_group_material",
+        "preview_group_creative_unit",
         "preview_copy",
         "preview_drama",
     ]:

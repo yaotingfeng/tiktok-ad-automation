@@ -54,14 +54,14 @@ def get_preview_dramas(
           JOIN build_unit b ON b.tenant_id=s.tenant_id AND b.id=s.unit_id
           WHERE b.tenant_id=:tenant AND b.preview_id=:preview AND b.drama_id=p.drama_id) AS skipped_material_count,
         (SELECT count(*) FROM preview_drama_group g WHERE g.tenant_id=:tenant AND g.preview_id=:preview AND g.drama_id=p.drama_id) AS material_group_count,
-        (SELECT count(*) FROM preview_group_material m WHERE m.tenant_id=:tenant AND m.preview_id=:preview AND m.drama_id=p.drama_id) AS material_count,
-        (SELECT count(DISTINCT m.material_id) FROM preview_group_material m WHERE m.tenant_id=:tenant AND m.preview_id=:preview AND m.drama_id=p.drama_id) AS unique_material_count,
-        CASE WHEN EXISTS (SELECT 1 FROM preview_ad_material m0 WHERE m0.tenant_id=:tenant AND m0.preview_id=:preview)
-          THEN (SELECT count(*) FROM preview_ad_material m WHERE m.tenant_id=:tenant AND m.preview_id=:preview AND m.drama_id=p.drama_id)
-          ELSE (SELECT count(*) FROM planned_ad a JOIN planned_group g ON g.tenant_id=a.tenant_id AND g.preview_id=a.preview_id AND g.id=a.group_id
-            JOIN preview_group_material m ON m.tenant_id=g.tenant_id AND m.preview_id=g.preview_id AND m.drama_id=g.drama_id AND m.group_no=g.group_no
+        (SELECT count(*) FROM frozen_group_material m WHERE m.tenant_id=:tenant AND m.preview_id=:preview AND m.drama_id=p.drama_id) AS material_count,
+        (SELECT count(DISTINCT m.material_id) FROM frozen_group_material m WHERE m.tenant_id=:tenant AND m.preview_id=:preview AND m.drama_id=p.drama_id) AS unique_material_count,
+        CASE WHEN EXISTS (SELECT 1 FROM preview_contract pc WHERE pc.tenant_id=:tenant AND pc.preview_id=:preview AND (pc.version=2 OR pc.legacy_material_layout='AD'))
+          THEN (SELECT count(*) FROM frozen_ad_material m WHERE m.tenant_id=:tenant AND m.preview_id=:preview AND m.drama_id=p.drama_id)
+          WHEN EXISTS (SELECT 1 FROM preview_contract pc WHERE pc.tenant_id=:tenant AND pc.preview_id=:preview AND pc.version=1 AND pc.legacy_material_layout='GROUP') THEN (SELECT count(*) FROM planned_ad a JOIN planned_group g ON g.tenant_id=a.tenant_id AND g.preview_id=a.preview_id AND g.id=a.group_id
+            JOIN frozen_group_material m ON m.tenant_id=g.tenant_id AND m.preview_id=g.preview_id AND m.drama_id=g.drama_id AND m.group_no=g.group_no
             WHERE a.tenant_id=:tenant AND a.preview_id=:preview AND g.drama_id=p.drama_id)
-        END AS ad_material_allocation_count,
+          ELSE 0 END AS ad_material_allocation_count,
         u.*
       FROM page p CROSS JOIN LATERAL (
         SELECT count(*) AS account_count,

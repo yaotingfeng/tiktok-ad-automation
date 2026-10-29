@@ -59,47 +59,38 @@ def frozen_ad_material_ids(
     base_ad_no: int,
     unit_id: UUID | None = None,
 ) -> list[UUID]:
-    """Read the immutable ad mapping, with a legacy group snapshot fallback.
+    from .creative_units import frozen_ad_creative_units, preview_contract
 
-    Previews frozen before the ad-level table existed have no rows there. Their
-    group-level order remains the authoritative historical intent.
-    """
-    query = (
-        select(PreviewAdMaterial.material_id)
-        .where(
-            PreviewAdMaterial.tenant_id == tenant_id,
-            PreviewAdMaterial.preview_id == preview_id,
-            PreviewAdMaterial.drama_id == drama_id,
-            PreviewAdMaterial.group_no == group_no,
-            PreviewAdMaterial.base_ad_no == base_ad_no,
+    contract = preview_contract(session, tenant_id=tenant_id, preview_id=preview_id)
+    if contract.version == 2:
+        units = frozen_ad_creative_units(
+            session,
+            tenant_id=tenant_id,
+            preview_id=preview_id,
+            drama_id=drama_id,
+            group_no=group_no,
+            base_ad_no=base_ad_no,
         )
-        .order_by(col(PreviewAdMaterial.position))
-    )
-    ids = list(session.exec(query).all())
-    # 只有整部剧尚未写入广告级映射时才兼容历史组级快照；新表部分缺行
-    # 表示冻结数据损坏，必须返回空集合让执行链明确阻断。
-    any_ad_rows = bool(
-        session.exec(
-            select(PreviewAdMaterial.material_id).where(
-                PreviewAdMaterial.tenant_id == tenant_id,
-                PreviewAdMaterial.preview_id == preview_id,
-            )
-        ).first()
-    )
-    if not ids and any_ad_rows:
-        return []
-    if not any_ad_rows:
-        legacy = (
-            select(PreviewGroupMaterial.material_id)
-            .where(
-                PreviewGroupMaterial.tenant_id == tenant_id,
-                PreviewGroupMaterial.preview_id == preview_id,
-                PreviewGroupMaterial.drama_id == drama_id,
-                PreviewGroupMaterial.group_no == group_no,
-            )
-            .order_by(col(PreviewGroupMaterial.position))
+        ids = [member.material_id for unit in units for member in unit.members]
+        if contract.media_kind == "CAROUSEL":
+            return ids
+    else:
+        if contract.legacy_material_layout not in {"GROUP", "AD"}:
+            return []
+        model = (
+            PreviewAdMaterial
+            if contract.legacy_material_layout == "AD"
+            else PreviewGroupMaterial
         )
-        ids = list(session.exec(legacy).all())
+        query = select(model.material_id).where(
+            model.tenant_id == tenant_id,
+            model.preview_id == preview_id,
+            model.drama_id == drama_id,
+            model.group_no == group_no,
+        )
+        if contract.legacy_material_layout == "AD":
+            query = query.where(PreviewAdMaterial.base_ad_no == base_ad_no)
+        ids = list(session.exec(query.order_by(col(model.position))).all())
     if unit_id is None:
         return ids
     if not ids:

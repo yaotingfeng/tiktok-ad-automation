@@ -1,4 +1,5 @@
 from pathlib import Path
+from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
@@ -180,12 +181,15 @@ def test_legacy_frozen_group_materials_are_used_when_ad_rows_are_absent():
             return self.values[0] if self.values else None
 
     class LegacySession:
+        def get(self, *args):
+            return SimpleNamespace(version=1, legacy_material_layout="GROUP")
+
         def __init__(self):
             self.calls = 0
 
         def exec(self, query):
             self.calls += 1
-            return Result([] if self.calls < 3 else [uuid4(), uuid4()])
+            return Result([uuid4(), uuid4()])
 
     assert (
         len(
@@ -211,6 +215,9 @@ def test_partial_ad_rows_in_another_drama_disable_legacy_fallback():
             return uuid4()
 
     class Session:
+        def get(self, *args):
+            return SimpleNamespace(version=1, legacy_material_layout="AD")
+
         def exec(self, query):
             return Result()
 
@@ -241,6 +248,9 @@ def test_frozen_ad_material_ids_reads_skipped_materials_in_one_batch():
             return self.values[0] if self.values else None
 
     class Session:
+        def get(self, *args):
+            return SimpleNamespace(version=1, legacy_material_layout="AD")
+
         def __init__(self):
             self.calls = 0
 
@@ -248,11 +258,7 @@ def test_frozen_ad_material_ids_reads_skipped_materials_in_one_batch():
             self.calls += 1
             # ad rows, preview-level presence, then one batched skipped-ID query
             return Result(
-                [first_id, skipped_id, last_id]
-                if self.calls == 1
-                else [uuid4()]
-                if self.calls == 2
-                else [skipped_id]
+                [first_id, skipped_id, last_id] if self.calls == 1 else [skipped_id]
             )
 
     session = Session()
@@ -265,7 +271,7 @@ def test_frozen_ad_material_ids_reads_skipped_materials_in_one_batch():
         base_ad_no=1,
         unit_id=uuid4(),
     ) == [first_id, last_id]
-    assert session.calls == 3
+    assert session.calls == 2
 
 
 def test_material_limit_uses_frozen_scene_limit():

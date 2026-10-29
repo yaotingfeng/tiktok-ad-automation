@@ -167,6 +167,8 @@ import type {
   buildsEditResponse,
   buildsExcludeData,
   buildsExcludeResponse,
+  buildsFrozenAdsData,
+  buildsFrozenAdsResponse,
   buildsFrozenGroupsData,
   buildsFrozenGroupsResponse,
   buildsFrozenUnitData,
@@ -559,6 +561,7 @@ export const DEMO_OPERATIONS = {
   "builds-edit": { method: "POST", path: "/api/tenants/{tenant_id}/build-drafts/{draft_id}/image-composition/edits", query: {} },
   "builds-edit_groups": { method: "PATCH", path: "/api/tenants/{tenant_id}/build-drafts/{draft_id}/dramas/{drama_id}/groups", query: {} },
   "builds-exclude": { method: "POST", path: "/api/tenants/{tenant_id}/build-drafts/{draft_id}/image-composition/candidates/exclude", query: {} },
+  "builds-frozen_ads": { method: "GET", path: "/api/tenants/{tenant_id}/build-units/{unit_id}/groups/{group_id}/ads", query: {"limit":"number"} },
   "builds-frozen_groups": { method: "GET", path: "/api/tenants/{tenant_id}/build-units/{unit_id}/groups", query: {"limit":"number"} },
   "builds-frozen_unit": { method: "GET", path: "/api/tenants/{tenant_id}/build-units/{unit_id}", query: {} },
   "builds-generate_preview": { method: "POST", path: "/api/tenants/{tenant_id}/build-drafts/{draft_id}/previews", query: {} },
@@ -800,6 +803,7 @@ export interface DemoOperationTypes {
   "builds-edit": { data: buildsEditData; response: buildsEditResponse }
   "builds-edit_groups": { data: buildsEditGroupsData; response: buildsEditGroupsResponse }
   "builds-exclude": { data: buildsExcludeData; response: buildsExcludeResponse }
+  "builds-frozen_ads": { data: buildsFrozenAdsData; response: buildsFrozenAdsResponse }
   "builds-frozen_groups": { data: buildsFrozenGroupsData; response: buildsFrozenGroupsResponse }
   "builds-frozen_unit": { data: buildsFrozenUnitData; response: buildsFrozenUnitResponse }
   "builds-generate_preview": { data: buildsGeneratePreviewData; response: buildsGeneratePreviewResponse }

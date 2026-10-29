@@ -9,6 +9,7 @@ import pytest
 from urllib3.response import HTTPResponse
 
 from app.core.errors import DomainError
+from app.integrations.tiktok.contracts.builds import VideoCreative
 from app.integrations.tiktok.contracts.common import RemoteCallError
 from app.integrations.tiktok.sdk import official_client
 from app.modules.builds.preview_validation import scene_reasons
@@ -41,7 +42,7 @@ def _strategy(**changes):
 def _materials(count: int):
     return [
         SimpleNamespace(
-            material_id=uuid4(),
+            unit_id=uuid4(),
             file_name=f"fixture-{index:02}.mp4",
         )
         for index in range(count)
@@ -57,13 +58,11 @@ def _plan_snapshot(
     groups = plan_structure(materials, config=config, pool=seed_copies(), seed=17)
     # PreviewAdMaterial 冻结的是基础广告的素材集合，创意复制只增加 PlannedAd。
     ad_materials = {
-        (group.group_no, ad.base_ad_no): ad.material_ids
+        (group.group_no, ad.base_ad_no): ad.unit_ids
         for group in groups
         for ad in group.ads
     }
-    planned_ads = sum(
-        len(ad.copies) for group in groups for ad in group.ads
-    )
+    planned_ads = sum(len(ad.copies) for group in groups for ad in group.ads)
     return groups, planned_ads, ad_materials
 
 
@@ -86,7 +85,11 @@ def test_end_to_end_by_material_one_material_per_ad_has_frozen_sets_and_fences()
     assert all(len(material_ids) == 1 for material_ids in ad_materials.values())
     # CTA and target video/cover fences are checked before any request is compiled.
     body = ad_assets(
-        [{"video_id": "target-v1", "image_id": "target-cover"}],
+        [
+            VideoCreative(
+                kind="VIDEO", video_id="target-v1", cover_image_id="target-cover"
+            )
+        ],
         text="Watch now.",
         url="https://example.test/minis",
         identity={
@@ -116,11 +119,11 @@ def test_end_to_end_two_groups_average_keeps_disjoint_one_material_ad_sets():
         )
     )
 
-    assert tuple(len(group.material_ids) for group in groups) == (10, 10)
+    assert tuple(len(group.unit_ids) for group in groups) == (10, 10)
     assert planned_ads == 20
     assert tuple(len(group.ads) for group in groups) == (10, 10)
     assert all(len(material_ids) == 1 for material_ids in ad_materials.values())
-    assert set(groups[0].material_ids).isdisjoint(groups[1].material_ids)
+    assert set(groups[0].unit_ids).isdisjoint(groups[1].unit_ids)
 
 
 def test_end_to_end_fixed_shared_creatives_expand_planned_ads_without_duplicate_mapping():
@@ -140,7 +143,7 @@ def test_end_to_end_fixed_shared_creatives_expand_planned_ads_without_duplicate_
     assert tuple(len(group.ads) for group in groups) == (2,)
     assert set(ad_materials) == {(1, 1), (1, 2)}
     assert all(len(material_ids) == 20 for material_ids in ad_materials.values())
-    assert groups[0].ads[0].material_ids == groups[0].ads[1].material_ids
+    assert groups[0].ads[0].unit_ids == groups[0].ads[1].unit_ids
     assert all(len(ad.copies) == 3 for ad in groups[0].ads)
 
 
@@ -215,7 +218,9 @@ def test_two_drafts_reuse_strategy_without_sharing_preview_frozen_rows():
 
 
 def test_shared_materials_prepare_one_account_task_but_keep_per_ad_creative_lists():
-    shared_mapping = {"video_id": "video-shared", "image_id": "cover-shared"}
+    shared_mapping = VideoCreative(
+        kind="VIDEO", video_id="video-shared", cover_image_id="cover-shared"
+    )
     ad_one = ad_assets(
         [shared_mapping],
         text="A",
@@ -282,8 +287,8 @@ def test_failure_and_recovery_fences_do_not_replan_or_expand_materials():
     )
     assert count_after == count_before
     assert mapping_after == mapping_before
-    assert [group.material_ids for group in recovered] == [
-        group.material_ids for group in before
+    assert [group.unit_ids for group in recovered] == [
+        group.unit_ids for group in before
     ]
 
     scene = SceneContext(
@@ -304,9 +309,7 @@ def test_failure_and_recovery_fences_do_not_replan_or_expand_materials():
         },
         cta_fields={"asset_ids": ["cta-1"]},
     )
-    reasons = scene_reasons(
-        _strategy(cta_option_ids=("cta-1",)), scene, "USD"
-    )
+    reasons = scene_reasons(_strategy(cta_option_ids=("cta-1",)), scene, "USD")
     assert "bid_strategy_invalid" in reasons
     assert "adgroup_budget_unverified" not in reasons
 
@@ -315,12 +318,15 @@ def test_each_sp_uses_complete_target_group_and_one_independent_text():
     from app.modules.builds.request_compiler import ad_assets
 
     mappings = [
-        {
-            "video_id": "target-v1",
-            "image_id": "target-cover-1",
-            "file_name": "01-The General-CL6-LH-1.mp4",
-        },
-        {"video_id": "target-v2", "image_id": "target-cover-2"},
+        VideoCreative(
+            kind="VIDEO",
+            video_id="target-v1",
+            cover_image_id="target-cover-1",
+            file_name="01-The General-CL6-LH-1.mp4",
+        ),
+        VideoCreative(
+            kind="VIDEO", video_id="target-v2", cover_image_id="target-cover-2"
+        ),
     ]
     identity = {
         "identity_type": "BC_AUTH_TT",
@@ -397,7 +403,7 @@ def test_identity_cannot_override_creative_assets():
 
     with pytest.raises(DomainError):
         ad_assets(
-            [{"video_id": "target", "image_id": "cover"}],
+            [VideoCreative(kind="VIDEO", video_id="target", cover_image_id="cover")],
             text="Watch.",
             url="https://example.test",
             identity={

@@ -7,6 +7,7 @@ from sqlalchemy import text
 from sqlmodel import Session, select
 from urllib3.response import HTTPResponse
 
+from app.integrations.tiktok.contracts.builds import VideoCreative
 from app.modules.builds.execution_models import ExecutionStep, StepEvidence
 from app.modules.builds.routes import save_attempt_context
 from tests.modules.builds.test_execution import executable as executable
@@ -398,7 +399,7 @@ def test_review_ad_copy_application_policy_rejects_blank_or_over_100(copy):
 
     with pytest.raises(DomainError):
         ad_assets(
-            [{"video_id": "target", "image_id": "cover"}],
+            [VideoCreative(kind="VIDEO", video_id="target", cover_image_id="cover")],
             text=copy,
             url="https://example.test/frozen",
             identity={
@@ -413,7 +414,7 @@ def test_review_ad_copy_application_policy_counts_characters_not_bytes():
     from app.modules.builds.request_compiler import ad_assets
 
     body = ad_assets(
-        [{"video_id": "target", "image_id": "cover"}],
+        [VideoCreative(kind="VIDEO", video_id="target", cover_image_id="cover")],
         text="剧" * 100,
         url="https://example.test/frozen",
         identity={

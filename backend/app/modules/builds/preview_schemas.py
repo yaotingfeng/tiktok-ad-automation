@@ -7,6 +7,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from app.modules.builds.route_schemas import ExecutionRoutePublic
 
+from .creative_units import FrozenCreativeUnit
 from .targeting_schemas import AudienceTargeting
 
 Readiness = Literal["READY", "PREPARING", "BLOCKED"]
@@ -103,6 +104,10 @@ class ExcludedDramaPublic(BaseModel):
 
 
 class PreviewSummary(BaseModel):
+    contract_version: Literal[1, 2]
+    media_kind: Literal["VIDEO", "CAROUSEL"]
+    excluded_image_count: int = 0
+    excluded_images: list[dict[str, Any]] = Field(default_factory=list)
     targeting: AudienceTargeting | None = None
     excluded_dramas: list[ExcludedDramaPublic] = Field(default_factory=list)
     targeting_region_codes: list[str] = Field(default_factory=list)
@@ -167,6 +172,8 @@ class PreviewUnit(BaseModel):
 
 
 class FrozenUnit(BaseModel):
+    contract_version: Literal[1, 2]
+    media_kind: Literal["VIDEO", "CAROUSEL"]
     targeting: AudienceTargeting | None = None
     targeting_region_codes: list[str] = Field(default_factory=list)
     model_config = ConfigDict(frozen=True)
@@ -201,6 +208,7 @@ class FrozenUnit(BaseModel):
 
 
 class FrozenAd(BaseModel):
+    creative_units: tuple[FrozenCreativeUnit, ...] = ()
     model_config = ConfigDict(frozen=True)
     ad_id: UUID
     base_ad_no: int
@@ -213,12 +221,17 @@ class FrozenAd(BaseModel):
 
 
 class FrozenGroup(BaseModel):
+    contract_version: Literal[1, 2] = 1
+    material_count: int | None = None
+    creative_unit_count: int | None = None
+    ad_count: int | None = None
+    sample_material_ids: tuple[UUID, ...] = ()
     model_config = ConfigDict(frozen=True)
     group_id: UUID
     group_no: int
     name: str
-    material_ids: tuple[UUID, ...]
-    ads: tuple[FrozenAd, ...]
+    material_ids: tuple[UUID, ...] | None
+    ads: tuple[FrozenAd, ...] | None
 
 
 class PreviewInputPublic(BaseModel):

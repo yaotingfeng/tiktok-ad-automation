@@ -53,9 +53,20 @@ def test_partial_materials_keep_valid_groups_and_frozen_selection(
         groups = previews.get_frozen_groups(
             session, context=context, unit_id=unit.unit_id
         )
-        retained = {m for g in groups.items for m in g.material_ids}
+        retained = {
+            m
+            for g in groups.items
+            for ad in previews.get_frozen_ads(
+                session,
+                context=context,
+                unit_id=unit.unit_id,
+                group_id=g.group_id,
+                limit=5,
+            ).items
+            for m in ad.material_ids
+        }
         assert retained == set(ordered) - failed
-        assert all(g.material_ids for g in groups.items)
+        assert all(g.material_count for g in groups.items)
         assert unit.group_count == (
             0 if failed_count == 23 else 2 if failed_count == 10 else 3
         )
@@ -145,7 +156,7 @@ def test_group_limit_applies_to_retained_materials_not_skipped_ones(
         groups = previews.get_frozen_groups(
             session, context=context, unit_id=unit.unit_id
         ).items
-        assert [len(g.material_ids) for g in groups] == [9, 9, 2]
+        assert [g.material_count for g in groups] == [9, 9, 2]
 
 
 def test_exclusions_are_account_scoped_paginated_authorized_and_immutable(
@@ -192,7 +203,7 @@ def test_exclusions_are_account_scoped_paginated_authorized_and_immutable(
             assert unit.readiness == "READY" and unit.skipped_material_count == 0
             assert (
                 sum(
-                    len(g.material_ids)
+                    g.material_count
                     for g in previews.get_frozen_groups(
                         session, context=context, unit_id=unit.unit_id
                     ).items

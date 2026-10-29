@@ -593,7 +593,10 @@ def test_ad_checks_current_video_evidence_after_admission(
 def test_frozen_custom_cover_keeps_its_final_fence(executable, redis_client, changed):
     from app.core.errors import DomainError
     from app.modules.builds.cover_execution import validate_ad_assets
-    from app.modules.builds.preview_models import BuildUnit, PreviewGroupMaterial
+    from app.modules.builds.preview_material_views import (
+        GroupMaterialView as PreviewGroupMaterial,
+    )
+    from app.modules.builds.preview_models import BuildUnit
 
     ad_id, _, job_id, _ = ready_ad_with_cover_job(executable, redis_client)
     db, _, _ = executable

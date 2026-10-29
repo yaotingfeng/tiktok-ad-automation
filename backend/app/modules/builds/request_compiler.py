@@ -3,7 +3,7 @@
 import json
 from collections.abc import Sequence
 from decimal import Decimal
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 from uuid import UUID
 
 from pydantic import Field, ValidationError
@@ -15,13 +15,14 @@ from app.integrations.tiktok.contracts.builds import (
     AdGroupCreate,
     BuildReadQuery,
     CampaignCreate,
+    CarouselCreative,
     CreateIntent,
-    CreativeAsset,
     CtaAsset,
     CtaCreate,
     FrozenModel,
     Id,
     IdentityFields,
+    VideoCreative,
 )
 from app.integrations.tiktok.contracts.common import (
     CallEvidence,
@@ -59,7 +60,7 @@ class _Image(FrozenModel):
     web_uri: Id
 
 
-class _CreativeInfo(IdentityFields):
+class _VideoInfo(IdentityFields):
     ad_format: Literal["SINGLE_VIDEO"]
     video_info: _Video
     image_info: tuple[_Image, ...] | None = Field(
@@ -67,8 +68,20 @@ class _CreativeInfo(IdentityFields):
     )
 
 
+class _Music(FrozenModel):
+    music_id: Id
+
+
+class _CarouselInfo(IdentityFields):
+    ad_format: Literal["CAROUSEL_ADS"]
+    image_info: tuple[_Image, ...] = Field(min_length=1, max_length=35)
+    music_info: _Music
+
+
 class _Creative(FrozenModel):
-    creative_info: _CreativeInfo
+    creative_info: Annotated[
+        _VideoInfo | _CarouselInfo, Field(discriminator="ad_format")
+    ]
 
 
 class _Text(FrozenModel):
@@ -186,12 +199,23 @@ def decode_observed_intent(kind: str, body: dict[str, object]) -> CreateIntent:
             landing_page_url=ad.landing_page_url_list[0].landing_page_url,
             portfolio_id=ad.ad_configuration.call_to_action_id,
             assets=tuple(
-                CreativeAsset(
-                    video_id=item.creative_info.video_info.video_id,
-                    file_name=item.creative_info.video_info.file_name,
-                    image_id=item.creative_info.image_info[0].web_uri
-                    if item.creative_info.image_info
-                    else None,
+                (
+                    VideoCreative(
+                        kind="VIDEO",
+                        video_id=item.creative_info.video_info.video_id,
+                        file_name=item.creative_info.video_info.file_name,
+                        cover_image_id=item.creative_info.image_info[0].web_uri
+                        if item.creative_info.image_info
+                        else None,
+                    )
+                    if isinstance(item.creative_info, _VideoInfo)
+                    else CarouselCreative(
+                        kind="CAROUSEL",
+                        image_ids=tuple(
+                            image.web_uri for image in item.creative_info.image_info
+                        ),
+                        music_id=item.creative_info.music_info.music_id,
+                    )
                 )
                 for item in ad.creative_list
             ),
@@ -200,6 +224,27 @@ def decode_observed_intent(kind: str, body: dict[str, object]) -> CreateIntent:
         cta = _CtaBody.model_validate(values)
         return CtaCreate(advertiser_id=cta.advertiser_id, assets=cta.portfolio_content)
     raise _invalid("kind", kind)
+
+
+def _asset_info(asset: VideoCreative | CarouselCreative) -> dict[str, Any]:
+    if isinstance(asset, CarouselCreative):
+        return {
+            "ad_format": "CAROUSEL_ADS",
+            "image_info": [{"web_uri": image} for image in asset.image_ids],
+            "music_info": {"music_id": asset.music_id},
+        }
+    return {
+        "ad_format": "SINGLE_VIDEO",
+        "video_info": {
+            "video_id": asset.video_id,
+            **({"file_name": asset.file_name} if asset.file_name else {}),
+        },
+        **(
+            {"image_info": [{"web_uri": asset.cover_image_id}]}
+            if asset.cover_image_id
+            else {}
+        ),
+    }
 
 
 def encode_intent(intent: CreateIntent) -> dict[str, object]:
@@ -234,20 +279,7 @@ def encode_intent(intent: CreateIntent) -> dict[str, object]:
                             if intent.identity_authorized_bc_id is not None
                             else {}
                         ),
-                        "ad_format": "SINGLE_VIDEO",
-                        "video_info": {
-                            "video_id": asset.video_id,
-                            **(
-                                {"file_name": asset.file_name}
-                                if asset.file_name
-                                else {}
-                            ),
-                        },
-                        **(
-                            {"image_info": [{"web_uri": asset.image_id}]}
-                            if asset.image_id
-                            else {}
-                        ),
+                        **_asset_info(asset),
                     }
                 }
                 for asset in intent.assets
@@ -344,7 +376,9 @@ def create_arguments(
     *, attempt_id: UUID, intent: CreateIntent, channel: ChannelKind
 ) -> tuple[str, dict[str, object]]:
     """attempt 仅做本地关联；金额必须能由两条官方 JSON 路径无损表达。"""
-    if channel not in {"OFFICIAL_API", "OFFICIAL_MCP"} or not isinstance(attempt_id, UUID):
+    if channel not in {"OFFICIAL_API", "OFFICIAL_MCP"} or not isinstance(
+        attempt_id, UUID
+    ):
         raise RemoteCallError(
             "invalid_build_request", effect="NOT_SENT", evidence=CallEvidence()
         )
@@ -388,7 +422,7 @@ def _nonempty(value: object) -> bool:
 
 
 def ad_assets(
-    mappings: Sequence[dict[str, str]],
+    mappings: Sequence[VideoCreative | CarouselCreative],
     *,
     text: str,
     url: str,
@@ -407,31 +441,9 @@ def ad_assets(
         raise DomainError("copy_too_long", "应用文案策略最多允许 100 个字符")
     creatives = []
     for item in mappings:
-        if not _nonempty(item.get("video_id")) or (
-            item.get("image_id") is not None and not _nonempty(item["image_id"])
-        ):
+        if not isinstance(item, (VideoCreative, CarouselCreative)):
             raise DomainError("target_asset_incomplete", "目标账户素材尚未核实")
-        creatives.append(
-            {
-                "creative_info": {
-                    **identity,
-                    "ad_format": "SINGLE_VIDEO",
-                    "video_info": {
-                        "video_id": item["video_id"],
-                        **(
-                            {"file_name": item["file_name"]}
-                            if item.get("file_name")
-                            else {}
-                        ),
-                    },
-                    **(
-                        {"image_info": [{"web_uri": item["image_id"]}]}
-                        if item.get("image_id")
-                        else {}
-                    ),
-                }
-            }
-        )
+        creatives.append({"creative_info": {**identity, **_asset_info(item)}})
     return {
         "creative_list": creatives,
         "ad_text_list": [{"ad_text": text}],
@@ -473,6 +485,7 @@ def _json_copy(value: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise DomainError("invalid_build_request", "搭建请求格式无效")
     try:
+
         def json_default(item: object) -> str:
             if isinstance(item, Decimal):
                 return str(item)
@@ -518,16 +531,22 @@ def compile_request(
             body["smart_plus_adgroup_mode"] = "MULTIPLE"
         else:
             if "budget" not in body:
-                raise DomainError("invalid_budget_strategy", "系列预算缺少 Campaign 日预算")
+                raise DomainError(
+                    "invalid_budget_strategy", "系列预算缺少 Campaign 日预算"
+                )
             body["budget_optimize_on"] = True
             body["budget_mode"] = "BUDGET_MODE_DYNAMIC_DAILY_BUDGET"
     if kind == "adgroup":
         if budget_strategy == "ADGROUP":
             if "budget" not in body:
-                raise DomainError("invalid_budget_strategy", "组预算缺少 Ad Group 日预算")
+                raise DomainError(
+                    "invalid_budget_strategy", "组预算缺少 Ad Group 日预算"
+                )
             body["budget_mode"] = "BUDGET_MODE_DYNAMIC_DAILY_BUDGET"
         elif "budget" in body:
-            raise DomainError("adgroup_budget_not_allowed", "系列预算策略不能设置广告组预算")
+            raise DomainError(
+                "adgroup_budget_not_allowed", "系列预算策略不能设置广告组预算"
+            )
         if bid_strategy == "HIGHEST_VALUE":
             if "roas_bid" in body:
                 raise DomainError("bid_strategy_invalid", "最高价值不能包含 ROAS 出价")

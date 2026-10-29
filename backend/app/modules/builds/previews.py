@@ -41,11 +41,9 @@ from app.modules.builds.preview_models import (
     BuildUnit,
     PlannedAd,
     PlannedGroup,
-    PreviewAdMaterial,
     PreviewCopy,
     PreviewDrama,
     PreviewDramaGroup,
-    PreviewGroupMaterial,
     PreviewInput,
     PreviewSkippedMaterial,
 )
@@ -93,9 +91,22 @@ from app.modules.strategies.service import get_copies, get_version
 from app.modules.strategies.structure import estimate_batch_structure, plan_structure
 from app.modules.tenants.permissions import require_tenant
 
+from .creative_units import (
+    preview_contract,
+    require_freeze_ready,
+    snapshot_creative_units,
+)
 from .image_composition_models import DraftCreativeUnit
+from .preview_material_views import AdMaterialView as PreviewAdMaterial
+from .preview_material_views import GroupMaterialView as PreviewGroupMaterial
+from .preview_models import (
+    PreviewAdCreativeUnit,
+    PreviewContract,
+    PreviewCreativeUnit,
+    PreviewGroupCreativeUnit,
+    PreviewImageExclusion,
+)
 from .structure import effective_structure_config
-from .video_units import ordered_units, video_material_ids
 
 """Preview planning is local and never dispatches target assets or ads."""
 
@@ -180,26 +191,14 @@ def _record(preview: BuildPreview, value: Any) -> None:
 def _bump_preview_retry_revision(
     session: Session, draft: BuildDraft, expected_revision: int
 ) -> None:
-    from .carousel_music_models import MusicPreparationRun, MusicSelectionJob
+    from .creative_units import has_live_music_intent
     from .drafts import _bump_revision
 
-    if draft.media_kind == "CAROUSEL":
-        # 重试只是新预览尝试，不能借版本提升取消仍在扫描的批量配乐意图。
-        for model in (MusicPreparationRun, MusicSelectionJob):
-            if (
-                session.exec(
-                    select(model.id).where(
-                        model.tenant_id == draft.tenant_id,
-                        model.draft_id == draft.id,
-                        model.active_generation == draft.active_image_generation,
-                        col(model.status).in_(["PENDING", "RUNNING"]),
-                    )
-                ).first()
-                is not None
-            ):
-                raise DomainError(
-                    "music_preparation_pending", "配乐准备尚未结束，请稍后重试预览"
-                )
+    if draft.media_kind == "CAROUSEL" and has_live_music_intent(session, draft):
+        # 重试不能借版本提升取消当前批量配乐意图；旧订阅不阻塞新尝试。
+        raise DomainError(
+            "music_preparation_pending", "配乐准备尚未结束，请稍后重试预览"
+        )
     was_applied = draft.applied_image_rule_revision == draft.revision
     _bump_revision(session, draft, expected_revision)
     if was_applied:
@@ -207,6 +206,20 @@ def _bump_preview_retry_revision(
 
 
 def generate_preview(
+    session: Session, *, context: TenantContext, draft_id: UUID, expected_revision: int
+) -> UUID:
+    from .preview_capture_limits import freeze_capture_limits
+
+    with freeze_capture_limits(session):
+        return _generate_preview(
+            session,
+            context=context,
+            draft_id=draft_id,
+            expected_revision=expected_revision,
+        )
+
+
+def _generate_preview(
     session: Session, *, context: TenantContext, draft_id: UUID, expected_revision: int
 ) -> UUID:
     draft = get_draft(session, context=context, draft_id=draft_id, lock=True)
@@ -305,8 +318,6 @@ def generate_preview(
         )
     ).one()
     estimate_batch_structure(unit_counts, account_count=account_count, config=config)
-    if draft.media_kind != "VIDEO":
-        raise DomainError("preview_contract_unavailable", "图片预览需要 V2 冻结合同")
     targeting = effective_targeting(session, context, draft)
     directory = draft_directory(session, context=context, draft_id=draft.id)
     if directory.state != "READY":
@@ -352,7 +363,12 @@ def generate_preview(
         bc_id=draft.bc_id,
         connection_id=draft.execution_connection_id,
     )
+    require_freeze_ready(session, draft, context=context, route=route)
     insert_preview_with_number(session, row)
+    contract = PreviewContract(**_scope(row), version=2, media_kind=draft.media_kind)
+    session.add(contract)
+    session.flush()
+    creative_records = snapshot_creative_units(session, preview=row, draft=draft)
     save_preview_route(session, context=context, preview_id=row.id, route=route)
     row.progress = {
         "phase": "inputs",
@@ -365,6 +381,15 @@ def generate_preview(
             .where(
                 DraftDrama.tenant_id == context.tenant_id,
                 DraftDrama.draft_id == draft_id,
+                select(DraftInput.id)
+                .where(
+                    DraftInput.tenant_id == context.tenant_id,
+                    DraftInput.draft_id == draft_id,
+                    DraftInput.kind == "drama",
+                    DraftInput.status == "ready",
+                    DraftInput.drama_id == DraftDrama.drama_id,
+                )
+                .exists(),
             )
         ).one()
         * session.exec(
@@ -392,6 +417,8 @@ def generate_preview(
             },
         ),
     }
+    _record(row, contract.model_dump(mode="json"))
+    _record(row, creative_records)
     session.add(row)
     session.flush()
     from app.modules.builds.preview_tasks import queue_preview
@@ -461,6 +488,15 @@ def _snapshot_drama(
         query = select(DraftDrama).where(
             DraftDrama.tenant_id == preview.tenant_id,
             DraftDrama.draft_id == preview.draft_id,
+            select(DraftInput.id)
+            .where(
+                DraftInput.tenant_id == preview.tenant_id,
+                DraftInput.draft_id == preview.draft_id,
+                DraftInput.kind == "drama",
+                DraftInput.status == "ready",
+                DraftInput.drama_id == DraftDrama.drama_id,
+            )
+            .exists(),
         )
         if p["drama_after"]:
             query = query.where(DraftDrama.drama_id > UUID(p["drama_after"]))
@@ -531,10 +567,15 @@ def _snapshot_drama(
         if p.get("planned"):
             p.update(drama_after=p["current_drama"], current_drama=None, planned=False)
             return
-        draft = session.get(BuildDraft, preview.draft_id)
-        assert draft is not None
-        source_units = ordered_units(session, draft, drama_id=drama_id)
-        source_materials = video_material_ids(session, draft, drama_id=drama_id)
+        source_units = session.exec(
+            select(PreviewCreativeUnit)
+            .where(
+                PreviewCreativeUnit.tenant_id == preview.tenant_id,
+                PreviewCreativeUnit.preview_id == preview.id,
+                PreviewCreativeUnit.drama_id == drama_id,
+            )
+            .order_by(col(PreviewCreativeUnit.position))
+        ).all()
         if not source_units:
             p.update(drama_after=p["current_drama"], current_drama=None)
             return
@@ -549,26 +590,24 @@ def _snapshot_drama(
             session.flush()
             _record(preview, group.model_dump(mode="json"))
             for position, unit_id in enumerate(group_plan.unit_ids, 1):
-                material_id = source_materials[unit_id]
-                material_row = PreviewGroupMaterial(
+                material_row = PreviewGroupCreativeUnit(
                     **_scope(preview),
                     drama_id=drama_id,
                     group_no=group_plan.group_no,
                     position=position,
-                    material_id=material_id,
+                    creative_unit_id=unit_id,
                 )
                 session.add(material_row)
                 _record(preview, material_row.model_dump(mode="json"))
             for ad_plan in group_plan.ads:
                 for position, unit_id in enumerate(ad_plan.unit_ids, 1):
-                    material_id = source_materials[unit_id]
-                    mapping = PreviewAdMaterial(
+                    mapping = PreviewAdCreativeUnit(
                         **_scope(preview),
                         drama_id=drama_id,
                         group_no=group_plan.group_no,
                         base_ad_no=ad_plan.base_ad_no,
                         position=position,
-                        material_id=material_id,
+                        creative_unit_id=unit_id,
                     )
                     session.add(mapping)
                     _record(preview, mapping.model_dump(mode="json"))
@@ -713,7 +752,9 @@ def _expand_unit(
                 link_id=drama.link_id,
                 route=route,
                 selected_identity=p.get("selected_identity"),
-                media_kind="VIDEO",
+                media_kind=preview_contract(
+                    session, tenant_id=preview.tenant_id, preview_id=preview.id
+                ).media_kind,
             )
         except DomainError as error:
             if error.code not in {
@@ -840,7 +881,11 @@ def _expand_unit(
         skipped_ids = [
             identity
             for identity, result in readiness.items()
-            if result.state == "blocked"
+            if preview_contract(
+                session, tenant_id=preview.tenant_id, preview_id=preview.id
+            ).media_kind
+            == "VIDEO"
+            and result.state == "blocked"
             and result.reason_code in SKIPPABLE_MATERIAL_REASONS
         ]
         # 文件名及原因随预览冻结，分页展示；不会因为以后补传成功而改变本次内容。
@@ -889,23 +934,30 @@ def _expand_unit(
             session.add(unit)
             p["group_after"] = group.group_no
             return
-        ad_material_counts = dict(
-            session.exec(
-                select(PreviewAdMaterial.base_ad_no, func.count())
-                .where(
-                    PreviewAdMaterial.tenant_id == preview.tenant_id,
-                    PreviewAdMaterial.preview_id == preview.id,
-                    PreviewAdMaterial.drama_id == drama.drama_id,
-                    PreviewAdMaterial.group_no == group.group_no,
-                    material_not_skipped(
-                        tenant_id=preview.tenant_id,
-                        unit_id=unit.id,
-                        material_id=col(PreviewAdMaterial.material_id),
-                    ),
+        ad_material_counts = {}
+        mappings = session.exec(
+            select(PreviewAdCreativeUnit).where(
+                PreviewAdCreativeUnit.tenant_id == preview.tenant_id,
+                PreviewAdCreativeUnit.preview_id == preview.id,
+                PreviewAdCreativeUnit.drama_id == drama.drama_id,
+                PreviewAdCreativeUnit.group_no == group.group_no,
+            )
+        ).all()
+        from .preview_models import PreviewCreativeUnitItem
+
+        for mapping in mappings:
+            members = session.exec(
+                select(PreviewCreativeUnitItem.material_id).where(
+                    PreviewCreativeUnitItem.tenant_id == preview.tenant_id,
+                    PreviewCreativeUnitItem.preview_id == preview.id,
+                    PreviewCreativeUnitItem.creative_unit_id
+                    == mapping.creative_unit_id,
                 )
-                .group_by(col(PreviewAdMaterial.base_ad_no))
             ).all()
-        )
+            if members and not all(member in skipped_ids for member in members):
+                ad_material_counts[mapping.base_ad_no] = (
+                    ad_material_counts.get(mapping.base_ad_no, 0) + 1
+                )
         if material_limit_exceeded(list(ad_material_counts.values()), maximum):
             _block(unit, ["material_group_limit_exceeded"])
     names = _names(preview, drama, config, group.group_no, 1)
@@ -1004,6 +1056,17 @@ def continue_preview(
     draft = get_draft(session, context=context, draft_id=initial.draft_id, lock=True)
     preview = _preview(session, context, preview_id, lock=True)
     if preview.status != "BUILDING":
+        return True
+    if (
+        preview_contract(
+            session, tenant_id=context.tenant_id, preview_id=preview.id
+        ).version
+        != 2
+    ):
+        preview.status = "FAILED"
+        preview.error_code = "preview_contract_expired"
+        session.add(preview)
+        session.flush()
         return True
     if (
         not is_current_batch_number(preview.batch_short_id)
@@ -1142,11 +1205,15 @@ def get_preview_summary(
             PreviewAdMaterial.preview_id == preview_id,
         )
     ).one()
-    # 旧预览没有广告级映射时，按冻结的组素材和 PlannedAd 关系还原展示口径。
+    descriptor = preview_contract(
+        session, tenant_id=context.tenant_id, preview_id=preview.id
+    )
+    # 仅显式 GROUP 历史布局按组素材还原展示；V2 缺行不回退。
     # 这里只读既有冻结行，不重新规划广告或素材。
     material_allocation_count = (
         ad_material_rows
-        or session.exec(
+        if descriptor.version == 2 or descriptor.legacy_material_layout != "GROUP"
+        else session.exec(
             select(func.count(col(PreviewGroupMaterial.material_id)))
             .select_from(PlannedAd)
             .join(
@@ -1198,7 +1265,40 @@ def get_preview_summary(
             col(PreviewInput.status).not_in(["matched", "ready"]),
         )
     ).one()
+    descriptor = preview_contract(
+        session, tenant_id=context.tenant_id, preview_id=preview.id
+    )
     return PreviewSummary(
+        contract_version=descriptor.version,
+        media_kind=descriptor.media_kind,
+        excluded_image_count=session.exec(
+            select(func.count())
+            .select_from(PreviewImageExclusion)
+            .where(
+                PreviewImageExclusion.tenant_id == context.tenant_id,
+                PreviewImageExclusion.preview_id == preview.id,
+            )
+        ).one(),
+        excluded_images=[
+            {
+                "drama_id": str(item.drama_id),
+                "material_id": str(item.material_id),
+                "file_name": item.file_name,
+                "reason": item.reason,
+            }
+            for item in session.exec(
+                select(PreviewImageExclusion)
+                .where(
+                    PreviewImageExclusion.tenant_id == context.tenant_id,
+                    PreviewImageExclusion.preview_id == preview.id,
+                )
+                .order_by(
+                    col(PreviewImageExclusion.drama_id),
+                    col(PreviewImageExclusion.material_id),
+                )
+                .limit(100)
+            ).all()
+        ],
         excluded_dramas=_excluded_dramas(session, context, preview_id),
         targeting=preview.config.get("targeting"),
         targeting_region_codes=preview.progress.get("targeting_region_codes", []),
@@ -1402,7 +1502,14 @@ def get_preview_units(
         else []
     )
     ad_material_counts = {row[0]: int(row[1] or 0) for row in ad_material_rows}
-    if not ad_material_counts and unit_ids:
+    descriptor = preview_contract(
+        session, tenant_id=context.tenant_id, preview_id=preview.id
+    )
+    if (
+        descriptor.version == 1
+        and descriptor.legacy_material_layout == "GROUP"
+        and unit_ids
+    ):
         legacy_ad_material_rows = session.exec(
             select(col(BuildUnit.id), func.count(col(PreviewGroupMaterial.material_id)))
             .join(
@@ -1519,7 +1626,12 @@ def load_frozen_unit(
     session: Session, *, context: TenantContext, unit_id: UUID
 ) -> FrozenUnit:
     preview, unit, drama = _unit(session, context, unit_id)
+    descriptor = preview_contract(
+        session, tenant_id=context.tenant_id, preview_id=preview.id
+    )
     return FrozenUnit(
+        contract_version=descriptor.version,
+        media_kind=descriptor.media_kind,
         unit_id=unit.id,
         preview_id=preview.id,
         tenant_id=context.tenant_id,
@@ -1569,6 +1681,22 @@ def get_frozen_groups(
     limit: int = 20,
 ) -> Page[FrozenGroup]:
     preview, unit, _ = _unit(session, context, unit_id)
+    descriptor = preview_contract(
+        session, tenant_id=context.tenant_id, preview_id=preview.id
+    )
+    if descriptor.version == 2:
+        from .preview_details import group_summaries
+
+        if type(limit) is not int or not 1 <= limit <= 100:
+            raise DomainError("configuration_invalid", "分页大小无效")
+        return group_summaries(
+            session,
+            context=context,
+            preview=preview,
+            unit=unit,
+            cursor=cursor,
+            limit=limit,
+        )
     scope, after = _page_scope(context, unit_id, "frozen_groups", limit, cursor)
     query = select(PlannedGroup).where(
         PlannedGroup.tenant_id == context.tenant_id, PlannedGroup.unit_id == unit_id
@@ -1583,6 +1711,10 @@ def get_frozen_groups(
     group_nos = [group.group_no for group in page_groups]
     group_ids = [group.id for group in page_groups]
 
+    contract = preview_contract(
+        session, tenant_id=context.tenant_id, preview_id=preview.id
+    )
+    member_limit = 100
     # 先以窗口函数按组做有界读取；计数和行读取都在数据库完成，避免恶意
     # 数据在 Python 中聚合后才发现超过 100 条。排除证据使用租户/任务范围
     # 的 EXISTS，保持旧预览的组级回退语义和输出顺序。
@@ -1608,7 +1740,7 @@ def get_frozen_groups(
                 .group_by(col(PreviewGroupMaterial.group_no))
             ).all()
         )
-        if any(count > 100 for count in group_material_counts.values()):
+        if any(count > member_limit for count in group_material_counts.values()):
             raise DomainError(
                 "preview_group_too_large", "素材分组超过可用上限，请先调整草稿分组"
             )
@@ -1647,7 +1779,7 @@ def get_frozen_groups(
                 material_rows.c.material_id,
             )
             .where(
-                material_rows.c.row_no <= 100,
+                material_rows.c.row_no <= member_limit,
             )
             .order_by(
                 material_rows.c.group_no,
@@ -1700,15 +1832,11 @@ def get_frozen_groups(
         for ad in planned_ads:
             ads_by_group.setdefault(ad.group_id, []).append(ad)
 
-    # 只要预览曾写入过广告级映射，就把缺行视为冻结数据损坏；完全没有
-    # 广告级行的历史预览继续使用组级素材快照。
-    has_ad_material_rows = bool(
-        session.exec(
-            select(PreviewAdMaterial.material_id).where(
-                PreviewAdMaterial.tenant_id == context.tenant_id,
-                PreviewAdMaterial.preview_id == preview.id,
-            )
-        ).first()
+    contract = preview_contract(
+        session, tenant_id=context.tenant_id, preview_id=preview.id
+    )
+    has_ad_material_rows = (
+        contract.version == 2 or contract.legacy_material_layout != "GROUP"
     )
     ad_material_map: dict[tuple[int, int], list[UUID]] = {}
     if has_ad_material_rows and group_nos:
@@ -1792,7 +1920,7 @@ def get_frozen_groups(
     }
     for group_no in group_nos:
         materials = filtered_group_materials.get(group_no, [])
-        if len(materials) > 100:
+        if len(materials) > member_limit:
             raise DomainError(
                 "preview_group_too_large", "素材分组超过可用上限，请先调整草稿分组"
             )
@@ -1911,4 +2039,24 @@ def get_preview_inputs(
         if len(rows) > limit
         else None,
         total=total,
+    )
+
+
+def get_frozen_ads(session, *, context, unit_id, group_id, cursor=None, limit=2):
+    preview, unit, _ = _unit(session, context, unit_id)
+    descriptor = preview_contract(
+        session, tenant_id=context.tenant_id, preview_id=preview.id
+    )
+    if descriptor.version != 2:
+        raise DomainError("preview_contract_expired", "历史预览请使用原分组详情")
+    from .preview_details import ad_page
+
+    return ad_page(
+        session,
+        context=context,
+        preview=preview,
+        unit=unit,
+        group_id=group_id,
+        cursor=cursor,
+        limit=limit,
     )

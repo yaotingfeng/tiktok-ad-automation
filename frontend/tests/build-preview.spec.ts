@@ -865,3 +865,104 @@ test("失败预览可在原页重试且不创建广告", async ({ page }) => {
   expect(retries).toBe(1)
   expect(api.requests.some((r) => r.path.endsWith("/submit"))).toBe(false)
 })
+
+test("V2 大分组展示准确总数并分页读取完整广告创意", async ({ page }) => {
+  await buildsBoundary(page)
+  const calls: Array<{ cursor: string | null; limit: string | null }> = []
+  await page.route(
+    /\/build-units\/[^/]+\/groups(?:\/[^?]*)?(?:\?.*)?$/,
+    async (route) => {
+      const url = new URL(route.request().url())
+      if (url.pathname.endsWith("/ads")) {
+        calls.push({
+          cursor: url.searchParams.get("cursor"),
+          limit: url.searchParams.get("limit"),
+        })
+        const start = url.searchParams.get("cursor") ? 3 : 1
+        return route.fulfill({
+          json: {
+            total: 2000,
+            next_cursor: start === 1 ? "second-page" : null,
+            items: [start, start + 1].map((n) => ({
+              ad_id: `ad-${n}`,
+              base_ad_no: n,
+              creative_no: 1,
+              name: `完整广告 ${n}`,
+              copy_id: "copy",
+              text: `正文 ${n}`,
+              cta_option_ids: [],
+              material_ids: [`${n}-1`, `${n}-2`, `${n}-3`],
+              creative_units: [
+                {
+                  unit_id: `creative-${n}`,
+                  kind: "CAROUSEL",
+                  generation: 1,
+                  content_revision: 1,
+                  music_revision: 1,
+                  content_digest: "digest",
+                  music_id: "fixed-song",
+                  music_snapshot: {},
+                  members: [1, 2, 3].map((i) => ({
+                    material_id: `${n}-${i}`,
+                    file_name: `广告${n}-图片${i}.jpg`,
+                    content_digest: "digest",
+                  })),
+                },
+              ],
+            })),
+          },
+        })
+      }
+      return route.fulfill({
+        json: {
+          total: 1,
+          next_cursor: null,
+          items: [
+            {
+              contract_version: 2,
+              group_id: "large-group",
+              group_no: 1,
+              name: "大分组",
+              material_count: 10000,
+              creative_unit_count: 2000,
+              ad_count: 2000,
+              sample_material_ids: ["sample-1", "sample-2"],
+              material_ids: null,
+              ads: null,
+            },
+          ],
+        },
+      })
+    },
+  )
+  await page.goto(`/tenants/${T}/build-previews/${P}?bc_id=${BC}`)
+  await page.getByRole("tab", { name: "账户组合", exact: true }).click()
+  await page.getByRole("button", { name: "查看冻结详情" }).first().click()
+  await page
+    .getByText("第 1 组 · 10000 份素材 · 2000 个完整创意 · 2000 条 SP 创意", {
+      exact: true,
+    })
+    .click()
+  await expect(
+    page.getByText("素材 ID 样例（最多 6 项）：sample-1、sample-2", {
+      exact: true,
+    }),
+  ).toBeVisible()
+  await expect(page.getByText("广告1-图片3.jpg", { exact: true })).toBeVisible()
+  await expect(
+    page
+      .getByText("创意 1 · 轮播，3 张图片，配乐 fixed-song", { exact: true })
+      .first(),
+  ).toBeVisible()
+  await page.getByRole("button", { name: "下一页广告", exact: true }).click()
+  await expect(page.getByText("广告3-图片3.jpg", { exact: true })).toBeVisible()
+  await expect(page.getByText("广告1-图片3.jpg", { exact: true })).toHaveCount(
+    0,
+  )
+  expect(calls).toEqual([
+    { cursor: null, limit: "2" },
+    { cursor: "second-page", limit: "2" },
+  ])
+  await page.getByRole("button", { name: "上一页广告", exact: true }).click()
+  await expect(page.getByText("广告1-图片3.jpg", { exact: true })).toBeVisible()
+})

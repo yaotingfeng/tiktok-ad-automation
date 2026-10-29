@@ -259,10 +259,20 @@ class AdGroupCreate(AdGroupObservedFacts):
         return self
 
 
-class CreativeAsset(FrozenModel):
+class VideoCreative(FrozenModel):
+    kind: Literal["VIDEO"] = "VIDEO"
     video_id: Id
-    image_id: Id | None = None
+    cover_image_id: Id | None = None
     file_name: str | None = Field(default=None, min_length=1, max_length=100)
+
+
+class CarouselCreative(FrozenModel):
+    kind: Literal["CAROUSEL"] = "CAROUSEL"
+    image_ids: tuple[Id, ...] = Field(min_length=1, max_length=35)
+    music_id: Id
+
+
+CreativeAsset = Annotated[VideoCreative | CarouselCreative, Field(discriminator="kind")]
 
 
 class IdentityFields(FrozenModel):
@@ -290,6 +300,12 @@ class AdCreate(IdentityFields):
     portfolio_id: Id
     assets: tuple[CreativeAsset, ...] = Field(min_length=1, max_length=50)
     operation_status: Literal["ENABLE", "DISABLE"] = "ENABLE"
+
+    @model_validator(mode="after")
+    def homogeneous_format(self) -> Self:
+        if len({asset.kind for asset in self.assets}) != 1:
+            raise ValueError("one ad must use one explicit creative format")
+        return self
 
 
 class CtaAsset(FrozenModel):

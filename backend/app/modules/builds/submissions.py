@@ -220,7 +220,7 @@ WITH unit_groups AS MATERIALIZED (
  SELECT id FROM planned_group WHERE tenant_id=:tenant AND preview_id=:preview AND unit_id=:unit
 ), material_candidates AS MATERIALIZED (
  SELECT DISTINCT m.material_id
- FROM preview_group_material m
+ FROM frozen_group_material m
  WHERE m.tenant_id=:tenant AND m.preview_id=:preview AND m.drama_id=:drama
  AND NOT EXISTS (SELECT 1 FROM preview_skipped_material skipped
  WHERE skipped.tenant_id=m.tenant_id AND skipped.unit_id=:unit AND skipped.material_id=m.material_id)
@@ -628,7 +628,7 @@ def get_submission(
  SELECT DISTINCT g.id group_id,g.unit_id
  FROM execution_step ms JOIN planned_group g
  ON g.tenant_id=ms.tenant_id AND g.preview_id=:preview AND g.unit_id=ms.unit_id
- JOIN preview_group_material m ON m.tenant_id=g.tenant_id AND m.preview_id=g.preview_id
+ JOIN frozen_group_material m ON m.tenant_id=g.tenant_id AND m.preview_id=g.preview_id
  AND m.drama_id=g.drama_id AND m.group_no=g.group_no AND m.material_id=ms.material_id
  AND NOT EXISTS (SELECT 1 FROM preview_skipped_material skipped
  WHERE skipped.tenant_id=m.tenant_id AND skipped.unit_id=g.unit_id AND skipped.material_id=m.material_id)
@@ -1063,7 +1063,7 @@ SELECT g.id group_id,g.unit_id,
  count(m.material_id)>0 AND coalesce(bool_and(ms.status='SUCCEEDED'),false) AND count(m.material_id)=count(ms.id) ready,
  coalesce(bool_or(ms.status='FAILED'),false) failed
 FROM planned_group g
-LEFT JOIN preview_group_material m ON m.tenant_id=g.tenant_id AND m.preview_id=g.preview_id AND m.drama_id=g.drama_id AND m.group_no=g.group_no
+LEFT JOIN frozen_group_material m ON m.tenant_id=g.tenant_id AND m.preview_id=g.preview_id AND m.drama_id=g.drama_id AND m.group_no=g.group_no
 AND NOT EXISTS (SELECT 1 FROM preview_skipped_material skipped
  WHERE skipped.tenant_id=m.tenant_id AND skipped.unit_id=g.unit_id AND skipped.material_id=m.material_id)
 LEFT JOIN execution_step ms ON ms.tenant_id=g.tenant_id AND ms.submission_id=:submission AND ms.unit_id=g.unit_id AND ms.kind='MATERIAL' AND ms.material_id=m.material_id

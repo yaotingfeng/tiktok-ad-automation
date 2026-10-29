@@ -19,9 +19,11 @@ from app.modules.builds import (
 from app.modules.builds.cover_execution import validate_ad_assets
 from app.modules.builds.execution_models import ExecutionStep
 from app.modules.builds.execution_schemas import StepClaim
+from app.modules.builds.preview_material_views import (
+    AdMaterialView as PreviewAdMaterial,
+)
 from app.modules.builds.preview_models import (
     BuildUnit,
-    PreviewAdMaterial,
     PreviewSkippedMaterial,
 )
 from app.modules.builds.routes import load_preview_route
@@ -267,7 +269,18 @@ def test_ad_request_and_final_fence_keep_same_frozen_material_order(
     )
     assert [
         c["creative_info"]["video_info"]["video_id"] for c in body["creative_list"]
-    ] == [f"video-{identity}" for identity in group.material_ids]
+    ] == [
+        f"video-{identity}"
+        for identity in previews.get_frozen_ads(
+            session,
+            context=context,
+            unit_id=partial.unit.id,
+            group_id=group.group_id,
+            limit=1,
+        )
+        .items[0]
+        .material_ids
+    ]
     validate_ad_assets(session, step=ad, unit=partial.unit, body=body)
 
 

@@ -14,6 +14,7 @@ from app.modules.builds.models import (
     DraftPreparationRequest,
 )
 from app.modules.builds.preview_schemas import (
+    FrozenAd,
     FrozenGroup,
     FrozenUnit,
     PreviewAccepted,
@@ -412,6 +413,31 @@ def frozen_groups(
 
 
 @router.get(
+    "/build-units/{unit_id}/groups/{group_id}/ads", response_model=Page[FrozenAd]
+)
+def frozen_ads(
+    tenant_id: UUID,
+    unit_id: UUID,
+    group_id: UUID,
+    session: SessionDep,
+    user: CurrentUser,
+    cursor: Cursor = None,
+    limit: Annotated[int, Query(ge=1, le=5)] = 2,
+) -> Page[FrozenAd]:
+    context = require_tenant(
+        session, actor_id=user.id, tenant_id=tenant_id, action="read"
+    )
+    return previews.get_frozen_ads(
+        session,
+        context=context,
+        unit_id=unit_id,
+        group_id=group_id,
+        cursor=cursor,
+        limit=limit,
+    )
+
+
+@router.get(
     "/build-units/{unit_id}/skipped-materials",
     response_model=Page[SkippedMaterialPublic],
 )
@@ -678,7 +704,11 @@ def update_image_structure(
 ) -> DraftSaved:
     from .structure import save_image_structure
 
-    context = require_tenant(session, actor_id=user.id, tenant_id=tenant_id, action="build")
-    revision = save_image_structure(session, context=context, draft_id=draft_id, body=body)
+    context = require_tenant(
+        session, actor_id=user.id, tenant_id=tenant_id, action="build"
+    )
+    revision = save_image_structure(
+        session, context=context, draft_id=draft_id, body=body
+    )
     session.commit()
     return DraftSaved(draft_id=draft_id, revision=revision)

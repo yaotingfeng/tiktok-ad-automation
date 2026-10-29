@@ -6,7 +6,11 @@ from decimal import Decimal
 import pytest
 from pydantic import ValidationError
 
-from app.integrations.tiktok.contracts.builds import CampaignCreate, CtaCreate
+from app.integrations.tiktok.contracts.builds import (
+    CampaignCreate,
+    CtaCreate,
+    VideoCreative,
+)
 from app.modules.builds.request_compiler import decode_intent, encode_intent
 
 
@@ -342,6 +346,8 @@ def test_current_scene_and_legacy_compiler_keep_every_actual_field():
 
     scene = _assemble_scene(
         scope={
+            "media_kind": "VIDEO",
+            "compiler_contract_revision": "creative-units-v2-2026-10-29",
             "access": SimpleNamespace(currency="USD"),
             "basis": "synthetic",
             "minis_id": "minis-1",
@@ -403,7 +409,7 @@ def test_current_scene_and_legacy_compiler_keep_every_actual_field():
         },
     )
     creative = ad_assets(
-        [{"video_id": "video", "image_id": "cover"}],
+        [VideoCreative(kind="VIDEO", video_id="video", cover_image_id="cover")],
         text="观看",
         url="https://example.invalid",
         identity={
