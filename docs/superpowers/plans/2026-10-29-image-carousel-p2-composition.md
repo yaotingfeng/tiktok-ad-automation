@@ -1,5 +1,7 @@
 # P2 批量编排与配乐实施计划
 
+> 实施衔接（2026-10-29）：P1 已按官方 SDK 单通道实施。纯编排输出“已有单元 ID / 待分配的新单元”，新实体 UUID 由 T2 持久化试算计划时一次分配；不得在纯算法中随机生成或从内容摘要推导实体 ID。候选快照补充 `upload_batch_created_at` 以实现设计规定的批次排序。T1 先增加类型和单元模型，现有视频草稿的数据回填及当前读写切换移至 P3-T1，与全部 unit_id 规划调用方同步完成，避免中间双写或陈旧镜像；图片路径直接使用新模型。
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking. 遵循项目按需技能偏好。
 
 **Goal:** 一次规则配置完成多部剧的图片组合、配乐、差异应用和可复用轮播。
@@ -33,14 +35,14 @@
 **Interfaces:** 在 schemas 定义：
 
 - `ImageRule(mode: SINGLE|SEQUENTIAL, images_per_unit: int, order: NATURAL_NAME|UPLOAD_SEQUENCE, remainder: KEEP|EXCLUDE, music_mode: RECOMMEND|FIXED, fixed_music_id: str|None, single_music_id: str|None)`；rule patch 只含显式覆盖字段。
-- `ImageCandidate(material_id, file_name_snapshot, upload_batch_id, upload_sequence, created_at, content_digest, enabled)`；允许缺旧上传序号，排序规则见 spec。
+- `ImageCandidate(material_id, file_name_snapshot, upload_batch_id, upload_batch_created_at, upload_sequence, created_at, content_digest, enabled)`；允许缺旧上传序号，排序规则见 spec。
 - `CreativeUnit(id, kind, ordered_material_ids, content_digest, music_id, music_rule_digest, composition_protected, music_protected, position, revision)`。
 - `CompositionDiff(units, retained_ids, removed_ids, excluded_images, conflicts, rule_digest, candidate_digest)`。
 - `resolve_image_rule(batch: ImageRule, patch: dict) -> ImageRule`；`compose_images(candidates: tuple[ImageCandidate,...], rule: ImageRule, previous: tuple[CreativeUnit,...], mode: PRESERVE_MANUAL|REPLACE_ALL) -> CompositionDiff`。函数禁止数据库、推荐或随机 IO。
 
 - [ ] 测试断言 60/N5=12、61/KEEP=13、61/EXCLUDE=12且排除1；单图N1、非法0/36、同图不在同单元重复；2在10之前；分页来源合并后与一次输入同序；受保护图片不再次自动使用；同输入同规则相同分组。运行 `uv run pytest tests/modules/builds/test_image_composition.py -q` 观察失败。
-- [ ] 实现纯算法、字段 patch 和确定性摘要；使用服务器生成/复用 creative_id，与 content digest 分离。迁移视频草稿为单视频单元时保留原排序，不重排视频文件名。
-- [ ] 迁移测试覆盖 VIDEO 默认值、租户/BC 外键、同图多单元、旧视频重复内容规则不放开；运行新测试及现有 `test_drafts.py`。
+- [ ] 实现纯算法、字段 patch 和确定性摘要；复用已有 creative_id，新单元使用明确的待分配提案类型，T2 持久化计划时生成 UUID，与 content digest 分离。T1 不建立视频草稿镜像；视频回填/当前读写切换由 P3-T1 同时完成。
+- [ ] 迁移测试覆盖 VIDEO 默认值、租户/BC 外键、同图多单元；旧视频重复内容规则不放开，运行新测试及现有 `test_drafts.py`。视频顺序保留的实际回填测试归 P3-T1。
 - [ ] 检查不存在把 unit_id 塞进 material_id 外键的捷径，聚焦提交。
 
 ### P2-T2：候选快照、试算、原子应用
