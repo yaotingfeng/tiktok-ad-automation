@@ -3,6 +3,7 @@
 import os
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
+from datetime import timedelta
 from threading import Barrier
 from types import SimpleNamespace
 from uuid import uuid4
@@ -20,6 +21,7 @@ from app.integrations.tiktok.sdk import AccountAdmissionDeferred
 from app.jobs import outbox
 from app.jobs.models import PendingDispatch
 from app.modules.ads import directory_dispatch, tasks
+from app.modules.ads.directory_requests import request_directory
 from app.modules.ads.sync import stage_directory_page
 from app.modules.ads.sync_models import AdDirectoryRun
 from app.modules.reporting import job_tasks
@@ -172,6 +174,54 @@ def test_nonterminal_page_sends_its_continuation_without_scanning_backlog(
             select(PendingDispatch).where(PendingDispatch.tenant_id == seed.tenant_id)
         ).one()
         assert row.task_key.endswith(":page:2") and row.published_at is not None
+
+
+def test_periodic_marker_stays_local_when_reading_and_continuing(
+    committed_sync_seed, monkeypatch, redis_client
+):
+    seed, factory = committed_sync_seed
+    with factory() as db, db.begin():
+        request_directory(
+            db,
+            tenant_id=seed.tenant_id,
+            bc_id="bc-a",
+            actor_id=seed.actor_id,
+            frozen_route=_route(seed),
+            advertiser_ids=["acc-1"],
+            scope="directory",
+            ad_types={"acc-1": {"REGULAR": ("campaign",)}},
+            periodic_intervals={"acc-1": timedelta(days=1)},
+        )
+        identity = db.exec(
+            select(AdDirectoryRun.id).where(AdDirectoryRun.tenant_id == seed.tenant_id)
+        ).one()
+    queries = []
+
+    def read(query):
+        queries.append(query)
+        assert query.ids == () and query.page == 1 and query.include_deleted
+        return page(complete=False)
+
+    @contextmanager
+    def gateway(**_kwargs):
+        yield SimpleNamespace(ads=SimpleNamespace(read_page=read))
+
+    monkeypatch.setattr(tasks, "open_tiktok_gateway", gateway)
+    sent = []
+    monkeypatch.setattr(
+        outbox.celery_app, "send_task", lambda name, **kw: sent.append(name)
+    )
+    assert (
+        tasks.run_directory_step(
+            database_engine=engine,
+            redis_client=redis_client,
+            context=seed.context,
+            run_id=identity,
+            claim_generation=1,
+        )
+        == "CONTINUE"
+    )
+    assert len(queries) == 1 and sent == ["ads.sync_step"]
 
 
 def test_full_directory_publication_immediately_sends_targeted_material_child(

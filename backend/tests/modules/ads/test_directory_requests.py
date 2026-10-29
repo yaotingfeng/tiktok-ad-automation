@@ -5,12 +5,10 @@ from sqlmodel import select
 
 from app.core.config import settings
 from app.modules.ads.directory_requests import (
-    AD_TYPE_PROBE_INTERVAL,
     DIRECTORY_AD_TYPES,
-    INACTIVE_DIRECTORY_INTERVAL,
     KINDS_BY_TYPE,
     directory_ad_types,
-    directory_due_accounts,
+    directory_unblocked_accounts,
     request_directory,
 )
 from app.modules.ads.models import AdObject
@@ -92,6 +90,7 @@ def _complete_probes(session, seed, advertiser_id, *, completed_at):
         )
     ).all():
         run.status, run.completed_at = "COMPLETE", completed_at
+        run.published_version = 1
         session.add(run)
     session.flush()
 
@@ -111,13 +110,15 @@ def _ad_object(seed, advertiser_id, ad_type):
 PROBES = dict.fromkeys(DIRECTORY_AD_TYPES, ("campaign",))
 
 
-def test_unused_ad_types_are_probed_once_per_day(session, sync_seed, monkeypatch):
+def test_unused_types_share_partition_calibration_freshness(
+    session, sync_seed, monkeypatch
+):
     monkeypatch.setattr(settings, "ADS_SYNC_ENABLED", True)
     now = datetime.now(UTC)
     args = {"tenant_id": sync_seed.tenant_id, "advertiser_ids": ["acc-1", "acc-2"]}
 
     # 首次：没有任何目录与探测记录，各类型只探测广告系列。
-    first = directory_ad_types(session, **args, active_ids=[], now=now)
+    first = directory_ad_types(session, **args, active_ids=[])
     assert first == {"acc-1": PROBES, "acc-2": PROBES}
     created = request_directory(
         session,
@@ -141,22 +142,30 @@ def test_unused_ad_types_are_probed_once_per_day(session, sync_seed, monkeypatch
     session.add(_ad_object(sync_seed, "acc-1", "SMART_PLUS"))
     session.flush()
     later = now + timedelta(hours=3)
-    assert directory_ad_types(session, **args, active_ids=[], now=later) == {
-        "acc-1": {"SMART_PLUS": ("campaign", "adgroup", "ad")},
-        "acc-2": {},
-    }
-
-    # 有消耗但目录还没有任何对象的账户，不等复查立即请求全部类型全部层级。
-    assert directory_ad_types(session, **args, active_ids=["acc-2"], now=later)[
-        "acc-2"
-    ] == dict.fromkeys(DIRECTORY_AD_TYPES, ("campaign", "adgroup", "ad"))
-
-    # 超过 24 小时，未使用类型重新探测一次广告系列。
-    stale = now + AD_TYPE_PROBE_INTERVAL + timedelta(minutes=1)
-    assert directory_ad_types(session, **args, active_ids=[], now=stale) == {
+    choices = directory_ad_types(session, **args, active_ids=[])
+    assert choices == {
         "acc-1": {**PROBES, "SMART_PLUS": ("campaign", "adgroup", "ad")},
         "acc-2": PROBES,
     }
+    # 近期已发布的系列探测跳过；Smart+ 尚缺组/广告，单独创建这两个分区。
+    assert (
+        request_directory(
+            session,
+            tenant_id=sync_seed.tenant_id,
+            bc_id="bc-a",
+            actor_id=sync_seed.actor_id,
+            frozen_route=_route(sync_seed),
+            advertiser_ids=["acc-1", "acc-2"],
+            scope="directory",
+            ad_types=choices,
+            periodic_intervals={"acc-1": timedelta(days=1), "acc-2": timedelta(days=7)},
+            now=later,
+        )
+        == 2
+    )
+    assert directory_ad_types(session, **args, active_ids=["acc-2"])[
+        "acc-2"
+    ] == dict.fromkeys(DIRECTORY_AD_TYPES, ("campaign", "adgroup", "ad"))
 
 
 def test_trimmed_request_only_creates_runs_for_used_types(
@@ -249,20 +258,8 @@ def test_targeted_read_is_queued_immediately_and_completed_run_is_never_reused(
     assert request_directory(session, **args) == 1
 
 
-def test_idle_accounts_refresh_daily(session, sync_seed):
-    now = datetime.now(UTC)
-    args = {
-        "tenant_id": sync_seed.tenant_id,
-        "bc_id": "bc-a",
-        "actor_id": sync_seed.actor_id,
-        "frozen_route": _route(sync_seed),
-        "advertiser_ids": ["acc-1", "acc-2"],
-    }
-    # 从未成功过：全部需要刷新。
-    assert directory_due_accounts(session, **args, active_ids=[], now=now) == [
-        "acc-1",
-        "acc-2",
-    ]
+def test_recent_success_does_not_hide_other_directory_partitions(session, sync_seed):
+    # 账户阶段只判断在途；真正新鲜度在周期请求入口按完整分区核对。
     session.add(
         AdDirectoryRun(
             tenant_id=sync_seed.tenant_id,
@@ -270,29 +267,25 @@ def test_idle_accounts_refresh_daily(session, sync_seed):
             bc_id="bc-a",
             actor_id=sync_seed.actor_id,
             connection_id=sync_seed.connection.id,
-            channel="OFFICIAL_API",
             frozen_route=_route(sync_seed),
             partition_key="a" * 64,
             query={"include_deleted": True},
             status="COMPLETE",
             claim_generation=1,
-            completed_at=now - timedelta(hours=1),
+            completed_at=datetime.now(UTC),
             kind="campaign",
             ad_type="SMART_PLUS",
         )
     )
     session.flush()
-    # acc-2 一小时前刚完成且无消耗：本轮跳过；有消耗的账户每轮都刷新。
-    assert directory_due_accounts(session, **args, active_ids=[], now=now) == ["acc-1"]
-    assert directory_due_accounts(session, **args, active_ids=["acc-2"], now=now) == [
-        "acc-1",
-        "acc-2",
-    ]
-    later = now + INACTIVE_DIRECTORY_INTERVAL
-    assert directory_due_accounts(session, **args, active_ids=[], now=later) == [
-        "acc-1",
-        "acc-2",
-    ]
+    assert directory_unblocked_accounts(
+        session,
+        tenant_id=sync_seed.tenant_id,
+        bc_id="bc-a",
+        actor_id=sync_seed.actor_id,
+        frozen_route=_route(sync_seed),
+        advertiser_ids=["acc-1", "acc-2"],
+    ) == ["acc-1", "acc-2"]
 
 
 @pytest.mark.parametrize(
@@ -317,14 +310,10 @@ def test_pending_full_directory_excludes_overlapping_accounts(
         run.status = status
     session.flush()
     args["advertiser_ids"] = ["acc-1", "acc-2"]
-    assert directory_due_accounts(
-        session, **args, active_ids=["acc-1", "acc-2"], now=datetime.now(UTC)
-    ) == ["acc-2"]
+    assert directory_unblocked_accounts(session, **args) == ["acc-2"]
     # 冻结授权变化后的新任务不能被旧授权积压遮挡。
     args["frozen_route"] = {**args["frozen_route"], "binding_revision": 1}
-    assert directory_due_accounts(
-        session, **args, active_ids=["acc-1", "acc-2"], now=datetime.now(UTC)
-    ) == ["acc-1", "acc-2"]
+    assert directory_unblocked_accounts(session, **args) == ["acc-1", "acc-2"]
 
 
 @pytest.mark.parametrize(
@@ -363,9 +352,7 @@ def test_targeted_and_terminal_directory_do_not_block_active_refresh(
     ).all():
         run.status = status
     session.flush()
-    assert directory_due_accounts(
-        session, **args, active_ids=["acc-1"], now=datetime.now(UTC)
-    ) == ["acc-1"]
+    assert directory_unblocked_accounts(session, **args) == ["acc-1"]
 
 
 @pytest.mark.parametrize("active", [[], ["acc-1"]])
@@ -380,7 +367,6 @@ def test_periodic_ads_already_cover_creatives_without_second_full_scan(
         tenant_id=sync_seed.tenant_id,
         advertiser_ids=["acc-1"],
         active_ids=active,
-        now=datetime.now(UTC),
     )
     assert types["acc-1"]["SMART_PLUS"] == ("campaign", "adgroup", "ad")
 
@@ -452,7 +438,6 @@ def test_parent_only_directory_request_still_reads_children(
 def test_type_presence_includes_deleted_objects_in_every_layer(
     session, sync_seed, kind
 ):
-    now = datetime.now(UTC)
     obj = _ad_object(sync_seed, "acc-1", "LEGACY_SMART_PLUS")
     obj.kind = kind
     obj.operation_status = "DELETED"
@@ -463,7 +448,6 @@ def test_type_presence_includes_deleted_objects_in_every_layer(
         tenant_id=sync_seed.tenant_id,
         advertiser_ids=["acc-1", "acc-2"],
         active_ids=[],
-        now=now,
     )
     assert result["acc-1"]["LEGACY_SMART_PLUS"] == ("campaign", "adgroup", "ad")
     assert result["acc-2"] == PROBES
@@ -476,6 +460,5 @@ def test_unknown_historical_type_does_not_mean_empty_active_account(session, syn
         tenant_id=sync_seed.tenant_id,
         advertiser_ids=["acc-1"],
         active_ids=["acc-1"],
-        now=datetime.now(UTC),
     )
     assert result == {"acc-1": PROBES}

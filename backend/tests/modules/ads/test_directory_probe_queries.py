@@ -1,4 +1,4 @@
-"""未使用类型只需任一近期成功证据，不能汇总完整运行历史。"""
+"""校准只需同冻结分区的近期发布证据，不能汇总完整运行历史。"""
 
 from datetime import UTC, datetime, timedelta
 
@@ -6,7 +6,8 @@ from sqlalchemy import event, text
 from sqlmodel import select
 
 from app.core.config import settings
-from app.modules.ads.directory_requests import directory_ad_types, request_directory
+from app.modules.ads.directory_calibration import recent_calibration
+from app.modules.ads.directory_requests import request_directory
 from app.modules.ads.sync_models import AdDirectoryRun
 from tests.modules.ads.test_directory_requests import _route
 from tests.modules.reporting.sync_conftest import sync_seed as sync_seed
@@ -32,6 +33,7 @@ def test_recent_probe_stops_before_old_history(session, sync_seed, monkeypatch):
         )
     ).one()
     run.status = "COMPLETE"
+    run.published_version = 1
     run.completed_at = now - timedelta(days=2)
     session.flush()
     session.connection().execute(
@@ -56,21 +58,19 @@ def test_recent_probe_stops_before_old_history(session, sync_seed, monkeypatch):
 
     event.listen(connection, "before_cursor_execute", capture)
     try:
-        result = directory_ad_types(
+        result = recent_calibration(
             session,
             tenant_id=sync_seed.tenant_id,
-            advertiser_ids=["acc-1"],
-            active_ids=[],
-            now=now,
+            advertiser_id="acc-1",
+            bc_id="bc-a",
+            actor_id=sync_seed.actor_id,
+            frozen_route=_route(sync_seed),
+            partition_key=run.partition_key,
+            cutoff=now - timedelta(days=1),
         )
     finally:
         event.remove(connection, "before_cursor_execute", capture)
-    assert result == {
-        "acc-1": {
-            "LEGACY_SMART_PLUS": ("campaign",),
-            "SMART_PLUS": ("campaign",),
-        }
-    }
+    assert result == now
     assert len(captured) == 1
     sql, params = captured[0]
     plan = connection.exec_driver_sql(
@@ -101,6 +101,7 @@ def test_newer_failed_request_does_not_hide_older_recent_success(
         )
     ).one()
     older.status, older.completed_at = "COMPLETE", now
+    older.published_version = 1
     values = older.model_dump(exclude={"id", "request_id", "request_sequence"})
     values.update(status="FAILED", completed_at=None)
     newer = AdDirectoryRun(**values)
@@ -109,10 +110,14 @@ def test_newer_failed_request_does_not_hide_older_recent_success(
     assert newer.request_sequence > older.request_sequence
     args = {
         "tenant_id": sync_seed.tenant_id,
-        "advertiser_ids": ["acc-1"],
-        "active_ids": [],
-        "now": now,
+        "advertiser_id": "acc-1",
+        "bc_id": "bc-a",
+        "actor_id": sync_seed.actor_id,
+        "frozen_route": _route(sync_seed),
+        "partition_key": older.partition_key,
+        "cutoff": now - timedelta(days=1),
     }
-    assert "REGULAR" not in directory_ad_types(session, **args)["acc-1"]
+    assert recent_calibration(session, **args) == now
     older.completed_at = now - timedelta(hours=24)
-    assert directory_ad_types(session, **args)["acc-1"]["REGULAR"] == ("campaign",)
+    session.flush()
+    assert recent_calibration(session, **args) is None

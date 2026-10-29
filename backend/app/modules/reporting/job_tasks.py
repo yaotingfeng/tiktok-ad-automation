@@ -30,6 +30,7 @@ from app.jobs.outbox import enqueue_after_commit, validate_dispatch_payload
 from app.jobs.tasks import register_dispatch_task
 from app.modules.accounts.models import AdvertiserAccount
 from app.modules.accounts.routing import verify_route
+from app.modules.ads.directory_calibration import calibration_interval
 from app.modules.ads.directory_dispatch import (
     PUBLISH_TASK_NAME,
     TARGETED_TASK_NAME,
@@ -40,7 +41,7 @@ from app.modules.ads.directory_dispatch import (
 )
 from app.modules.ads.directory_requests import (
     directory_ad_types,
-    directory_due_accounts,
+    directory_unblocked_accounts,
     request_directory,
 )
 from app.modules.ads.material_directory_children import MATERIAL_CHILD_KEY
@@ -99,8 +100,10 @@ PUBLISH_MESSAGE_LOST_AFTER = timedelta(minutes=30)
 TARGETED_MESSAGE_LOST_AFTER = timedelta(minutes=2)
 # 一轮周期目录分批推进；此游标不占用账户筛选或规则相位的进度键。
 DIRECTORY_PLAN_PROGRESS = "directory_cycle_v1"
-DIRECTORY_PLAN_ACCOUNTS = 64
+DIRECTORY_PLAN_NOT_BEFORE = "directory_batch_not_before_v1"
+DIRECTORY_PLAN_ACCOUNTS = 16
 DIRECTORY_PLAN_SECONDS = 3
+DIRECTORY_PLAN_BATCH_INTERVAL = timedelta(minutes=1)
 
 register_dispatch_task("reporting.job_step", "ads-reporting")
 register_dispatch_task("reporting.backfill_step", "ads-backfill")
@@ -505,6 +508,10 @@ def _dispatch_directories(session, now):
     count = 0
     served = set()
     for row in rows:
+        from app.modules.ads.directory_backlog import review_unstarted_directory
+
+        if review_unstarted_directory(session, row, now):
+            continue
         if is_live_directory(row):
             if targeted_available <= 0:
                 continue
@@ -630,6 +637,12 @@ def _defer_plan(plan, retry_at):
 
 def _plan_directory_step(session, plan, *, accounts, now):
     """稳定账户ID游标；成功批次才推进，单个慢账户退避后不阻挡其余账户。"""
+    resume_at = plan.screening_progress.get(DIRECTORY_PLAN_NOT_BEFORE)
+    if resume_at is not None and now < datetime.fromisoformat(resume_at):
+        plan.next_directory_at = max(
+            plan.next_directory_at, datetime.fromisoformat(resume_at)
+        )
+        return
     accounts = sorted(set(accounts))
     scope = sha256(
         json.dumps(
@@ -667,14 +680,13 @@ def _plan_directory_step(session, plan, *, accounts, now):
                 session.begin_nested(),
                 query_budget(session, seconds=DIRECTORY_PLAN_SECONDS),
             ):
-                due = directory_due_accounts(
+                due = directory_unblocked_accounts(
                     session,
                     tenant_id=plan.tenant_id,
                     bc_id=plan.bc_id,
                     actor_id=plan.actor_id,
                     frozen_route=plan.frozen_route,
                     advertiser_ids=batch,
-                    active_ids=plan.last_active_advertiser_ids,
                     now=now,
                 )
                 request_directory(
@@ -685,12 +697,16 @@ def _plan_directory_step(session, plan, *, accounts, now):
                     frozen_route=plan.frozen_route,
                     advertiser_ids=due,
                     scope="directory",
+                    now=now,
+                    periodic_intervals={
+                        account: calibration_interval(plan, account, now)
+                        for account in due
+                    },
                     ad_types=directory_ad_types(
                         session,
                         tenant_id=plan.tenant_id,
                         advertiser_ids=due,
                         active_ids=plan.last_active_advertiser_ids,
-                        now=now,
                     ),
                 )
                 session.flush()
@@ -718,6 +734,11 @@ def _plan_directory_step(session, plan, *, accounts, now):
                 deferred.pop(advertiser, None)
             state["batch_size"] = min(DIRECTORY_PLAN_ACCOUNTS, size * 2)
     state["deferred"] = deferred
+    # 预算独立于账户/授权游标，范围变化和完成整轮都不能绕过分钟限额。
+    plan.screening_progress = {
+        **plan.screening_progress,
+        DIRECTORY_PLAN_NOT_BEFORE: (now + DIRECTORY_PLAN_BATCH_INTERVAL).isoformat(),
+    }
     remaining = [a for a in accounts if a > state["after"] and a not in deferred]
     if not remaining and not deferred:
         plan.screening_progress = {
@@ -732,7 +753,7 @@ def _plan_directory_step(session, plan, *, accounts, now):
             DIRECTORY_PLAN_PROGRESS: state,
         }
         plan.next_directory_at = (
-            now + timedelta(seconds=5)
+            now + DIRECTORY_PLAN_BATCH_INTERVAL
             if remaining
             else min(datetime.fromisoformat(at) for at in deferred.values())
         )
@@ -831,8 +852,8 @@ def _plan_one(
                         session.connection().execute(
                             text("SELECT set_config('statement_timeout', '8s', true)")
                         )
-                        # 全量目录（含已删除）已覆盖只读在投对象的需求，周期只发这一种；
-                        # 无消耗账户按天刷新，未使用类型只探测广告系列。
+                        # 完整目录作为低频校准，活跃对象由热报和操作后的定向回读维护；
+                        # 分区按每日/每周到期，未知类型只探测系列，跨轮批次限额持久保存。
                         _plan_directory_step(session, plan, accounts=accounts, now=now)
                         session.connection().execute(
                             text(

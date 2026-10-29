@@ -27,6 +27,7 @@ from app.integrations.tiktok.sdk import AccountAdmissionDeferred
 from app.jobs.celery_app import celery_app
 from app.jobs.outbox import validate_dispatch_payload
 from app.modules.accounts.routing import verify_route
+from app.modules.ads.directory_calibration import PERIODIC_KEY
 from app.modules.ads.directory_dispatch import (
     PUBLISH_TASK_NAME,
     TARGETED_TASK_NAME,
@@ -357,6 +358,7 @@ def _run_directory_step(
         material_scope = material_child_scope(session, run)
         query_data = dict(run.query)
         query_data.pop(MATERIAL_CHILD_KEY, None)
+        query_data.pop(PERIODIC_KEY, None)
         # Celery retries must resume the persisted cursor.  The durable query is
         # the contract; page is the only mutable transport cursor.
         query_data["page"] = run.next_page

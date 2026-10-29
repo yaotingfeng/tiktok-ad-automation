@@ -15,6 +15,11 @@ from app.core.errors import DomainError
 from app.integrations.tiktok.contracts.context import FrozenTikTokRoute
 from app.jobs.outbox import enqueue_after_commit
 from app.modules.accounts.routing import verify_route
+from app.modules.ads.directory_calibration import (
+    PERIODIC_KEY,
+    recent_calibration,
+    unstarted_without_delivery,
+)
 from app.modules.ads.directory_dispatch import enqueue_directory_step
 from app.modules.ads.sync_models import AdDirectoryRun
 
@@ -46,10 +51,6 @@ _PERIODIC_KINDS_BY_TYPE = {
 }
 # 未使用类型的探测只读广告系列：该类型没有系列就不可能有广告组和广告。
 PROBE_KINDS = ("campaign",)
-# 账户未使用的广告类型只按此间隔复查，避免每轮都发必然为空的目录请求。
-AD_TYPE_PROBE_INTERVAL = timedelta(hours=24)
-# 最近无消耗的账户目录基本不变，周期全量只按此间隔刷新；本系统改动另走定向刷新。
-INACTIVE_DIRECTORY_INTERVAL = timedelta(hours=24)
 
 
 def _partition_key(query: dict) -> str:
@@ -58,38 +59,17 @@ def _partition_key(query: dict) -> str:
     ).hexdigest()
 
 
-def _probe_partition(advertiser_id: str, ad_type: str) -> str:
-    """全量目录（含已删除）中该类型广告系列首页的分区键，用作类型探测记录。"""
-    return _partition_key(
-        {
-            "advertiser_id": advertiser_id,
-            "kind": "campaign",
-            "ad_type": ad_type,
-            "page": 1,
-            "page_size": 1000,
-            "ids": [],
-            "parent_ids": [],
-            "include_deleted": True,
-        }
-    )
-
-
 def directory_ad_types(
     session: Session,
     *,
     tenant_id: UUID,
     advertiser_ids: Collection[str],
     active_ids: Collection[str],
-    now: datetime,
 ) -> dict[str, dict[str, tuple[str, ...]]]:
-    """周期目录按账户实际使用的广告类型裁剪请求，返回 账户 -> 类型 -> 层级。
+    """使用过的类型校准三层；未知类型只探测系列，首次活跃空目录校准三层。
 
-    业务规则：
-    - 账户目录里已有某类型对象（含已删除），该类型全部层级每轮都同步；
-    - 未使用的类型，距最近一次成功探测超过 24 小时才只读一次广告系列，
-      覆盖账户新启用某类型的情况；没有任何广告的账户因此自然降为每天一次；
-    - 最近有消耗但目录里还没有任何对象的账户，全部类型全部层级立即请求，不等复查。
-    本系统自己创建或修改的对象另走定向刷新，不受此裁剪影响。
+    此处只决定查询范围；所有类型的新鲜度统一在请求入口按冻结分区核验，
+    不能用其它 BC/授权或未发布的探测记录预先删除候选。
     """
     accounts = sorted(set(advertiser_ids))
     if not accounts:
@@ -119,42 +99,6 @@ def directory_ad_types(
     ):
         used.setdefault(advertiser_id, set()).add(ad_type or "")
     active = set(active_ids)
-    probes = {
-        _probe_partition(advertiser_id, ad_type): (advertiser_id, ad_type)
-        for advertiser_id in accounts
-        for ad_type in DIRECTORY_AD_TYPES
-        if ad_type not in used.get(advertiser_id, set())
-        and not (advertiser_id in active and not used.get(advertiser_id))
-    }
-    probed: set[tuple[str, str]] = set()
-    if probes:
-        # 账户与分区成对探测，从最新请求向后找任一近期成功即可；不能先扫描
-        # 整段账户历史再汇总max。保留精确分区合同，不用其他类型/定向任务替代。
-        for partition_key in (
-            session.connection()
-            .execute(
-                text("""
-            SELECT p.partition_key FROM unnest(
-              CAST(:accounts AS text[]),CAST(:partitions AS text[])
-            ) p(advertiser_id,partition_key)
-            JOIN LATERAL (
-              SELECT true FROM ad_directory_run r
-              WHERE r.tenant_id=:tenant AND r.advertiser_id=p.advertiser_id
-                AND r.partition_key=p.partition_key AND r.status='COMPLETE'
-                AND r.completed_at>:cutoff
-              ORDER BY r.request_sequence DESC LIMIT 1
-            ) fresh ON true
-            """),
-                {
-                    "tenant": tenant_id,
-                    "accounts": [advertiser for advertiser, _ in probes.values()],
-                    "partitions": list(probes),
-                    "cutoff": now - AD_TYPE_PROBE_INTERVAL,
-                },
-            )
-            .scalars()
-        ):
-            probed.add(probes[partition_key])
     result: dict[str, dict[str, tuple[str, ...]]] = {}
     for advertiser_id in accounts:
         in_use = used.get(advertiser_id, set())
@@ -166,12 +110,11 @@ def directory_ad_types(
             if ad_type in in_use
             else PROBE_KINDS
             for ad_type in DIRECTORY_AD_TYPES
-            if ad_type in in_use or (advertiser_id, ad_type) not in probed
         }
     return result
 
 
-def directory_due_accounts(
+def directory_unblocked_accounts(
     session: Session,
     *,
     tenant_id: UUID,
@@ -179,15 +122,11 @@ def directory_due_accounts(
     actor_id: UUID,
     frozen_route: dict,
     advertiser_ids: Collection[str],
-    active_ids: Collection[str],
-    now: datetime,
+    now: datetime | None = None,
 ) -> list[str]:
-    """本轮周期目录需要刷新的账户。
-
-    最近有消耗的账户每轮都刷新；其余账户距最近一次成功的周期全量超过
-    INACTIVE_DIRECTORY_INTERVAL 才刷新，从未成功过的账户立即刷新。
-    """
+    """先排除已有全量在途的账户；新鲜度稍后按实际类型/层级分区判断。"""
     accounts = sorted(set(advertiser_ids))
+    now = now or datetime.now(UTC)
     if not accounts:
         return []
     session.flush()
@@ -203,6 +142,12 @@ def directory_due_accounts(
               WHERE tenant_id=:tenant AND bc_id=:bc AND actor_id=:actor
                 AND frozen_route=CAST(:route AS jsonb)
                 AND status IN ('QUEUED','RUNNING','ADMISSION_WAIT','WAITING_REMOTE')
+                AND NOT (
+                  COALESCE(query->'periodic_directory_v1'='true'::jsonb,false)
+                  AND status='QUEUED' AND next_page=1
+                  AND claim_token IS NULL AND claimed_until IS NULL
+                  AND COALESCE(next_attempt_at>:now,false)
+                )
                 AND (query->>'include_deleted')::boolean IS TRUE
                 AND coalesce(jsonb_array_length(query->'ids'),0)=0
                 AND coalesce(jsonb_array_length(query->'parent_ids'),0)=0
@@ -215,45 +160,12 @@ def directory_due_accounts(
                 "actor": actor_id,
                 "route": json.dumps(frozen_route),
                 "ids": accounts,
+                "now": now,
             },
         )
         .scalars()
     )
-    accounts = [
-        advertiser_id for advertiser_id in accounts if advertiser_id not in pending
-    ]
-    active = set(active_ids) & set(accounts)
-    idle = [advertiser_id for advertiser_id in accounts if advertiser_id not in active]
-    fresh: set[str] = set()
-    if idle:
-        # 只需任一最近成功证据；逐账户找到首条即停，避免 DISTINCT 扫完运行历史。
-        # 保留原有成功范围：不额外收窄 BC、冻结路由或定向 ID 条件。
-        fresh = set(
-            session.connection()
-            .execute(
-                text("""
-                SELECT a.advertiser_id FROM unnest(CAST(:accounts AS text[])) a(advertiser_id)
-                JOIN LATERAL (
-                  SELECT 1 FROM ad_directory_run r
-                  WHERE r.tenant_id=:tenant AND r.advertiser_id=a.advertiser_id
-                    AND r.status='COMPLETE'
-                    AND CAST(r.query->>'include_deleted' AS boolean) IS true
-                    AND r.completed_at > :cutoff LIMIT 1
-                ) recent ON true
-                """),
-                {
-                    "tenant": tenant_id,
-                    "accounts": idle,
-                    "cutoff": now - INACTIVE_DIRECTORY_INTERVAL,
-                },
-            )
-            .scalars()
-        )
-    return [
-        advertiser_id
-        for advertiser_id in accounts
-        if advertiser_id in active or advertiser_id not in fresh
-    ]
+    return [advertiser_id for advertiser_id in accounts if advertiser_id not in pending]
 
 
 def directory_id_chunks(
@@ -294,6 +206,8 @@ def request_directory(
     include_deleted: bool = False,
     workload: str | None = None,
     dispatch_immediately: bool = True,
+    periodic_intervals: Mapping[str, timedelta] | None = None,
+    now: datetime | None = None,
 ) -> int:
     """ad_types 为空表示请求全部类型全部层级；周期调度传入 directory_ad_types 的裁剪结果。
 
@@ -309,6 +223,13 @@ def request_directory(
         raise DomainError("directory_request_invalid", "目录服务分类无效")
     route = FrozenTikTokRoute.model_validate(frozen_route)
     advertiser_ids = tuple(sorted(set(advertiser_ids)))
+    periodic = periodic_intervals is not None
+    if periodic and (
+        scope != "directory"
+        or set(periodic_intervals) != set(advertiser_ids)
+        or any(interval <= timedelta(0) for interval in periodic_intervals.values())
+    ):
+        raise DomainError("directory_request_invalid", "周期目录校准范围无效")
     if (
         route.tenant_id != tenant_id
         or route.bc_id != bc_id
@@ -329,7 +250,7 @@ def request_directory(
             advertiser_id=advertiser,
             capability="read",
         )
-    now = datetime.now(UTC)
+    now = now or datetime.now(UTC)
     payload = [
         frozen_route,
         str(actor_id),
@@ -338,6 +259,8 @@ def request_directory(
         sorted((str(r.tenant_id), r.advertiser_id, r.kind, r.remote_id) for r in refs),
         int(now.timestamp()) // 1800,
     ]
+    if periodic:
+        payload.append(PERIODIC_KEY)
     slot_id = uuid5(
         UUID("c5c96c13-7e3a-4cbb-a7cc-9b12e9d1c6ad"),
         json.dumps(payload, sort_keys=True),
@@ -402,8 +325,25 @@ def request_directory(
                     "include_deleted": scope == "directory" or include_deleted,
                 }
                 partition = _partition_key(query)
+                if periodic:
+                    if (
+                        recent_calibration(
+                            session,
+                            tenant_id=tenant_id,
+                            advertiser_id=advertiser_id,
+                            bc_id=bc_id,
+                            actor_id=actor_id,
+                            frozen_route=frozen_route,
+                            partition_key=partition,
+                            cutoff=now - periodic_intervals[advertiser_id],
+                        )
+                        is not None
+                    ):
+                        continue
+                    # 调度元数据不进入查询摘要，也不发送给平台。显式请求保持独立。
+                    query[PERIODIC_KEY] = True
                 existing = session.exec(
-                    select(AdDirectoryRun.id)
+                    select(AdDirectoryRun)
                     .where(
                         AdDirectoryRun.tenant_id == tenant_id,
                         AdDirectoryRun.advertiser_id == advertiser_id,
@@ -411,6 +351,7 @@ def request_directory(
                         AdDirectoryRun.bc_id == bc_id,
                         AdDirectoryRun.actor_id == actor_id,
                         AdDirectoryRun.frozen_route == frozen_route,
+                        col(AdDirectoryRun.query).op("?")(PERIODIC_KEY) == periodic,
                         # 已被领取的运行可能已读过首页，不能代替本次刷新。
                         (col(AdDirectoryRun.request_id) == request_id)
                         | and_(
@@ -420,8 +361,18 @@ def request_directory(
                         ),
                     )
                     .limit(1)
+                    .with_for_update()
                 ).first()
                 if existing is not None:
+                    # 冷转热后校准间隔缩短：复用原身份提前未开始的延期任务。
+                    if (
+                        periodic
+                        and existing.next_attempt_at is not None
+                        and existing.next_attempt_at > now
+                        and unstarted_without_delivery(session, existing)
+                    ):
+                        existing.next_attempt_at = now
+                        existing.error_code = None
                     continue
                 run = AdDirectoryRun(
                     tenant_id=tenant_id,
