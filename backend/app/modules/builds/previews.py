@@ -177,8 +177,6 @@ def generate_preview(
     session: Session, *, context: TenantContext, draft_id: UUID, expected_revision: int
 ) -> UUID:
     draft = get_draft(session, context=context, draft_id=draft_id, lock=True)
-    if draft.revision != expected_revision:
-        raise DomainError("draft_revision_conflict", "草稿已变更")
     existing = session.exec(
         select(BuildPreview).where(
             BuildPreview.tenant_id == context.tenant_id,
@@ -186,8 +184,55 @@ def generate_preview(
             BuildPreview.draft_revision == expected_revision,
         )
     ).one_or_none()
+    if draft.revision != expected_revision:
+        # 原请求响应丢失/重复点击：仅返回由这个失败预览直接重试得到的新版本。
+        if (
+            existing
+            and existing.status == "FAILED"
+            and draft.revision == expected_revision + 1
+        ):
+            retried = session.exec(
+                select(BuildPreview).where(
+                    BuildPreview.tenant_id == context.tenant_id,
+                    BuildPreview.draft_id == draft_id,
+                    BuildPreview.draft_revision == draft.revision,
+                )
+            ).one_or_none()
+            if retried and retried.progress.get("retry_of") == str(existing.id):
+                return retried.id
+        raise DomainError("draft_revision_conflict", "草稿已变更")
     if existing:
-        return existing.id
+        existing = _preview(session, context, existing.id, lock=True)
+        if existing.status != "FAILED":
+            return existing.id
+        if draft.status != "READY":
+            raise DomainError("draft_not_ready", "草稿尚未准备完成")
+        if (
+            session.exec(
+                select(Submission.id).where(
+                    Submission.tenant_id == context.tenant_id,
+                    Submission.preview_id == existing.id,
+                )
+            ).first()
+            is not None
+        ):
+            raise DomainError("preview_already_submitted", "已提交的预览不能重试生成")
+        # FAILED 记录受数据库冻结保护；只提升草稿版本，复用已准备的输入创建新预览。
+        from app.modules.builds.drafts import _bump_revision
+
+        _bump_revision(session, draft, expected_revision)
+        session.flush()
+        identity = generate_preview(
+            session,
+            context=context,
+            draft_id=draft_id,
+            expected_revision=draft.revision,
+        )
+        retried = _preview(session, context, identity, lock=True)
+        retried.progress = {**retried.progress, "retry_of": str(existing.id)}
+        session.add(retried)
+        session.flush()
+        return identity
     if draft.status != "READY":
         raise DomainError("draft_not_ready", "草稿尚未准备完成")
     from app.modules.builds.identity_selection import require_preview_identity

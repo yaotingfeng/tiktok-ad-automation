@@ -51,7 +51,9 @@ def test_preview_readiness_requires_scene_currency_and_every_material_path():
     assert unit_readiness("USD", "USD", [], []) == "BLOCKED"
 
 
-def seed_targeting_directory(session, context, advertisers, minis_id="fixture-mini", route=None):
+def seed_targeting_directory(
+    session, context, advertisers, minis_id="fixture-mini", route=None
+):
     # 持久化离线目录，预览/执行继续使用合成场景，绝不调用真实 TikTok。
     from datetime import UTC, datetime, timedelta
 
@@ -366,7 +368,11 @@ def test_two_drafts_freeze_independent_preview_rows_and_keep_strategy_version(
     assert {row.preview_id for row in second_ads} == {second_preview}
     version_after = session.get(StrategyVersion, source.strategy_version_id)
     assert version_after is not None
-    assert (version_after.id, version_after.number, version_after.config) == version_snapshot
+    assert (
+        version_after.id,
+        version_after.number,
+        version_after.config,
+    ) == version_snapshot
 
 
 @pytest.mark.parametrize(
@@ -519,7 +525,7 @@ def test_strategy_structure_matrix_persists_material_ads_and_frozen_contract(
                     "optimization_goal": "VALUE",
                     "optimization_event": "IMPRESSION_LEVEL_AD_REVENUE",
                     "deep_bid_type": "VO_MIN_ROAS",
-                }
+                },
             },
         }
     )
@@ -564,11 +570,15 @@ def test_strategy_structure_matrix_persists_material_ads_and_frozen_contract(
     assert len(ads) == expected_ads * 2 * 3  # 两剧三账户，每个组合都完整冻结。
     assert mappings
     for drama_id in {row.drama_id for row in mappings}:
-        assert len({row.material_id for row in mappings if row.drama_id == drama_id}) == 20
+        assert (
+            len({row.material_id for row in mappings if row.drama_id == drama_id}) == 20
+        )
     assert all(ad.cta_option_ids == ["cta-1"] for ad in ads)
     # 每个 drama/group 的冻结素材顺序是广告结构的输入合同；组间必须互斥。
     group_material_ids = {}
-    for row in sorted(groups, key=lambda item: (item.drama_id, item.group_no, item.position)):
+    for row in sorted(
+        groups, key=lambda item: (item.drama_id, item.group_no, item.position)
+    ):
         group_material_ids.setdefault((row.drama_id, row.group_no), []).append(
             row.material_id
         )
@@ -706,9 +716,7 @@ def test_strategy_structure_matrix_persists_material_ads_and_frozen_contract(
             },
             resolved={
                 **body,
-                "ad_configuration": {
-                    "call_to_action_id": ad.cta_option_ids[0]
-                },
+                "ad_configuration": {"call_to_action_id": ad.cta_option_ids[0]},
             },
         )
         assert len(compiled_ad["creative_list"]) == len(expected_ids)
@@ -717,9 +725,7 @@ def test_strategy_structure_matrix_persists_material_ads_and_frozen_contract(
         assert "budget_mode" not in compiled_ad
         assert "roas_bid" not in compiled_ad
         assert "deep_bid_type" not in compiled_ad
-        assert compiled_ad["ad_configuration"] == {
-            "call_to_action_id": "cta-1"
-        }
+        assert compiled_ad["ad_configuration"] == {"call_to_action_id": "cta-1"}
         assert [
             creative["creative_info"]["video_info"]["video_id"]
             for creative in compiled_ad["creative_list"]
@@ -738,8 +744,7 @@ def test_strategy_structure_matrix_persists_material_ads_and_frozen_contract(
         for unit in units
     )
     assert all(
-        unit.scene_snapshot["bid_strategy"] == changes["bid_strategy"]
-        for unit in units
+        unit.scene_snapshot["bid_strategy"] == changes["bid_strategy"] for unit in units
     )
     if changes["budget_strategy"] == "ADGROUP":
         assert all(
@@ -751,7 +756,12 @@ def test_strategy_structure_matrix_persists_material_ads_and_frozen_contract(
             "campaign_daily_budget" in unit.scene_snapshot["field_constraints"]
             for unit in units
         )
-    assert label in {"by-material-one", "average-two", "shared-creatives", "group-budget-highest"}
+    assert label in {
+        "by-material-one",
+        "average-two",
+        "shared-creatives",
+        "group-budget-highest",
+    }
 
 
 def test_identity_picker_keeps_same_named_authorizations_separate_and_saves_choice(
@@ -1315,7 +1325,7 @@ def test_http_preview_request_and_readonly_pages(
     )
 
 
-@pytest.mark.parametrize("mode", ["generate", "continue", "edit"])
+@pytest.mark.parametrize("mode", ["generate", "continue", "edit", "retry"])
 def test_preview_concurrent_parent_locking(
     isolated_strategy_database, mode, monkeypatch
 ):
@@ -1368,13 +1378,17 @@ def test_preview_concurrent_parent_locking(
             if mode != "generate"
             else None
         )
+        if mode == "retry":
+            failed = session.get(BuildPreview, identity)
+            failed.status, failed.error_code = "FAILED", "naming_context_missing"
+            session.add(failed)
         session.commit()
     barrier = Barrier(2)
 
     def work(index):
         with Session(engine) as session:
             barrier.wait(timeout=10)
-            if mode == "generate":
+            if mode in ("generate", "retry"):
                 result = previews.generate_preview(
                     session, context=context, draft_id=draft, expected_revision=1
                 )
@@ -1400,10 +1414,81 @@ def test_preview_concurrent_parent_locking(
         rows = session.exec(
             select(BuildPreview).where(BuildPreview.draft_id == draft)
         ).all()
-        assert len(rows) == 1
-        if mode == "generate":
+        assert len(rows) == (2 if mode == "retry" else 1)
+        if mode in ("generate", "retry"):
             assert result[0] == result[1]
+            if mode == "retry":
+                assert result[0] != identity
+                assert session.get(BuildDraft, draft).revision == 2
         elif mode == "continue":
             assert rows[0].status == "FROZEN"
         else:
             assert rows[0].status == "OBSOLETE"
+
+
+def test_failed_preview_retry_preserves_history_and_deduplicates_requests(
+    session, context, prepared
+):
+    from app.modules.builds.preview_tasks import process_preview
+
+    identity = previews.generate_preview(
+        session, context=context, draft_id=prepared, expected_revision=1
+    )
+    row = session.get(BuildPreview, identity)
+    assert row is not None
+    old_generation = row.generation
+    row.status, row.error_code = "FAILED", "naming_context_missing"
+    session.add(row)
+    session.flush()
+    progress = dict(row.progress)
+
+    retried = previews.generate_preview(
+        session, context=context, draft_id=prepared, expected_revision=1
+    )
+    assert retried != identity
+    fresh = session.get(BuildPreview, retried)
+    assert fresh.status == "BUILDING" and fresh.error_code is None
+    assert fresh.draft_revision == 2 and fresh.progress["retry_of"] == str(identity)
+    assert fresh.batch_short_id != row.batch_short_id
+    assert (
+        previews.generate_preview(
+            session, context=context, draft_id=prepared, expected_revision=1
+        )
+        == retried
+    )
+    assert (
+        previews.generate_preview(
+            session, context=context, draft_id=prepared, expected_revision=2
+        )
+        == retried
+    )
+    process_preview(
+        database_engine=session.connection(),
+        tenant_id=context.tenant_id,
+        actor_id=context.actor_id,
+        payload={"preview_id": str(identity), "generation": old_generation},
+    )
+    session.refresh(row)
+    assert row.status == "FAILED" and row.progress == progress
+    drain(session, context, retried)
+    session.refresh(fresh)
+    assert fresh.status == "FROZEN"
+    assert session.get(BuildDraft, prepared).revision == 2
+
+
+def test_failed_preview_retry_rejects_changed_draft(session, context, prepared):
+    from app.core.errors import DomainError
+
+    identity = previews.generate_preview(
+        session, context=context, draft_id=prepared, expected_revision=1
+    )
+    row = session.get(BuildPreview, identity)
+    row.status, row.error_code = "FAILED", "naming_context_missing"
+    draft = session.get(BuildDraft, prepared)
+    draft.revision = 2
+    session.add_all([row, draft])
+    session.flush()
+    with pytest.raises(DomainError, match="草稿已变更"):
+        previews.generate_preview(
+            session, context=context, draft_id=prepared, expected_revision=1
+        )

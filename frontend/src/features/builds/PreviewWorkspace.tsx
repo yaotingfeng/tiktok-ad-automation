@@ -1,4 +1,4 @@
-import { useQuery } from "@tanstack/react-query"
+import { useMutation, useQuery } from "@tanstack/react-query"
 import { Link, useNavigate, useRouterState } from "@tanstack/react-router"
 import { useState } from "react"
 import {
@@ -91,6 +91,36 @@ export function BuildPreviewPanel({
       ).data,
     refetchInterval: (q) =>
       q.state.data?.status === "BUILDING" ? 2000 : false,
+  })
+  const retryPreview = useMutation({
+    mutationFn: async () => {
+      const failed = summary.data
+      if (
+        !write ||
+        !failed ||
+        failed.bc_id !== bcId ||
+        failed.status !== "FAILED" ||
+        failed.submission_id
+      )
+        throw new Error("当前预览不可重试")
+      return (
+        await BuildsService.generatePreview({
+          path: { tenant_id: tenantId, draft_id: failed.draft_id },
+          body: { expected_revision: failed.draft_revision },
+        })
+      ).data
+    },
+    onSuccess: async (data) => {
+      if (data.preview_id === previewId) {
+        await summary.refetch()
+      } else {
+        await navigate({
+          to: "/tenants/$tenantId/build-previews/$previewId",
+          params: { tenantId, previewId: data.preview_id },
+          search: { bc_id: bcId },
+        })
+      }
+    },
   })
   const submission = usePreviewSubmission(
     tenantId,
@@ -249,7 +279,17 @@ export function BuildPreviewPanel({
       ) : current.status === "FAILED" ? (
         <Card>
           <CardContent className="flex min-w-0 flex-col gap-2">
-            <p role="status">尚未生成完整冻结预览，请返回调整并核实原因。</p>
+            <p role="status">预览生成失败，可复用已准备的内容重新生成。</p>
+            {write && !readOnly && (
+              <Button
+                className="self-start"
+                disabled={retryPreview.isPending}
+                onClick={() => retryPreview.mutate()}
+              >
+                {retryPreview.isPending ? "正在重新生成…" : "重试生成预览"}
+              </Button>
+            )}
+            {retryPreview.error && <RequestError error={retryPreview.error} />}
             <p className="text-sm text-muted-foreground">
               统计尚未完成，暂不展示最终提交数量与预算。
             </p>
