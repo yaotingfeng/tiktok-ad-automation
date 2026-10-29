@@ -23,6 +23,7 @@ import { capabilitiesQuery } from "@/features/providers/queries"
 import { versionQuery } from "@/features/strategies/queries"
 import { normalizeDecimal } from "@/features/strategies/validation"
 import { DirectoryPicker } from "@/features/tenants/DirectoryPicker"
+import { RuleChoice } from "./ImageRuleFields"
 import { ApplicationPicker } from "./ApplicationPicker"
 import { mutationKey } from "./api"
 import { DraftConflict } from "./DraftConflict"
@@ -39,6 +40,7 @@ import {
 } from "./presentation"
 
 type Values = {
+  mediaKind: "VIDEO" | "CAROUSEL"
   customProvider: string
   manualLinks: NamedManualLink[]
   drama: string
@@ -67,7 +69,7 @@ export function BuildInputPage({
   tenantId,
   bcId,
   write,
-  summary,
+  summary: sourceSummary,
   original,
   onSaved,
   onCancel,
@@ -84,6 +86,8 @@ export function BuildInputPage({
   onSaved?: (prepare: boolean) => void
   onCancel?: () => void
 }) {
+  const [copyOther, setCopyOther] = useState(false)
+  const summary = copyOther ? undefined : sourceSummary
   const key = summary
     ? mutationKey(tenantId, bcId, summary.draft_id)
     : `build-create:${tenantId}:${bcId}`
@@ -96,6 +100,7 @@ export function BuildInputPage({
     }
   })
   const initial = useRef<Values>({
+    mediaKind: summary?.media_kind ?? "VIDEO",
     drama: original?.drama.join("\n") || "",
     account: original?.account.join("\n") || "",
     connection: summary?.custom_provider_name
@@ -268,6 +273,7 @@ export function BuildInputPage({
             body: {
               request_id: operation.requestId,
               bc_id: bcId,
+              media_kind: values.mediaKind,
               strategy_version_id: values.version,
               provider_connection_id:
                 values.connection === "other" ? null : values.connection,
@@ -365,6 +371,30 @@ export function BuildInputPage({
       <Card className="min-w-0">
         <CardContent>
           <FieldGroup className="grid min-w-0 gap-6 md:grid-cols-3">
+            {sourceSummary && (
+              <Button
+                variant="outline"
+                disabled={disabled || copyOther}
+                onClick={() => {
+                  setCopyOther(true)
+                  change({
+                    mediaKind:
+                      sourceSummary.media_kind === "CAROUSEL"
+                        ? "VIDEO"
+                        : "CAROUSEL",
+                  })
+                }}
+              >
+                以另一类型新建草稿
+              </Button>
+            )}
+            <RuleChoice
+              label="投放素材类型"
+              value={values.mediaKind}
+              choices={{ VIDEO: "视频", CAROUSEL: "图片" }}
+              disabled={disabled || !!summary}
+              onChange={(v) => change({ mediaKind: v as Values["mediaKind"] })}
+            />
             <p className="text-sm text-muted-foreground md:col-span-3">
               使用当前 BC 设置的授权，在开始准备时固定。如需更换，请前往
               <Link

@@ -1,6 +1,6 @@
 import hashlib
 from datetime import datetime
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Query, Response
@@ -356,6 +356,7 @@ def get_materials(
     session: SessionDep,
     user: CurrentUser,
     query: Annotated[str, Query(max_length=1000)] = "",
+    media_type: Literal["VIDEO", "IMAGE"] | None = None,
     status: Annotated[
         str | None,
         Query(
@@ -380,10 +381,13 @@ def get_materials(
         "tenant": str(tenant_id),
         "query": hashlib.sha256(query.encode()).hexdigest(),
         "status": status or "",
+        "media_type": media_type or "",
         "from": created_from.isoformat() if created_from else "",
         "to": created_to.isoformat() if created_to else "",
     }
     statement, stage = _catalog_statement(context)
+    if media_type:
+        statement = statement.where(MaterialFile.media_type == media_type)
     if query:
         statement = statement.where(
             col(MaterialFile.file_name_folded).contains(query, autoescape=True)

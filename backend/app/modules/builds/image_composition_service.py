@@ -1090,7 +1090,7 @@ def _page(
     )
 
 
-def list_creative_units(session, scope, *, cursor=None, limit=50):
+def list_creative_units(session, scope, *, cursor=None, limit=50, drama_id=None):
     draft = _draft(session, scope, verify=False)
     query = (
         select(DraftCreativeUnit)
@@ -1101,11 +1101,13 @@ def list_creative_units(session, scope, *, cursor=None, limit=50):
         )
         .order_by(col(DraftCreativeUnit.drama_id), col(DraftCreativeUnit.position))
     )
+    if drama_id is not None:
+        query = query.where(DraftCreativeUnit.drama_id == drama_id)
     return _page(
         session,
         scope,
         query,
-        kind=f"units:{draft.active_image_generation}:{draft.revision}",
+        kind=f"units:{draft.active_image_generation}:{draft.revision}:{drama_id}",
         cursor=cursor,
         limit=limit,
         transform=lambda r: {
@@ -1138,7 +1140,7 @@ def list_plan_units(session, scope, plan_id, *, cursor=None, limit=50):
     )
 
 
-def list_candidates(session, scope, snapshot_id=None, *, cursor=None, limit=50):
+def list_candidates(session, scope, snapshot_id=None, *, cursor=None, limit=50, drama_id=None):
     draft = _draft(session, scope, verify=False)
     state = session.get(ImageCompositionState, (scope.tenant_id, scope.draft_id))
     identity = (
@@ -1159,6 +1161,9 @@ def list_candidates(session, scope, snapshot_id=None, *, cursor=None, limit=50):
         .order_by(col(ImageCandidateItem.drama_id), col(ImageCandidateItem.material_id))
     )
 
+    if drama_id is not None:
+        query = query.where(ImageCandidateItem.drama_id == drama_id)
+
     def public(row):
         exclusion = exclusions.get((row.drama_id, row.material_id))
         return {
@@ -1172,7 +1177,7 @@ def list_candidates(session, scope, snapshot_id=None, *, cursor=None, limit=50):
         session,
         scope,
         query,
-        kind=f"candidates:{identity}:{draft.revision}",
+        kind=f"candidates:{identity}:{draft.revision}:{drama_id}",
         cursor=cursor,
         limit=limit,
         transform=public,

@@ -7,6 +7,7 @@ from fastapi import APIRouter, Query
 from pydantic import Field
 
 from app.api.deps import CurrentUser, SessionDep
+from app.modules.builds import image_public as public
 from app.modules.builds.image_composition_api import Change, _scope
 from app.modules.builds.image_composition_schemas import ImmutableModel
 from app.modules.materials import carousel_presets as service
@@ -34,7 +35,7 @@ class Load(DraftChange):
     allow_reuse: bool = Field(default=False, strict=True)
 
 
-@router.get("")
+@router.get("", response_model=public.CarouselPresetPage)
 def list_versions(
     tenant_id: UUID,
     session: SessionDep,
@@ -51,7 +52,7 @@ def list_versions(
     )
 
 
-@router.get("/{version_id}")
+@router.get("/{version_id}", response_model=public.CarouselPresetPublic)
 def read_version(
     tenant_id: UUID, version_id: UUID, session: SessionDep, user: CurrentUser
 ):
@@ -61,7 +62,7 @@ def read_version(
     return service.get_preset_version(session, context, version_id)
 
 
-@router.post("")
+@router.post("", response_model=public.CarouselPresetPublic)
 def save_version(tenant_id: UUID, body: Save, session: SessionDep, user: CurrentUser):
     scope = _scope(session, user, tenant_id, body.draft_id, write=True)
     result = service.save_preset_version(
@@ -76,7 +77,7 @@ def save_version(tenant_id: UUID, body: Save, session: SessionDep, user: Current
     return result
 
 
-@router.post("/{version_id}/copy")
+@router.post("/{version_id}/copy", response_model=public.CarouselPresetPublic)
 def copy_version(
     tenant_id: UUID,
     version_id: UUID,
@@ -94,7 +95,7 @@ def copy_version(
     return result
 
 
-@router.post("/{version_id}/load")
+@router.post("/{version_id}/load", response_model=public.CarouselPresetLoaded)
 def load_version(
     tenant_id: UUID,
     version_id: UUID,

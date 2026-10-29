@@ -74,11 +74,13 @@ export function Identifier({ value }: { value: string }) {
   )
 }
 export function FilterSelect({
+  allLabel,
   label,
   value,
   onChange,
   choices,
 }: {
+  allLabel?: string
   label: string
   value: string
   onChange: (value: string) => void
@@ -91,7 +93,7 @@ export function FilterSelect({
       </SelectTrigger>
       <SelectContent>
         <SelectGroup>
-          <SelectItem value="all">全部{label}</SelectItem>
+          <SelectItem value="all">{allLabel ?? `全部${label}`}</SelectItem>
           {Object.entries(choices).map(([key, text]) => (
             <SelectItem key={key} value={key}>
               {text}

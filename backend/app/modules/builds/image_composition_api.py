@@ -7,6 +7,7 @@ from fastapi import APIRouter, Query
 from pydantic import Field
 
 from app.api.deps import CurrentUser, SessionDep
+from app.core.pagination import Page
 from app.modules.builds import image_composition_service as service
 from app.modules.builds.image_composition_commands import CreativeEditCommand
 from app.modules.builds.image_composition_schemas import (
@@ -15,6 +16,8 @@ from app.modules.builds.image_composition_schemas import (
     ImmutableModel,
 )
 from app.modules.tenants.permissions import require_tenant
+
+from . import image_public as public
 
 router = APIRouter(prefix="/build-drafts/{draft_id}/image-composition")
 Cursor = Annotated[str | None, Query(max_length=4096)]
@@ -69,7 +72,9 @@ def _scope(session, user, tenant_id, draft_id, *, write=False, cancel=False):
     )
 
 
-@router.get("")
+@router.get(
+    "", response_model=public.CompositionStatePublic, response_model_exclude_unset=True
+)
 def composition_state(
     tenant_id: UUID, draft_id: UUID, session: SessionDep, user: CurrentUser
 ):
@@ -78,7 +83,7 @@ def composition_state(
     )
 
 
-@router.post("/candidates/refresh")
+@router.post("/candidates/refresh", response_model=public.CandidateProgress)
 def refresh(
     tenant_id: UUID,
     draft_id: UUID,
@@ -95,7 +100,7 @@ def refresh(
     return result
 
 
-@router.post("/candidates/adopt")
+@router.post("/candidates/adopt", response_model=public.CandidateAdopted)
 def adopt(
     tenant_id: UUID, draft_id: UUID, body: Adopt, session: SessionDep, user: CurrentUser
 ):
@@ -108,7 +113,7 @@ def adopt(
     return result
 
 
-@router.post("/candidates/allocate")
+@router.post("/candidates/allocate", response_model=public.ImageRevisionPublic)
 def allocate(
     tenant_id: UUID,
     draft_id: UUID,
@@ -125,7 +130,7 @@ def allocate(
     return result
 
 
-@router.post("/candidates/exclude")
+@router.post("/candidates/exclude", response_model=public.ImageRevisionPublic)
 def exclude(
     tenant_id: UUID,
     draft_id: UUID,
@@ -142,7 +147,7 @@ def exclude(
     return result
 
 
-@router.get("/candidates")
+@router.get("/candidates", response_model=Page[public.ImageCandidatePublic])
 def candidates(
     tenant_id: UUID,
     draft_id: UUID,
@@ -151,6 +156,7 @@ def candidates(
     snapshot_id: UUID | None = None,
     cursor: Cursor = None,
     limit: Limit = 50,
+    drama_id: UUID | None = None,
 ):
     return service.list_candidates(
         session,
@@ -158,10 +164,11 @@ def candidates(
         snapshot_id,
         cursor=cursor,
         limit=limit,
+        drama_id=drama_id,
     )
 
 
-@router.post("/plans")
+@router.post("/plans", response_model=public.CompositionPlanPublic)
 def preview(
     tenant_id: UUID,
     draft_id: UUID,
@@ -182,7 +189,7 @@ def preview(
     return result
 
 
-@router.get("/plans/{plan_id}")
+@router.get("/plans/{plan_id}", response_model=public.CompositionPlanPublic)
 def plan(
     tenant_id: UUID,
     draft_id: UUID,
@@ -194,7 +201,7 @@ def plan(
     return service.get_composition_plan(session, scope, plan_id)
 
 
-@router.get("/plans/{plan_id}/units")
+@router.get("/plans/{plan_id}/units", response_model=Page[public.ImageUnitPublic])
 def plan_units(
     tenant_id: UUID,
     draft_id: UUID,
@@ -213,7 +220,7 @@ def plan_units(
     )
 
 
-@router.post("/apply")
+@router.post("/apply", response_model=public.CompositionRunPublic)
 def apply(
     tenant_id: UUID, draft_id: UUID, body: Apply, session: SessionDep, user: CurrentUser
 ):
@@ -226,7 +233,7 @@ def apply(
     return result
 
 
-@router.get("/runs/{run_id}")
+@router.get("/runs/{run_id}", response_model=public.CompositionRunPublic)
 def progress(
     tenant_id: UUID,
     draft_id: UUID,
@@ -239,7 +246,7 @@ def progress(
     )
 
 
-@router.post("/runs/{run_id}/cancel")
+@router.post("/runs/{run_id}/cancel", response_model=public.CompositionRunPublic)
 def cancel(
     tenant_id: UUID,
     draft_id: UUID,
@@ -258,7 +265,7 @@ def cancel(
     return result
 
 
-@router.get("/units")
+@router.get("/units", response_model=Page[public.ImageUnitPublic])
 def units(
     tenant_id: UUID,
     draft_id: UUID,
@@ -266,13 +273,18 @@ def units(
     user: CurrentUser,
     cursor: Cursor = None,
     limit: Limit = 50,
+    drama_id: UUID | None = None,
 ):
     return service.list_creative_units(
-        session, _scope(session, user, tenant_id, draft_id), cursor=cursor, limit=limit
+        session,
+        _scope(session, user, tenant_id, draft_id),
+        cursor=cursor,
+        limit=limit,
+        drama_id=drama_id,
     )
 
 
-@router.post("/edits")
+@router.post("/edits", response_model=public.CreativeEditPublic)
 def edit(
     tenant_id: UUID, draft_id: UUID, body: Edit, session: SessionDep, user: CurrentUser
 ):
@@ -287,7 +299,7 @@ def edit(
     return result
 
 
-@router.post("/candidates/add")
+@router.post("/candidates/add", response_model=public.CandidateAdded)
 def add_candidates(
     tenant_id: UUID,
     draft_id: UUID,
@@ -304,7 +316,7 @@ def add_candidates(
     return result
 
 
-@router.get("/plans/{plan_id}/differences")
+@router.get("/plans/{plan_id}/differences", response_model=Page[public.ImageDifference])
 def differences(
     tenant_id: UUID,
     draft_id: UUID,
@@ -332,7 +344,9 @@ def differences(
     )
 
 
-@router.get("/candidates/snapshots/{snapshot_id}")
+@router.get(
+    "/candidates/snapshots/{snapshot_id}", response_model=public.CandidateProgress
+)
 def candidate_progress(
     tenant_id: UUID,
     draft_id: UUID,
@@ -347,7 +361,10 @@ def candidate_progress(
     )
 
 
-@router.post("/candidates/snapshots/{snapshot_id}/cancel")
+@router.post(
+    "/candidates/snapshots/{snapshot_id}/cancel",
+    response_model=public.CandidateProgress,
+)
 def cancel_candidates(
     tenant_id: UUID,
     draft_id: UUID,
@@ -366,3 +383,24 @@ def cancel_candidates(
     )
     session.commit()
     return result
+
+
+@router.get("/dramas", response_model=Page[public.ImageDramaSummary])
+def image_dramas(
+    tenant_id: UUID,
+    draft_id: UUID,
+    session: SessionDep,
+    user: CurrentUser,
+    issue: Literal["all", "music", "unused", "protected"] = "all",
+    cursor: Cursor = None,
+    limit: Limit = 50,
+):
+    from .image_composition_queries import drama_summaries
+
+    return drama_summaries(
+        session,
+        _scope(session, user, tenant_id, draft_id),
+        issue=issue,
+        cursor=cursor,
+        limit=limit,
+    )

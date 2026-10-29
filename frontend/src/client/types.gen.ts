@@ -334,6 +334,24 @@ export type Adjustment_Output = {
 };
 
 /**
+ * Adopt
+ */
+export type Adopt = {
+    /**
+     * Request Id
+     */
+    request_id: string;
+    /**
+     * Expected Revision
+     */
+    expected_revision: number;
+    /**
+     * Snapshot Id
+     */
+    snapshot_id: string;
+};
+
+/**
  * AdsQueryPage
  */
 export type AdsQueryPage = {
@@ -365,6 +383,28 @@ export type AdsQueryPage = {
 };
 
 /**
+ * Allocate
+ */
+export type Allocate = {
+    /**
+     * Request Id
+     */
+    request_id: string;
+    /**
+     * Expected Revision
+     */
+    expected_revision: number;
+    /**
+     * Material Id
+     */
+    material_id: string;
+    /**
+     * Drama Ids
+     */
+    drama_ids: Array<string>;
+};
+
+/**
  * AppConfiguration
  */
 export type AppConfiguration = {
@@ -391,6 +431,24 @@ export type AppendVersionRequest = {
      * Request Id
      */
     request_id: string;
+};
+
+/**
+ * Apply
+ */
+export type Apply = {
+    /**
+     * Request Id
+     */
+    request_id: string;
+    /**
+     * Expected Revision
+     */
+    expected_revision: number;
+    /**
+     * Plan Id
+     */
+    plan_id: string;
 };
 
 /**
@@ -632,6 +690,92 @@ export type Body_login_login_access_token = {
 };
 
 /**
+ * CandidateAdded
+ */
+export type CandidateAdded = {
+    /**
+     * Revision
+     */
+    revision: number;
+    /**
+     * Snapshot Id
+     */
+    snapshot_id: string;
+    /**
+     * Added
+     */
+    added: number;
+};
+
+/**
+ * CandidateAdopted
+ */
+export type CandidateAdopted = {
+    /**
+     * Revision
+     */
+    revision: number;
+    /**
+     * Snapshot Id
+     */
+    snapshot_id: string;
+};
+
+/**
+ * CandidateProgress
+ */
+export type CandidateProgress = {
+    /**
+     * Snapshot Id
+     */
+    snapshot_id: string;
+    /**
+     * Revision
+     */
+    revision: number;
+    /**
+     * Status
+     */
+    status: 'PENDING' | 'READY' | 'FAILED' | 'CANCELLED';
+    /**
+     * Generation
+     */
+    generation: number;
+    /**
+     * Processed
+     */
+    processed: number;
+    /**
+     * Candidate Count
+     */
+    candidate_count: number;
+    /**
+     * Completed Drama Count
+     */
+    completed_drama_count: number;
+    /**
+     * Total Drama Count
+     */
+    total_drama_count: number;
+    /**
+     * Added
+     */
+    added: number | null;
+    /**
+     * Removed
+     */
+    removed: number | null;
+    /**
+     * Error Code
+     */
+    error_code: string | null;
+    /**
+     * Cutoff
+     */
+    cutoff: string;
+};
+
+/**
  * CandidateSelection
  */
 export type CandidateSelection = {
@@ -710,6 +854,98 @@ export type CapabilityRefreshRequest = {
 };
 
 /**
+ * CarouselPresetLoaded
+ */
+export type CarouselPresetLoaded = {
+    /**
+     * Revision
+     */
+    revision: number;
+    unit: ImageUnitPublic;
+};
+
+/**
+ * CarouselPresetPage
+ */
+export type CarouselPresetPage = {
+    /**
+     * Items
+     */
+    items: Array<CarouselPresetPublic>;
+    /**
+     * Total
+     */
+    total: number;
+    /**
+     * Offset
+     */
+    offset: number;
+    /**
+     * Limit
+     */
+    limit: number;
+};
+
+/**
+ * CarouselPresetPublic
+ */
+export type CarouselPresetPublic = {
+    /**
+     * Id
+     */
+    id: string;
+    /**
+     * Tenant Id
+     */
+    tenant_id: string;
+    /**
+     * Source Bc Id
+     */
+    source_bc_id: string;
+    /**
+     * Source Draft Id
+     */
+    source_draft_id: string;
+    /**
+     * Source Unit Id
+     */
+    source_unit_id: string;
+    /**
+     * Source Drama Id
+     */
+    source_drama_id: string;
+    /**
+     * Name
+     */
+    name: string;
+    /**
+     * Version
+     */
+    version: number;
+    /**
+     * Content Digest
+     */
+    content_digest: string;
+    /**
+     * Ordered Material Ids
+     */
+    ordered_material_ids: Array<string>;
+    /**
+     * Music Id
+     */
+    music_id: string | null;
+    /**
+     * Music Status
+     */
+    music_status: 'NOT_REQUIRED' | 'NEEDS_SELECTION' | 'PENDING' | 'RUNNING' | 'READY' | 'FAILED';
+    music_snapshot: PublicMusicSnapshot;
+    /**
+     * Created At
+     */
+    created_at: string;
+};
+
+/**
  * CatalogMetric
  */
 export type CatalogMetric = {
@@ -783,6 +1019,20 @@ export type CatalogPublic = {
     action_levels: {
         [key: string]: Array<string>;
     };
+};
+
+/**
+ * Change
+ */
+export type Change = {
+    /**
+     * Request Id
+     */
+    request_id: string;
+    /**
+     * Expected Revision
+     */
+    expected_revision: number;
 };
 
 /**
@@ -867,6 +1117,153 @@ export type CompleteUploadRequest = {
      * Parts
      */
     parts: Array<UploadedPart>;
+};
+
+/**
+ * CompositionPlanPublic
+ */
+export type CompositionPlanPublic = {
+    /**
+     * Plan Id
+     */
+    plan_id: string;
+    /**
+     * Base Revision
+     */
+    base_revision: number;
+    /**
+     * Input Digest
+     */
+    input_digest: string;
+    /**
+     * Unit Count
+     */
+    unit_count: number;
+    /**
+     * Added Unit Count
+     */
+    added_unit_count: number;
+    /**
+     * Removed Unit Count
+     */
+    removed_unit_count: number;
+    /**
+     * Retained Unit Count
+     */
+    retained_unit_count: number;
+    /**
+     * Protected Unit Count
+     */
+    protected_unit_count: number;
+    /**
+     * Music Counts
+     */
+    music_counts: {
+        [key: string]: number;
+    };
+    /**
+     * Image Reference Count
+     */
+    image_reference_count: number;
+    /**
+     * Distinct Image Count
+     */
+    distinct_image_count: number;
+    /**
+     * Reused Image Count
+     */
+    reused_image_count: number;
+    /**
+     * Conflicts
+     */
+    conflicts: Array<ImageDifference>;
+    /**
+     * Conflict Count
+     */
+    conflict_count: number;
+    /**
+     * Dramas
+     */
+    dramas: Array<DramaDifferenceSummary>;
+    /**
+     * Mode
+     */
+    mode: 'PRESERVE_MANUAL' | 'REPLACE_ALL';
+};
+
+/**
+ * CompositionRunPublic
+ */
+export type CompositionRunPublic = {
+    /**
+     * Run Id
+     */
+    run_id: string;
+    /**
+     * Plan Id
+     */
+    plan_id: string;
+    /**
+     * Generation
+     */
+    generation: number;
+    /**
+     * Status
+     */
+    status: 'PENDING' | 'APPLIED' | 'FAILED' | 'CANCELLED';
+    /**
+     * Processed
+     */
+    processed: number;
+    /**
+     * Total
+     */
+    total: number;
+    /**
+     * Cursor
+     */
+    cursor: number;
+    /**
+     * Error Code
+     */
+    error_code: string | null;
+};
+
+/**
+ * CompositionStatePublic
+ */
+export type CompositionStatePublic = {
+    /**
+     * Revision
+     */
+    revision: number;
+    /**
+     * Active Generation
+     */
+    active_generation: number;
+    /**
+     * Applied Rule Revision
+     */
+    applied_rule_revision: number | null;
+    /**
+     * Snapshot Id
+     */
+    snapshot_id: string | null;
+    rule: ImageRule;
+    /**
+     * Drama Patches
+     */
+    drama_patches: {
+        [key: string]: ImageRulePatch;
+    };
+    candidate_build: CandidateProgress | null;
+    run: CompositionRunPublic | null;
+    /**
+     * Music Counts
+     */
+    music_counts: {
+        [key: string]: number;
+    };
 };
 
 /**
@@ -1112,6 +1509,20 @@ export type ConnectionUpdate = {
 };
 
 /**
+ * Copy
+ */
+export type Copy = {
+    /**
+     * Request Id
+     */
+    request_id: string;
+    /**
+     * Name
+     */
+    name: string;
+};
+
+/**
  * CopyPoolPublic
  */
 export type CopyPoolPublic = {
@@ -1148,9 +1559,35 @@ export type CopyPublic = {
 };
 
 /**
+ * Create
+ */
+export type Create = {
+    /**
+     * Kind
+     */
+    kind: 'CREATE';
+    /**
+     * Drama Id
+     */
+    drama_id: string;
+    /**
+     * Material Ids
+     */
+    material_ids: Array<string>;
+    /**
+     * Allow Reuse
+     */
+    allow_reuse?: boolean;
+};
+
+/**
  * CreateDraftRequest
  */
 export type CreateDraftRequest = {
+    /**
+     * Media Kind
+     */
+    media_kind?: 'VIDEO' | 'CAROUSEL';
     /**
      * Request Id
      */
@@ -1215,6 +1652,24 @@ export type CreateStrategyRequest = {
 };
 
 /**
+ * CreativeEditPublic
+ */
+export type CreativeEditPublic = {
+    /**
+     * Revision
+     */
+    revision: number;
+    /**
+     * Affected Units
+     */
+    affected_units: Array<string>;
+    /**
+     * Pending Music Ids
+     */
+    pending_music_ids: Array<string>;
+};
+
+/**
  * DefaultConnectionRequest
  */
 export type DefaultConnectionRequest = {
@@ -1222,6 +1677,20 @@ export type DefaultConnectionRequest = {
      * Connection Id
      */
     connection_id: string;
+};
+
+/**
+ * Delete
+ */
+export type Delete = {
+    /**
+     * Kind
+     */
+    kind: 'DELETE';
+    /**
+     * Unit Id
+     */
+    unit_id: string;
 };
 
 /**
@@ -1445,6 +1914,10 @@ export type DraftInputPublic = {
  */
 export type DraftListItem = {
     /**
+     * Media Kind
+     */
+    media_kind?: 'VIDEO' | 'CAROUSEL';
+    /**
      * Draft Id
      */
     draft_id: string;
@@ -1601,6 +2074,11 @@ export type DraftSaved = {
  * DraftSummary
  */
 export type DraftSummary = {
+    structure_override?: StructureOverride;
+    /**
+     * Media Kind
+     */
+    media_kind?: 'VIDEO' | 'CAROUSEL';
     targeting?: AudienceTargeting;
     targeting_override?: AudienceTargeting | null;
     /**
@@ -1723,6 +2201,48 @@ export type DramaCandidate = {
 };
 
 /**
+ * DramaDifferenceSummary
+ */
+export type DramaDifferenceSummary = {
+    /**
+     * Drama Id
+     */
+    drama_id: string;
+    /**
+     * Rule Digest
+     */
+    rule_digest: string;
+    /**
+     * Candidate Digest
+     */
+    candidate_digest: string;
+    /**
+     * Retained Ids Count
+     */
+    retained_ids_count: number;
+    /**
+     * Removed Ids Count
+     */
+    removed_ids_count: number;
+    /**
+     * Excluded Images Count
+     */
+    excluded_images_count: number;
+    /**
+     * Warnings Count
+     */
+    warnings_count: number;
+    /**
+     * Protection Losses Count
+     */
+    protection_losses_count: number;
+    /**
+     * Conflicts Count
+     */
+    conflicts_count: number;
+};
+
+/**
  * DryRunPublic
  */
 export type DryRunPublic = {
@@ -1758,6 +2278,56 @@ export type DryRunRequest = {
 };
 
 /**
+ * Duplicate
+ */
+export type Duplicate = {
+    /**
+     * Kind
+     */
+    kind: 'DUPLICATE';
+    /**
+     * Unit Id
+     */
+    unit_id: string;
+};
+
+/**
+ * Edit
+ */
+export type Edit = {
+    /**
+     * Request Id
+     */
+    request_id: string;
+    /**
+     * Expected Revision
+     */
+    expected_revision: number;
+    /**
+     * Command
+     */
+    command: ({
+        kind: 'SET_IMAGES';
+    } & SetImages) | ({
+        kind: 'CREATE';
+    } & Create) | ({
+        kind: 'DUPLICATE';
+    } & Duplicate) | ({
+        kind: 'MERGE';
+    } & Merge) | ({
+        kind: 'SPLIT';
+    } & Split) | ({
+        kind: 'DELETE';
+    } & Delete) | ({
+        kind: 'SET_PROTECTION';
+    } & SetProtection) | ({
+        kind: 'RESTORE_CANDIDATES';
+    } & RestoreCandidates) | ({
+        kind: 'SET_MUSIC';
+    } & SetMusic);
+};
+
+/**
  * EmptyRequest
  */
 export type EmptyRequest = {
@@ -1784,6 +2354,28 @@ export type EntityRef = {
      * Remote Id
      */
     remote_id: string;
+};
+
+/**
+ * Exclude
+ */
+export type Exclude = {
+    /**
+     * Request Id
+     */
+    request_id: string;
+    /**
+     * Expected Revision
+     */
+    expected_revision: number;
+    /**
+     * Drama Id
+     */
+    drama_id: string;
+    /**
+     * Material Ids
+     */
+    material_ids: Array<string>;
 };
 
 /**
@@ -2271,6 +2863,318 @@ export type IdentityOption = {
      * Profile Image
      */
     profile_image?: string | null;
+};
+
+/**
+ * ImageCandidatePublic
+ */
+export type ImageCandidatePublic = {
+    /**
+     * Material Id
+     */
+    material_id: string;
+    /**
+     * File Name Snapshot
+     */
+    file_name_snapshot: string;
+    /**
+     * Upload Batch Id
+     */
+    upload_batch_id?: string | null;
+    /**
+     * Upload Batch Created At
+     */
+    upload_batch_created_at?: string | null;
+    /**
+     * Upload Sequence
+     */
+    upload_sequence?: number | null;
+    /**
+     * Created At
+     */
+    created_at: string;
+    /**
+     * Content Digest
+     */
+    content_digest: string;
+    /**
+     * Enabled
+     */
+    enabled?: boolean;
+    /**
+     * Drama Id
+     */
+    drama_id: string;
+    /**
+     * Cross Drama Allowed
+     */
+    cross_drama_allowed?: boolean;
+};
+
+/**
+ * ImageDifference
+ */
+export type ImageDifference = {
+    /**
+     * Drama Id
+     */
+    drama_id?: string | null;
+    /**
+     * Drama Ids
+     */
+    drama_ids?: Array<string>;
+    /**
+     * Code
+     */
+    code?: string | null;
+    /**
+     * Reason
+     */
+    reason?: string | null;
+    /**
+     * Unit Id
+     */
+    unit_id?: string | null;
+    /**
+     * Material Id
+     */
+    material_id?: string | null;
+    /**
+     * Material Ids
+     */
+    material_ids?: Array<string>;
+};
+
+/**
+ * ImageDramaSummary
+ */
+export type ImageDramaSummary = {
+    /**
+     * Drama Id
+     */
+    drama_id: string;
+    /**
+     * Link Id
+     */
+    link_id: string;
+    /**
+     * Title
+     */
+    title: string;
+    /**
+     * First Line
+     */
+    first_line: number;
+    /**
+     * Material State
+     */
+    material_state: string;
+    /**
+     * Matched Count
+     */
+    matched_count: number;
+    /**
+     * Candidate Count
+     */
+    candidate_count: number;
+    /**
+     * Excluded Count
+     */
+    excluded_count: number;
+    /**
+     * Unused Count
+     */
+    unused_count: number;
+    /**
+     * Unit Count
+     */
+    unit_count: number;
+    /**
+     * Ready Count
+     */
+    ready_count: number;
+    /**
+     * Selection Count
+     */
+    selection_count: number;
+    /**
+     * Pending Count
+     */
+    pending_count: number;
+    /**
+     * Failed Count
+     */
+    failed_count: number;
+    /**
+     * Protected Count
+     */
+    protected_count: number;
+    /**
+     * Reference Count
+     */
+    reference_count: number;
+    /**
+     * Used Image Count
+     */
+    used_image_count: number;
+};
+
+/**
+ * ImageRevisionPublic
+ */
+export type ImageRevisionPublic = {
+    /**
+     * Revision
+     */
+    revision: number;
+};
+
+/**
+ * ImageRule
+ */
+export type ImageRule = {
+    /**
+     * Mode
+     */
+    mode?: 'SINGLE' | 'SEQUENTIAL';
+    /**
+     * Images Per Unit
+     */
+    images_per_unit?: number;
+    /**
+     * Order
+     */
+    order?: 'NATURAL_NAME' | 'UPLOAD_SEQUENCE';
+    /**
+     * Remainder
+     */
+    remainder?: 'KEEP' | 'EXCLUDE';
+    /**
+     * Music Mode
+     */
+    music_mode?: 'RECOMMEND' | 'FIXED';
+    /**
+     * Fixed Music Id
+     */
+    fixed_music_id?: string | null;
+    /**
+     * Single Music Id
+     */
+    single_music_id?: string | null;
+};
+
+/**
+ * ImageRulePatch
+ *
+ * 仅 model_dump(exclude_unset=True) 为覆盖；None 可显式清除曲目。
+ */
+export type ImageRulePatch = {
+    /**
+     * Mode
+     */
+    mode?: 'SINGLE' | 'SEQUENTIAL' | null;
+    /**
+     * Images Per Unit
+     */
+    images_per_unit?: number | null;
+    /**
+     * Order
+     */
+    order?: 'NATURAL_NAME' | 'UPLOAD_SEQUENCE' | null;
+    /**
+     * Remainder
+     */
+    remainder?: 'KEEP' | 'EXCLUDE' | null;
+    /**
+     * Music Mode
+     */
+    music_mode?: 'RECOMMEND' | 'FIXED' | null;
+    /**
+     * Fixed Music Id
+     */
+    fixed_music_id?: string | null;
+    /**
+     * Single Music Id
+     */
+    single_music_id?: string | null;
+};
+
+/**
+ * ImageStructureChange
+ */
+export type ImageStructureChange = {
+    /**
+     * Request Id
+     */
+    request_id: string;
+    /**
+     * Expected Revision
+     */
+    expected_revision: number;
+    structure_override: StructureOverride;
+};
+
+/**
+ * ImageUnitPublic
+ */
+export type ImageUnitPublic = {
+    /**
+     * Kind
+     */
+    kind?: 'VIDEO' | 'CAROUSEL';
+    /**
+     * Ordered Material Ids
+     */
+    ordered_material_ids: Array<string>;
+    /**
+     * Content Digest
+     */
+    content_digest: string;
+    /**
+     * Music Id
+     */
+    music_id?: string | null;
+    /**
+     * Music Rule Digest
+     */
+    music_rule_digest?: string;
+    /**
+     * Music Status
+     */
+    music_status?: 'NOT_REQUIRED' | 'NEEDS_SELECTION' | 'PENDING' | 'RUNNING' | 'READY' | 'FAILED';
+    /**
+     * Composition Protected
+     */
+    composition_protected?: boolean;
+    /**
+     * Music Protected
+     */
+    music_protected?: boolean;
+    /**
+     * Position
+     */
+    position: number;
+    /**
+     * Revision
+     */
+    revision?: number;
+    /**
+     * Music Revision
+     */
+    music_revision?: number;
+    /**
+     * Music Request Generation
+     */
+    music_request_generation?: number;
+    /**
+     * Id
+     */
+    id: string;
+    /**
+     * Drama Id
+     */
+    drama_id: string;
+    music_snapshot?: PublicMusicSnapshot;
 };
 
 /**
@@ -2964,6 +3868,32 @@ export type LinkPreparationRequest = {
     config?: {
         [key: string]: unknown;
     };
+};
+
+/**
+ * Load
+ */
+export type Load = {
+    /**
+     * Request Id
+     */
+    request_id: string;
+    /**
+     * Expected Revision
+     */
+    expected_revision: number;
+    /**
+     * Draft Id
+     */
+    draft_id: string;
+    /**
+     * Drama Id
+     */
+    drama_id: string;
+    /**
+     * Allow Reuse
+     */
+    allow_reuse?: boolean;
 };
 
 /**
@@ -3662,6 +4592,20 @@ export type MemberUserCreate = {
 };
 
 /**
+ * Merge
+ */
+export type Merge = {
+    /**
+     * Kind
+     */
+    kind: 'MERGE';
+    /**
+     * Unit Ids
+     */
+    unit_ids: Array<string>;
+};
+
+/**
  * Message
  */
 export type Message = {
@@ -3767,6 +4711,204 @@ export type MiniOption = {
      * Name
      */
     name: string;
+};
+
+/**
+ * MusicItemPublic
+ */
+export type MusicItemPublic = {
+    /**
+     * Music Id
+     */
+    music_id: string;
+    /**
+     * Display Name
+     */
+    display_name: string;
+    /**
+     * Author
+     */
+    author: string | null;
+    /**
+     * Duration
+     */
+    duration: number | null;
+    /**
+     * Preview Url
+     */
+    preview_url: string | null;
+};
+
+/**
+ * MusicJobError
+ */
+export type MusicJobError = {
+    /**
+     * Job Id
+     */
+    job_id: string;
+    /**
+     * Error Code
+     */
+    error_code: string | null;
+};
+
+/**
+ * MusicJobPublic
+ */
+export type MusicJobPublic = {
+    /**
+     * Job Id
+     */
+    job_id: string;
+    /**
+     * Generation
+     */
+    generation: number;
+    /**
+     * Status
+     */
+    status: string;
+    /**
+     * Processed
+     */
+    processed: number;
+    /**
+     * Total
+     */
+    total: number;
+    /**
+     * Attempts
+     */
+    attempts: number;
+    /**
+     * Error Code
+     */
+    error_code: string | null;
+};
+
+/**
+ * MusicPagePublic
+ */
+export type MusicPagePublic = {
+    /**
+     * Items
+     */
+    items: Array<MusicItemPublic>;
+    /**
+     * Next Cursor
+     */
+    next_cursor: string | null;
+    /**
+     * Truncated
+     */
+    truncated: boolean;
+};
+
+/**
+ * MusicPreparationError
+ */
+export type MusicPreparationError = {
+    /**
+     * Run Id
+     */
+    run_id: string;
+    /**
+     * Error Code
+     */
+    error_code: string | null;
+};
+
+/**
+ * MusicRead
+ */
+export type MusicRead = {
+    /**
+     * Music Ids
+     */
+    music_ids: Array<string>;
+};
+
+/**
+ * MusicRequest
+ */
+export type MusicRequest = {
+    /**
+     * Request Id
+     */
+    request_id: string;
+    /**
+     * Expected Content Revision
+     */
+    expected_content_revision: number;
+    /**
+     * Expected Music Revision
+     */
+    expected_music_revision: number;
+    /**
+     * Action
+     */
+    action: 'RECOMMEND' | 'RETRY' | 'SET_MANUAL';
+    /**
+     * Music Id
+     */
+    music_id?: string | null;
+};
+
+/**
+ * MusicRequestPublic
+ */
+export type MusicRequestPublic = {
+    /**
+     * Revision
+     */
+    revision: number;
+    /**
+     * Job Ids
+     */
+    job_ids: Array<string>;
+    /**
+     * Music Revision
+     */
+    music_revision: number;
+    /**
+     * Request Generation
+     */
+    request_generation: number;
+    /**
+     * Status
+     */
+    status: 'NOT_REQUIRED' | 'NEEDS_SELECTION' | 'PENDING' | 'RUNNING' | 'READY' | 'FAILED';
+};
+
+/**
+ * MusicSummaryPublic
+ */
+export type MusicSummaryPublic = {
+    /**
+     * Active Generation
+     */
+    active_generation: number;
+    /**
+     * Jobs
+     */
+    jobs: {
+        [key: string]: number;
+    };
+    /**
+     * Preparations
+     */
+    preparations: {
+        [key: string]: number;
+    };
+    /**
+     * Preparation Errors
+     */
+    preparation_errors: Array<MusicPreparationError>;
+    /**
+     * Recent Errors
+     */
+    recent_errors: Array<MusicJobError>;
 };
 
 /**
@@ -4028,6 +5170,78 @@ export type Page_FrozenGroup_ = {
      * Items
      */
     items: Array<FrozenGroup>;
+    /**
+     * Next Cursor
+     */
+    next_cursor?: string | null;
+    /**
+     * Total
+     */
+    total: number;
+};
+
+/**
+ * Page[ImageCandidatePublic]
+ */
+export type Page_ImageCandidatePublic_ = {
+    /**
+     * Items
+     */
+    items: Array<ImageCandidatePublic>;
+    /**
+     * Next Cursor
+     */
+    next_cursor?: string | null;
+    /**
+     * Total
+     */
+    total: number;
+};
+
+/**
+ * Page[ImageDifference]
+ */
+export type Page_ImageDifference_ = {
+    /**
+     * Items
+     */
+    items: Array<ImageDifference>;
+    /**
+     * Next Cursor
+     */
+    next_cursor?: string | null;
+    /**
+     * Total
+     */
+    total: number;
+};
+
+/**
+ * Page[ImageDramaSummary]
+ */
+export type Page_ImageDramaSummary_ = {
+    /**
+     * Items
+     */
+    items: Array<ImageDramaSummary>;
+    /**
+     * Next Cursor
+     */
+    next_cursor?: string | null;
+    /**
+     * Total
+     */
+    total: number;
+};
+
+/**
+ * Page[ImageUnitPublic]
+ */
+export type Page_ImageUnitPublic_ = {
+    /**
+     * Items
+     */
+    items: Array<ImageUnitPublic>;
     /**
      * Next Cursor
      */
@@ -4698,6 +5912,31 @@ export type PreparationSummary = {
 };
 
 /**
+ * Preview
+ */
+export type Preview = {
+    /**
+     * Request Id
+     */
+    request_id: string;
+    /**
+     * Expected Revision
+     */
+    expected_revision: number;
+    rule: ImageRule;
+    /**
+     * Drama Patches
+     */
+    drama_patches?: {
+        [key: string]: ImageRulePatch;
+    };
+    /**
+     * Mode
+     */
+    mode?: 'PRESERVE_MANUAL' | 'REPLACE_ALL';
+};
+
+/**
  * PreviewAccepted
  */
 export type PreviewAccepted = {
@@ -5306,6 +6545,36 @@ export type ProviderLinkPublic = {
      * Config Display Incomplete
      */
     config_display_incomplete: boolean;
+};
+
+/**
+ * PublicMusicSnapshot
+ */
+export type PublicMusicSnapshot = {
+    /**
+     * Music Id
+     */
+    music_id?: string | null;
+    /**
+     * Display Name
+     */
+    display_name?: string | null;
+    /**
+     * Author
+     */
+    author?: string | null;
+    /**
+     * Duration
+     */
+    duration?: number | null;
+    /**
+     * Selection Source
+     */
+    selection_source?: string | null;
+    /**
+     * Images Changed
+     */
+    images_changed?: boolean | null;
 };
 
 /**
@@ -6039,6 +7308,24 @@ export type ResolvedLink = {
 };
 
 /**
+ * RestoreCandidates
+ */
+export type RestoreCandidates = {
+    /**
+     * Kind
+     */
+    kind: 'RESTORE_CANDIDATES';
+    /**
+     * Drama Id
+     */
+    drama_id: string;
+    /**
+     * Material Ids
+     */
+    material_ids: Array<string>;
+};
+
+/**
  * RuleCreate
  */
 export type RuleCreate = {
@@ -6396,6 +7683,32 @@ export type RunSummary = {
 };
 
 /**
+ * Save
+ */
+export type Save = {
+    /**
+     * Request Id
+     */
+    request_id: string;
+    /**
+     * Expected Revision
+     */
+    expected_revision: number;
+    /**
+     * Draft Id
+     */
+    draft_id: string;
+    /**
+     * Source Unit Id
+     */
+    source_unit_id: string;
+    /**
+     * Name
+     */
+    name: string;
+};
+
+/**
  * SavedViewCreate
  */
 export type SavedViewCreate = {
@@ -6503,6 +7816,68 @@ export type SelectionRequest = {
 };
 
 /**
+ * SetImages
+ */
+export type SetImages = {
+    /**
+     * Kind
+     */
+    kind: 'SET_IMAGES';
+    /**
+     * Unit Id
+     */
+    unit_id: string;
+    /**
+     * Material Ids
+     */
+    material_ids: Array<string>;
+    /**
+     * Allow Reuse
+     */
+    allow_reuse?: boolean;
+};
+
+/**
+ * SetMusic
+ */
+export type SetMusic = {
+    /**
+     * Kind
+     */
+    kind: 'SET_MUSIC';
+    /**
+     * Unit Id
+     */
+    unit_id: string;
+    /**
+     * Music Id
+     */
+    music_id: string;
+};
+
+/**
+ * SetProtection
+ */
+export type SetProtection = {
+    /**
+     * Kind
+     */
+    kind: 'SET_PROTECTION';
+    /**
+     * Unit Id
+     */
+    unit_id: string;
+    /**
+     * Composition Protected
+     */
+    composition_protected?: boolean | null;
+    /**
+     * Music Protected
+     */
+    music_protected?: boolean | null;
+};
+
+/**
  * SignedPart
  */
 export type SignedPart = {
@@ -6546,6 +7921,24 @@ export type SkippedMaterialPublic = {
      * Reason Code
      */
     reason_code: string;
+};
+
+/**
+ * Split
+ */
+export type Split = {
+    /**
+     * Kind
+     */
+    kind: 'SPLIT';
+    /**
+     * Unit Id
+     */
+    unit_id: string;
+    /**
+     * Split Positions
+     */
+    split_positions: Array<number>;
 };
 
 /**
@@ -6856,6 +8249,48 @@ export type StrategyStateRequest = {
      * Name
      */
     name?: string | null;
+};
+
+/**
+ * StructureOverride
+ */
+export type StructureOverride = {
+    /**
+     * Group Generation Mode
+     */
+    group_generation_mode?: 'FIXED' | 'BY_MATERIAL' | null;
+    /**
+     * Group Count
+     */
+    group_count?: number | null;
+    /**
+     * Group Material Allocation
+     */
+    group_material_allocation?: 'SHARED' | 'SEQUENTIAL_AVERAGE' | null;
+    /**
+     * Max Materials Per Group
+     */
+    max_materials_per_group?: number | null;
+    /**
+     * Ad Generation Mode
+     */
+    ad_generation_mode?: 'FIXED' | 'BY_MATERIAL' | null;
+    /**
+     * Ads Per Group
+     */
+    ads_per_group?: number | null;
+    /**
+     * Ad Material Allocation
+     */
+    ad_material_allocation?: 'SHARED' | 'SEQUENTIAL_AVERAGE' | null;
+    /**
+     * Max Materials Per Ad
+     */
+    max_materials_per_ad?: number | null;
+    /**
+     * Creative Count
+     */
+    creative_count?: number | null;
 };
 
 /**
@@ -10681,6 +12116,181 @@ export type createIngestGenerationResponses = {
 
 export type createIngestGenerationResponse = createIngestGenerationResponses[keyof createIngestGenerationResponses];
 
+export type materialsListVersionsData = {
+    body?: never;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+    };
+    query?: {
+        /**
+         * Name
+         */
+        name?: string;
+        /**
+         * Offset
+         */
+        offset?: number;
+        /**
+         * Limit
+         */
+        limit?: number;
+    };
+    url: '/api/tenants/{tenant_id}/materials/carousel-presets';
+};
+
+export type materialsListVersionsErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type materialsListVersionsError = materialsListVersionsErrors[keyof materialsListVersionsErrors];
+
+export type materialsListVersionsResponses = {
+    /**
+     * Successful Response
+     */
+    200: CarouselPresetPage;
+};
+
+export type materialsListVersionsResponse = materialsListVersionsResponses[keyof materialsListVersionsResponses];
+
+export type materialsSaveVersionData = {
+    body: Save;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+    };
+    query?: never;
+    url: '/api/tenants/{tenant_id}/materials/carousel-presets';
+};
+
+export type materialsSaveVersionErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type materialsSaveVersionError = materialsSaveVersionErrors[keyof materialsSaveVersionErrors];
+
+export type materialsSaveVersionResponses = {
+    /**
+     * Successful Response
+     */
+    200: CarouselPresetPublic;
+};
+
+export type materialsSaveVersionResponse = materialsSaveVersionResponses[keyof materialsSaveVersionResponses];
+
+export type materialsReadVersionData = {
+    body?: never;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+        /**
+         * Version Id
+         */
+        version_id: string;
+    };
+    query?: never;
+    url: '/api/tenants/{tenant_id}/materials/carousel-presets/{version_id}';
+};
+
+export type materialsReadVersionErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type materialsReadVersionError = materialsReadVersionErrors[keyof materialsReadVersionErrors];
+
+export type materialsReadVersionResponses = {
+    /**
+     * Successful Response
+     */
+    200: CarouselPresetPublic;
+};
+
+export type materialsReadVersionResponse = materialsReadVersionResponses[keyof materialsReadVersionResponses];
+
+export type materialsCopyVersionData = {
+    body: Copy;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+        /**
+         * Version Id
+         */
+        version_id: string;
+    };
+    query?: never;
+    url: '/api/tenants/{tenant_id}/materials/carousel-presets/{version_id}/copy';
+};
+
+export type materialsCopyVersionErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type materialsCopyVersionError = materialsCopyVersionErrors[keyof materialsCopyVersionErrors];
+
+export type materialsCopyVersionResponses = {
+    /**
+     * Successful Response
+     */
+    200: CarouselPresetPublic;
+};
+
+export type materialsCopyVersionResponse = materialsCopyVersionResponses[keyof materialsCopyVersionResponses];
+
+export type materialsLoadVersionData = {
+    body: Load;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+        /**
+         * Version Id
+         */
+        version_id: string;
+    };
+    query?: never;
+    url: '/api/tenants/{tenant_id}/materials/carousel-presets/{version_id}/load';
+};
+
+export type materialsLoadVersionErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type materialsLoadVersionError = materialsLoadVersionErrors[keyof materialsLoadVersionErrors];
+
+export type materialsLoadVersionResponses = {
+    /**
+     * Successful Response
+     */
+    200: CarouselPresetLoaded;
+};
+
+export type materialsLoadVersionResponse = materialsLoadVersionResponses[keyof materialsLoadVersionResponses];
+
 export type materialsReadUploadBatchesData = {
     body?: never;
     path: {
@@ -11019,6 +12629,10 @@ export type materialsGetMaterialsData = {
          * Query
          */
         query?: string;
+        /**
+         * Media Type
+         */
+        media_type?: 'VIDEO' | 'IMAGE' | null;
         /**
          * Status
          */
@@ -15009,6 +16623,966 @@ export type buildsUpdateDeliveryResponses = {
 };
 
 export type buildsUpdateDeliveryResponse = buildsUpdateDeliveryResponses[keyof buildsUpdateDeliveryResponses];
+
+export type buildsCompositionStateData = {
+    body?: never;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+        /**
+         * Draft Id
+         */
+        draft_id: string;
+    };
+    query?: never;
+    url: '/api/tenants/{tenant_id}/build-drafts/{draft_id}/image-composition';
+};
+
+export type buildsCompositionStateErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type buildsCompositionStateError = buildsCompositionStateErrors[keyof buildsCompositionStateErrors];
+
+export type buildsCompositionStateResponses = {
+    /**
+     * Successful Response
+     */
+    200: CompositionStatePublic;
+};
+
+export type buildsCompositionStateResponse = buildsCompositionStateResponses[keyof buildsCompositionStateResponses];
+
+export type buildsRefreshData = {
+    body: Change;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+        /**
+         * Draft Id
+         */
+        draft_id: string;
+    };
+    query?: never;
+    url: '/api/tenants/{tenant_id}/build-drafts/{draft_id}/image-composition/candidates/refresh';
+};
+
+export type buildsRefreshErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type buildsRefreshError = buildsRefreshErrors[keyof buildsRefreshErrors];
+
+export type buildsRefreshResponses = {
+    /**
+     * Successful Response
+     */
+    200: CandidateProgress;
+};
+
+export type buildsRefreshResponse = buildsRefreshResponses[keyof buildsRefreshResponses];
+
+export type buildsAdoptData = {
+    body: Adopt;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+        /**
+         * Draft Id
+         */
+        draft_id: string;
+    };
+    query?: never;
+    url: '/api/tenants/{tenant_id}/build-drafts/{draft_id}/image-composition/candidates/adopt';
+};
+
+export type buildsAdoptErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type buildsAdoptError = buildsAdoptErrors[keyof buildsAdoptErrors];
+
+export type buildsAdoptResponses = {
+    /**
+     * Successful Response
+     */
+    200: CandidateAdopted;
+};
+
+export type buildsAdoptResponse = buildsAdoptResponses[keyof buildsAdoptResponses];
+
+export type buildsAllocateData = {
+    body: Allocate;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+        /**
+         * Draft Id
+         */
+        draft_id: string;
+    };
+    query?: never;
+    url: '/api/tenants/{tenant_id}/build-drafts/{draft_id}/image-composition/candidates/allocate';
+};
+
+export type buildsAllocateErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type buildsAllocateError = buildsAllocateErrors[keyof buildsAllocateErrors];
+
+export type buildsAllocateResponses = {
+    /**
+     * Successful Response
+     */
+    200: ImageRevisionPublic;
+};
+
+export type buildsAllocateResponse = buildsAllocateResponses[keyof buildsAllocateResponses];
+
+export type buildsExcludeData = {
+    body: Exclude;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+        /**
+         * Draft Id
+         */
+        draft_id: string;
+    };
+    query?: never;
+    url: '/api/tenants/{tenant_id}/build-drafts/{draft_id}/image-composition/candidates/exclude';
+};
+
+export type buildsExcludeErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type buildsExcludeError = buildsExcludeErrors[keyof buildsExcludeErrors];
+
+export type buildsExcludeResponses = {
+    /**
+     * Successful Response
+     */
+    200: ImageRevisionPublic;
+};
+
+export type buildsExcludeResponse = buildsExcludeResponses[keyof buildsExcludeResponses];
+
+export type buildsCandidatesData = {
+    body?: never;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+        /**
+         * Draft Id
+         */
+        draft_id: string;
+    };
+    query?: {
+        /**
+         * Snapshot Id
+         */
+        snapshot_id?: string | null;
+        /**
+         * Cursor
+         */
+        cursor?: string | null;
+        /**
+         * Limit
+         */
+        limit?: number;
+        /**
+         * Drama Id
+         */
+        drama_id?: string | null;
+    };
+    url: '/api/tenants/{tenant_id}/build-drafts/{draft_id}/image-composition/candidates';
+};
+
+export type buildsCandidatesErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type buildsCandidatesError = buildsCandidatesErrors[keyof buildsCandidatesErrors];
+
+export type buildsCandidatesResponses = {
+    /**
+     * Successful Response
+     */
+    200: Page_ImageCandidatePublic_;
+};
+
+export type buildsCandidatesResponse = buildsCandidatesResponses[keyof buildsCandidatesResponses];
+
+export type buildsPreviewData = {
+    body: Preview;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+        /**
+         * Draft Id
+         */
+        draft_id: string;
+    };
+    query?: never;
+    url: '/api/tenants/{tenant_id}/build-drafts/{draft_id}/image-composition/plans';
+};
+
+export type buildsPreviewErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type buildsPreviewError = buildsPreviewErrors[keyof buildsPreviewErrors];
+
+export type buildsPreviewResponses = {
+    /**
+     * Successful Response
+     */
+    200: CompositionPlanPublic;
+};
+
+export type buildsPreviewResponse = buildsPreviewResponses[keyof buildsPreviewResponses];
+
+export type buildsPlanData = {
+    body?: never;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+        /**
+         * Draft Id
+         */
+        draft_id: string;
+        /**
+         * Plan Id
+         */
+        plan_id: string;
+    };
+    query?: never;
+    url: '/api/tenants/{tenant_id}/build-drafts/{draft_id}/image-composition/plans/{plan_id}';
+};
+
+export type buildsPlanErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type buildsPlanError = buildsPlanErrors[keyof buildsPlanErrors];
+
+export type buildsPlanResponses = {
+    /**
+     * Successful Response
+     */
+    200: CompositionPlanPublic;
+};
+
+export type buildsPlanResponse = buildsPlanResponses[keyof buildsPlanResponses];
+
+export type buildsPlanUnitsData = {
+    body?: never;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+        /**
+         * Draft Id
+         */
+        draft_id: string;
+        /**
+         * Plan Id
+         */
+        plan_id: string;
+    };
+    query?: {
+        /**
+         * Cursor
+         */
+        cursor?: string | null;
+        /**
+         * Limit
+         */
+        limit?: number;
+    };
+    url: '/api/tenants/{tenant_id}/build-drafts/{draft_id}/image-composition/plans/{plan_id}/units';
+};
+
+export type buildsPlanUnitsErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type buildsPlanUnitsError = buildsPlanUnitsErrors[keyof buildsPlanUnitsErrors];
+
+export type buildsPlanUnitsResponses = {
+    /**
+     * Successful Response
+     */
+    200: Page_ImageUnitPublic_;
+};
+
+export type buildsPlanUnitsResponse = buildsPlanUnitsResponses[keyof buildsPlanUnitsResponses];
+
+export type buildsApplyData = {
+    body: Apply;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+        /**
+         * Draft Id
+         */
+        draft_id: string;
+    };
+    query?: never;
+    url: '/api/tenants/{tenant_id}/build-drafts/{draft_id}/image-composition/apply';
+};
+
+export type buildsApplyErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type buildsApplyError = buildsApplyErrors[keyof buildsApplyErrors];
+
+export type buildsApplyResponses = {
+    /**
+     * Successful Response
+     */
+    200: CompositionRunPublic;
+};
+
+export type buildsApplyResponse = buildsApplyResponses[keyof buildsApplyResponses];
+
+export type buildsProgressData = {
+    body?: never;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+        /**
+         * Draft Id
+         */
+        draft_id: string;
+        /**
+         * Run Id
+         */
+        run_id: string;
+    };
+    query?: never;
+    url: '/api/tenants/{tenant_id}/build-drafts/{draft_id}/image-composition/runs/{run_id}';
+};
+
+export type buildsProgressErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type buildsProgressError = buildsProgressErrors[keyof buildsProgressErrors];
+
+export type buildsProgressResponses = {
+    /**
+     * Successful Response
+     */
+    200: CompositionRunPublic;
+};
+
+export type buildsProgressResponse = buildsProgressResponses[keyof buildsProgressResponses];
+
+export type buildsCancelData = {
+    body: Change;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+        /**
+         * Draft Id
+         */
+        draft_id: string;
+        /**
+         * Run Id
+         */
+        run_id: string;
+    };
+    query?: never;
+    url: '/api/tenants/{tenant_id}/build-drafts/{draft_id}/image-composition/runs/{run_id}/cancel';
+};
+
+export type buildsCancelErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type buildsCancelError = buildsCancelErrors[keyof buildsCancelErrors];
+
+export type buildsCancelResponses = {
+    /**
+     * Successful Response
+     */
+    200: CompositionRunPublic;
+};
+
+export type buildsCancelResponse = buildsCancelResponses[keyof buildsCancelResponses];
+
+export type buildsUnitsData = {
+    body?: never;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+        /**
+         * Draft Id
+         */
+        draft_id: string;
+    };
+    query?: {
+        /**
+         * Cursor
+         */
+        cursor?: string | null;
+        /**
+         * Limit
+         */
+        limit?: number;
+        /**
+         * Drama Id
+         */
+        drama_id?: string | null;
+    };
+    url: '/api/tenants/{tenant_id}/build-drafts/{draft_id}/image-composition/units';
+};
+
+export type buildsUnitsErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type buildsUnitsError = buildsUnitsErrors[keyof buildsUnitsErrors];
+
+export type buildsUnitsResponses = {
+    /**
+     * Successful Response
+     */
+    200: Page_ImageUnitPublic_;
+};
+
+export type buildsUnitsResponse = buildsUnitsResponses[keyof buildsUnitsResponses];
+
+export type buildsEditData = {
+    body: Edit;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+        /**
+         * Draft Id
+         */
+        draft_id: string;
+    };
+    query?: never;
+    url: '/api/tenants/{tenant_id}/build-drafts/{draft_id}/image-composition/edits';
+};
+
+export type buildsEditErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type buildsEditError = buildsEditErrors[keyof buildsEditErrors];
+
+export type buildsEditResponses = {
+    /**
+     * Successful Response
+     */
+    200: CreativeEditPublic;
+};
+
+export type buildsEditResponse = buildsEditResponses[keyof buildsEditResponses];
+
+export type buildsAddCandidatesData = {
+    body: Exclude;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+        /**
+         * Draft Id
+         */
+        draft_id: string;
+    };
+    query?: never;
+    url: '/api/tenants/{tenant_id}/build-drafts/{draft_id}/image-composition/candidates/add';
+};
+
+export type buildsAddCandidatesErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type buildsAddCandidatesError = buildsAddCandidatesErrors[keyof buildsAddCandidatesErrors];
+
+export type buildsAddCandidatesResponses = {
+    /**
+     * Successful Response
+     */
+    200: CandidateAdded;
+};
+
+export type buildsAddCandidatesResponse = buildsAddCandidatesResponses[keyof buildsAddCandidatesResponses];
+
+export type buildsDifferencesData = {
+    body?: never;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+        /**
+         * Draft Id
+         */
+        draft_id: string;
+        /**
+         * Plan Id
+         */
+        plan_id: string;
+    };
+    query?: {
+        /**
+         * Kind
+         */
+        kind?: 'conflicts' | 'excluded_images' | 'warnings' | 'removed_ids' | 'retained_ids' | 'protection_losses';
+        /**
+         * Cursor
+         */
+        cursor?: string | null;
+        /**
+         * Limit
+         */
+        limit?: number;
+    };
+    url: '/api/tenants/{tenant_id}/build-drafts/{draft_id}/image-composition/plans/{plan_id}/differences';
+};
+
+export type buildsDifferencesErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type buildsDifferencesError = buildsDifferencesErrors[keyof buildsDifferencesErrors];
+
+export type buildsDifferencesResponses = {
+    /**
+     * Successful Response
+     */
+    200: Page_ImageDifference_;
+};
+
+export type buildsDifferencesResponse = buildsDifferencesResponses[keyof buildsDifferencesResponses];
+
+export type buildsCandidateProgressData = {
+    body?: never;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+        /**
+         * Draft Id
+         */
+        draft_id: string;
+        /**
+         * Snapshot Id
+         */
+        snapshot_id: string;
+    };
+    query?: never;
+    url: '/api/tenants/{tenant_id}/build-drafts/{draft_id}/image-composition/candidates/snapshots/{snapshot_id}';
+};
+
+export type buildsCandidateProgressErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type buildsCandidateProgressError = buildsCandidateProgressErrors[keyof buildsCandidateProgressErrors];
+
+export type buildsCandidateProgressResponses = {
+    /**
+     * Successful Response
+     */
+    200: CandidateProgress;
+};
+
+export type buildsCandidateProgressResponse = buildsCandidateProgressResponses[keyof buildsCandidateProgressResponses];
+
+export type buildsCancelCandidatesData = {
+    body: Change;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+        /**
+         * Draft Id
+         */
+        draft_id: string;
+        /**
+         * Snapshot Id
+         */
+        snapshot_id: string;
+    };
+    query?: never;
+    url: '/api/tenants/{tenant_id}/build-drafts/{draft_id}/image-composition/candidates/snapshots/{snapshot_id}/cancel';
+};
+
+export type buildsCancelCandidatesErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type buildsCancelCandidatesError = buildsCancelCandidatesErrors[keyof buildsCancelCandidatesErrors];
+
+export type buildsCancelCandidatesResponses = {
+    /**
+     * Successful Response
+     */
+    200: CandidateProgress;
+};
+
+export type buildsCancelCandidatesResponse = buildsCancelCandidatesResponses[keyof buildsCancelCandidatesResponses];
+
+export type buildsImageDramasData = {
+    body?: never;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+        /**
+         * Draft Id
+         */
+        draft_id: string;
+    };
+    query?: {
+        /**
+         * Issue
+         */
+        issue?: 'all' | 'music' | 'unused' | 'protected';
+        /**
+         * Cursor
+         */
+        cursor?: string | null;
+        /**
+         * Limit
+         */
+        limit?: number;
+    };
+    url: '/api/tenants/{tenant_id}/build-drafts/{draft_id}/image-composition/dramas';
+};
+
+export type buildsImageDramasErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type buildsImageDramasError = buildsImageDramasErrors[keyof buildsImageDramasErrors];
+
+export type buildsImageDramasResponses = {
+    /**
+     * Successful Response
+     */
+    200: Page_ImageDramaSummary_;
+};
+
+export type buildsImageDramasResponse = buildsImageDramasResponses[keyof buildsImageDramasResponses];
+
+export type buildsSearchMusicData = {
+    body?: never;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+        /**
+         * Draft Id
+         */
+        draft_id: string;
+    };
+    query: {
+        /**
+         * Keyword
+         */
+        keyword: string;
+        /**
+         * Cursor
+         */
+        cursor?: string | null;
+    };
+    url: '/api/tenants/{tenant_id}/build-drafts/{draft_id}/music/search';
+};
+
+export type buildsSearchMusicErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type buildsSearchMusicError = buildsSearchMusicErrors[keyof buildsSearchMusicErrors];
+
+export type buildsSearchMusicResponses = {
+    /**
+     * Successful Response
+     */
+    200: MusicPagePublic;
+};
+
+export type buildsSearchMusicResponse = buildsSearchMusicResponses[keyof buildsSearchMusicResponses];
+
+export type buildsReadMusicData = {
+    body: MusicRead;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+        /**
+         * Draft Id
+         */
+        draft_id: string;
+    };
+    query?: never;
+    url: '/api/tenants/{tenant_id}/build-drafts/{draft_id}/music/read';
+};
+
+export type buildsReadMusicErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type buildsReadMusicError = buildsReadMusicErrors[keyof buildsReadMusicErrors];
+
+export type buildsReadMusicResponses = {
+    /**
+     * Successful Response
+     */
+    200: MusicPagePublic;
+};
+
+export type buildsReadMusicResponse = buildsReadMusicResponses[keyof buildsReadMusicResponses];
+
+export type buildsRequestMusicData = {
+    body: MusicRequest;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+        /**
+         * Draft Id
+         */
+        draft_id: string;
+        /**
+         * Unit Id
+         */
+        unit_id: string;
+    };
+    query?: never;
+    url: '/api/tenants/{tenant_id}/build-drafts/{draft_id}/music/units/{unit_id}';
+};
+
+export type buildsRequestMusicErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type buildsRequestMusicError = buildsRequestMusicErrors[keyof buildsRequestMusicErrors];
+
+export type buildsRequestMusicResponses = {
+    /**
+     * Successful Response
+     */
+    200: MusicRequestPublic;
+};
+
+export type buildsRequestMusicResponse = buildsRequestMusicResponses[keyof buildsRequestMusicResponses];
+
+export type buildsMusicProgressData = {
+    body?: never;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+        /**
+         * Draft Id
+         */
+        draft_id: string;
+        /**
+         * Job Id
+         */
+        job_id: string;
+    };
+    query?: never;
+    url: '/api/tenants/{tenant_id}/build-drafts/{draft_id}/music/jobs/{job_id}';
+};
+
+export type buildsMusicProgressErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type buildsMusicProgressError = buildsMusicProgressErrors[keyof buildsMusicProgressErrors];
+
+export type buildsMusicProgressResponses = {
+    /**
+     * Successful Response
+     */
+    200: MusicJobPublic;
+};
+
+export type buildsMusicProgressResponse = buildsMusicProgressResponses[keyof buildsMusicProgressResponses];
+
+export type buildsMusicSummaryData = {
+    body?: never;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+        /**
+         * Draft Id
+         */
+        draft_id: string;
+    };
+    query?: never;
+    url: '/api/tenants/{tenant_id}/build-drafts/{draft_id}/music';
+};
+
+export type buildsMusicSummaryErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type buildsMusicSummaryError = buildsMusicSummaryErrors[keyof buildsMusicSummaryErrors];
+
+export type buildsMusicSummaryResponses = {
+    /**
+     * Successful Response
+     */
+    200: MusicSummaryPublic;
+};
+
+export type buildsMusicSummaryResponse = buildsMusicSummaryResponses[keyof buildsMusicSummaryResponses];
+
+export type buildsUpdateImageStructureData = {
+    body: ImageStructureChange;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+        /**
+         * Draft Id
+         */
+        draft_id: string;
+    };
+    query?: never;
+    url: '/api/tenants/{tenant_id}/build-drafts/{draft_id}/structure';
+};
+
+export type buildsUpdateImageStructureErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type buildsUpdateImageStructureError = buildsUpdateImageStructureErrors[keyof buildsUpdateImageStructureErrors];
+
+export type buildsUpdateImageStructureResponses = {
+    /**
+     * Successful Response
+     */
+    200: DraftSaved;
+};
+
+export type buildsUpdateImageStructureResponse = buildsUpdateImageStructureResponses[keyof buildsUpdateImageStructureResponses];
 
 export type buildsSavedSubmissionData = {
     body?: never;

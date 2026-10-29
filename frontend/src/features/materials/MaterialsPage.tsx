@@ -18,6 +18,7 @@ import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { RequestError } from "@/features/tenants/shared"
 import { useTenantScope } from "@/features/tenants/TenantScope"
 import { WorkspacePageTitle } from "@/features/workspace/WorkspacePageTitle"
+import { CarouselPresetList } from "./CarouselPresetList"
 import { AssetDetails } from "./AssetDetails"
 import { BatchHistory } from "./BatchHistory"
 import { BatchUploadSheet } from "./BatchUploadSheet"
@@ -58,7 +59,12 @@ function MaterialWorkspace({
         batch_id?: string
       },
   })
-  const tab = search.tab === "uploads" ? "uploads" : "library"
+  const tab =
+    search.tab === "uploads"
+      ? "uploads"
+      : search.tab === "carousels"
+        ? "carousels"
+        : "library"
   const [details, setDetails] = useState<string | null>(null)
   const [forbidden, setForbidden] = useState(false)
   const [sheet, setSheet] = useState(false)
@@ -115,7 +121,7 @@ function MaterialWorkspace({
   const write = allowed && !forbidden
   const revoke = () => setForbidden(true)
   const go = (
-    next: "library" | "uploads",
+    next: "library" | "uploads" | "carousels",
     id: string | null | undefined = batchId,
   ) =>
     void navigate({
@@ -166,13 +172,19 @@ function MaterialWorkspace({
       </Alert>
       <Tabs
         value={tab}
-        onValueChange={(value) => go(value as "library" | "uploads")}
+        onValueChange={(value) =>
+          go(value as "library" | "uploads" | "carousels")
+        }
       >
         <TabsList>
+          <TabsTrigger value="carousels">轮播库</TabsTrigger>
           <TabsTrigger value="library">素材库</TabsTrigger>
           <TabsTrigger value="uploads">上传队列</TabsTrigger>
         </TabsList>
       </Tabs>
+      {tab === "carousels" && (
+        <CarouselPresetList tenantId={tenantId} write={write} />
+      )}
       <section
         aria-label="素材目录"
         className="min-w-0"

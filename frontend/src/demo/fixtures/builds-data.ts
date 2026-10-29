@@ -1,5 +1,9 @@
 // 批量搭建领域的私有数据：草稿、预览、提交、执行步骤。
-import type { AudienceTargeting, DeliveryConfig } from "../../client"
+import type {
+  AudienceTargeting,
+  DeliveryConfig,
+  StructureOverride,
+} from "../../client"
 import { demoUuid, isoDaysAgo } from "../runtime/clock"
 import {
   DEMO_DRAMAS,
@@ -18,6 +22,8 @@ export type UnitReadiness = "READY" | "PREPARING" | "BLOCKED"
 
 // 草稿数据结构
 export interface DemoDraft {
+  media_kind?: "VIDEO" | "CAROUSEL"
+  structure_override?: StructureOverride
   draft_id: string
   tenant_id: string
   bc_id: string
@@ -200,7 +206,12 @@ export function seedHistorySubmissions() {
     prepare_started_at: null,
   }
 
-  demoDrafts.push(draft1, draft2)
+  demoDrafts.push(draft1, draft2, {
+    ...draft1,
+    draft_id: demoUuid(723),
+    media_kind: "CAROUSEL",
+    structure_override: {},
+  })
 }
 
 // 初始化时调用

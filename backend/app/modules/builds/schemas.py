@@ -7,6 +7,7 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.modules.builds.image_composition_schemas import MediaKind
+from app.modules.builds.structure import StructureOverride
 from app.modules.builds.targeting_schemas import AudienceTargeting
 from app.modules.providers.schemas import DramaCandidate
 
@@ -124,6 +125,7 @@ class DraftGroupEditRequest(BaseModel):
 
 
 class DraftSummary(BaseModel):
+    structure_override: StructureOverride = Field(default_factory=StructureOverride)
     media_kind: MediaKind = "VIDEO"
     targeting: AudienceTargeting = Field(default_factory=AudienceTargeting)
     targeting_override: AudienceTargeting | None = None

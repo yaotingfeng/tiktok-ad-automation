@@ -81,6 +81,7 @@ def draft_summary(
     ).one()
     provider = session.get(ProviderConnection, row.provider_connection_id)
     return DraftSummary(
+        structure_override=row.structure_override or {},
         media_kind=row.media_kind,
         targeting=row.targeting_override
         or get_version(

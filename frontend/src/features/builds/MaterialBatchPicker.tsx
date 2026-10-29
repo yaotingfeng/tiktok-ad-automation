@@ -20,12 +20,14 @@ import { cn } from "@/lib/utils"
 
 export function MaterialBatchPicker({
   tenantId,
+  mediaType = "VIDEO",
   existingIds,
   existingContentKeys,
   disabled,
   onAdd,
 }: {
   tenantId: string
+  mediaType?: "VIDEO" | "IMAGE"
   existingIds: string[]
   existingContentKeys: string[]
   disabled: boolean
@@ -52,6 +54,7 @@ export function MaterialBatchPicker({
       tenantId,
       "builds",
       "material-picker",
+      mediaType,
       search,
       paging.cursor,
       paging.limit,
@@ -64,6 +67,7 @@ export function MaterialBatchPicker({
           path: { tenant_id: tenantId },
           query: {
             query: search,
+            media_type: mediaType,
             cursor: paging.cursor,
             limit: paging.limit,
           },

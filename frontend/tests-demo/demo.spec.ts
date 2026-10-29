@@ -232,3 +232,45 @@ test("素材制作在新标签页打开君博租户的生产直达页", async ({
   await opened.close()
   expect(await gaps(page)).toEqual([])
 })
+
+test("图片演示取消匹配、复制与轮播库加载有合成反馈", async ({
+  page,
+  baseURL,
+}) => {
+  const state = watch(page)
+  await enter(page)
+  await go(
+    page,
+    tenantPage("/build-drafts/d0d0d0d0-0000-4000-8000-0000000002d3"),
+  )
+  await expect(page.getByText("整批图片规则", { exact: true })).toBeVisible()
+  await page.getByRole("button", { name: "刷新匹配图片" }).click()
+  await page.getByRole("button", { name: "取消匹配", exact: true }).click()
+  await expect(page.getByText("图片匹配已停止，可重新刷新。")).toBeVisible()
+  await page.getByRole("button", { name: "查看与调整轮播" }).first().click()
+  await page.getByRole("button", { name: "复制", exact: true }).first().click()
+  await page.getByRole("button", { name: "确认复制", exact: true }).click()
+  await expect(page.getByText("创意 14 · 5 张", { exact: true })).toBeVisible()
+  await page
+    .getByRole("button", { name: "存入轮播库", exact: true })
+    .first()
+    .click()
+  await page.getByRole("textbox", { name: "轮播名称" }).fill("合成回归轮播")
+  await page.getByRole("button", { name: "确认保存", exact: true }).click()
+  await page.getByRole("button", { name: "从轮播库添加", exact: true }).click()
+  await expect(page.getByText("合成回归轮播 · v1 · 5 张")).toBeVisible()
+  await page.getByRole("button", { name: "加载到本剧", exact: true }).click()
+  await page.getByRole("button", { name: "确认加载", exact: true }).click()
+  await expect(
+    page
+      .getByRole("dialog", { name: "加载轮播" })
+      .getByText("请明确确认图片复用"),
+  ).toBeVisible()
+  await page.getByRole("button", { name: "明确允许与现有轮播复用图片" }).click()
+  await page.getByRole("button", { name: "确认加载", exact: true }).click()
+  await expect(page.getByRole("dialog", { name: "加载轮播" })).toHaveCount(0)
+  await expect(page.getByText("创意 15 · 5 张", { exact: true })).toBeVisible()
+  expect(state.errors).toEqual([])
+  expect(await gaps(page)).toEqual([])
+  expectIsolated(state, new URL(baseURL as string).origin)
+})

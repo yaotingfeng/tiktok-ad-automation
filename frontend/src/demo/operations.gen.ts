@@ -135,14 +135,38 @@ import type {
   automationRulesUpdateRuleResponse,
   availableBcsData,
   availableBcsResponse,
+  buildsAddCandidatesData,
+  buildsAddCandidatesResponse,
+  buildsAdoptData,
+  buildsAdoptResponse,
+  buildsAllocateData,
+  buildsAllocateResponse,
+  buildsApplyData,
+  buildsApplyResponse,
   buildsAuthorizeHistoricalReadData,
   buildsAuthorizeHistoricalReadResponse,
+  buildsCancelCandidatesData,
+  buildsCancelCandidatesResponse,
+  buildsCancelData,
+  buildsCancelResponse,
+  buildsCandidateProgressData,
+  buildsCandidateProgressResponse,
+  buildsCandidatesData,
+  buildsCandidatesResponse,
+  buildsCompositionStateData,
+  buildsCompositionStateResponse,
   buildsCreateData,
   buildsCreateResponse,
+  buildsDifferencesData,
+  buildsDifferencesResponse,
   buildsDramasData,
   buildsDramasResponse,
+  buildsEditData,
   buildsEditGroupsData,
   buildsEditGroupsResponse,
+  buildsEditResponse,
+  buildsExcludeData,
+  buildsExcludeResponse,
   buildsFrozenGroupsData,
   buildsFrozenGroupsResponse,
   buildsFrozenUnitData,
@@ -173,6 +197,8 @@ import type {
   buildsGetSubmissionUnitsResponse,
   buildsIdentityOptionsData,
   buildsIdentityOptionsResponse,
+  buildsImageDramasData,
+  buildsImageDramasResponse,
   buildsInputsData,
   buildsInputsResponse,
   buildsListDraftsData,
@@ -183,22 +209,40 @@ import type {
   buildsMaterialsResponse,
   buildsMinisOptionsData,
   buildsMinisOptionsResponse,
+  buildsMusicProgressData,
+  buildsMusicProgressResponse,
+  buildsMusicSummaryData,
+  buildsMusicSummaryResponse,
+  buildsPlanData,
+  buildsPlanResponse,
+  buildsPlanUnitsData,
+  buildsPlanUnitsResponse,
   buildsPrepareData,
   buildsPrepareResponse,
+  buildsPreviewData,
   buildsPreviewDramasData,
   buildsPreviewDramasResponse,
   buildsPreviewInputsData,
   buildsPreviewInputsResponse,
   buildsPreviewRequestData,
   buildsPreviewRequestResponse,
+  buildsPreviewResponse,
   buildsPreviewSummaryData,
   buildsPreviewSummaryResponse,
   buildsPreviewUnitsData,
   buildsPreviewUnitsResponse,
+  buildsProgressData,
+  buildsProgressResponse,
   buildsPutManualLinkData,
   buildsPutManualLinkResponse,
+  buildsReadMusicData,
+  buildsReadMusicResponse,
   buildsReconcileSubmissionData,
   buildsReconcileSubmissionResponse,
+  buildsRefreshData,
+  buildsRefreshResponse,
+  buildsRequestMusicData,
+  buildsRequestMusicResponse,
   buildsRetrySubmissionData,
   buildsRetrySubmissionResponse,
   buildsSavedMutationData,
@@ -211,6 +255,8 @@ import type {
   buildsSavedSubmissionRecoveryData,
   buildsSavedSubmissionRecoveryResponse,
   buildsSavedSubmissionResponse,
+  buildsSearchMusicData,
+  buildsSearchMusicResponse,
   buildsSelectIdentityData,
   buildsSelectIdentityResponse,
   buildsSelectMiniData,
@@ -227,9 +273,13 @@ import type {
   buildsTargetingOptionsResponse,
   buildsTargetingRegionsData,
   buildsTargetingRegionsResponse,
+  buildsUnitsData,
+  buildsUnitsResponse,
   buildsUpdateData,
   buildsUpdateDeliveryData,
   buildsUpdateDeliveryResponse,
+  buildsUpdateImageStructureData,
+  buildsUpdateImageStructureResponse,
   buildsUpdateResponse,
   buildsUpdateTargetingData,
   buildsUpdateTargetingResponse,
@@ -268,6 +318,8 @@ import type {
   materialPushPostMaterialBatchResponse,
   materialsAuthorizeReissueData,
   materialsAuthorizeReissueResponse,
+  materialsCopyVersionData,
+  materialsCopyVersionResponse,
   materialsGetAssetsData,
   materialsGetAssetsResponse,
   materialsGetAttemptsData,
@@ -276,6 +328,10 @@ import type {
   materialsGetMaterialResponse,
   materialsGetMaterialsData,
   materialsGetMaterialsResponse,
+  materialsListVersionsData,
+  materialsListVersionsResponse,
+  materialsLoadVersionData,
+  materialsLoadVersionResponse,
   materialsPostCompleteData,
   materialsPostCompleteResponse,
   materialsPostObjectRetryData,
@@ -296,6 +352,10 @@ import type {
   materialsReadUploadBatchesResponse,
   materialsReadUploadRequestData,
   materialsReadUploadRequestResponse,
+  materialsReadVersionData,
+  materialsReadVersionResponse,
+  materialsSaveVersionData,
+  materialsSaveVersionResponse,
   providersApplicationCapabilitiesData,
   providersApplicationCapabilitiesResponse,
   providersGetLinksData,
@@ -473,10 +533,22 @@ export const DEMO_OPERATIONS = {
   "automation_rules-test_feishu": { method: "POST", path: "/api/tenants/{tenant_id}/automation-settings/test-feishu", query: {} },
   "automation_rules-update_rule": { method: "PUT", path: "/api/tenants/{tenant_id}/automation-rules/{rule_id}", query: {} },
   "availableBcs": { method: "GET", path: "/api/tenants/{tenant_id}/tiktok/mcp/connections/{connection_id}/available-bcs", query: {"page":"number","page_size":"number","refresh":"boolean"} },
+  "builds-add_candidates": { method: "POST", path: "/api/tenants/{tenant_id}/build-drafts/{draft_id}/image-composition/candidates/add", query: {} },
+  "builds-adopt": { method: "POST", path: "/api/tenants/{tenant_id}/build-drafts/{draft_id}/image-composition/candidates/adopt", query: {} },
+  "builds-allocate": { method: "POST", path: "/api/tenants/{tenant_id}/build-drafts/{draft_id}/image-composition/candidates/allocate", query: {} },
+  "builds-apply": { method: "POST", path: "/api/tenants/{tenant_id}/build-drafts/{draft_id}/image-composition/apply", query: {} },
   "builds-authorize_historical_read": { method: "POST", path: "/api/tenants/{tenant_id}/execution-steps/{step_id}/historical-read", query: {} },
+  "builds-cancel": { method: "POST", path: "/api/tenants/{tenant_id}/build-drafts/{draft_id}/image-composition/runs/{run_id}/cancel", query: {} },
+  "builds-cancel_candidates": { method: "POST", path: "/api/tenants/{tenant_id}/build-drafts/{draft_id}/image-composition/candidates/snapshots/{snapshot_id}/cancel", query: {} },
+  "builds-candidate_progress": { method: "GET", path: "/api/tenants/{tenant_id}/build-drafts/{draft_id}/image-composition/candidates/snapshots/{snapshot_id}", query: {} },
+  "builds-candidates": { method: "GET", path: "/api/tenants/{tenant_id}/build-drafts/{draft_id}/image-composition/candidates", query: {"limit":"number"} },
+  "builds-composition_state": { method: "GET", path: "/api/tenants/{tenant_id}/build-drafts/{draft_id}/image-composition", query: {} },
   "builds-create": { method: "POST", path: "/api/tenants/{tenant_id}/build-drafts", query: {} },
+  "builds-differences": { method: "GET", path: "/api/tenants/{tenant_id}/build-drafts/{draft_id}/image-composition/plans/{plan_id}/differences", query: {"limit":"number"} },
   "builds-dramas": { method: "GET", path: "/api/tenants/{tenant_id}/build-drafts/{draft_id}/dramas", query: {"limit":"number"} },
+  "builds-edit": { method: "POST", path: "/api/tenants/{tenant_id}/build-drafts/{draft_id}/image-composition/edits", query: {} },
   "builds-edit_groups": { method: "PATCH", path: "/api/tenants/{tenant_id}/build-drafts/{draft_id}/dramas/{drama_id}/groups", query: {} },
+  "builds-exclude": { method: "POST", path: "/api/tenants/{tenant_id}/build-drafts/{draft_id}/image-composition/candidates/exclude", query: {} },
   "builds-frozen_groups": { method: "GET", path: "/api/tenants/{tenant_id}/build-units/{unit_id}/groups", query: {"limit":"number"} },
   "builds-frozen_unit": { method: "GET", path: "/api/tenants/{tenant_id}/build-units/{unit_id}", query: {} },
   "builds-generate_preview": { method: "POST", path: "/api/tenants/{tenant_id}/build-drafts/{draft_id}/previews", query: {} },
@@ -492,25 +564,36 @@ export const DEMO_OPERATIONS = {
   "builds-get_submission_steps": { method: "GET", path: "/api/tenants/{tenant_id}/submissions/{submission_id}/steps", query: {"limit":"number"} },
   "builds-get_submission_units": { method: "GET", path: "/api/tenants/{tenant_id}/submissions/{submission_id}/units", query: {"limit":"number"} },
   "builds-identity_options": { method: "GET", path: "/api/tenants/{tenant_id}/build-drafts/{draft_id}/identities", query: {} },
+  "builds-image_dramas": { method: "GET", path: "/api/tenants/{tenant_id}/build-drafts/{draft_id}/image-composition/dramas", query: {"limit":"number"} },
   "builds-inputs": { method: "GET", path: "/api/tenants/{tenant_id}/build-drafts/{draft_id}/inputs", query: {"limit":"number"} },
   "builds-list_drafts": { method: "GET", path: "/api/tenants/{tenant_id}/build-drafts", query: {"limit":"number"} },
   "builds-list_submissions": { method: "GET", path: "/api/tenants/{tenant_id}/submissions", query: {"limit":"number"} },
   "builds-materials": { method: "GET", path: "/api/tenants/{tenant_id}/build-drafts/{draft_id}/dramas/{drama_id}/materials", query: {"limit":"number"} },
   "builds-minis_options": { method: "GET", path: "/api/tenants/{tenant_id}/build-drafts/{draft_id}/minis", query: {"page":"number"} },
+  "builds-music_progress": { method: "GET", path: "/api/tenants/{tenant_id}/build-drafts/{draft_id}/music/jobs/{job_id}", query: {} },
+  "builds-music_summary": { method: "GET", path: "/api/tenants/{tenant_id}/build-drafts/{draft_id}/music", query: {} },
+  "builds-plan": { method: "GET", path: "/api/tenants/{tenant_id}/build-drafts/{draft_id}/image-composition/plans/{plan_id}", query: {} },
+  "builds-plan_units": { method: "GET", path: "/api/tenants/{tenant_id}/build-drafts/{draft_id}/image-composition/plans/{plan_id}/units", query: {"limit":"number"} },
   "builds-prepare": { method: "POST", path: "/api/tenants/{tenant_id}/build-drafts/{draft_id}/prepare", query: {} },
+  "builds-preview": { method: "POST", path: "/api/tenants/{tenant_id}/build-drafts/{draft_id}/image-composition/plans", query: {} },
   "builds-preview_dramas": { method: "GET", path: "/api/tenants/{tenant_id}/build-previews/{preview_id}/dramas", query: {"limit":"number"} },
   "builds-preview_inputs": { method: "GET", path: "/api/tenants/{tenant_id}/build-previews/{preview_id}/inputs", query: {"limit":"number","issues_only":"boolean"} },
   "builds-preview_request": { method: "GET", path: "/api/tenants/{tenant_id}/build-drafts/{draft_id}/previews/{revision}", query: {} },
   "builds-preview_summary": { method: "GET", path: "/api/tenants/{tenant_id}/build-previews/{preview_id}", query: {} },
   "builds-preview_units": { method: "GET", path: "/api/tenants/{tenant_id}/build-previews/{preview_id}/units", query: {"limit":"number"} },
+  "builds-progress": { method: "GET", path: "/api/tenants/{tenant_id}/build-drafts/{draft_id}/image-composition/runs/{run_id}", query: {} },
   "builds-put_manual_link": { method: "PUT", path: "/api/tenants/{tenant_id}/build-drafts/{draft_id}/inputs/{input_id}/manual-link", query: {} },
+  "builds-read_music": { method: "POST", path: "/api/tenants/{tenant_id}/build-drafts/{draft_id}/music/read", query: {} },
   "builds-reconcile_submission": { method: "POST", path: "/api/tenants/{tenant_id}/submissions/{submission_id}/reconcile", query: {} },
+  "builds-refresh": { method: "POST", path: "/api/tenants/{tenant_id}/build-drafts/{draft_id}/image-composition/candidates/refresh", query: {} },
+  "builds-request_music": { method: "POST", path: "/api/tenants/{tenant_id}/build-drafts/{draft_id}/music/units/{unit_id}", query: {} },
   "builds-retry_submission": { method: "POST", path: "/api/tenants/{tenant_id}/submissions/{submission_id}/retry", query: {} },
   "builds-saved_mutation": { method: "GET", path: "/api/tenants/{tenant_id}/build-mutation-requests/{request_id}", query: {} },
   "builds-saved_prepare_request": { method: "GET", path: "/api/tenants/{tenant_id}/build-preparation-requests/{request_id}", query: {} },
   "builds-saved_request": { method: "GET", path: "/api/tenants/{tenant_id}/build-draft-requests/{request_id}", query: {} },
   "builds-saved_submission": { method: "GET", path: "/api/tenants/{tenant_id}/submission-requests/{request_id}", query: {} },
   "builds-saved_submission_recovery": { method: "GET", path: "/api/tenants/{tenant_id}/submission-recovery-requests/{request_id}", query: {} },
+  "builds-search_music": { method: "GET", path: "/api/tenants/{tenant_id}/build-drafts/{draft_id}/music/search", query: {} },
   "builds-select_identity": { method: "POST", path: "/api/tenants/{tenant_id}/build-drafts/{draft_id}/identities", query: {} },
   "builds-select_mini": { method: "POST", path: "/api/tenants/{tenant_id}/build-drafts/{draft_id}/minis", query: {} },
   "builds-skipped_materials": { method: "GET", path: "/api/tenants/{tenant_id}/build-units/{unit_id}/skipped-materials", query: {"limit":"number"} },
@@ -519,8 +602,10 @@ export const DEMO_OPERATIONS = {
   "builds-targeting_accounts": { method: "GET", path: "/api/tenants/{tenant_id}/build-drafts/{draft_id}/targeting/accounts", query: {"limit":"number"} },
   "builds-targeting_options": { method: "GET", path: "/api/tenants/{tenant_id}/build-drafts/{draft_id}/targeting", query: {} },
   "builds-targeting_regions": { method: "GET", path: "/api/tenants/{tenant_id}/targeting/regions", query: {} },
+  "builds-units": { method: "GET", path: "/api/tenants/{tenant_id}/build-drafts/{draft_id}/image-composition/units", query: {"limit":"number"} },
   "builds-update": { method: "PATCH", path: "/api/tenants/{tenant_id}/build-drafts/{draft_id}", query: {} },
   "builds-update_delivery": { method: "PATCH", path: "/api/tenants/{tenant_id}/build-drafts/{draft_id}/delivery", query: {} },
+  "builds-update_image_structure": { method: "PUT", path: "/api/tenants/{tenant_id}/build-drafts/{draft_id}/structure", query: {} },
   "builds-update_targeting": { method: "PATCH", path: "/api/tenants/{tenant_id}/build-drafts/{draft_id}/targeting", query: {} },
   "cancel_ingest_file": { method: "POST", path: "/api/tenants/{tenant_id}/materials/ingest-sessions/{session_id}/files/{material_id}/cancel", query: {} },
   "complete_ingest_file": { method: "POST", path: "/api/tenants/{tenant_id}/materials/ingest-sessions/{session_id}/files/{material_id}/complete", query: {} },
@@ -541,10 +626,13 @@ export const DEMO_OPERATIONS = {
   "material-push-get_material_batch": { method: "GET", path: "/api/integrations/materials/batches/{batch_id}", query: {} },
   "material-push-post_material_batch": { method: "POST", path: "/api/integrations/materials/batches", query: {} },
   "materials-authorize_reissue": { method: "POST", path: "/api/tenants/{tenant_id}/submissions/{submission_id}/material-reissues", query: {} },
+  "materials-copy_version": { method: "POST", path: "/api/tenants/{tenant_id}/materials/carousel-presets/{version_id}/copy", query: {} },
   "materials-get_assets": { method: "GET", path: "/api/tenants/{tenant_id}/materials/{material_id}/assets", query: {"limit":"number"} },
   "materials-get_attempts": { method: "GET", path: "/api/tenants/{tenant_id}/materials/{material_id}/attempts", query: {"limit":"number"} },
   "materials-get_material": { method: "GET", path: "/api/tenants/{tenant_id}/materials/{material_id}", query: {} },
   "materials-get_materials": { method: "GET", path: "/api/tenants/{tenant_id}/materials", query: {"limit":"number"} },
+  "materials-list_versions": { method: "GET", path: "/api/tenants/{tenant_id}/materials/carousel-presets", query: {"offset":"number","limit":"number"} },
+  "materials-load_version": { method: "POST", path: "/api/tenants/{tenant_id}/materials/carousel-presets/{version_id}/load", query: {} },
   "materials-post_complete": { method: "POST", path: "/api/tenants/{tenant_id}/materials/{material_id}/complete", query: {} },
   "materials-post_object_retry": { method: "POST", path: "/api/tenants/{tenant_id}/materials/{material_id}/retry", query: {} },
   "materials-post_part_signature": { method: "POST", path: "/api/tenants/{tenant_id}/materials/{material_id}/upload-parts/{part_number}/sign", query: {} },
@@ -555,6 +643,8 @@ export const DEMO_OPERATIONS = {
   "materials-read_upload_batch": { method: "GET", path: "/api/tenants/{tenant_id}/materials/upload-batches/{batch_id}", query: {} },
   "materials-read_upload_batches": { method: "GET", path: "/api/tenants/{tenant_id}/materials/upload-batches", query: {"limit":"number"} },
   "materials-read_upload_request": { method: "GET", path: "/api/tenants/{tenant_id}/materials/upload-requests/{request_id}", query: {} },
+  "materials-read_version": { method: "GET", path: "/api/tenants/{tenant_id}/materials/carousel-presets/{version_id}", query: {} },
+  "materials-save_version": { method: "POST", path: "/api/tenants/{tenant_id}/materials/carousel-presets", query: {} },
   "providers-application_capabilities": { method: "GET", path: "/api/tenants/{tenant_id}/providers/connections/{connection_id}/applications/{application_id}/capabilities", query: {} },
   "providers-get_links": { method: "GET", path: "/api/tenants/{tenant_id}/providers/links", query: {"limit":"number"} },
   "providers-get_preparation": { method: "GET", path: "/api/tenants/{tenant_id}/providers/link-preparations/{task_id}", query: {"page_size":"number","exceptions_only":"boolean"} },
@@ -679,10 +769,22 @@ export interface DemoOperationTypes {
   "automation_rules-test_feishu": { data: automationRulesTestFeishuData; response: automationRulesTestFeishuResponse }
   "automation_rules-update_rule": { data: automationRulesUpdateRuleData; response: automationRulesUpdateRuleResponse }
   "availableBcs": { data: availableBcsData; response: availableBcsResponse }
+  "builds-add_candidates": { data: buildsAddCandidatesData; response: buildsAddCandidatesResponse }
+  "builds-adopt": { data: buildsAdoptData; response: buildsAdoptResponse }
+  "builds-allocate": { data: buildsAllocateData; response: buildsAllocateResponse }
+  "builds-apply": { data: buildsApplyData; response: buildsApplyResponse }
   "builds-authorize_historical_read": { data: buildsAuthorizeHistoricalReadData; response: buildsAuthorizeHistoricalReadResponse }
+  "builds-cancel": { data: buildsCancelData; response: buildsCancelResponse }
+  "builds-cancel_candidates": { data: buildsCancelCandidatesData; response: buildsCancelCandidatesResponse }
+  "builds-candidate_progress": { data: buildsCandidateProgressData; response: buildsCandidateProgressResponse }
+  "builds-candidates": { data: buildsCandidatesData; response: buildsCandidatesResponse }
+  "builds-composition_state": { data: buildsCompositionStateData; response: buildsCompositionStateResponse }
   "builds-create": { data: buildsCreateData; response: buildsCreateResponse }
+  "builds-differences": { data: buildsDifferencesData; response: buildsDifferencesResponse }
   "builds-dramas": { data: buildsDramasData; response: buildsDramasResponse }
+  "builds-edit": { data: buildsEditData; response: buildsEditResponse }
   "builds-edit_groups": { data: buildsEditGroupsData; response: buildsEditGroupsResponse }
+  "builds-exclude": { data: buildsExcludeData; response: buildsExcludeResponse }
   "builds-frozen_groups": { data: buildsFrozenGroupsData; response: buildsFrozenGroupsResponse }
   "builds-frozen_unit": { data: buildsFrozenUnitData; response: buildsFrozenUnitResponse }
   "builds-generate_preview": { data: buildsGeneratePreviewData; response: buildsGeneratePreviewResponse }
@@ -698,25 +800,36 @@ export interface DemoOperationTypes {
   "builds-get_submission_steps": { data: buildsGetSubmissionStepsData; response: buildsGetSubmissionStepsResponse }
   "builds-get_submission_units": { data: buildsGetSubmissionUnitsData; response: buildsGetSubmissionUnitsResponse }
   "builds-identity_options": { data: buildsIdentityOptionsData; response: buildsIdentityOptionsResponse }
+  "builds-image_dramas": { data: buildsImageDramasData; response: buildsImageDramasResponse }
   "builds-inputs": { data: buildsInputsData; response: buildsInputsResponse }
   "builds-list_drafts": { data: buildsListDraftsData; response: buildsListDraftsResponse }
   "builds-list_submissions": { data: buildsListSubmissionsData; response: buildsListSubmissionsResponse }
   "builds-materials": { data: buildsMaterialsData; response: buildsMaterialsResponse }
   "builds-minis_options": { data: buildsMinisOptionsData; response: buildsMinisOptionsResponse }
+  "builds-music_progress": { data: buildsMusicProgressData; response: buildsMusicProgressResponse }
+  "builds-music_summary": { data: buildsMusicSummaryData; response: buildsMusicSummaryResponse }
+  "builds-plan": { data: buildsPlanData; response: buildsPlanResponse }
+  "builds-plan_units": { data: buildsPlanUnitsData; response: buildsPlanUnitsResponse }
   "builds-prepare": { data: buildsPrepareData; response: buildsPrepareResponse }
+  "builds-preview": { data: buildsPreviewData; response: buildsPreviewResponse }
   "builds-preview_dramas": { data: buildsPreviewDramasData; response: buildsPreviewDramasResponse }
   "builds-preview_inputs": { data: buildsPreviewInputsData; response: buildsPreviewInputsResponse }
   "builds-preview_request": { data: buildsPreviewRequestData; response: buildsPreviewRequestResponse }
   "builds-preview_summary": { data: buildsPreviewSummaryData; response: buildsPreviewSummaryResponse }
   "builds-preview_units": { data: buildsPreviewUnitsData; response: buildsPreviewUnitsResponse }
+  "builds-progress": { data: buildsProgressData; response: buildsProgressResponse }
   "builds-put_manual_link": { data: buildsPutManualLinkData; response: buildsPutManualLinkResponse }
+  "builds-read_music": { data: buildsReadMusicData; response: buildsReadMusicResponse }
   "builds-reconcile_submission": { data: buildsReconcileSubmissionData; response: buildsReconcileSubmissionResponse }
+  "builds-refresh": { data: buildsRefreshData; response: buildsRefreshResponse }
+  "builds-request_music": { data: buildsRequestMusicData; response: buildsRequestMusicResponse }
   "builds-retry_submission": { data: buildsRetrySubmissionData; response: buildsRetrySubmissionResponse }
   "builds-saved_mutation": { data: buildsSavedMutationData; response: buildsSavedMutationResponse }
   "builds-saved_prepare_request": { data: buildsSavedPrepareRequestData; response: buildsSavedPrepareRequestResponse }
   "builds-saved_request": { data: buildsSavedRequestData; response: buildsSavedRequestResponse }
   "builds-saved_submission": { data: buildsSavedSubmissionData; response: buildsSavedSubmissionResponse }
   "builds-saved_submission_recovery": { data: buildsSavedSubmissionRecoveryData; response: buildsSavedSubmissionRecoveryResponse }
+  "builds-search_music": { data: buildsSearchMusicData; response: buildsSearchMusicResponse }
   "builds-select_identity": { data: buildsSelectIdentityData; response: buildsSelectIdentityResponse }
   "builds-select_mini": { data: buildsSelectMiniData; response: buildsSelectMiniResponse }
   "builds-skipped_materials": { data: buildsSkippedMaterialsData; response: buildsSkippedMaterialsResponse }
@@ -725,8 +838,10 @@ export interface DemoOperationTypes {
   "builds-targeting_accounts": { data: buildsTargetingAccountsData; response: buildsTargetingAccountsResponse }
   "builds-targeting_options": { data: buildsTargetingOptionsData; response: buildsTargetingOptionsResponse }
   "builds-targeting_regions": { data: buildsTargetingRegionsData; response: buildsTargetingRegionsResponse }
+  "builds-units": { data: buildsUnitsData; response: buildsUnitsResponse }
   "builds-update": { data: buildsUpdateData; response: buildsUpdateResponse }
   "builds-update_delivery": { data: buildsUpdateDeliveryData; response: buildsUpdateDeliveryResponse }
+  "builds-update_image_structure": { data: buildsUpdateImageStructureData; response: buildsUpdateImageStructureResponse }
   "builds-update_targeting": { data: buildsUpdateTargetingData; response: buildsUpdateTargetingResponse }
   "cancel_ingest_file": { data: cancelIngestFileData; response: cancelIngestFileResponse }
   "complete_ingest_file": { data: completeIngestFileData; response: completeIngestFileResponse }
@@ -747,10 +862,13 @@ export interface DemoOperationTypes {
   "material-push-get_material_batch": { data: materialPushGetMaterialBatchData; response: materialPushGetMaterialBatchResponse }
   "material-push-post_material_batch": { data: materialPushPostMaterialBatchData; response: materialPushPostMaterialBatchResponse }
   "materials-authorize_reissue": { data: materialsAuthorizeReissueData; response: materialsAuthorizeReissueResponse }
+  "materials-copy_version": { data: materialsCopyVersionData; response: materialsCopyVersionResponse }
   "materials-get_assets": { data: materialsGetAssetsData; response: materialsGetAssetsResponse }
   "materials-get_attempts": { data: materialsGetAttemptsData; response: materialsGetAttemptsResponse }
   "materials-get_material": { data: materialsGetMaterialData; response: materialsGetMaterialResponse }
   "materials-get_materials": { data: materialsGetMaterialsData; response: materialsGetMaterialsResponse }
+  "materials-list_versions": { data: materialsListVersionsData; response: materialsListVersionsResponse }
+  "materials-load_version": { data: materialsLoadVersionData; response: materialsLoadVersionResponse }
   "materials-post_complete": { data: materialsPostCompleteData; response: materialsPostCompleteResponse }
   "materials-post_object_retry": { data: materialsPostObjectRetryData; response: materialsPostObjectRetryResponse }
   "materials-post_part_signature": { data: materialsPostPartSignatureData; response: materialsPostPartSignatureResponse }
@@ -761,6 +879,8 @@ export interface DemoOperationTypes {
   "materials-read_upload_batch": { data: materialsReadUploadBatchData; response: materialsReadUploadBatchResponse }
   "materials-read_upload_batches": { data: materialsReadUploadBatchesData; response: materialsReadUploadBatchesResponse }
   "materials-read_upload_request": { data: materialsReadUploadRequestData; response: materialsReadUploadRequestResponse }
+  "materials-read_version": { data: materialsReadVersionData; response: materialsReadVersionResponse }
+  "materials-save_version": { data: materialsSaveVersionData; response: materialsSaveVersionResponse }
   "providers-application_capabilities": { data: providersApplicationCapabilitiesData; response: providersApplicationCapabilitiesResponse }
   "providers-get_links": { data: providersGetLinksData; response: providersGetLinksResponse }
   "providers-get_preparation": { data: providersGetPreparationData; response: providersGetPreparationResponse }

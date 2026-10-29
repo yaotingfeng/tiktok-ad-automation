@@ -29,6 +29,7 @@ handle("builds-create", (req) => {
   const body = req.body!
 
   const draft: DemoDraft = {
+    media_kind: body.media_kind ?? "VIDEO",
     draft_id: demoUuid(),
     tenant_id,
     bc_id: body.bc_id,
@@ -72,6 +73,8 @@ handle("builds-create", (req) => {
 
   return new DemoReply(201, {
     draft_id: draft.draft_id,
+    media_kind: draft.media_kind ?? "VIDEO",
+    structure_override: draft.structure_override ?? {},
     revision: draft.revision,
   })
 })
@@ -135,6 +138,8 @@ handle("builds-summary", (req) => {
 
   return {
     draft_id: draft.draft_id,
+    media_kind: draft.media_kind ?? "VIDEO",
+    structure_override: draft.structure_override ?? {},
     revision: draft.revision,
     bc_id: draft.bc_id,
     status: draft.status,

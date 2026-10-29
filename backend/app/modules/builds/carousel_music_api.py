@@ -13,6 +13,7 @@ from app.core.errors import DomainError
 from app.modules.tenants.permissions import require_tenant
 
 from . import carousel_music as service
+from . import image_public as public
 from .carousel_music_models import MusicSelectionJob
 from .image_composition_api import _scope
 from .image_composition_schemas import ImmutableModel
@@ -54,7 +55,7 @@ def _browse(session, user, tenant_id, draft_id, **kwargs):
         )
 
 
-@router.get("/search")
+@router.get("/search", response_model=public.MusicPagePublic)
 def search_music(
     tenant_id: UUID,
     draft_id: UUID,
@@ -65,7 +66,7 @@ def search_music(
     return _browse(session, user, tenant_id, draft_id, **query.model_dump())
 
 
-@router.post("/read")
+@router.post("/read", response_model=public.MusicPagePublic)
 def read_music(
     tenant_id: UUID,
     draft_id: UUID,
@@ -76,7 +77,7 @@ def read_music(
     return _browse(session, user, tenant_id, draft_id, music_ids=body.music_ids)
 
 
-@router.post("/units/{unit_id}")
+@router.post("/units/{unit_id}", response_model=public.MusicRequestPublic)
 def request_music(
     tenant_id: UUID,
     draft_id: UUID,
@@ -95,7 +96,7 @@ def request_music(
     return result
 
 
-@router.get("/jobs/{job_id}")
+@router.get("/jobs/{job_id}", response_model=public.MusicJobPublic)
 def music_progress(
     tenant_id: UUID,
     draft_id: UUID,
@@ -110,7 +111,7 @@ def music_progress(
     return service._public(job)
 
 
-@router.get("")
+@router.get("", response_model=public.MusicSummaryPublic)
 def music_summary(
     tenant_id: UUID, draft_id: UUID, session: SessionDep, user: CurrentUser
 ):

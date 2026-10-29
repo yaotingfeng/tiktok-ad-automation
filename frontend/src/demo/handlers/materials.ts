@@ -1,5 +1,6 @@
 // 体验版假后端：materials 领域
 
+import { imageCandidates } from "../fixtures/image-composition-state"
 import { toast } from "sonner"
 import {
   addIngestFile,
@@ -30,6 +31,38 @@ handle("materials-get_materials", (req) => {
     return { items: [], next_cursor: null, total: 0 }
   }
 
+  if (req.query.media_type === "IMAGE") {
+    const rows = imageCandidates.filter(
+      (c) => !search || c.file_name_snapshot.includes(search),
+    )
+    const page = paginate(
+      rows,
+      { cursor, limit: limit ?? 50 },
+      (row) => row.material_id,
+    )
+    return {
+      items: page.items.map((row) => ({
+        material_id: row.material_id,
+        content_key: `material:${row.material_id}`,
+        media_type: "IMAGE" as const,
+        bc_id: MAIN_BC_ID,
+        file_name: row.file_name_snapshot,
+        byte_size: 1024,
+        mime_type: "image/jpeg",
+        duration: null,
+        width: 720,
+        height: 1280,
+        created_at: row.created_at,
+        original_available: true,
+        status: "available" as const,
+        available_account_count: 1,
+        latest_advertiser_id: null,
+        latest_bc_id: MAIN_BC_ID,
+      })),
+      next_cursor: page.next_cursor,
+      total: page.total,
+    }
+  }
   // 过滤：搜索关键词
   let materials = DEMO_MATERIALS
   if (search) {
@@ -133,6 +166,18 @@ handle("materials-get_attempts", () => {
 // 素材原始预览（返回签名 URL）
 handle("materials-read_original_preview", (req) => {
   const { material_id } = req.path
+  const imageNumber = Number.parseInt(material_id.split("-")[4] ?? "", 16)
+  if (
+    material_id.startsWith("d0d0d0d0-") &&
+    imageNumber >= 1100 &&
+    imageNumber < 1170
+  ) {
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="240" height="320"><rect width="240" height="320" fill="#e5e5e5"/><text x="120" y="160" text-anchor="middle" fill="#404040" font-size="24">图片 ${imageNumber - 1099}</text></svg>`
+    return {
+      url: `data:image/svg+xml,${encodeURIComponent(svg)}`,
+      expires_in: 3600,
+    }
+  }
   const material = DEMO_MATERIALS.find(
     (m) => m.id === material_id || m.id.startsWith(material_id),
   )

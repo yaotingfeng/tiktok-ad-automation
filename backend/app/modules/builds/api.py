@@ -48,6 +48,7 @@ from .identity_selection import (
     draft_identities,
 )
 from .mini_selection import ChooseMiniRequest, DraftMinis, choose_mini, draft_minis
+from .structure import ImageStructureChange
 from .targeting_schemas import TargetingAccount, TargetingChange, TargetingDirectory
 
 router = APIRouter(prefix="/tenants/{tenant_id}", tags=["builds"])
@@ -647,3 +648,19 @@ router.include_router(image_composition_router)
 from .carousel_music_api import router as carousel_music_router  # noqa: E402
 
 router.include_router(carousel_music_router)
+
+
+@router.put("/build-drafts/{draft_id}/structure", response_model=DraftSaved)
+def update_image_structure(
+    tenant_id: UUID,
+    draft_id: UUID,
+    body: ImageStructureChange,
+    session: SessionDep,
+    user: CurrentUser,
+) -> DraftSaved:
+    from .structure import save_image_structure
+
+    context = require_tenant(session, actor_id=user.id, tenant_id=tenant_id, action="build")
+    revision = save_image_structure(session, context=context, draft_id=draft_id, body=body)
+    session.commit()
+    return DraftSaved(draft_id=draft_id, revision=revision)
