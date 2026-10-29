@@ -15,7 +15,7 @@ from app.modules.tenants.permissions import require_tenant
 from . import carousel_music as service
 from . import image_public as public
 from .carousel_music_models import MusicSelectionJob
-from .image_composition_api import _scope
+from .image_composition_api import Change, _scope
 from .image_composition_schemas import ImmutableModel
 
 router = APIRouter(prefix="/build-drafts/{draft_id}/music")
@@ -172,3 +172,50 @@ def music_summary(
             {"job_id": str(identity), "error_code": code} for identity, code in failed
         ],
     }
+
+
+class SelectedDramaRetry(Change):
+    drama_ids: tuple[UUID, ...] = Field(min_length=1, max_length=100)
+
+
+@router.post("/batch-retries", response_model=public.MusicBatchProgress)
+def retry_selected_music(
+    tenant_id: UUID,
+    draft_id: UUID,
+    body: SelectedDramaRetry,
+    session: SessionDep,
+    user: CurrentUser,
+):
+    from .image_music_batch import start_music_retry
+
+    result = start_music_retry(
+        session,
+        _scope(session, user, tenant_id, draft_id, write=True),
+        body.request_id,
+        body.expected_revision,
+        body.drama_ids,
+    )
+    session.commit()
+    return result
+
+
+@router.get("/batch-retries", response_model=list[public.MusicBatchProgress])
+def music_retry_batches(
+    tenant_id: UUID, draft_id: UUID, session: SessionDep, user: CurrentUser
+):
+    from .image_music_batch import recent_batches
+
+    return recent_batches(session, _scope(session, user, tenant_id, draft_id))
+
+
+@router.get("/batch-retries/{run_id}", response_model=public.MusicBatchProgress)
+def music_retry_progress(
+    tenant_id: UUID,
+    draft_id: UUID,
+    run_id: UUID,
+    session: SessionDep,
+    user: CurrentUser,
+):
+    from .image_music_batch import batch_progress
+
+    return batch_progress(session, _scope(session, user, tenant_id, draft_id), run_id)

@@ -4,6 +4,9 @@ import { buildsBoundary, BC, T, D } from "./utils/buildsBoundary"
 
 test("图片整批规则先查看差异，取消不写入组合", async ({ page }) => {
   const { summary, requests } = await buildsBoundary(page)
+  await page.route("**/music/batch-retries", (route) =>
+    route.fulfill({ json: [] }),
+  )
   Object.assign(summary, { media_kind: "CAROUSEL", structure_override: {} })
   await page.route("**/image-composition", (route) =>
     route.fulfill({
@@ -211,6 +214,9 @@ async function imageBoundary(page: import("@playwright/test").Page) {
     }
     return route.fulfill({ json: { items: [], total: 0, next_cursor: null } })
   })
+  await page.route("**/music/batch-retries", (route) =>
+    route.fulfill({ json: [] }),
+  )
   await page.route("**/music/search?**", (route) =>
     route.fulfill({
       json: {
@@ -423,12 +429,17 @@ test("后台配乐更新保留未保存图片顺序，内容变化明确阻断�
   await expect(
     sheet.getByRole("button", { name: "保存图片调整", exact: true }),
   ).toBeEnabled()
+  const savedUnits = page.waitForResponse((response) =>
+    response.url().includes("image-composition/units"),
+  )
   await sheet.getByRole("button", { name: "保存图片调整", exact: true }).click()
+  await savedUnits
   expect(
     env.calls.filter((c) => c.suffix === "/edits").slice(-1)[0]!.body.command,
   ).toMatchObject({ material_ids: ["image-2", "image-1", "image-3"] })
   await sheet.getByRole("button", { name: "图片 2 前移" }).click()
   env.unit.revision++
+  env.state.revision++
   await page.waitForResponse((response) =>
     response.url().includes("image-composition/units"),
   )
@@ -480,4 +491,382 @@ test("取消图片匹配后不沿用轮询缓存，当前组合保留", async ({
   await expect(page.getByText("图片匹配已停止，可重新刷新。")).toBeVisible()
   await expect(page.getByRole("button", { name: "取消匹配" })).toHaveCount(0)
   expect(state.active_generation).toBe(1)
+})
+
+for (const action of ["music", "other-card"] as const) {
+  test(`草稿版本变化保留未保存图片：${action}`, async ({ page }) => {
+    const env = await imageBoundary(page)
+    const second = {
+      ...env.unit,
+      id: "second-unit",
+      position: 2,
+      ordered_material_ids: ["other-1", "other-2"],
+    }
+    await page.route("**/image-composition/units?**", async (route) => {
+      if (env.state.revision > 1)
+        await new Promise((resolve) => setTimeout(resolve, 150))
+      await route.fulfill({
+        json: { items: [env.unit, second], total: 2, next_cursor: null },
+      })
+    })
+    await page.route("**/image-composition/edits", (route) => {
+      const body = route.request().postDataJSON()
+      env.calls.push({ suffix: "/edits", body })
+      const target = body.command.unit_id === second.id ? second : env.unit
+      target.ordered_material_ids = body.command.material_ids
+      target.revision++
+      env.state.revision++
+      return route.fulfill({
+        json: {
+          revision: env.state.revision,
+          affected_units: [target.id],
+          pending_music_ids: [],
+        },
+      })
+    })
+    await page.goto(`/tenants/${T}/build-drafts/${D}?bc_id=${BC}`)
+    await page.getByRole("button", { name: "查看与调整轮播" }).first().click()
+    const sheet = page.getByRole("dialog", { name: /查看与调整轮播/ })
+    const first = sheet
+      .locator('[data-slot="card"]')
+      .filter({ hasText: "创意 1 ·" })
+    await first.getByRole("button", { name: "图片 2 前移" }).click()
+    if (action === "music") {
+      await first.getByRole("button", { name: "换音乐", exact: true }).click()
+      const picker = page.getByRole("dialog", { name: "选择音乐", exact: true })
+      await picker.getByLabel("搜索音乐", { exact: true }).fill("新")
+      await picker.getByRole("button", { name: "搜索", exact: true }).click()
+      await picker.getByRole("button", { name: "新曲 · 演示" }).click()
+      await picker.getByRole("button", { name: "使用这首音乐" }).click()
+    } else {
+      const other = sheet
+        .locator('[data-slot="card"]')
+        .filter({ hasText: "创意 2 ·" })
+      await other.getByRole("button", { name: "图片 2 前移" }).click()
+      await other
+        .getByRole("button", { name: "保存图片调整", exact: true })
+        .click()
+    }
+    await expect.poll(() => env.state.revision).toBe(2)
+    await page.waitForResponse((response) =>
+      response.url().includes("image-composition/units"),
+    )
+    await expect(
+      first.getByRole("button", { name: "保存图片调整", exact: true }),
+    ).toBeEnabled()
+    await first
+      .getByRole("button", { name: "保存图片调整", exact: true })
+      .click()
+    expect(
+      env.calls.filter((c) => c.suffix === "/edits").slice(-1)[0].body.command,
+    ).toMatchObject({ material_ids: ["image-2", "image-1", "image-3"] })
+  })
+}
+
+test("第二页换曲后重置签名游标，往返分页保留图片编辑", async ({ page }) => {
+  const env = await imageBoundary(page)
+  const first = { ...env.unit, id: "first-page", position: 1 }
+  env.unit.position = 51
+  const invalid: string[] = []
+  await page.route("**/image-composition/units?**", async (route) => {
+    const cursor = new URL(route.request().url()).searchParams.get("cursor")
+    if (cursor && cursor !== `revision-${env.state.revision}`) {
+      invalid.push(cursor)
+      return route.fulfill({
+        status: 422,
+        json: { code: "invalid_cursor", message: "分页游标无效" },
+      })
+    }
+    return route.fulfill({
+      json: {
+        items: [cursor ? env.unit : first],
+        total: 51,
+        next_cursor: cursor ? null : `revision-${env.state.revision}`,
+      },
+    })
+  })
+  await page.goto(`/tenants/${T}/build-drafts/${D}?bc_id=${BC}`)
+  await page.getByRole("button", { name: "查看与调整轮播" }).first().click()
+  const sheet = page.getByRole("dialog", { name: /查看与调整轮播/ })
+  await sheet.getByRole("button", { name: "下一页", exact: true }).click()
+  await expect(sheet.getByText("创意 51 · 3 张", { exact: true })).toBeVisible()
+  await sheet.getByRole("button", { name: "图片 2 前移" }).click()
+  await sheet.getByRole("button", { name: "上一页", exact: true }).click()
+  await sheet.getByRole("button", { name: "下一页", exact: true }).click()
+  await expect(
+    sheet.getByRole("button", { name: "保存图片调整", exact: true }),
+  ).toBeEnabled()
+  await sheet.getByRole("button", { name: "换音乐", exact: true }).click()
+  const picker = page.getByRole("dialog", { name: "选择音乐", exact: true })
+  await picker.getByLabel("搜索音乐", { exact: true }).fill("新")
+  await picker.getByRole("button", { name: "搜索", exact: true }).click()
+  await picker.getByRole("button", { name: "新曲 · 演示" }).click()
+  await picker.getByRole("button", { name: "使用这首音乐" }).click()
+  await expect(sheet.getByText("创意 1 · 3 张", { exact: true })).toBeVisible()
+  await sheet.getByRole("button", { name: "下一页", exact: true }).click()
+  await sheet.getByRole("button", { name: "保存图片调整", exact: true }).click()
+  expect(
+    env.calls.filter((c) => c.suffix === "/edits").slice(-1)[0].body.command,
+  ).toMatchObject({ material_ids: ["image-2", "image-1", "image-3"] })
+  expect(invalid).toEqual([])
+})
+
+test("勾选剧目批量字段覆盖、指定曲、恢复与失败重试范围明确", async ({
+  page,
+}) => {
+  const env = await imageBoundary(page)
+  const other = "99999999-9999-4999-8999-999999999999",
+    untouched = "77777777-7777-4777-8777-777777777777"
+  env.state.drama_patches = {
+    [untouched]: { images_per_unit: 7 },
+    [env.unit.drama_id]: { order: "CREATED_AT" },
+  }
+  await page.route("**/image-composition/dramas?**", (route) =>
+    route.fulfill({
+      json: {
+        items: [env.unit.drama_id, other, untouched].map((id, i) => ({
+          drama_id: id,
+          title: `剧${i + 1}`,
+          link_id: D,
+          first_line: i + 1,
+          candidate_count: 61,
+          unit_count: 13,
+          failed_count: 2,
+          pending_count: 0,
+          selection_count: 1,
+          protected_count: 1,
+        })),
+        total: 3,
+        next_cursor: null,
+      },
+    }),
+  )
+  let retry: Record<string, unknown> | null = null
+  await page.route("**/music/batch-retries", async (route) => {
+    if (route.request().method() === "POST") {
+      retry = route.request().postDataJSON()
+      env.state.revision++
+    }
+    const result = {
+      run_id: D,
+      revision: env.state.revision,
+      drama_ids: [env.unit.drama_id, other],
+      status: "PENDING",
+      processed: 20,
+      retried: 18,
+      skipped_protected: 1,
+      skipped_recovered: 1,
+      error_code: null,
+    }
+    return route.fulfill({
+      json:
+        route.request().method() === "POST" ? result : retry ? [result] : [],
+    })
+  })
+  await page.goto(`/tenants/${T}/build-drafts/${D}?bc_id=${BC}`)
+  await page.getByRole("checkbox", { name: "选择剧目 剧1" }).check()
+  await page.getByRole("checkbox", { name: "选择剧目 剧2" }).check()
+  await page.getByRole("button", { name: "修改所选规则" }).click()
+  const rules = page.getByRole("dialog", { name: "修改所选剧目规则" })
+  await rules.getByLabel("每轮播张数", { exact: true }).fill("4")
+  await rules.getByRole("button", { name: "保存所选规则" }).click()
+  await page.getByRole("button", { name: "查看生成结果", exact: true }).click()
+  expect(
+    env.calls.filter((c) => c.suffix === "/plans").slice(-1)[0].body
+      .drama_patches,
+  ).toEqual({
+    [env.unit.drama_id]: { order: "CREATED_AT", images_per_unit: 4 },
+    [other]: { images_per_unit: 4 },
+    [untouched]: { images_per_unit: 7 },
+  })
+  await page.getByRole("button", { name: "返回修改" }).click()
+  await page.getByRole("button", { name: "所选剧指定音乐" }).click()
+  const music = page.getByRole("dialog", { name: "选择音乐", exact: true })
+  await music.getByLabel("搜索音乐", { exact: true }).fill("新")
+  await music.getByRole("button", { name: "搜索", exact: true }).click()
+  await music.getByRole("button", { name: "新曲 · 演示" }).click()
+  await music.getByRole("button", { name: "使用这首音乐" }).click()
+  await page.getByRole("button", { name: "查看生成结果", exact: true }).click()
+  const patched = env.calls.filter((c) => c.suffix === "/plans").slice(-1)[0]
+    .body.drama_patches as Record<string, unknown>
+  expect(patched[other]).toMatchObject({
+    images_per_unit: 4,
+    music_mode: "FIXED",
+    fixed_music_id: "song-new",
+  })
+  expect(patched[untouched]).toEqual({ images_per_unit: 7 })
+  await page.getByRole("button", { name: "返回修改" }).click()
+  await page.getByRole("button", { name: "所选剧恢复整批规则" }).click()
+  await page.getByRole("button", { name: "确认恢复所选规则" }).click()
+  await page.getByRole("button", { name: "查看生成结果", exact: true }).click()
+  expect(
+    env.calls.filter((c) => c.suffix === "/plans").slice(-1)[0].body
+      .drama_patches,
+  ).toEqual({ [untouched]: { images_per_unit: 7 } })
+  await page.getByRole("button", { name: "返回修改" }).click()
+  await page.getByRole("button", { name: "重试所选剧失败配乐" }).click()
+  await page.getByRole("button", { name: "确认重试所选失败项" }).click()
+  expect(retry).toMatchObject({ drama_ids: [env.unit.drama_id, other] })
+  await page.reload()
+  await expect(
+    page.getByText(/批量重试进行中.*已扫描 20.*已重试 18/),
+  ).toBeVisible()
+})
+
+test("替换差异呈现剧名稳定创意位置和具体保护损失", async ({ page }) => {
+  const env = await imageBoundary(page)
+  let replace = false
+  await page.route("**/image-composition/plans", (route) => {
+    const body = route.request().postDataJSON()
+    replace = body.mode === "REPLACE_ALL"
+    return route.fulfill({
+      json: {
+        plan_id: replace ? "replace-plan" : D,
+        base_revision: 1,
+        input_digest: "test",
+        unit_count: 2,
+        added_unit_count: 2,
+        retained_unit_count: 0,
+        removed_unit_count: 2,
+        protected_unit_count: 0,
+        music_counts: {},
+        image_reference_count: 6,
+        distinct_image_count: 6,
+        reused_image_count: 0,
+        conflicts: [],
+        conflict_count: 0,
+        mode: body.mode,
+        dramas: [
+          {
+            drama_id: env.unit.drama_id,
+            drama_title: "月光之剧",
+            retained_ids_count: 0,
+            removed_ids_count: 2,
+            excluded_images_count: 0,
+            protection_losses_count: replace ? 1 : 0,
+          },
+        ],
+      },
+    })
+  })
+  await page.route("**/plans/*/differences?**", (route) =>
+    route.fulfill({
+      json: {
+        items: replace
+          ? [
+              {
+                drama_id: env.unit.drama_id,
+                drama_title: "月光之剧",
+                unit_id: D,
+                unit_position: 51,
+                composition_protected: true,
+                music_protected: true,
+                materials: [{ material_id: D, file_name: "月光_封面.jpg" }],
+              },
+            ]
+          : [],
+        total: replace ? 1 : 0,
+        next_cursor: null,
+      },
+    }),
+  )
+  await page.route("**/plans/*/units?**", (route) =>
+    route.fulfill({
+      json: {
+        items: [{ ...env.unit, position: 51, drama_title: "月光之剧" }],
+        total: 1,
+        next_cursor: null,
+      },
+    }),
+  )
+  await page.goto(`/tenants/${T}/build-drafts/${D}?bc_id=${BC}`)
+  await page.getByRole("button", { name: "查看生成结果", exact: true }).click()
+  await page.getByRole("button", { name: "同时替换手工调整" }).click()
+  const diff = page.getByRole("dialog", { name: "查看生成结果", exact: true })
+  await expect(
+    diff.getByText("月光之剧 · 创意 51", { exact: true }),
+  ).toBeVisible()
+  await expect(diff.getByText("月光_封面.jpg", { exact: true })).toBeVisible()
+  await expect(
+    diff.getByText("将失去图片保护、音乐保护", { exact: true }),
+  ).toBeVisible()
+  await expect(diff.getByRole("button", { name: "应用并生成" })).toBeDisabled()
+  await diff.getByRole("checkbox", { name: "我已核对所列保护损失" }).check()
+  await expect(diff.getByRole("button", { name: "应用并生成" })).toBeEnabled()
+})
+
+test("候选第二页恢复排除后游标重置且保留已选图片，摘要换版本归第一页", async ({
+  page,
+}) => {
+  const env = await imageBoundary(page)
+  const invalid: string[] = []
+  await page.route("**/image-composition/dramas?**", (route) => {
+    const cursor = new URL(route.request().url()).searchParams.get("cursor")
+    if (cursor && cursor !== `dramas-${env.state.revision}`) {
+      invalid.push(cursor)
+      return route.fulfill({ status: 422, json: { code: "invalid_cursor" } })
+    }
+    return route.fulfill({
+      json: {
+        items: [
+          {
+            drama_id: env.unit.drama_id,
+            title: cursor ? "第二页剧" : "第一页剧",
+            link_id: D,
+            first_line: 1,
+            candidate_count: 61,
+            unit_count: 13,
+            failed_count: 0,
+            pending_count: 0,
+            selection_count: 1,
+            protected_count: 1,
+          },
+        ],
+        total: 51,
+        next_cursor: cursor ? null : `dramas-${env.state.revision}`,
+      },
+    })
+  })
+  await page.route("**/image-composition/candidates?**", (route) => {
+    const cursor = new URL(route.request().url()).searchParams.get("cursor")
+    if (cursor && cursor !== `candidates-${env.state.revision}`) {
+      invalid.push(cursor)
+      return route.fulfill({ status: 422, json: { code: "invalid_cursor" } })
+    }
+    return route.fulfill({
+      json: {
+        items: [
+          {
+            material_id: cursor ? "excluded" : "selected",
+            drama_id: env.unit.drama_id,
+            file_name_snapshot: cursor ? "待恢复图片.jpg" : "已选图片.jpg",
+            enabled: !cursor,
+          },
+        ],
+        total: 51,
+        next_cursor: cursor ? null : `candidates-${env.state.revision}`,
+      },
+    })
+  })
+  await page.goto(`/tenants/${T}/build-drafts/${D}?bc_id=${BC}`)
+  await page
+    .getByRole("button", { name: "下一页", exact: true })
+    .first()
+    .click()
+  await expect(page.getByText("第二页剧", { exact: true })).toBeVisible()
+  env.state.revision++
+  await expect(page.getByText("第一页剧", { exact: true })).toBeVisible()
+  await page.getByRole("button", { name: "查看与调整轮播" }).click()
+  await page.getByRole("button", { name: "手工新建轮播" }).click()
+  const picker = page.getByRole("dialog", {
+    name: "添加本剧候选图片",
+    exact: true,
+  })
+  await picker.getByRole("checkbox", { name: "已选图片.jpg" }).check()
+  await picker.getByRole("button", { name: "下一页", exact: true }).click()
+  await picker.getByRole("button", { name: "恢复本次使用" }).click()
+  await expect(
+    picker.getByRole("checkbox", { name: "已选图片.jpg" }),
+  ).toBeChecked()
+  expect(invalid).toEqual([])
 })

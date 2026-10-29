@@ -1,5 +1,5 @@
 // 全部为虚构本地演示状态；不调用平台，也不作为投放资格证明。
-import type { CompositionPlanPublic } from "@/client"
+import type { CompositionPlanPublic, ImageDifference } from "@/client"
 import {
   imageState as get,
   imageUnits as units,
@@ -13,6 +13,7 @@ import { demoDrafts } from "../fixtures/builds-data"
 import { DEMO_DRAMAS } from "../fixtures/world"
 import { demoUuid } from "../runtime/clock"
 import { handle, demoError } from "../runtime/registry"
+const demoLosses = new Map<string, ImageDifference[]>()
 handle("builds-composition_state", (req) => get(req.path.draft_id))
 handle("builds-units", (req) => {
   get(req.path.draft_id)
@@ -98,9 +99,51 @@ handle("builds-preview", (req) => {
     reused_image_count: 0,
     conflicts: [],
     conflict_count: 0,
-    dramas: [],
+    dramas: DEMO_DRAMAS.slice(0, 2).map((drama) => ({
+      drama_id: drama.id,
+      drama_title: drama.title,
+      rule_digest: "synthetic",
+      candidate_digest: "synthetic",
+      retained_ids_count: 0,
+      removed_ids_count: 0,
+      excluded_images_count: 0,
+      warnings_count: 0,
+      conflicts_count: 0,
+      protection_losses_count:
+        req.body!.mode === "REPLACE_ALL"
+          ? (units.get(req.path.draft_id) ?? []).filter(
+              (unit) =>
+                unit.drama_id === drama.id &&
+                (unit.composition_protected || unit.music_protected),
+            ).length
+          : 0,
+    })),
     mode: req.body!.mode ?? "PRESERVE_MANUAL",
   }
+  demoLosses.set(
+    plan.plan_id,
+    plan.mode === "REPLACE_ALL"
+      ? (units.get(req.path.draft_id) ?? [])
+          .filter((unit) => unit.composition_protected || unit.music_protected)
+          .map((unit) => ({
+            drama_id: unit.drama_id,
+            drama_title: DEMO_DRAMAS.find((drama) => drama.id === unit.drama_id)
+              ?.title,
+            unit_id: unit.id,
+            unit_position: unit.position,
+            composition_protected: unit.composition_protected,
+            music_protected: unit.music_protected,
+            music_title: unit.music_snapshot?.display_name,
+            materials: unit.ordered_material_ids.map((id) => ({
+              material_id: id,
+              file_name:
+                imageCandidates.find(
+                  (candidate) => candidate.material_id === id,
+                )?.file_name_snapshot ?? "演示图片",
+            })),
+          }))
+      : [],
+  )
   plans.set(plan.plan_id, plan)
   return plan
 })
@@ -111,11 +154,20 @@ handle(
     demoError(404, "image_composition_not_found", "演示试算不存在"),
 )
 handle("builds-plan_units", (req) => ({
-  items: units.get(req.path.draft_id) ?? [],
-  total: 14,
+  items: (units.get(req.path.draft_id) ?? []).map((unit) => ({
+    ...unit,
+    drama_title: DEMO_DRAMAS.find((drama) => drama.id === unit.drama_id)?.title,
+  })),
+  total: units.get(req.path.draft_id)?.length ?? 0,
   next_cursor: null,
 }))
-handle("builds-differences", () => ({ items: [], total: 0, next_cursor: null }))
+handle("builds-differences", (req) => {
+  const items =
+    req.query.kind === "protection_losses"
+      ? (demoLosses.get(req.path.plan_id) ?? [])
+      : []
+  return { items, total: items.length, next_cursor: null }
+})
 handle("builds-apply", (req) => {
   const state = get(req.path.draft_id)
   state.run = {
@@ -437,4 +489,56 @@ handle("builds-music_summary", (req) => ({
 }))
 handle("builds-music_progress", () =>
   demoError(404, "image_composition_not_found", "该合成用例不创建后台音乐任务"),
+)
+
+// 仅模拟批量进度；真实分片、恢复与版本栅栏在服务端测试中验证。
+const retries = new Map<string, import("@/client").MusicBatchProgress[]>()
+handle("builds-retry_selected_music", (req) => {
+  const id = req.path.draft_id,
+    state = get(id)
+  if (req.body!.expected_revision !== state.revision)
+    return demoError(409, "draft_revision_conflict", "草稿已变化")
+  const result: import("@/client").MusicBatchProgress = {
+    run_id: demoUuid(),
+    revision: bumpImage(id),
+    drama_ids: req.body!.drama_ids,
+    status: "PENDING",
+    processed: 0,
+    retried: 0,
+    skipped_protected: 0,
+    skipped_recovered: 0,
+    error_code: null,
+  }
+  retries.set(id, [result, ...(retries.get(id) ?? [])].slice(0, 20))
+  return result
+})
+handle("builds-music_retry_batches", (req) => {
+  const rows = retries.get(req.path.draft_id) ?? []
+  for (const run of rows)
+    if (run.status === "PENDING") {
+      if (get(req.path.draft_id).revision !== run.revision) {
+        run.status = "CANCELLED"
+        run.error_code = "draft_revision_conflict"
+        continue
+      }
+      for (const unit of units.get(req.path.draft_id) ?? [])
+        if (run.drama_ids.includes(unit.drama_id)) {
+          run.processed++
+          if (unit.music_protected) run.skipped_protected++
+          else if (unit.music_status !== "FAILED") run.skipped_recovered++
+          else {
+            unit.music_status = "READY"
+            unit.music_id = "demo-song"
+            run.retried++
+          }
+        }
+      run.status = "READY"
+    }
+  return rows
+})
+handle(
+  "builds-music_retry_progress",
+  (req) =>
+    retries.get(req.path.draft_id)?.find((r) => r.run_id === req.path.run_id) ??
+    demoError(404, "image_composition_not_found", "演示任务不存在"),
 )

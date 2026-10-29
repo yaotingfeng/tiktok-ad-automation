@@ -109,6 +109,9 @@ function Preparation({
     [busy, setBusy] = useState(false),
     [forbidden, setForbidden] = useState(false),
     [material, setMaterial] = useState<DraftDramaPublic | null>(null),
+    [selectedImageDramas, setSelectedImageDramas] = useState<
+      Record<string, string>
+    >({}),
     [linkId, setLinkId] = useState<string | null>(null),
     [restored, setRestored] = useState<{
       drama: string[]
@@ -668,6 +671,7 @@ function Preparation({
           summary={current}
           write={allowed && !busy && current.status !== "PREPARING"}
           drama={material}
+          selectedDramas={selectedImageDramas}
           onCloseDrama={() => setMaterial(null)}
           onChanged={() => void summary.refetch()}
         />
@@ -689,6 +693,8 @@ function Preparation({
               bcId={bcId}
               summary={current}
               onMaterial={setMaterial}
+              selectedDramas={selectedImageDramas}
+              onSelectDramas={setSelectedImageDramas}
               onLink={setLinkId}
               write={allowed && !busy && !pending && !pendingMutation}
               onChanged={() => void prepare()}

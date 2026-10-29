@@ -624,24 +624,38 @@ def preview_composition(
     )
     session.add(plan)
     session.flush()
+    from .image_diff_context import freeze_diff_context
+
+    describe = freeze_diff_context(dramas, candidates, [])
+    conflicts = [describe(c) for c in conflicts]
     ordinal, summaries = 0, []
     music_counts, image_uses = Counter(), Counter()
     new_count = removed_count = retained_count = protected_count = 0
     for drama in dramas:
-        previous = tuple(
-            _unit_value(session, u)
-            for u in _units(
-                session, scope, draft.active_image_generation, drama.drama_id
-            )
+        previous_rows = _units(
+            session, scope, draft.active_image_generation, drama.drama_id
         )
+        previous = tuple(_unit_value(session, u) for u in previous_rows)
         effective = effective_rules[drama.drama_id]
         diff = compose_images(
             tuple(candidates.get(drama.drama_id, [])), effective, previous, mode
         )
         details = diff.model_dump(mode="json", exclude={"units"})
-        summaries.append({"drama_id": str(drama.drama_id), **details})
+        describe = freeze_diff_context(
+            [drama],
+            {drama.drama_id: candidates.get(drama.drama_id, [])},
+            previous,
+            {str(u.id): u.music_snapshot.get("display_name") for u in previous_rows},
+        )
+        for field in _DIFF_FIELDS:
+            details[field] = [
+                describe(item, drama.drama_id) for item in details.get(field, [])
+            ]
+        summaries.append(
+            {"drama_id": str(drama.drama_id), "drama_title": drama.title, **details}
+        )
         conflicts.extend(
-            {"drama_id": str(drama.drama_id), **c.model_dump(mode="json")}
+            describe(c.model_dump(mode="json"), drama.drama_id)
             for c in diff.conflicts
         )
         removed_count += len(diff.removed_ids)
@@ -1129,6 +1143,10 @@ def list_plan_units(session, scope, plan_id, *, cursor=None, limit=50):
         )
         .order_by(col(ImageCompositionPlanUnit.ordinal))
     )
+    titles = {
+        row["drama_id"]: row.get("drama_title", "剧目名称未记录")
+        for row in plan.summary["dramas"]
+    }
     return _page(
         session,
         scope,
@@ -1136,7 +1154,11 @@ def list_plan_units(session, scope, plan_id, *, cursor=None, limit=50):
         kind=f"plan:{plan.id}",
         cursor=cursor,
         limit=limit,
-        transform=lambda r: {**r.unit, "drama_id": str(r.drama_id)},
+        transform=lambda r: {
+            **r.unit,
+            "drama_id": str(r.drama_id),
+            "drama_title": titles.get(str(r.drama_id), "已移除剧目"),
+        },
     )
 
 

@@ -1,7 +1,7 @@
 """配乐消息只携带引用；租约过期重放同一代，不清空任何 Redis 队列。"""
 
 from datetime import UTC, datetime, timedelta
-from uuid import UUID
+from uuid import UUID, uuid5
 
 from redis import Redis
 from sqlmodel import Session, col, select
@@ -193,7 +193,12 @@ def queue_music_preparation(session, scope, draft):
 def advance_music_preparation(session, run_id, generation):
     from time import monotonic
 
-    from .carousel_music import _authority, _scope, enqueue_music
+    from .carousel_music import (
+        _authority,
+        _scope,
+        enqueue_music,
+        request_unit_recommendation,
+    )
     from .carousel_music_models import MusicPreparationRun
     from .image_composition_models import DraftCreativeUnit
     from .models import BuildDraft
@@ -216,22 +221,67 @@ def advance_music_preparation(session, run_id, generation):
     try:
         scope = _scope(run)
         draft = _authority(session, scope, lock=True)
-        if draft.active_image_generation != run.active_generation:
-            run.status = "CANCELLED"
+        if draft.active_image_generation != run.active_generation or (
+            run.action == "RETRY_FAILED" and draft.revision != run.base_revision
+        ):
+            run.status, run.error_code, run.repair_after = (
+                "CANCELLED",
+                "draft_revision_conflict",
+                None,
+            )
         else:
             query = select(DraftCreativeUnit.id).where(
                 DraftCreativeUnit.tenant_id == run.tenant_id,
                 DraftCreativeUnit.draft_id == run.draft_id,
                 DraftCreativeUnit.generation == run.active_generation,
-                col(DraftCreativeUnit.music_status).in_(["PENDING", "RUNNING"]),
             )
+            if run.action == "RETRY_FAILED":
+                from .models import DraftInput
+
+                query = query.where(
+                    col(DraftCreativeUnit.drama_id).in_(
+                        [UUID(i) for i in run.drama_ids]
+                    ),
+                    select(DraftInput.id)
+                    .where(
+                        DraftInput.tenant_id == run.tenant_id,
+                        DraftInput.draft_id == run.draft_id,
+                        DraftInput.kind == "drama",
+                        DraftInput.drama_id == DraftCreativeUnit.drama_id,
+                    )
+                    .exists(),
+                )
+            else:
+                query = query.where(
+                    col(DraftCreativeUnit.music_status).in_(["PENDING", "RUNNING"])
+                )
             if run.after_id:
                 query = query.where(DraftCreativeUnit.id > run.after_id)
             ids = session.exec(
                 query.order_by(col(DraftCreativeUnit.id)).limit(20)
             ).all()
             for identity in ids:
-                enqueue_music(session, scope, draft, unit_ids=[identity])
+                if run.action == "RETRY_FAILED":
+                    unit = session.get(
+                        DraftCreativeUnit,
+                        (run.tenant_id, run.draft_id, run.active_generation, identity),
+                    )
+                    if unit.music_protected:
+                        run.skipped_protected += 1
+                    elif unit.music_status != "FAILED":
+                        run.skipped_recovered += 1
+                    else:
+                        request_unit_recommendation(
+                            session,
+                            scope,
+                            draft,
+                            unit,
+                            uuid5(run.id, str(identity)),
+                            "RETRY",
+                        )
+                        run.retried += 1
+                else:
+                    enqueue_music(session, scope, draft, unit_ids=[identity])
                 run.after_id, run.processed = identity, run.processed + 1
                 if monotonic() - started >= 10:
                     break

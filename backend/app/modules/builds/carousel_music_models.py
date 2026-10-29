@@ -10,7 +10,10 @@ from sqlalchemy import (
     DateTime,
     ForeignKeyConstraint,
     Index,
+    Integer,
+    String,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlmodel import Field, SQLModel
@@ -84,6 +87,10 @@ class MusicPreparationRun(SQLModel, table=True):
             name="ck_music_preparation_progress",
         ),
         Index("ix_music_preparation_repair", "status", "repair_after"),
+        CheckConstraint(
+            "action IN ('PREPARE','RETRY_FAILED') AND (action != 'RETRY_FAILED' OR (base_revision IS NOT NULL AND base_revision > 0 AND jsonb_array_length(drama_ids) BETWEEN 1 AND 100)) AND retried >= 0 AND skipped_protected >= 0 AND skipped_recovered >= 0",
+            name="ck_music_preparation_action",
+        ),
     )
     id: UUID = Field(default_factory=uuid4, primary_key=True)
     tenant_id: UUID
@@ -94,6 +101,24 @@ class MusicPreparationRun(SQLModel, table=True):
     generation: int = 1
     route: dict[str, Any] = Field(sa_column=Column(JSONB, nullable=False))
     status: str = "PENDING"
+    action: str = Field(
+        default="PREPARE",
+        sa_column=Column(String, nullable=False, server_default="PREPARE"),
+    )
+    drama_ids: list[str] = Field(
+        default_factory=list,
+        sa_column=Column(JSONB, nullable=False, server_default=text("'[]'::jsonb")),
+    )
+    base_revision: int | None = None
+    retried: int = Field(
+        default=0, sa_column=Column(Integer, nullable=False, server_default="0")
+    )
+    skipped_protected: int = Field(
+        default=0, sa_column=Column(Integer, nullable=False, server_default="0")
+    )
+    skipped_recovered: int = Field(
+        default=0, sa_column=Column(Integer, nullable=False, server_default="0")
+    )
     after_id: UUID | None = None
     processed: int = 0
     error_code: str | None = None

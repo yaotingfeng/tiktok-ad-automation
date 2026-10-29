@@ -1731,6 +1731,20 @@ export type DeliveryConfig = {
 };
 
 /**
+ * DifferenceMaterial
+ */
+export type DifferenceMaterial = {
+    /**
+     * Material Id
+     */
+    material_id: string;
+    /**
+     * File Name
+     */
+    file_name: string;
+};
+
+/**
  * DraftDramaPublic
  */
 export type DraftDramaPublic = {
@@ -2208,6 +2222,10 @@ export type DramaDifferenceSummary = {
      * Drama Id
      */
     drama_id: string;
+    /**
+     * Drama Title
+     */
+    drama_title?: string;
     /**
      * Rule Digest
      */
@@ -2916,6 +2934,34 @@ export type ImageCandidatePublic = {
  */
 export type ImageDifference = {
     /**
+     * Music Title
+     */
+    music_title?: string | null;
+    /**
+     * Drama Title
+     */
+    drama_title?: string | null;
+    /**
+     * Drama Titles
+     */
+    drama_titles?: Array<string>;
+    /**
+     * Unit Position
+     */
+    unit_position?: number | null;
+    /**
+     * Materials
+     */
+    materials?: Array<DifferenceMaterial>;
+    /**
+     * Composition Protected
+     */
+    composition_protected?: boolean;
+    /**
+     * Music Protected
+     */
+    music_protected?: boolean;
+    /**
      * Drama Id
      */
     drama_id?: string | null;
@@ -3174,6 +3220,10 @@ export type ImageUnitPublic = {
      * Drama Id
      */
     drama_id: string;
+    /**
+     * Drama Title
+     */
+    drama_title?: string | null;
     music_snapshot?: PublicMusicSnapshot;
 };
 
@@ -4711,6 +4761,48 @@ export type MiniOption = {
      * Name
      */
     name: string;
+};
+
+/**
+ * MusicBatchProgress
+ */
+export type MusicBatchProgress = {
+    /**
+     * Run Id
+     */
+    run_id: string;
+    /**
+     * Revision
+     */
+    revision: number;
+    /**
+     * Drama Ids
+     */
+    drama_ids: Array<string>;
+    /**
+     * Status
+     */
+    status: 'PENDING' | 'READY' | 'FAILED' | 'CANCELLED';
+    /**
+     * Processed
+     */
+    processed: number;
+    /**
+     * Retried
+     */
+    retried: number;
+    /**
+     * Skipped Protected
+     */
+    skipped_protected: number;
+    /**
+     * Skipped Recovered
+     */
+    skipped_recovered: number;
+    /**
+     * Error Code
+     */
+    error_code: string | null;
 };
 
 /**
@@ -7791,6 +7883,24 @@ export type Schedule = {
      * Timezone Basis
      */
     timezone_basis?: 'RULE' | 'ACCOUNT';
+};
+
+/**
+ * SelectedDramaRetry
+ */
+export type SelectedDramaRetry = {
+    /**
+     * Request Id
+     */
+    request_id: string;
+    /**
+     * Expected Revision
+     */
+    expected_revision: number;
+    /**
+     * Drama Ids
+     */
+    drama_ids: Array<string>;
 };
 
 /**
@@ -17549,6 +17659,114 @@ export type buildsMusicSummaryResponses = {
 };
 
 export type buildsMusicSummaryResponse = buildsMusicSummaryResponses[keyof buildsMusicSummaryResponses];
+
+export type buildsMusicRetryBatchesData = {
+    body?: never;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+        /**
+         * Draft Id
+         */
+        draft_id: string;
+    };
+    query?: never;
+    url: '/api/tenants/{tenant_id}/build-drafts/{draft_id}/music/batch-retries';
+};
+
+export type buildsMusicRetryBatchesErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type buildsMusicRetryBatchesError = buildsMusicRetryBatchesErrors[keyof buildsMusicRetryBatchesErrors];
+
+export type buildsMusicRetryBatchesResponses = {
+    /**
+     * Response Builds-Music Retry Batches
+     *
+     * Successful Response
+     */
+    200: Array<MusicBatchProgress>;
+};
+
+export type buildsMusicRetryBatchesResponse = buildsMusicRetryBatchesResponses[keyof buildsMusicRetryBatchesResponses];
+
+export type buildsRetrySelectedMusicData = {
+    body: SelectedDramaRetry;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+        /**
+         * Draft Id
+         */
+        draft_id: string;
+    };
+    query?: never;
+    url: '/api/tenants/{tenant_id}/build-drafts/{draft_id}/music/batch-retries';
+};
+
+export type buildsRetrySelectedMusicErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type buildsRetrySelectedMusicError = buildsRetrySelectedMusicErrors[keyof buildsRetrySelectedMusicErrors];
+
+export type buildsRetrySelectedMusicResponses = {
+    /**
+     * Successful Response
+     */
+    200: MusicBatchProgress;
+};
+
+export type buildsRetrySelectedMusicResponse = buildsRetrySelectedMusicResponses[keyof buildsRetrySelectedMusicResponses];
+
+export type buildsMusicRetryProgressData = {
+    body?: never;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+        /**
+         * Draft Id
+         */
+        draft_id: string;
+        /**
+         * Run Id
+         */
+        run_id: string;
+    };
+    query?: never;
+    url: '/api/tenants/{tenant_id}/build-drafts/{draft_id}/music/batch-retries/{run_id}';
+};
+
+export type buildsMusicRetryProgressErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type buildsMusicRetryProgressError = buildsMusicRetryProgressErrors[keyof buildsMusicRetryProgressErrors];
+
+export type buildsMusicRetryProgressResponses = {
+    /**
+     * Successful Response
+     */
+    200: MusicBatchProgress;
+};
+
+export type buildsMusicRetryProgressResponse = buildsMusicRetryProgressResponses[keyof buildsMusicRetryProgressResponses];
 
 export type buildsUpdateImageStructureData = {
     body: ImageStructureChange;

@@ -30,7 +30,7 @@ export function CarouselPresetList({
   tenantId: string
   write: boolean
   destination?: { draftId: string; dramaId: string; revision: number }
-  onLoaded?: () => void
+  onLoaded?: (revision: number) => void
 }) {
   const [name, setName] = useState(""),
     [offset, setOffset] = useState(0),
@@ -55,7 +55,7 @@ export function CarouselPresetList({
     setBusy(true)
     try {
       if (destination) {
-        await MaterialsService.loadVersion({
+        const result = await MaterialsService.loadVersion({
           path: { tenant_id: tenantId, version_id: selected.id },
           body: {
             ...change(destination.revision),
@@ -64,7 +64,7 @@ export function CarouselPresetList({
             allow_reuse: reuse,
           },
         })
-        onLoaded?.()
+        onLoaded?.(result.data.revision)
       } else
         await MaterialsService.copyVersion({
           path: { tenant_id: tenantId, version_id: selected.id },

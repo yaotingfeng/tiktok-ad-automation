@@ -26,6 +26,7 @@ class PublicMusicSnapshot(BaseModel):
 
 class ImageUnitPublic(CreativeUnit):
     drama_id: UUID
+    drama_title: str | None = None
     music_snapshot: PublicMusicSnapshot = Field(default_factory=PublicMusicSnapshot)
 
 
@@ -83,7 +84,19 @@ class CompositionStatePublic(ImageRevisionPublic):
     music_counts: dict[str, int]
 
 
+class DifferenceMaterial(BaseModel):
+    material_id: UUID
+    file_name: str
+
+
 class ImageDifference(BaseModel):
+    music_title: str | None = None
+    drama_title: str | None = None
+    drama_titles: list[str] = Field(default_factory=list)
+    unit_position: int | None = None
+    materials: list[DifferenceMaterial] = Field(default_factory=list)
+    composition_protected: bool = False
+    music_protected: bool = False
     drama_id: UUID | None = None
     drama_ids: list[UUID] = Field(default_factory=list)
     code: str | None = None
@@ -95,6 +108,7 @@ class ImageDifference(BaseModel):
 
 class DramaDifferenceSummary(BaseModel):
     drama_id: UUID
+    drama_title: str = "剧目名称未记录"
     rule_digest: str
     candidate_digest: str
     retained_ids_count: int
@@ -224,3 +238,15 @@ class ImageDramaSummary(BaseModel):
     protected_count: int
     reference_count: int
     used_image_count: int
+
+
+class MusicBatchProgress(BaseModel):
+    run_id: UUID
+    revision: int
+    drama_ids: list[UUID]
+    status: Literal["PENDING", "READY", "FAILED", "CANCELLED"]
+    processed: int
+    retried: int
+    skipped_protected: int
+    skipped_recovered: int
+    error_code: str | None

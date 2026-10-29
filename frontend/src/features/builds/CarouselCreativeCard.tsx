@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react"
+import { useState } from "react"
 import { useQuery } from "@tanstack/react-query"
 import { MaterialsService, type ImageUnitPublic, type Edit } from "@/client"
 import {
@@ -25,6 +25,7 @@ import { RequestError } from "@/features/tenants/shared"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { MusicPicker } from "./MusicPicker"
 import { imageApi, imagePath, musicLabel, change } from "./imageCompositionApi"
+import type { ImageEditorState } from "./imageWorkspaceState"
 export function ImageThumb({
   tenantId,
   id,
@@ -67,7 +68,8 @@ export function CarouselCreativeCard({
   write,
   recommend,
   onEdit,
-  onDirty,
+  editor,
+  onEditor,
   onMusicChanged,
   onAdd,
 }: {
@@ -78,36 +80,29 @@ export function CarouselCreativeCard({
   write: boolean
   recommend: boolean
   onEdit: (command: Edit["command"]) => Promise<void>
-  onDirty: (id: string, dirty: boolean) => void
-  onMusicChanged: () => void
+  editor?: ImageEditorState
+  onEditor: (value: ImageEditorState | null) => void
+  onMusicChanged: (revision: number) => void
   onAdd: (unit: ImageUnitPublic, ids: string[]) => void
 }) {
-  const [ids, setIds] = useState(unit.ordered_material_ids),
-    [music, setMusic] = useState(false),
+  const ids = editor?.ids ?? unit.ordered_material_ids
+  const [music, setMusic] = useState(false),
     [confirm, setConfirm] = useState<
       "DUPLICATE" | "DELETE" | "SPLIT" | "PRESET" | null
     >(null),
     [name, setName] = useState(""),
     [busy, setBusy] = useState(false),
     [error, setError] = useState<unknown>(),
-    [editingRevision, setEditingRevision] = useState(unit.revision),
     [imageOffset, setImageOffset] = useState(0)
   const visibleIds = ids
     .map((id, index) => ({ id, index }))
     .slice(imageOffset, imageOffset + 5)
-  const dirty =
-    JSON.stringify(ids) !== JSON.stringify(unit.ordered_material_ids)
-  const stale = dirty && editingRevision !== unit.revision
-  useEffect(() => {
-    if (!dirty) {
-      setIds(unit.ordered_material_ids)
-      setEditingRevision(unit.revision)
-    }
-  }, [unit.revision, unit.ordered_material_ids])
+  const dirty = !!editor
+  const stale = dirty && editor.revision !== unit.revision
   async function requestSong(action: "RECOMMEND" | "RETRY") {
     setBusy(true)
     try {
-      await imageApi.requestMusic({
+      const result = await imageApi.requestMusic({
         path: { ...imagePath(tenantId, draftId), unit_id: unit.id },
         body: {
           request_id: crypto.randomUUID(),
@@ -116,7 +111,7 @@ export function CarouselCreativeCard({
           action,
         },
       })
-      onMusicChanged()
+      onMusicChanged(result.data.revision)
     } catch (e) {
       setError(e)
     } finally {
@@ -124,21 +119,22 @@ export function CarouselCreativeCard({
     }
   }
   const changeIds = (value: string[]) => {
-    if (JSON.stringify(value) === JSON.stringify(unit.ordered_material_ids))
-      setEditingRevision(unit.revision)
     if (imageOffset >= value.length)
       setImageOffset(Math.max(0, imageOffset - 5))
-    setIds(value)
-    onDirty(
-      unit.id,
-      JSON.stringify(value) !== JSON.stringify(unit.ordered_material_ids),
+    onEditor(
+      JSON.stringify(value) === JSON.stringify(unit.ordered_material_ids)
+        ? null
+        : {
+            ids: value,
+            revision: editor?.revision ?? unit.revision,
+          },
     )
   }
   const save = async () => {
     setBusy(true)
     try {
       await onEdit({ kind: "SET_IMAGES", unit_id: unit.id, material_ids: ids })
-      onDirty(unit.id, false)
+      onEditor(null)
     } catch (e) {
       setError(e)
     } finally {
@@ -349,7 +345,7 @@ export function CarouselCreativeCard({
           draftId={draftId}
           onClose={() => setMusic(false)}
           onSelect={async (song) => {
-            await imageApi.requestMusic({
+            const result = await imageApi.requestMusic({
               path: { ...imagePath(tenantId, draftId), unit_id: unit.id },
               body: {
                 request_id: crypto.randomUUID(),
@@ -359,7 +355,7 @@ export function CarouselCreativeCard({
                 music_id: song.music_id,
               },
             })
-            onMusicChanged()
+            onMusicChanged(result.data.revision)
           }}
         />
       )}

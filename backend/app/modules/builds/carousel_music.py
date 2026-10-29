@@ -236,6 +236,48 @@ def enqueue_music(session, scope, draft, *, unit_ids=None):
     return list(dict.fromkeys(result))
 
 
+def request_unit_recommendation(session, scope, draft, unit, request_id, action):
+    """共享单元转换：不推进草稿版本，供用户单项与已冻结批量分片调用。"""
+    effective = _effective_parameters(
+        _state(session, draft), unit, len(_items(session, unit))
+    )
+    if action == "RECOMMEND" and effective["mode"] == "FIXED":
+        # 必须在改版本/保护/状态之前拒绝；手工指定仍走 SET_MANUAL。
+        raise DomainError(
+            "music_request_invalid",
+            "指定曲模式不支持重新推荐，请手工选择曲目或修改配乐规则",
+        )
+    if action == "RETRY" and unit.music_status != "FAILED":
+        raise DomainError("music_request_invalid", "仅失败项可以重试")
+    unit.music_request_generation += 1
+    unit.music_revision += 1
+    unit.music_protected = False
+    unit.music_status = "PENDING"
+    old_parameters = (
+        unit.music_snapshot.get("pending_request", {}).get("parameters")
+        if action == "RETRY"
+        else None
+    )
+    if effective["mode"] == "FIXED":
+        # 失败重试仍精确读取当前配置曲，不能恢复成推荐请求。
+        old_parameters = effective
+    unit.music_snapshot = {
+        **unit.music_snapshot,
+        "pending_request": {
+            "request_id": str(request_id),
+            "action": action,
+            "parameters": old_parameters,
+        },
+    }
+    jobs = enqueue_music(
+        session,
+        scope,
+        draft,
+        unit_ids=[unit.id],
+    )
+    return jobs
+
+
 def request_music(
     session,
     scope,
@@ -292,43 +334,7 @@ def request_music(
         unit.music_snapshot = {"selection_source": "MANUAL"}
         jobs = []
     elif action in {"RECOMMEND", "RETRY"}:
-        effective = _effective_parameters(
-            _state(session, draft), unit, len(_items(session, unit))
-        )
-        if action == "RECOMMEND" and effective["mode"] == "FIXED":
-            # 必须在改版本/保护/状态之前拒绝；手工指定仍走 SET_MANUAL。
-            raise DomainError(
-                "music_request_invalid",
-                "指定曲模式不支持重新推荐，请手工选择曲目或修改配乐规则",
-            )
-        if action == "RETRY" and unit.music_status != "FAILED":
-            raise DomainError("music_request_invalid", "仅失败项可以重试")
-        unit.music_request_generation += 1
-        unit.music_revision += 1
-        unit.music_protected = False
-        unit.music_status = "PENDING"
-        old_parameters = (
-            unit.music_snapshot.get("pending_request", {}).get("parameters")
-            if action == "RETRY"
-            else None
-        )
-        if effective["mode"] == "FIXED":
-            # 失败重试仍精确读取当前配置曲，不能恢复成推荐请求。
-            old_parameters = effective
-        unit.music_snapshot = {
-            **unit.music_snapshot,
-            "pending_request": {
-                "request_id": str(request_id),
-                "action": action,
-                "parameters": old_parameters,
-            },
-        }
-        jobs = enqueue_music(
-            session,
-            scope,
-            draft,
-            unit_ids=[unit.id],
-        )
+        jobs = request_unit_recommendation(session, scope, draft, unit, request_id, action)
     else:
         raise DomainError("music_request_invalid", "配乐动作无效")
     # 用户意图使旧计划失效；后台完成不增加草稿版本。

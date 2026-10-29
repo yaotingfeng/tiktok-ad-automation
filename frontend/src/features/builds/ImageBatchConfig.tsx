@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react"
-import { useQuery, useQueryClient } from "@tanstack/react-query"
+import { useQuery } from "@tanstack/react-query"
 import type {
   CompositionPlanPublic,
   CompositionRunPublic,
@@ -32,24 +32,26 @@ import { ImageStructureOverride } from "./ImageStructureOverride"
 import { ImageCompositionDiff } from "./ImageCompositionDiff"
 import { ImageCandidateRefresh } from "./ImageCandidateRefresh"
 import { CarouselCreativeSheet } from "./CarouselCreativeSheet"
+import { ImageDramaBatchActions } from "./ImageDramaBatchActions"
 export function ImageBatchConfig({
   tenantId,
   summary,
   write,
   drama,
+  selectedDramas,
   onCloseDrama,
   onChanged,
 }: {
   tenantId: string
   summary: DraftSummary
   write: boolean
+  selectedDramas: Record<string, string>
   drama: DraftDramaPublic | null
   onCloseDrama: () => void
   onChanged: () => void
 }) {
   const draftId = summary.draft_id,
     path = imagePath(tenantId, draftId),
-    client = useQueryClient(),
     [localRule, setLocalRule] = useState<ImageRule | null>(null),
     [localPatches, setLocalPatches] = useState<Record<
       string,
@@ -92,9 +94,6 @@ export function ImageBatchConfig({
     disabled = !write || busy || working || !current
   const changed = () => {
     void state.refetch()
-    void client.invalidateQueries({
-      queryKey: ["image-units", tenantId, draftId],
-    })
     onChanged()
   }
   async function trial(
@@ -253,8 +252,26 @@ export function ImageBatchConfig({
           </Button>
         </CardFooter>
       </Card>
+      <ImageDramaBatchActions
+        tenantId={tenantId}
+        draftId={draftId}
+        revision={current?.revision ?? summary.revision}
+        selected={selectedDramas}
+        rule={rule}
+        disabled={disabled}
+        onChanged={changed}
+        onPatch={(patch) => {
+          const next = { ...patches }
+          for (const id of Object.keys(selectedDramas)) {
+            if (patch === null) delete next[id]
+            else next[id] = { ...next[id], ...patch }
+          }
+          setLocalPatches(next)
+        }}
+      />
       {plan && (
         <ImageCompositionDiff
+          key={plan.plan_id}
           tenantId={tenantId}
           draftId={draftId}
           plan={plan}
@@ -274,6 +291,7 @@ export function ImageBatchConfig({
           draftId={draftId}
           drama={drama}
           revision={current.revision}
+          generation={current.active_generation}
           rule={rule}
           patch={patches[drama.drama_id] ?? {}}
           write={!disabled}

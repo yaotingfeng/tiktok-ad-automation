@@ -1,5 +1,5 @@
 import { useState } from "react"
-import { useQuery } from "@tanstack/react-query"
+import { useQuery, keepPreviousData } from "@tanstack/react-query"
 import type {
   DraftDramaPublic,
   ImageUnitPublic,
@@ -25,18 +25,23 @@ import {
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Field, FieldGroup, FieldLabel } from "@/components/ui/field"
-import { Pager, RequestError, useCursorPage } from "@/features/tenants/shared"
+import { Pager, RequestError } from "@/features/tenants/shared"
 import { MaterialBatchPicker } from "./MaterialBatchPicker"
 import { BuildGuard } from "./presentation"
 import { imageApi, imagePath, change } from "./imageCompositionApi"
 import { CarouselCreativeCard } from "./CarouselCreativeCard"
 import { ImageRuleFields } from "./ImageRuleFields"
 import { CarouselPresetList } from "@/features/materials/CarouselPresetList"
+import {
+  useImageCursorPage,
+  type ImageEditorState,
+} from "./imageWorkspaceState"
 export function CarouselCreativeSheet({
   tenantId,
   draftId,
   drama,
-  revision,
+  revision: serverRevision,
+  generation,
   rule,
   patch,
   write,
@@ -48,6 +53,7 @@ export function CarouselCreativeSheet({
   draftId: string
   drama: DraftDramaPublic
   revision: number
+  generation: number
   rule: ImageRule
   patch: ImageRulePatch
   write: boolean
@@ -55,9 +61,12 @@ export function CarouselCreativeSheet({
   onChanged: () => void
   onClose: () => void
 }) {
-  const paging = useCursorPage(),
-    candidatePaging = useCursorPage(),
-    [dirty, setDirty] = useState<Record<string, boolean>>({}),
+  const [mutationRevision, setMutationRevision] = useState(serverRevision)
+  const revision = Math.max(serverRevision, mutationRevision)
+  const scope = `${draftId}:${drama.drama_id}:${revision}:${generation}`
+  const paging = useImageCursorPage(scope),
+    candidatePaging = useImageCursorPage(scope),
+    [editors, setEditors] = useState<Record<string, ImageEditorState>>({}),
     [leaving, setLeaving] = useState(false),
     [error, setError] = useState<unknown>(),
     [busy, setBusy] = useState(false),
@@ -70,6 +79,19 @@ export function CarouselCreativeSheet({
     [selected, setSelected] = useState<string[]>([]),
     [merge, setMerge] = useState(false),
     [reuse, setReuse] = useState(false)
+  const dirty = Object.keys(editors).length > 0
+  function setEditor(id: string, value: ImageEditorState | null) {
+    setEditors((current) => {
+      const next = { ...current }
+      if (value) next[id] = value
+      else delete next[id]
+      return next
+    })
+  }
+  function changed(nextRevision?: number) {
+    if (nextRevision) setMutationRevision(nextRevision)
+    onChanged()
+  }
   const path = imagePath(tenantId, draftId)
   const units = useQuery({
     queryKey: [
@@ -78,6 +100,7 @@ export function CarouselCreativeSheet({
       draftId,
       drama.drama_id,
       revision,
+      generation,
       paging.cursor,
     ],
     queryFn: async ({ signal }) =>
@@ -92,6 +115,8 @@ export function CarouselCreativeSheet({
           signal,
         })
       ).data,
+    placeholderData: keepPreviousData,
+    enabled: !busy,
     refetchInterval: 2000,
   })
   const songs = useQuery({
@@ -128,9 +153,10 @@ export function CarouselCreativeSheet({
       draftId,
       drama.drama_id,
       revision,
+      generation,
       candidatePaging.cursor,
     ],
-    enabled: !!add,
+    enabled: !!add && !busy,
     queryFn: async ({ signal }) =>
       (
         await imageApi.candidates({
@@ -147,9 +173,11 @@ export function CarouselCreativeSheet({
   async function edit(command: Edit["command"]) {
     setBusy(true)
     try {
-      await imageApi.edit({ path, body: { ...change(revision), command } })
-      onChanged()
-      await units.refetch()
+      const result = await imageApi.edit({
+        path,
+        body: { ...change(revision), command },
+      })
+      changed(result.data.revision)
     } catch (e) {
       setError(e)
       throw e
@@ -158,14 +186,14 @@ export function CarouselCreativeSheet({
     }
   }
   function close() {
-    if (Object.values(dirty).some(Boolean)) setLeaving(true)
+    if (dirty) setLeaving(true)
     else onClose()
   }
   const effective = { ...rule, ...patch } as ImageRule
   return (
     <>
       <BuildGuard
-        dirty={Object.values(dirty).some(Boolean)}
+        dirty={dirty}
         title="有未保存图片调整"
         leaveLabel="放弃未保存调整"
       />
@@ -196,7 +224,7 @@ export function CarouselCreativeSheet({
                 onAdd={async (items) => {
                   setBusy(true)
                   try {
-                    await imageApi.addCandidates({
+                    const result = await imageApi.addCandidates({
                       path,
                       body: {
                         ...change(revision),
@@ -204,7 +232,7 @@ export function CarouselCreativeSheet({
                         material_ids: items.map((i) => i.material_id),
                       },
                     })
-                    onChanged()
+                    changed(result.data.revision)
                   } catch (e) {
                     setError(e)
                   } finally {
@@ -267,8 +295,8 @@ export function CarouselCreativeSheet({
                 tenantId={tenantId}
                 write={write}
                 destination={{ draftId, dramaId: drama.drama_id, revision }}
-                onLoaded={() => {
-                  onChanged()
+                onLoaded={(nextRevision) => {
+                  changed(nextRevision)
                   setLibrary(false)
                 }}
               />
@@ -306,13 +334,12 @@ export function CarouselCreativeSheet({
                       ),
                     },
                   }}
-                  write={write && !busy}
+                  write={write && !busy && !units.isPlaceholderData}
                   recommend={effective.music_mode !== "FIXED"}
                   onEdit={edit}
-                  onDirty={(id, value) =>
-                    setDirty((d) => ({ ...d, [id]: value }))
-                  }
-                  onMusicChanged={onChanged}
+                  editor={editors[unit.id]}
+                  onEditor={(value) => setEditor(unit.id, value)}
+                  onMusicChanged={changed}
                   onAdd={(unit, ids) => {
                     setAdd({ unit, ids })
                     setReuse(false)
@@ -324,7 +351,7 @@ export function CarouselCreativeSheet({
               paging={paging}
               nextCursor={units.data?.next_cursor}
               total={units.data?.total}
-              busy={units.isFetching || Object.values(dirty).some(Boolean)}
+              busy={units.isFetching}
             />
             <Button variant="outline" onClick={close}>
               完成
@@ -430,7 +457,6 @@ export function CarouselCreativeSheet({
                                 drama_id: drama.drama_id,
                                 material_ids: [c.material_id],
                               })
-                              await candidates.refetch()
                             } catch {
                               return
                             }
@@ -481,8 +507,7 @@ export function CarouselCreativeSheet({
                                 allow_reuse: reuse,
                               },
                         )
-                        if (add.unit)
-                          setDirty((d) => ({ ...d, [add.unit!.id]: false }))
+                        if (add.unit) setEditor(add.unit.id, null)
                       } catch {
                         return
                       }

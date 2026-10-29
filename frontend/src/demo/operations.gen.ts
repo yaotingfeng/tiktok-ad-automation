@@ -211,6 +211,10 @@ import type {
   buildsMinisOptionsResponse,
   buildsMusicProgressData,
   buildsMusicProgressResponse,
+  buildsMusicRetryBatchesData,
+  buildsMusicRetryBatchesResponse,
+  buildsMusicRetryProgressData,
+  buildsMusicRetryProgressResponse,
   buildsMusicSummaryData,
   buildsMusicSummaryResponse,
   buildsPlanData,
@@ -243,6 +247,8 @@ import type {
   buildsRefreshResponse,
   buildsRequestMusicData,
   buildsRequestMusicResponse,
+  buildsRetrySelectedMusicData,
+  buildsRetrySelectedMusicResponse,
   buildsRetrySubmissionData,
   buildsRetrySubmissionResponse,
   buildsSavedMutationData,
@@ -571,6 +577,8 @@ export const DEMO_OPERATIONS = {
   "builds-materials": { method: "GET", path: "/api/tenants/{tenant_id}/build-drafts/{draft_id}/dramas/{drama_id}/materials", query: {"limit":"number"} },
   "builds-minis_options": { method: "GET", path: "/api/tenants/{tenant_id}/build-drafts/{draft_id}/minis", query: {"page":"number"} },
   "builds-music_progress": { method: "GET", path: "/api/tenants/{tenant_id}/build-drafts/{draft_id}/music/jobs/{job_id}", query: {} },
+  "builds-music_retry_batches": { method: "GET", path: "/api/tenants/{tenant_id}/build-drafts/{draft_id}/music/batch-retries", query: {} },
+  "builds-music_retry_progress": { method: "GET", path: "/api/tenants/{tenant_id}/build-drafts/{draft_id}/music/batch-retries/{run_id}", query: {} },
   "builds-music_summary": { method: "GET", path: "/api/tenants/{tenant_id}/build-drafts/{draft_id}/music", query: {} },
   "builds-plan": { method: "GET", path: "/api/tenants/{tenant_id}/build-drafts/{draft_id}/image-composition/plans/{plan_id}", query: {} },
   "builds-plan_units": { method: "GET", path: "/api/tenants/{tenant_id}/build-drafts/{draft_id}/image-composition/plans/{plan_id}/units", query: {"limit":"number"} },
@@ -587,6 +595,7 @@ export const DEMO_OPERATIONS = {
   "builds-reconcile_submission": { method: "POST", path: "/api/tenants/{tenant_id}/submissions/{submission_id}/reconcile", query: {} },
   "builds-refresh": { method: "POST", path: "/api/tenants/{tenant_id}/build-drafts/{draft_id}/image-composition/candidates/refresh", query: {} },
   "builds-request_music": { method: "POST", path: "/api/tenants/{tenant_id}/build-drafts/{draft_id}/music/units/{unit_id}", query: {} },
+  "builds-retry_selected_music": { method: "POST", path: "/api/tenants/{tenant_id}/build-drafts/{draft_id}/music/batch-retries", query: {} },
   "builds-retry_submission": { method: "POST", path: "/api/tenants/{tenant_id}/submissions/{submission_id}/retry", query: {} },
   "builds-saved_mutation": { method: "GET", path: "/api/tenants/{tenant_id}/build-mutation-requests/{request_id}", query: {} },
   "builds-saved_prepare_request": { method: "GET", path: "/api/tenants/{tenant_id}/build-preparation-requests/{request_id}", query: {} },
@@ -807,6 +816,8 @@ export interface DemoOperationTypes {
   "builds-materials": { data: buildsMaterialsData; response: buildsMaterialsResponse }
   "builds-minis_options": { data: buildsMinisOptionsData; response: buildsMinisOptionsResponse }
   "builds-music_progress": { data: buildsMusicProgressData; response: buildsMusicProgressResponse }
+  "builds-music_retry_batches": { data: buildsMusicRetryBatchesData; response: buildsMusicRetryBatchesResponse }
+  "builds-music_retry_progress": { data: buildsMusicRetryProgressData; response: buildsMusicRetryProgressResponse }
   "builds-music_summary": { data: buildsMusicSummaryData; response: buildsMusicSummaryResponse }
   "builds-plan": { data: buildsPlanData; response: buildsPlanResponse }
   "builds-plan_units": { data: buildsPlanUnitsData; response: buildsPlanUnitsResponse }
@@ -823,6 +834,7 @@ export interface DemoOperationTypes {
   "builds-reconcile_submission": { data: buildsReconcileSubmissionData; response: buildsReconcileSubmissionResponse }
   "builds-refresh": { data: buildsRefreshData; response: buildsRefreshResponse }
   "builds-request_music": { data: buildsRequestMusicData; response: buildsRequestMusicResponse }
+  "builds-retry_selected_music": { data: buildsRetrySelectedMusicData; response: buildsRetrySelectedMusicResponse }
   "builds-retry_submission": { data: buildsRetrySubmissionData; response: buildsRetrySubmissionResponse }
   "builds-saved_mutation": { data: buildsSavedMutationData; response: buildsSavedMutationResponse }
   "builds-saved_prepare_request": { data: buildsSavedPrepareRequestData; response: buildsSavedPrepareRequestResponse }

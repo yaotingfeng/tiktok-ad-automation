@@ -34,7 +34,9 @@ def test_structure_save_is_independent_and_idempotent(session, context, image_dr
             "max_materials_per_group": None,
         },
     )
-    revision = save_image_structure(session, context=context, draft_id=draft.id, body=body)
+    revision = save_image_structure(
+        session, context=context, draft_id=draft.id, body=body
+    )
     assert revision == body.expected_revision + 1
     assert (
         save_image_structure(session, context=context, draft_id=draft.id, body=body)
@@ -103,7 +105,9 @@ def test_openapi_composition_responses_are_typed():
             response = operation["responses"]["200"]["content"]["application/json"][
                 "schema"
             ]
-            assert response.get("$ref"), operation["operationId"]
+            assert response.get("$ref") or response.get("items", {}).get("$ref"), (
+                operation["operationId"]
+            )
 
 
 @pytest.mark.parametrize("complete", [False, True])
@@ -129,7 +133,9 @@ def test_structure_preserves_current_refresh(session, context, image_draft, comp
         expected_revision=draft.revision,
         structure_override={"creative_count": 3},
     )
-    revision = save_image_structure(session, context=context, draft_id=draft.id, body=body)
+    revision = save_image_structure(
+        session, context=context, draft_id=draft.id, body=body
+    )
     progress = candidate_snapshot_progress(session, scope, pending["snapshot_id"])
     assert progress["revision"] == revision
     assert progress["status"] == ("READY" if complete else "PENDING")
@@ -381,3 +387,251 @@ def test_drama_summary_pages_only_current_inputs(session, context):
     second = drama_summaries(session, scope, cursor=first.next_cursor, limit=1)
     assert second.items[0]["title"] == "Sun" and second.next_cursor is None
     assert second.items[0]["candidate_count"] == 0
+
+
+def test_plan_difference_identifies_protected_drama_unit_and_images(
+    session, image_draft
+):
+    from app.modules.builds.image_composition_commands import SetProtection
+    from app.modules.builds.image_composition_models import DraftCreativeUnit
+    from app.modules.builds.image_composition_schemas import ImageRule
+    from app.modules.builds.image_composition_service import (
+        edit_creative_units,
+        list_plan_differences,
+        list_plan_units,
+        preview_composition,
+    )
+
+    draft, drama, scope = image_draft
+    units = apply_rule(session, image_draft)
+    protected = session.get(
+        DraftCreativeUnit,
+        (scope.tenant_id, draft.id, draft.active_image_generation, units[0]["id"]),
+    )
+    protected.music_id = "selected-song"
+    protected.music_status = "READY"
+    protected.music_snapshot = {"display_name": "冻结曲名"}
+    edit_creative_units(
+        session,
+        scope,
+        uuid4(),
+        draft.revision,
+        SetProtection(
+            kind="SET_PROTECTION",
+            unit_id=units[0]["id"],
+            composition_protected=True,
+            music_protected=True,
+        ),
+    )
+    plan = preview_composition(
+        session,
+        scope,
+        uuid4(),
+        draft.revision,
+        ImageRule(images_per_unit=2),
+        {},
+        "REPLACE_ALL",
+    )
+    assert plan["dramas"][0]["drama_title"] == drama.title
+    loss = list_plan_differences(
+        session, scope, plan["plan_id"], kind="protection_losses", limit=1
+    ).items[0]
+    assert loss["drama_title"] == drama.title and loss["unit_position"] == 1
+    assert loss["composition_protected"] and loss["music_protected"]
+    assert loss["music_title"] == "冻结曲名"
+    protected.music_snapshot = {"display_name": "后来换曲"}
+    assert (
+        list_plan_differences(
+            session, scope, plan["plan_id"], kind="protection_losses", limit=1
+        ).items[0]["music_title"]
+        == "冻结曲名"
+    )
+    assert len(loss["materials"]) == 3 and loss["materials"][0]["file_name"].startswith(
+        drama.title
+    )
+    page = list_plan_units(session, scope, plan["plan_id"], limit=1)
+    second = list_plan_units(
+        session, scope, plan["plan_id"], limit=1, cursor=page.next_cursor
+    )
+    assert (
+        second.items[0]["position"] == 2
+        and second.items[0]["drama_title"] == drama.title
+    )
+
+
+def test_selected_music_retry_is_durable_bounded_and_preserves_protection(
+    session, image_draft
+):
+    from app.modules.builds.carousel_music_models import MusicPreparationRun
+    from app.modules.builds.carousel_music_tasks import advance_music_preparation
+    from app.modules.builds.image_composition_commands import Duplicate
+    from app.modules.builds.image_composition_models import DraftCreativeUnit
+    from app.modules.builds.image_composition_service import edit_creative_units
+    from app.modules.builds.image_music_batch import batch_progress, start_music_retry
+
+    draft, drama, scope = image_draft
+    units = apply_rule(session, image_draft)
+    for _ in range(20):
+        edit_creative_units(
+            session,
+            scope,
+            uuid4(),
+            draft.revision,
+            Duplicate(kind="DUPLICATE", unit_id=units[0]["id"]),
+        )
+    from sqlmodel import select
+
+    rows = session.exec(
+        select(DraftCreativeUnit)
+        .where(
+            DraftCreativeUnit.draft_id == draft.id,
+            DraftCreativeUnit.generation == draft.active_image_generation,
+        )
+        .order_by(DraftCreativeUnit.id)
+    ).all()
+    for unit in rows:
+        unit.music_status = "FAILED"
+        unit.music_protected = False
+    rows[0].music_id, rows[0].music_protected = "manual", True
+    rows[1].music_id, rows[1].music_status = "ready", "READY"
+    request_id, before = uuid4(), draft.revision
+    result = start_music_retry(session, scope, request_id, before, [drama.drama_id])
+    assert draft.revision == before + 1
+    assert (
+        start_music_retry(session, scope, request_id, before, [drama.drama_id])
+        == result
+    )
+    run = session.get(MusicPreparationRun, result["run_id"])
+    assert run.dispatch_id
+    advance_music_preparation(session, run.id, run.generation)
+    progress = batch_progress(session, scope, run.id)
+    assert progress["processed"] == 20 and progress["status"] == "PENDING"
+    assert progress["skipped_protected"] == 1 and progress["skipped_recovered"] == 1
+    assert progress["retried"] == 18
+    assert draft.revision == before + 1
+    assert rows[0].music_id == "manual" and rows[0].music_protected
+    old_generation = run.generation - 1
+    advance_music_preparation(session, run.id, old_generation)
+    assert run.processed == 20
+    # 用户后续编辑使余下范围失效，不追赶新意图。
+    draft.revision += 1
+    advance_music_preparation(session, run.id, run.generation)
+    assert run.status == "CANCELLED" and run.error_code == "draft_revision_conflict"
+    assert run.processed == 20
+
+
+def test_selected_retry_leaves_unselected_drama_and_rejects_foreign_scope(
+    session, context
+):
+    from sqlmodel import select
+
+    from app.core.errors import DomainError
+    from app.modules.builds.carousel_music_models import MusicPreparationRun
+    from app.modules.builds.carousel_music_tasks import advance_music_preparation
+    from app.modules.builds.image_composition_models import DraftCreativeUnit
+    from app.modules.builds.image_composition_service import (
+        adopt_candidates,
+        refresh_candidates,
+        resolve_image_scope,
+    )
+    from app.modules.builds.image_music_batch import batch_progress, start_music_retry
+    from app.modules.builds.models import DraftDrama
+    from tests.modules.builds.test_drafts import create_intent
+    from tests.modules.builds.test_image_composition_migration import scaffold
+    from tests.modules.builds.test_image_composition_service import (
+        finish_candidate_snapshot,
+    )
+    from tests.modules.materials.test_tenant_materials import material
+
+    intent = create_intent(session, context)
+    intent["drama_lines"] = ["Moon", "Sun"]
+    draft, _ = scaffold(session, context, intent)
+    dramas = session.exec(
+        select(DraftDrama)
+        .where(DraftDrama.draft_id == draft.id)
+        .order_by(DraftDrama.first_line)
+    ).all()
+    for drama in dramas:
+        for index in range(3):
+            row = material(session, context, f"{drama.title}_{index}.jpg")
+            row.media_type, row.mime_type, row.sha256 = (
+                "IMAGE",
+                "image/jpeg",
+                f"{index:064x}",
+            )
+    session.flush()
+    scope = resolve_image_scope(session, context=context, draft_id=draft.id)
+    progress = finish_candidate_snapshot(
+        session, scope, refresh_candidates(session, scope, uuid4(), draft.revision)
+    )
+    adopt_candidates(session, scope, uuid4(), draft.revision, progress["snapshot_id"])
+    apply_rule(session, (draft, dramas[0], scope))
+    units = session.exec(
+        select(DraftCreativeUnit)
+        .where(
+            DraftCreativeUnit.draft_id == draft.id,
+            DraftCreativeUnit.generation == draft.active_image_generation,
+        )
+        .order_by(DraftCreativeUnit.drama_id)
+    ).all()
+    for unit in units:
+        unit.music_status = "FAILED"
+    other = next(u for u in units if u.drama_id == dramas[1].drama_id)
+    before = other.model_dump()
+    with pytest.raises(DomainError):
+        start_music_retry(session, scope, uuid4(), draft.revision, [uuid4()])
+    request_id = uuid4()
+    result = start_music_retry(
+        session, scope, request_id, draft.revision, [dramas[0].drama_id]
+    )
+    with pytest.raises(DomainError):
+        start_music_retry(
+            session, scope, request_id, draft.revision, [dramas[1].drama_id]
+        )
+    run = session.get(MusicPreparationRun, result["run_id"])
+    advance_music_preparation(session, run.id, run.generation)
+    assert batch_progress(session, scope, run.id)["retried"] == 1
+    assert other.model_dump() == before
+
+
+def test_selected_retry_migration_preserves_old_preparation(monkeypatch):
+    from alembic import command
+    from sqlalchemy import MetaData, Table
+    from sqlmodel import Session
+
+    from app.modules.builds.carousel_music_models import MusicPreparationRun
+    from tests.migration_database import historical_database
+    from tests.modules.builds.test_drafts import create_intent
+    from tests.modules.builds.test_image_composition_migration import scaffold
+    from tests.modules.conftest import create_context
+
+    with historical_database(monkeypatch, "0057_carousel_copy_integrity") as (
+        engine,
+        config,
+    ):
+        with Session(engine) as session, session.begin():
+            context = create_context(session)
+            draft, _ = scaffold(session, context, create_intent(session, context))
+            identity = uuid4()
+            table = Table("music_preparation_run", MetaData(), autoload_with=engine)
+            session.execute(
+                table.insert().values(
+                    id=identity,
+                    tenant_id=context.tenant_id,
+                    draft_id=draft.id,
+                    bc_id=draft.bc_id,
+                    actor_id=context.actor_id,
+                    active_generation=1,
+                    generation=2,
+                    route={"synthetic": True},
+                    status="PENDING",
+                    processed=20,
+                )
+            )
+        command.upgrade(config, "head")
+        with Session(engine) as session:
+            restored = session.get(MusicPreparationRun, identity)
+            assert restored.action == "PREPARE" and restored.base_revision is None
+            assert restored.drama_ids == [] and restored.retried == 0
+            assert restored.processed == 20 and restored.generation == 2
+            assert restored.route == {"synthetic": True}

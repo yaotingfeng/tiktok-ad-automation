@@ -7,6 +7,7 @@ import {
   type DraftInputPublic,
   type DraftSummary,
 } from "@/client"
+import { Checkbox } from "@/components/ui/checkbox"
 import { Button } from "@/components/ui/button"
 import { FilterSelect } from "@/features/accounts/presentation"
 import { Pager, ServerTable, useCursorPage } from "@/features/tenants/shared"
@@ -15,6 +16,9 @@ import { canChooseDrama, DramaInputSheet } from "./DramaInputSheet"
 import { ManualLinkSheet } from "./ManualLinkSheet"
 import { materialWaitingLabel } from "./preparationProgress"
 import { BuildReason, BuildStatus } from "./presentation"
+
+import { useImageCursorPage } from "./imageWorkspaceState"
+import { imageApi, imageKey, imagePath } from "./imageCompositionApi"
 
 function linkLabel(input: DraftInputPublic, status: DraftSummary["status"]) {
   const progress = input.preparation
@@ -57,6 +61,8 @@ export function BuildDramaTable({
   bcId,
   summary,
   onMaterial,
+  selectedDramas,
+  onSelectDramas,
   onLink,
   write,
   onChanged,
@@ -65,6 +71,8 @@ export function BuildDramaTable({
   tenantId: string
   bcId: string
   summary: DraftSummary
+  selectedDramas: Record<string, string>
+  onSelectDramas: (selected: Record<string, string>) => void
   onMaterial: (drama: DraftDramaPublic) => void
   onLink: (id: string) => void
   write: boolean
@@ -109,13 +117,33 @@ export function BuildDramaTable({
   const [issue, setIssue] = useState<"all" | "music" | "unused" | "protected">(
     "all",
   )
-  const imagePaging = useCursorPage()
+  const imageState = useQuery({
+    queryKey: imageKey(tenantId, summary.draft_id),
+    queryFn: async ({ signal }) =>
+      (
+        await imageApi.compositionState({
+          path: imagePath(tenantId, summary.draft_id),
+          signal,
+        })
+      ).data,
+    enabled: summary.media_kind === "CAROUSEL",
+    refetchInterval: 2000,
+  })
+  const imageRevision = Math.max(
+    summary.revision,
+    imageState.data?.revision ?? 0,
+  )
+  const imageGeneration = imageState.data?.active_generation ?? 0
+  const imagePaging = useImageCursorPage(
+    `${summary.draft_id}:${imageRevision}:${imageGeneration}:${issue}`,
+  )
   const images = useQuery({
     queryKey: [
       ...buildKey(tenantId, bcId),
       summary.draft_id,
       "image-dramas",
-      summary.revision,
+      imageRevision,
+      imageGeneration,
       issue,
       imagePaging.cursor,
     ],
@@ -161,7 +189,37 @@ export function BuildDramaTable({
             filtered={issue !== "all"}
             emptyTitle="没有符合条件的图片剧目"
             columns={[
+              {
+                header: "选择",
+                cell: ({ row }) => (
+                  <Checkbox
+                    aria-label={`选择剧目 ${row.original.title}`}
+                    checked={!!selectedDramas[row.original.drama_id]}
+                    disabled={
+                      !write ||
+                      (!selectedDramas[row.original.drama_id] &&
+                        Object.keys(selectedDramas).length >= 100)
+                    }
+                    onCheckedChange={(checked) => {
+                      const next = { ...selectedDramas }
+                      if (checked)
+                        next[row.original.drama_id] = row.original.title
+                      else delete next[row.original.drama_id]
+                      onSelectDramas(next)
+                    }}
+                  />
+                ),
+              },
               { header: "剧目", accessorKey: "title" },
+              {
+                header: "规则来源",
+                cell: ({ row }) =>
+                  Object.keys(
+                    imageState.data?.drama_patches[row.original.drama_id] ?? {},
+                  ).length
+                    ? "有覆盖"
+                    : "整批",
+              },
               { header: "候选图片", accessorKey: "candidate_count" },
               { header: "轮播 / 单图", accessorKey: "unit_count" },
               {

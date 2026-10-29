@@ -1135,3 +1135,65 @@ def test_failed_fixed_retry_reads_configured_song_without_recommend(
         json.loads(query["filtering"][0])["music_ids"] == ["configured"]
         for _, query in wire["calls"]
     )
+
+
+def test_selected_retry_repair_and_fixed_rule_only_reads_configured_song(
+    fixed_music_case, wire, redis_client
+):
+    from datetime import timedelta
+
+    from app.jobs.models import PendingDispatch
+    from app.modules.builds.carousel_music_models import MusicPreparationRun
+    from app.modules.builds.carousel_music_tasks import (
+        advance_music_preparation,
+        repair_music_preparation,
+    )
+    from app.modules.builds.image_music_batch import (
+        batch_progress,
+        recent_batches,
+        start_music_retry,
+    )
+
+    engine, scope, unit_id = fixed_music_case
+    with Session(engine) as session, session.begin():
+        draft = session.get(BuildDraft, scope.draft_id)
+        unit = session.get(
+            DraftCreativeUnit,
+            (scope.tenant_id, draft.id, draft.active_image_generation, unit_id),
+        )
+        unit.music_status = "FAILED"
+        result = start_music_retry(
+            session, scope, uuid4(), draft.revision, [unit.drama_id]
+        )
+        run_id = UUID(result["run_id"])
+        run = session.get(MusicPreparationRun, run_id)
+        run.repair_after = datetime.now(UTC) - timedelta(seconds=1)
+        dispatch = session.get(PendingDispatch, run.dispatch_id)
+        dispatch.published_at = datetime.now(UTC)
+        original_dispatch = dispatch.id
+        revision = draft.revision
+    assert repair_music_preparation(database_engine=engine) == 1
+    with Session(engine) as session, session.begin():
+        assert session.get(PendingDispatch, original_dispatch).published_at is None
+        run = session.get(MusicPreparationRun, run_id)
+        assert run.dispatch_id == original_dispatch
+        advance_music_preparation(session, run_id, run.generation)
+        progress = batch_progress(session, scope, run_id)
+        assert progress["status"] == "READY" and progress["retried"] == 1
+        assert recent_batches(session, scope)[0]["run_id"] == str(run_id)
+        assert session.get(BuildDraft, scope.draft_id).revision == revision
+        jobs = session.exec(
+            select(MusicSelectionJob).where(
+                MusicSelectionJob.active_generation
+                == session.get(BuildDraft, scope.draft_id).active_image_generation
+            )
+        ).all()
+        assert jobs and all(
+            job.parameters["mode"] == "FIXED"
+            and job.parameters["music_id"] == "configured"
+            for job in jobs
+        )
+        job_id = jobs[-1].id
+    advance_music(job_id, 1, database_engine=engine, redis_client=redis_client)
+    music_paths = [path for path, _ in wire["calls"] if "/music/" in path]
+    assert music_paths and all("/music/get/" in path for path in music_paths)
