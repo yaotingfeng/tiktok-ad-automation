@@ -82,3 +82,17 @@
 ![本地轮播广告说明与金额边界](assets/image-carousel-batch/local-ad-report.jpg)
 
 最终全局 `ruff check app tests`、`ty check app` 通过。全局格式检查仍有58个既有文件待格式化，同工具主分支基线为70个；本功能新增格式问题已处理，不声称全局格式全绿。此前聚合运行出现一次失败的场景恢复用例，本次定向1项通过，原聚合记录保持原结果。
+
+
+## 总审查修复定向验收（2026-10-30）
+
+总审查发现的原件清理后缩略图不可见、未应用本地规则仍可预览及演示夹具循环初始化，统一完成一轮修复。缩略图在原件不可读或 URL 失效时，仅回退到当前草稿 BC 的已授权平台图片；平台失败显示不可用，不触发上传。
+
+最后一轮图片编排与交付浏览器回归24项通过（含8项新增回归），图片预览 PG/SDK 9项及既有视频/跨BC预览5项通过。生产与演示构建、官方客户端生成、聚焦 Ruff/ty、Bun独立导入通过；沿用前述既有格式/测试类型检查警告，不声明全套检查全绿。
+
+Computer Use 单独验证：音乐全部就绪时可预览；整批 N 从5改3后按钮禁用；只查看差异再返回仍禁用；应用并等待读回完成后恢复；逐剧 N 改4并关闭侧栏后再次禁用。截图为最后一步。原件清理、URL失效及授权撤销由浏览器请求替身和真实PG授权测试覆盖，未以CUA伪造清理，也未访问真实平台。
+
+![规则未应用时禁止创建预览](assets/image-carousel-batch/local-unapplied-rules.jpg)
+
+
+修复提交07ca7837的定向复审结论：全部3项ADDRESSED，未发现新增问题，可合并本地main。随后整合main 1f4a01fb（查询预算嵌套恢复）至4470a787；`TEST_REDIS_URL=redis://localhost:6379/14 uv run pytest tests/modules/reporting/test_nested_query_budget.py tests/modules/reporting/test_carousel_ad_links.py tests/modules/reporting/test_planning_commits.py tests/modules/reporting/test_material_links.py -q` 结果 **73 passed / 33.42s**。该整合没有改变已验收的界面和缩略图代码。
