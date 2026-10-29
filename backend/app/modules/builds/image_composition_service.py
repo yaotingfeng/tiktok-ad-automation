@@ -57,7 +57,6 @@ from app.modules.materials.ingest_models import (
     TemporaryMaterialObject,
 )
 from app.modules.materials.models import AccountMaterial, MaterialFile
-from app.modules.materials.repository import material_visible
 
 
 @dataclass(frozen=True)
@@ -114,6 +113,17 @@ def resolve_image_scope(
             )
             .limit(1)
         ).first()
+        if prior is None:
+            prior = session.exec(
+                select(ImageCandidateSnapshot)
+                .where(
+                    ImageCandidateSnapshot.tenant_id == context.tenant_id,
+                    ImageCandidateSnapshot.draft_id == draft.id,
+                    col(ImageCandidateSnapshot.route) != {},
+                )
+                .order_by(col(ImageCandidateSnapshot.created_at).desc())
+                .limit(1)
+            ).first()
         if prior is None:
             raise
         route = FrozenTikTokRoute.model_validate(prior.route)
@@ -301,7 +311,9 @@ def _append_candidates(session, scope, snapshot, drama_id, rows):
                 col(IngestSessionFile.tenant_id) == scope.tenant_id,
                 col(IngestSessionFile.material_id).in_([r.id for r in rows]),
             )
+            .distinct(col(IngestSessionFile.material_id))
             .order_by(
+                col(IngestSessionFile.material_id),
                 col(IngestSession.created_at),
                 col(IngestSession.id),
                 col(IngestSessionFile.client_index),
@@ -341,46 +353,36 @@ def _append_candidates(session, scope, snapshot, drama_id, rows):
         )
 
 
-def build_candidate_snapshot(session, scope, draft):
-    """本地匹配显式限定 IMAGE；分页读取库存，不走视频选材或视频场景。"""
-    snapshot = ImageCandidateSnapshot(
-        tenant_id=scope.tenant_id,
-        draft_id=scope.draft_id,
-        bc_id=scope.bc_id,
-        base_revision=draft.revision,
+def build_candidate_snapshot(session, scope, draft, *, preparation_id=None):
+    """启动候选并只推进首个 100 行页面；剩余页面有持久游标，不在此全量循环。"""
+    from .image_candidate_service import (
+        advance_candidate_snapshot,
+        start_candidate_snapshot,
     )
-    session.add(snapshot)
-    session.flush()
-    for drama in _dramas(session, scope):
-        after = None
-        while True:
-            query = select(MaterialFile).where(
-                col(MaterialFile.tenant_id) == scope.tenant_id,
-                MaterialFile.media_type == "IMAGE",
-                col(MaterialFile.created_at) <= snapshot.created_at,
-                material_visible(tenant_id=scope.tenant_id),
-                col(MaterialFile.file_name_folded).contains(
-                    drama.title.strip().casefold(), autoescape=True
-                ),
-            )
-            if after:
-                query = query.where(col(MaterialFile.id) > after)
-            rows = session.exec(query.order_by(col(MaterialFile.id)).limit(100)).all()
-            _append_candidates(session, scope, snapshot, drama.drama_id, rows)
-            if len(rows) < 100:
-                break
-            after = rows[-1].id
-    session.flush()
+
+    snapshot = start_candidate_snapshot(
+        session, scope, draft, preparation_id=preparation_id
+    )
+    advance_candidate_snapshot(session, snapshot.id, snapshot.generation)
     return snapshot
 
 
 def _sync_candidate_counts(session, scope, snapshot_id):
-    counts = dict(session.exec(select(ImageCandidateItem.drama_id, func.count()).where(
-        ImageCandidateItem.tenant_id == scope.tenant_id,
-        ImageCandidateItem.snapshot_id == snapshot_id,
-    ).group_by(col(ImageCandidateItem.drama_id))).all())
+    counts = dict(
+        session.exec(
+            select(ImageCandidateItem.drama_id, func.count())
+            .where(
+                ImageCandidateItem.tenant_id == scope.tenant_id,
+                ImageCandidateItem.snapshot_id == snapshot_id,
+            )
+            .group_by(col(ImageCandidateItem.drama_id))
+        ).all()
+    )
     for drama in _dramas(session, scope):
-        drama.matched_count, drama.material_state = counts.get(drama.drama_id, 0), "ready"
+        drama.matched_count, drama.material_state = (
+            counts.get(drama.drama_id, 0),
+            "ready",
+        )
 
 
 def refresh_candidates(session, scope, request_id, expected_revision):
@@ -391,32 +393,9 @@ def refresh_candidates(session, scope, request_id, expected_revision):
         return replay
     _editable(session, draft)
     snapshot = build_candidate_snapshot(session, scope, draft)
-    state = _state(session, draft)
-    old = (
-        {
-            (r.drama_id, r.material_id)
-            for r in _snapshot_items(session, scope, state.snapshot_id)
-        }
-        if state.snapshot_id
-        else set()
-    )
-    new = {
-        (r.drama_id, r.material_id)
-        for r in _snapshot_items(session, scope, snapshot.id)
-    }
-    return _receipt(
-        session,
-        scope,
-        request_id,
-        fp,
-        {
-            "snapshot_id": snapshot.id,
-            "revision": draft.revision,
-            "candidate_count": len(new),
-            "added": len(new - old),
-            "removed": len(old - new),
-        },
-    )
+    from .image_candidate_service import snapshot_progress
+
+    return _receipt(session, scope, request_id, fp, snapshot_progress(snapshot))
 
 
 def adopt_candidates(session, scope, request_id, expected_revision, snapshot_id):
@@ -439,6 +418,8 @@ def adopt_candidates(session, scope, request_id, expected_revision, snapshot_id)
         scope.bc_id,
     ):
         raise DomainError("image_composition_not_found", "候选快照不存在")
+    if snapshot.status != "READY":
+        raise DomainError("image_candidates_incomplete", "候选尚未完整构建，暂不能采纳")
     if snapshot.base_revision != draft.revision:
         raise DomainError("draft_revision_conflict", "候选刷新后草稿已更新，请重新刷新")
     _state(session, draft).snapshot_id = snapshot.id
@@ -963,7 +944,7 @@ def advance_composition(
         return _progress(run)
     try:
         with session.begin_nested():
-            _draft(session, scope)
+            _draft(session, scope, lock=True)
             if draft.revision != run.base_revision:
                 raise DomainError("draft_revision_conflict", "草稿已更新")
             state = _state(session, draft)
@@ -1008,6 +989,7 @@ def advance_composition(
                 if monotonic() - started >= 10:
                     break
             if run.cursor == run.total:
+                _draft(session, scope, lock=True)
                 # 再核对全部成员，并在切换瞬间继承刚完成的系统配乐；不跨内容/规则/请求代数。
                 _validate_generation(session, scope, state, run.generation)
                 previous = {
@@ -1159,6 +1141,10 @@ def list_candidates(session, scope, snapshot_id=None, *, cursor=None, limit=50):
     identity = (
         UUID(str(snapshot_id)) if snapshot_id else state.snapshot_id if state else None
     )
+    if identity is not None:
+        from .image_candidate_service import require_completed_snapshot
+
+        require_completed_snapshot(session, scope, identity)
     exclusions = _exclusions(session, scope)
     query = (
         select(ImageCandidateItem)
@@ -1451,10 +1437,39 @@ def prepare_image_candidates(session, context, draft, prep):
         prep.pending_links = False
         prep.phase = "links"
         return
-    scope = resolve_image_scope(session, context=context, draft_id=draft.id)
+    from .drafts import _preparation_route
+    from .image_candidate_service import advance_candidate_snapshot
+
+    scope = ImageDraftScope(
+        context.tenant_id,
+        draft.bc_id,
+        draft.id,
+        context.actor_id,
+        _preparation_route(session, context, draft, prep),
+    )
     state = _state(session, draft)
     if state.snapshot_id is None:
-        state.snapshot_id = build_candidate_snapshot(session, scope, draft).id
+        snapshot = session.exec(
+            select(ImageCandidateSnapshot).where(
+                ImageCandidateSnapshot.tenant_id == scope.tenant_id,
+                ImageCandidateSnapshot.draft_id == draft.id,
+                ImageCandidateSnapshot.preparation_id == prep.id,
+            )
+        ).one_or_none()
+        if snapshot is None:
+            snapshot = build_candidate_snapshot(
+                session, scope, draft, preparation_id=prep.id
+            )
+        elif snapshot.status == "PENDING":
+            advance_candidate_snapshot(session, snapshot.id, snapshot.generation)
+        if snapshot.status == "PENDING":
+            return
+        if snapshot.status != "READY":
+            raise DomainError(
+                snapshot.error_code or "image_candidates_incomplete",
+                "图片候选准备未完成，请重新准备",
+            )
+        state.snapshot_id = snapshot.id
     _sync_candidate_counts(session, scope, state.snapshot_id)
     prep.status, prep.phase = "READY", "done"
     draft.status = "READY"
@@ -1511,7 +1526,24 @@ def composition_state(session, scope):
         )
         .group_by(col(DraftCreativeUnit.music_status))
     ).all()
+    from .image_candidate_service import snapshot_progress
+
+    candidate_query = select(ImageCandidateSnapshot).where(
+        ImageCandidateSnapshot.tenant_id == scope.tenant_id,
+        ImageCandidateSnapshot.draft_id == scope.draft_id,
+        ImageCandidateSnapshot.base_revision == draft.revision,
+    )
+    if state and state.snapshot_id:
+        candidate_query = candidate_query.where(
+            ImageCandidateSnapshot.id != state.snapshot_id
+        )
+    candidate_build = session.exec(
+        candidate_query.order_by(col(ImageCandidateSnapshot.created_at).desc()).limit(1)
+    ).first()
     return {
+        "candidate_build": snapshot_progress(candidate_build)
+        if candidate_build
+        else None,
         "revision": draft.revision,
         "active_generation": draft.active_image_generation,
         "applied_rule_revision": draft.applied_image_rule_revision,
@@ -1561,6 +1593,9 @@ def add_candidate_images(
         draft_id=scope.draft_id,
         bc_id=scope.bc_id,
         base_revision=draft.revision,
+        actor_id=scope.actor_id,
+        route=scope.route.model_dump(mode="json"),
+        source_snapshot_id=state.snapshot_id,
     )
     session.add(snapshot)
     session.flush()
@@ -1600,6 +1635,16 @@ def add_candidate_images(
         drama_id,
         [rows[i] for i in material_ids if i not in known],
     )
+    session.flush()
+    snapshot.candidate_count = session.exec(
+        select(func.count())
+        .select_from(ImageCandidateItem)
+        .where(
+            ImageCandidateItem.tenant_id == scope.tenant_id,
+            ImageCandidateItem.snapshot_id == snapshot.id,
+        )
+    ).one()
+    snapshot.summary = {"added": len(set(material_ids) - known), "removed": 0}
     state.snapshot_id = snapshot.id
     _sync_candidate_counts(session, scope, snapshot.id)
     _bump_revision(session, draft, expected_revision)
@@ -1616,26 +1661,55 @@ def add_candidate_images(
     )
 
 
-_DIFF_FIELDS = ("excluded_images", "warnings", "removed_ids", "retained_ids", "protection_losses")
+_DIFF_FIELDS = (
+    "excluded_images",
+    "warnings",
+    "removed_ids",
+    "retained_ids",
+    "protection_losses",
+)
 
 
 def _public_plan(summary):
     # 大批次只返回汇总和首屏冲突；图片/逐项差异通过受 scope 约束的分页 API 读取。
     dramas = []
     for row in summary["dramas"]:
-        dramas.append({**{k: v for k, v in row.items() if k not in (*_DIFF_FIELDS, "conflicts")},
-            **{f"{key}_count": len(row.get(key, [])) for key in (*_DIFF_FIELDS, "conflicts")}})
-    return {**summary, "dramas": dramas, "conflicts": summary["conflicts"][:100], "conflict_count": len(summary["conflicts"])}
+        dramas.append(
+            {
+                **{
+                    k: v
+                    for k, v in row.items()
+                    if k not in (*_DIFF_FIELDS, "conflicts")
+                },
+                **{
+                    f"{key}_count": len(row.get(key, []))
+                    for key in (*_DIFF_FIELDS, "conflicts")
+                },
+            }
+        )
+    return {
+        **summary,
+        "dramas": dramas,
+        "conflicts": summary["conflicts"][:100],
+        "conflict_count": len(summary["conflicts"]),
+    }
 
 
-def list_plan_differences(session, scope, plan_id, *, kind="conflicts", cursor=None, limit=50):
+def list_plan_differences(
+    session, scope, plan_id, *, kind="conflicts", cursor=None, limit=50
+):
     _draft(session, scope, verify=False)
     plan = _plan(session, scope, plan_id)
     if kind not in ("conflicts", *_DIFF_FIELDS):
         raise DomainError("image_edit_invalid", "差异类型无效")
     if type(limit) is not int or not 1 <= limit <= 100:
         raise DomainError("invalid_page_size", "每页最多 100 条")
-    owner = {"tenant": str(scope.tenant_id), "bc": scope.bc_id, "draft": str(scope.draft_id), "kind": f"plan-difference:{plan.id}:{kind}"}
+    owner = {
+        "tenant": str(scope.tenant_id),
+        "bc": scope.bc_id,
+        "draft": str(scope.draft_id),
+        "kind": f"plan-difference:{plan.id}:{kind}",
+    }
     after = decode_cursor(cursor, scope=owner)
     try:
         offset = int(after) if after else 0
@@ -1643,8 +1717,22 @@ def list_plan_differences(session, scope, plan_id, *, kind="conflicts", cursor=N
             raise ValueError
     except ValueError:
         raise DomainError("invalid_cursor", "分页游标无效") from None
-    items = plan.summary["conflicts"] if kind == "conflicts" else [
-        {"drama_id": drama["drama_id"], **(item if isinstance(item, dict) else {"unit_id": item})}
-        for drama in plan.summary["dramas"] for item in drama.get(kind, [])
-    ]
-    return Page(items=items[offset:offset+limit], total=len(items), next_cursor=encode_cursor(scope=owner, last_id=str(offset+limit)) if offset+limit < len(items) else None)
+    items = (
+        plan.summary["conflicts"]
+        if kind == "conflicts"
+        else [
+            {
+                "drama_id": drama["drama_id"],
+                **(item if isinstance(item, dict) else {"unit_id": item}),
+            }
+            for drama in plan.summary["dramas"]
+            for item in drama.get(kind, [])
+        ]
+    )
+    return Page(
+        items=items[offset : offset + limit],
+        total=len(items),
+        next_cursor=encode_cursor(scope=owner, last_id=str(offset + limit))
+        if offset + limit < len(items)
+        else None,
+    )

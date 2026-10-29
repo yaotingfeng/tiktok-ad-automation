@@ -102,6 +102,12 @@ def process_preparation(
             return
         if prep.draft_revision != draft.revision:
             prep.status = "OBSOLETE"
+            if draft.media_kind == "CAROUSEL":
+                from .image_candidate_service import fail_initial_candidate_snapshot
+
+                fail_initial_candidate_snapshot(
+                    session, prep, "draft_revision_conflict"
+                )
             session.add(prep)
             return
         try:
@@ -127,6 +133,10 @@ def process_preparation(
                     ):
                         break
         except DomainError as error:
+            if draft.media_kind == "CAROUSEL":
+                from .image_candidate_service import fail_initial_candidate_snapshot
+
+                fail_initial_candidate_snapshot(session, prep, error.code)
             prep.status, prep.error_code, draft.status = (
                 "BLOCKED",
                 error.code,

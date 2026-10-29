@@ -305,6 +305,64 @@ def add_candidates(
 
 
 @router.get("/plans/{plan_id}/differences")
-def differences(tenant_id: UUID, draft_id: UUID, plan_id: UUID, session: SessionDep, user: CurrentUser,
-    kind: Literal["conflicts", "excluded_images", "warnings", "removed_ids", "retained_ids", "protection_losses"] = "conflicts", cursor: Cursor = None, limit: Limit = 50):
-    return service.list_plan_differences(session, _scope(session, user, tenant_id, draft_id), plan_id, kind=kind, cursor=cursor, limit=limit)
+def differences(
+    tenant_id: UUID,
+    draft_id: UUID,
+    plan_id: UUID,
+    session: SessionDep,
+    user: CurrentUser,
+    kind: Literal[
+        "conflicts",
+        "excluded_images",
+        "warnings",
+        "removed_ids",
+        "retained_ids",
+        "protection_losses",
+    ] = "conflicts",
+    cursor: Cursor = None,
+    limit: Limit = 50,
+):
+    return service.list_plan_differences(
+        session,
+        _scope(session, user, tenant_id, draft_id),
+        plan_id,
+        kind=kind,
+        cursor=cursor,
+        limit=limit,
+    )
+
+
+@router.get("/candidates/snapshots/{snapshot_id}")
+def candidate_progress(
+    tenant_id: UUID,
+    draft_id: UUID,
+    snapshot_id: UUID,
+    session: SessionDep,
+    user: CurrentUser,
+):
+    from .image_candidate_service import candidate_snapshot_progress
+
+    return candidate_snapshot_progress(
+        session, _scope(session, user, tenant_id, draft_id), snapshot_id
+    )
+
+
+@router.post("/candidates/snapshots/{snapshot_id}/cancel")
+def cancel_candidates(
+    tenant_id: UUID,
+    draft_id: UUID,
+    snapshot_id: UUID,
+    body: Change,
+    session: SessionDep,
+    user: CurrentUser,
+):
+    from .image_candidate_service import cancel_candidate_snapshot
+
+    result = cancel_candidate_snapshot(
+        session,
+        _scope(session, user, tenant_id, draft_id, write=True, cancel=True),
+        snapshot_id,
+        **body.model_dump(),
+    )
+    session.commit()
+    return result

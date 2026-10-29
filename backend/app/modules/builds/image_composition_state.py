@@ -10,6 +10,8 @@ from sqlalchemy import (
     DateTime,
     ForeignKeyConstraint,
     Index,
+    Integer,
+    String,
     UniqueConstraint,
     text,
 )
@@ -61,8 +63,54 @@ class ImageCandidateSnapshot(SQLModel, table=True):
     __tablename__ = "image_candidate_snapshot"
     __table_args__ = (
         scope_fk(),
+        ForeignKeyConstraint(
+            ["dispatch_id"],
+            ["pending_dispatch.id"],
+            name="fk_image_snapshot_dispatch_id",
+        ),
+        ForeignKeyConstraint(
+            ["preparation_id"],
+            ["draft_preparation.id"],
+            name="fk_image_snapshot_preparation_id",
+        ),
+        ForeignKeyConstraint(
+            ["actor_id"], ["user.id"], name="fk_image_snapshot_actor_id"
+        ),
         UniqueConstraint(
             "tenant_id", "draft_id", "bc_id", "id", name="uq_image_snapshot_scope"
+        ),
+        CheckConstraint(
+            "status IN ('PENDING','READY','CANCELLED','FAILED')",
+            name="ck_image_snapshot_status",
+        ),
+        CheckConstraint(
+            "generation >= 0 AND candidate_count >= 0 AND drama_cursor >= 0 AND drama_cursor <= jsonb_array_length(dramas)",
+            name="ck_image_snapshot_progress",
+        ),
+        CheckConstraint(
+            "status != 'PENDING' OR (actor_id IS NOT NULL AND jsonb_typeof(route) = 'object' AND route ? 'connection_id')",
+            name="ck_image_snapshot_owner",
+        ),
+        UniqueConstraint(
+            "tenant_id", "preparation_id", name="uq_image_snapshot_preparation"
+        ),
+        Index(
+            "uq_image_snapshot_pending",
+            "tenant_id",
+            "draft_id",
+            unique=True,
+            postgresql_where=text("status = 'PENDING'"),
+        ),
+        Index("ix_image_snapshot_recovery", "status", "repair_after"),
+        ForeignKeyConstraint(
+            ["tenant_id", "draft_id", "bc_id", "source_snapshot_id"],
+            [
+                "image_candidate_snapshot.tenant_id",
+                "image_candidate_snapshot.draft_id",
+                "image_candidate_snapshot.bc_id",
+                "image_candidate_snapshot.id",
+            ],
+            name="fk_image_snapshot_source",
         ),
     )
     id: UUID = Field(default_factory=uuid4, primary_key=True)
@@ -70,6 +118,41 @@ class ImageCandidateSnapshot(SQLModel, table=True):
     draft_id: UUID
     bc_id: str
     base_revision: int
+    # 旧快照/显式手工加图默认已完成；异步匹配显式置 PENDING 并冻结构建上下文。
+    status: str = Field(
+        default="READY",
+        sa_column=Column(String(16), nullable=False, server_default="READY"),
+    )
+    actor_id: UUID | None = None
+    source_snapshot_id: UUID | None = None
+    preparation_id: UUID | None = None
+    route: dict[str, Any] = Field(
+        default_factory=dict,
+        sa_column=Column(JSONB, nullable=False, server_default=text("'{}'::jsonb")),
+    )
+    dramas: list[dict[str, Any]] = Field(
+        default_factory=list,
+        sa_column=Column(JSONB, nullable=False, server_default=text("'[]'::jsonb")),
+    )
+    generation: int = Field(
+        default=0, sa_column=Column(Integer, nullable=False, server_default="0")
+    )
+    drama_cursor: int = Field(
+        default=0, sa_column=Column(Integer, nullable=False, server_default="0")
+    )
+    material_after: UUID | None = None
+    candidate_count: int = Field(
+        default=0, sa_column=Column(Integer, nullable=False, server_default="0")
+    )
+    summary: dict[str, Any] = Field(
+        default_factory=dict,
+        sa_column=Column(JSONB, nullable=False, server_default=text("'{}'::jsonb")),
+    )
+    error_code: str | None = None
+    dispatch_id: UUID | None = None
+    repair_after: datetime | None = Field(
+        default=None, sa_column=Column(DateTime(timezone=True))
+    )
     # 内容一经生成不可漂移；候选启禁另存于 exclusions。
     created_at: datetime = Field(
         default_factory=lambda: datetime.now(UTC),

@@ -28,6 +28,23 @@ from tests.modules.builds.test_image_composition_migration import scaffold
 from tests.modules.materials.test_tenant_materials import material
 
 
+def finish_candidate_snapshot(session, scope, progress):
+    from app.modules.builds.image_candidate_service import (
+        advance_candidate_snapshot,
+        candidate_snapshot_progress,
+    )
+
+    for _ in range(100):
+        progress = candidate_snapshot_progress(session, scope, progress["snapshot_id"])
+        if progress["status"] != "PENDING":
+            assert progress["status"] == "READY"
+            return progress
+        advance_candidate_snapshot(
+            session, progress["snapshot_id"], progress["generation"]
+        )
+    raise AssertionError("candidate construction did not finish")
+
+
 @pytest.fixture
 def image_draft(session, context):
     intent = create_intent(session, context)
@@ -43,6 +60,7 @@ def image_draft(session, context):
     session.flush()
     scope = resolve_image_scope(session, context=context, draft_id=draft.id)
     snapshot = refresh_candidates(session, scope, uuid4(), draft.revision)
+    snapshot = finish_candidate_snapshot(session, scope, snapshot)
     adopt_candidates(session, scope, uuid4(), draft.revision, snapshot["snapshot_id"])
     return draft, drama, scope
 
@@ -363,6 +381,7 @@ def test_refresh_candidate_acceptance_stales_plan_and_preserves_active_and_exclu
     snapshot = refresh_candidates(session, scope, uuid4(), draft.revision)
     assert snapshot["added"] == 1
     assert list_candidates(session, scope).total == 7
+    snapshot = finish_candidate_snapshot(session, scope, snapshot)
     adopt_candidates(session, scope, uuid4(), draft.revision, snapshot["snapshot_id"])
     assert list_candidates(session, scope).total == 8
     assert (
@@ -525,6 +544,7 @@ def test_cross_drama_allocation_and_explicit_reuse_are_resolvable(session, conte
     session.flush()
     scope = resolve_image_scope(session, context=context, draft_id=draft.id)
     snapshot = refresh_candidates(session, scope, uuid4(), draft.revision)
+    snapshot = finish_candidate_snapshot(session, scope, snapshot)
     adopt_candidates(session, scope, uuid4(), draft.revision, snapshot["snapshot_id"])
     plan = preview_composition(
         session, scope, uuid4(), draft.revision, ImageRule(), {}, "PRESERVE_MANUAL"
@@ -1020,6 +1040,7 @@ def test_missing_digest_and_disappeared_images_are_reported_never_shrunk(
         == first["ordered_material_ids"]
     )
     snapshot = refresh_candidates(session, scope, uuid4(), draft.revision)
+    snapshot = finish_candidate_snapshot(session, scope, snapshot)
     adopt_candidates(session, scope, uuid4(), draft.revision, snapshot["snapshot_id"])
     plan = preview_composition(
         session, scope, uuid4(), draft.revision, ImageRule(), {}, "PRESERVE_MANUAL"
@@ -1040,6 +1061,7 @@ def test_paginated_candidate_snapshot_is_frozen_across_name_changes(
         originals.append(row)
     session.flush()
     snapshot = refresh_candidates(session, scope, uuid4(), draft.revision)
+    snapshot = finish_candidate_snapshot(session, scope, snapshot)
     adopt_candidates(session, scope, uuid4(), draft.revision, snapshot["snapshot_id"])
     original_name = originals[0].file_name
     originals[0].file_name = "Renamed-after-snapshot.jpg"
@@ -1181,7 +1203,9 @@ def test_manual_add_first_freezes_authorized_candidate_without_reviving_exclusio
     )
 
 
-def test_difference_pages_keep_excluded_images_out_of_plan_summary(session, image_draft):
+def test_difference_pages_keep_excluded_images_out_of_plan_summary(
+    session, image_draft
+):
     from uuid import UUID
 
     from app.modules.builds.image_composition_service import (
@@ -1189,14 +1213,282 @@ def test_difference_pages_keep_excluded_images_out_of_plan_summary(session, imag
         list_candidates,
         list_plan_differences,
     )
+
     draft, drama, scope = image_draft
     candidates = list_candidates(session, scope).items
-    exclude_candidates(session, scope, uuid4(), draft.revision, drama.drama_id, tuple(UUID(c["material_id"]) for c in candidates))
-    plan = preview_composition(session, scope, uuid4(), draft.revision, ImageRule(), {}, "PRESERVE_MANUAL")
+    exclude_candidates(
+        session,
+        scope,
+        uuid4(),
+        draft.revision,
+        drama.drama_id,
+        tuple(UUID(c["material_id"]) for c in candidates),
+    )
+    plan = preview_composition(
+        session, scope, uuid4(), draft.revision, ImageRule(), {}, "PRESERVE_MANUAL"
+    )
     assert plan["unit_count"] == 0
     assert "excluded_images" not in plan["dramas"][0]
     assert plan["dramas"][0]["excluded_images_count"] == 7
-    page = list_plan_differences(session, scope, plan["plan_id"], kind="excluded_images", limit=2)
+    page = list_plan_differences(
+        session, scope, plan["plan_id"], kind="excluded_images", limit=2
+    )
     assert page.total == 7 and len(page.items) == 2 and page.next_cursor
     with pytest.raises(DomainError):
-        list_plan_differences(session, scope, plan["plan_id"], kind="conflicts", cursor=page.next_cursor)
+        list_plan_differences(
+            session, scope, plan["plan_id"], kind="conflicts", cursor=page.next_cursor
+        )
+
+
+@pytest.mark.parametrize("staged", [False, True])
+def test_worker_rechecks_build_role_before_staging_or_switch(
+    session, image_draft, staged
+):
+    from app.modules.tenants.models import TenantMembership
+
+    draft, _, scope = image_draft
+    old = apply_rule(session, image_draft)
+    old_generation = draft.active_image_generation
+    plan = preview_composition(
+        session,
+        scope,
+        uuid4(),
+        draft.revision,
+        ImageRule(images_per_unit=2),
+        {},
+        "PRESERVE_MANUAL",
+    )
+    run = apply_composition(session, scope, plan["plan_id"], uuid4(), draft.revision)
+    if staged:
+        assert (
+            advance_composition(session, run["run_id"], run["generation"], limit=1)[
+                "status"
+            ]
+            == "PENDING"
+        )
+    member = session.get(TenantMembership, (scope.tenant_id, scope.actor_id))
+    member.role = "viewer"
+    session.flush()
+    progress = advance_composition(session, run["run_id"], run["generation"])
+    assert (
+        progress["status"] == "FAILED" and progress["error_code"] == "action_forbidden"
+    )
+    assert draft.active_image_generation == old_generation
+    assert list_creative_units(session, scope).items == old
+
+
+def test_candidate_refresh_checkpoints_and_rejects_incomplete_adoption(
+    session, image_draft
+):
+    from app.modules.builds.image_composition_service import list_candidates
+
+    draft, _, scope = image_draft
+    for index in range(7, 205):
+        row = material(session, scope.context, f"Moon_{index}.jpg")
+        row.media_type, row.sha256 = "IMAGE", f"{index:064x}"
+    session.flush()
+    refresh = refresh_candidates(session, scope, uuid4(), draft.revision)
+    assert refresh["status"] == "PENDING" and refresh["processed"] == 100
+    with pytest.raises(DomainError) as hidden:
+        list_candidates(session, scope, refresh["snapshot_id"])
+    assert hidden.value.code == "image_candidates_incomplete"
+    assert list_candidates(session, scope).total == 7
+    with pytest.raises(DomainError) as incomplete:
+        adopt_candidates(
+            session, scope, uuid4(), draft.revision, refresh["snapshot_id"]
+        )
+    assert incomplete.value.code == "image_candidates_incomplete"
+
+
+@pytest.mark.parametrize(
+    "action,error",
+    [
+        ("role", "action_forbidden"),
+        ("revision", "draft_revision_conflict"),
+        ("cancel", "image_candidates_cancelled"),
+    ],
+)
+def test_candidate_generation_stale_permission_and_cancel_preserve_active(
+    session, image_draft, action, error
+):
+    from app.modules.builds.image_candidate_service import (
+        advance_candidate_snapshot,
+        cancel_candidate_snapshot,
+        candidate_snapshot_progress,
+    )
+    from app.modules.builds.image_composition_service import list_candidates
+    from app.modules.tenants.models import TenantMembership
+
+    draft, _, scope = image_draft
+    old = apply_rule(session, image_draft)
+    active = draft.active_image_generation
+    for index in range(7, 205):
+        row = material(session, scope.context, f"Moon_{index}.jpg")
+        row.media_type, row.sha256 = "IMAGE", f"{index:064x}"
+    session.flush()
+    refresh = refresh_candidates(session, scope, uuid4(), draft.revision)
+    assert refresh["status"] == "PENDING"
+    assert (
+        advance_candidate_snapshot(
+            session, refresh["snapshot_id"], refresh["generation"] - 1
+        )
+        == refresh
+    )
+    if action == "role":
+        session.get(TenantMembership, (scope.tenant_id, scope.actor_id)).role = "viewer"
+    elif action == "revision":
+        draft.revision += 1
+    else:
+        cancel_candidate_snapshot(
+            session, scope, refresh["snapshot_id"], uuid4(), draft.revision
+        )
+    session.flush()
+    result = advance_candidate_snapshot(
+        session, refresh["snapshot_id"], refresh["generation"]
+    )
+    assert result["status"] == ("CANCELLED" if action == "cancel" else "FAILED")
+    assert result["processed"] == 100 and result["error_code"] == error
+    assert candidate_snapshot_progress(session, scope, refresh["snapshot_id"]) == result
+    assert (
+        draft.active_image_generation == active
+        and list_creative_units(session, scope).items == old
+    )
+    assert list_candidates(session, scope).total == 7
+
+
+def test_candidate_worker_rollback_replay_recovery_retains_cutoff(
+    committed_image_draft,
+):
+    from datetime import UTC, datetime, timedelta
+    from uuid import UUID
+
+    from sqlmodel import Session
+
+    from app.jobs.models import PendingDispatch
+    from app.modules.builds.image_candidate_service import (
+        advance_candidate_snapshot,
+        candidate_snapshot_progress,
+    )
+    from app.modules.builds.image_candidate_tasks import (
+        process_candidate_snapshot,
+        repair_candidate_snapshots,
+    )
+    from app.modules.builds.image_composition_service import list_candidates
+    from app.modules.builds.image_composition_state import (
+        ImageCandidateItem,
+        ImageCandidateSnapshot,
+    )
+
+    scope, _, engine = committed_image_draft
+    with Session(engine) as setup:
+        draft = setup.get(BuildDraft, scope.draft_id)
+        for index in range(61, 261):
+            row = material(setup, scope.context, f"Moon_{index}.jpg")
+            row.media_type, row.sha256 = "IMAGE", f"{index:064x}"
+        setup.flush()
+        first = refresh_candidates(setup, scope, uuid4(), draft.revision)
+        assert first["processed"] == 100
+        setup.commit()
+    with Session(engine) as crashed:
+        result = advance_candidate_snapshot(
+            crashed, first["snapshot_id"], first["generation"]
+        )
+        assert result["processed"] == 200
+        crashed.rollback()
+    with Session(engine) as check:
+        snapshot = check.get(ImageCandidateSnapshot, UUID(first["snapshot_id"]))
+        assert (
+            snapshot.candidate_count == 100
+            and snapshot.generation == first["generation"]
+        )
+        assert (
+            len(
+                check.exec(
+                    select(ImageCandidateItem).where(
+                        ImageCandidateItem.snapshot_id == snapshot.id
+                    )
+                ).all()
+            )
+            == 100
+        )
+        late = material(check, scope.context, "Moon_late.jpg")
+        late.media_type, late.sha256 = "IMAGE", "f" * 64
+        late_id = late.id
+        dispatch = check.get(PendingDispatch, snapshot.dispatch_id)
+        payload, original_dispatch_id = dict(dispatch.payload), dispatch.id
+        snapshot.repair_after = datetime.now(UTC) - timedelta(seconds=1)
+        dispatch.published_at = datetime.now(UTC)
+        check.commit()
+    assert repair_candidate_snapshots(database_engine=engine) == 1
+    with Session(engine) as check:
+        snapshot = check.get(ImageCandidateSnapshot, UUID(first["snapshot_id"]))
+        assert snapshot.dispatch_id == original_dispatch_id
+        assert check.get(PendingDispatch, original_dispatch_id).published_at is None
+    for _ in range(2):
+        process_candidate_snapshot(
+            database_engine=engine,
+            tenant_id=scope.tenant_id,
+            actor_id=scope.actor_id,
+            payload=payload,
+        )
+    with Session(engine) as check:
+        snapshot = check.get(ImageCandidateSnapshot, UUID(first["snapshot_id"]))
+        assert snapshot.candidate_count == 200
+        payload = dict(check.get(PendingDispatch, snapshot.dispatch_id).payload)
+    process_candidate_snapshot(
+        database_engine=engine,
+        tenant_id=scope.tenant_id,
+        actor_id=scope.actor_id,
+        payload=payload,
+    )
+    with Session(engine) as check:
+        result = candidate_snapshot_progress(check, scope, first["snapshot_id"])
+        assert result["status"] == "READY" and result["candidate_count"] == 261
+        assert (
+            result["added"] == 200
+            and result["removed"] == 0
+            and result["cutoff"] == first["cutoff"]
+        )
+        assert list_candidates(check, scope).total == 61
+        assert not check.exec(
+            select(ImageCandidateItem).where(
+                ImageCandidateItem.snapshot_id == UUID(first["snapshot_id"]),
+                ImageCandidateItem.material_id == late_id,
+            )
+        ).all()
+        draft = check.get(BuildDraft, scope.draft_id)
+        adopt_candidates(check, scope, uuid4(), draft.revision, first["snapshot_id"])
+        assert list_candidates(check, scope).total == 261
+        check.commit()
+
+
+def test_candidate_progress_cancel_api_and_tenant_scope(
+    client, session, context, image_draft
+):
+    from app.api.deps import get_current_user
+    from app.main import app
+    from app.models import User
+
+    draft, _, scope = image_draft
+    for index in range(7, 105):
+        row = material(session, scope.context, f"Moon_{index}.jpg")
+        row.media_type, row.sha256 = "IMAGE", f"{index:064x}"
+    session.flush()
+    app.dependency_overrides[get_current_user] = lambda: session.get(
+        User, context.actor_id
+    )
+    url = f"/api/tenants/{scope.tenant_id}/build-drafts/{draft.id}/image-composition/candidates"
+    response = client.post(
+        url + "/refresh",
+        json={"request_id": str(uuid4()), "expected_revision": draft.revision},
+    )
+    assert response.status_code == 200 and response.json()["status"] == "PENDING"
+    snapshot_id = response.json()["snapshot_id"]
+    assert client.get(url + f"/snapshots/{snapshot_id}").json()["processed"] == 100
+    assert client.get(url + f"?snapshot_id={snapshot_id}").status_code == 409
+    assert client.get(url + f"/snapshots/{uuid4()}").status_code == 404
+    response = client.post(
+        url + f"/snapshots/{snapshot_id}/cancel",
+        json={"request_id": str(uuid4()), "expected_revision": draft.revision},
+    )
+    assert response.status_code == 200 and response.json()["status"] == "CANCELLED"

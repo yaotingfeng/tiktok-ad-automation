@@ -1176,6 +1176,10 @@ def continue_draft(session: Session, *, context: TenantContext, task_id: UUID) -
         return True
     if prep.draft_revision != draft.revision:
         prep.status = "OBSOLETE"
+        if draft.media_kind == "CAROUSEL":
+            from .image_candidate_service import fail_initial_candidate_snapshot
+
+            fail_initial_candidate_snapshot(session, prep, "draft_revision_conflict")
     elif prep.phase == "accounts":
         if _capabilities_page(session, context, draft, prep):
             _accounts_page(session, context, draft, prep)
@@ -1210,6 +1214,10 @@ def _bump_revision(session: Session, draft: BuildDraft, expected_revision: int) 
             "draft_revision_conflict", "草稿已更新，请保留当前编辑并读取最新版本"
         )
     draft.revision += 1
+    if draft.media_kind == "CAROUSEL":
+        from .image_candidate_service import invalidate_candidate_snapshots
+
+        invalidate_candidate_snapshots(session, draft)
     draft.updated_at = datetime.now(UTC)
     session.add(draft)
     return draft.revision

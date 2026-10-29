@@ -4,6 +4,9 @@ from fastapi.responses import JSONResponse
 # Register exact business codes here; never infer status from provider text.
 ERROR_HTTP_STATUS: dict[str, int] = {
     "image_composition_busy": 409,
+    "image_candidates_busy": 409,
+    "image_candidates_incomplete": 409,
+    "image_candidates_cancelled": 409,
     "image_composition_not_found": 404,
     "image_composition_conflict": 409,
     "image_candidates_required": 409,

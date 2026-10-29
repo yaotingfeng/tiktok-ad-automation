@@ -293,3 +293,140 @@ def test_repair_preserves_current_identity_and_unpublished_backoff(
     assert session.get(DraftPreparation, task).dispatch_id == original
     assert session.get(DraftPreparation, task).generation == 0
     assert session.get(PendingDispatch, original).published_at is None
+
+
+def test_carousel_initial_candidates_checkpoint_within_preparation_budget(
+    session, context, intent
+):
+    import pytest
+
+    from app.modules.builds.image_composition_service import (
+        list_candidates,
+        resolve_image_scope,
+    )
+    from app.modules.builds.image_composition_state import (
+        ImageCandidateItem,
+        ImageCandidateSnapshot,
+        ImageCompositionState,
+    )
+
+    draft_id, task_id = material_task(session, context, intent, ["Moon"])
+    draft = session.get(BuildDraft, draft_id)
+    draft.media_kind = "CAROUSEL"
+    for index in range(1501):
+        row = material(session, context, f"Moon_{index:04}.jpg")
+        row.media_type, row.sha256 = "IMAGE", f"{index:064x}"
+    session.flush()
+    process_preparation(
+        database_engine=session.connection(),
+        tenant_id=context.tenant_id,
+        actor_id=context.actor_id,
+        payload={"preparation_id": str(task_id), "generation": 0},
+    )
+    session.expire_all()
+    snapshot = session.exec(
+        select(ImageCandidateSnapshot).where(
+            ImageCandidateSnapshot.preparation_id == task_id
+        )
+    ).one()
+    assert snapshot.status == "PENDING" and 100 <= snapshot.candidate_count <= 500
+    assert snapshot.candidate_count == snapshot.generation * 100
+    state = session.get(ImageCompositionState, (context.tenant_id, draft_id))
+    assert state.snapshot_id is None
+    identity, count, cursor, cutoff = (
+        snapshot.id,
+        snapshot.candidate_count,
+        snapshot.generation,
+        snapshot.created_at,
+    )
+    # 一个随后中断的页面真实回滚；上一轮已提交的快照和游标保留。
+    with pytest.raises(RuntimeError), session.begin_nested():
+        continue_draft(session, context=context, task_id=task_id)
+        assert snapshot.candidate_count == count + 100
+        raise RuntimeError("worker interrupted before commit")
+    session.expire_all()
+    snapshot = session.get(ImageCandidateSnapshot, identity)
+    assert snapshot.candidate_count == count and snapshot.generation == cursor
+    assert (
+        len(
+            session.exec(
+                select(ImageCandidateItem).where(
+                    ImageCandidateItem.snapshot_id == identity
+                )
+            ).all()
+        )
+        == count
+    )
+    for _ in range(25):
+        prep = session.get(DraftPreparation, task_id)
+        if prep.status != "PENDING":
+            break
+        payload = {"preparation_id": str(task_id), "generation": prep.generation}
+        process_preparation(
+            database_engine=session.connection(),
+            tenant_id=context.tenant_id,
+            actor_id=context.actor_id,
+            payload=payload,
+        )
+        # 原投递重放不能重复处理已提交的页。
+        process_preparation(
+            database_engine=session.connection(),
+            tenant_id=context.tenant_id,
+            actor_id=context.actor_id,
+            payload=payload,
+        )
+        session.expire_all()
+    assert session.get(DraftPreparation, task_id).status == "READY"
+    snapshot = session.get(ImageCandidateSnapshot, identity)
+    assert (
+        snapshot.status == "READY"
+        and snapshot.candidate_count == 1501
+        and snapshot.created_at == cutoff
+    )
+    assert (
+        session.get(ImageCompositionState, (context.tenant_id, draft_id)).snapshot_id
+        == identity
+    )
+    scope = resolve_image_scope(session, context=context, draft_id=draft_id)
+    assert list_candidates(session, scope).total == 1501
+
+
+def test_carousel_initial_candidates_role_loss_fails_preparation_and_snapshot(
+    session, context, intent
+):
+    from app.modules.builds.image_composition_state import (
+        ImageCandidateSnapshot,
+        ImageCompositionState,
+    )
+
+    draft_id, task_id = material_task(session, context, intent, ["Moon"])
+    session.get(BuildDraft, draft_id).media_kind = "CAROUSEL"
+    for index in range(151):
+        row = material(session, context, f"Moon_{index:04}.jpg")
+        row.media_type, row.sha256 = "IMAGE", f"{index:064x}"
+    session.flush()
+    continue_draft(session, context=context, task_id=task_id)
+    snapshot = session.exec(
+        select(ImageCandidateSnapshot).where(
+            ImageCandidateSnapshot.preparation_id == task_id
+        )
+    ).one()
+    identity = snapshot.id
+    assert snapshot.candidate_count == 100 and snapshot.status == "PENDING"
+    session.get(TenantMembership, (context.tenant_id, context.actor_id)).role = "viewer"
+    session.flush()
+    process_preparation(
+        database_engine=session.connection(),
+        tenant_id=context.tenant_id,
+        actor_id=context.actor_id,
+        payload={"preparation_id": str(task_id), "generation": 0},
+    )
+    session.expire_all()
+    assert session.get(DraftPreparation, task_id).status == "BLOCKED"
+    snapshot = session.get(ImageCandidateSnapshot, identity)
+    assert snapshot.status == "FAILED" and snapshot.error_code == "action_forbidden"
+    assert snapshot.candidate_count == 100
+    assert (
+        session.get(ImageCompositionState, (context.tenant_id, draft_id)).snapshot_id
+        is None
+    )

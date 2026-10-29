@@ -30,6 +30,7 @@ celery_app.conf.update(
         "app.modules.materials.push_tasks",
         "app.modules.builds.draft_tasks",
         "app.modules.builds.image_composition_tasks",
+        "app.modules.builds.image_candidate_tasks",
         "app.modules.builds.preview_tasks",
         "app.modules.builds.submission_tasks",
         "app.modules.builds.tasks",
@@ -184,6 +185,11 @@ celery_app.conf.update(
         },
         "repair-material-dispatches": {
             "task": "materials.repair_dispatches",
+            "schedule": 60.0,
+            "options": {"queue": "control"},
+        },
+        "repair-image-candidates": {
+            "task": "builds.repair_image_candidates",
             "schedule": 60.0,
             "options": {"queue": "control"},
         },
