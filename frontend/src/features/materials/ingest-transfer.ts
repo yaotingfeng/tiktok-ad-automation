@@ -233,6 +233,7 @@ export function ingestCallbacks(options: {
               file_name: file.name,
               size: file.size,
               mime_type: file.type,
+              media_type: file.type.startsWith("image/") ? "IMAGE" : "VIDEO",
               last_modified_ms: file.lastModified,
             })),
           },

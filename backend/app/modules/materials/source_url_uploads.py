@@ -163,6 +163,10 @@ def _records(
     generation: int,
 ) -> tuple[MaterialFile, TemporaryMaterialObject, IngestSessionFile]:
     material = _locked_material(db, context, material_id)
+    if material.media_type != "VIDEO":
+        raise DomainError(
+            "image_distribution_pending", "图片等待专用平台分发，不支持视频上传"
+        )
     obj = db.exec(
         select(TemporaryMaterialObject)
         .where(
@@ -340,6 +344,10 @@ def request_url_retry(
         db, tenant_id=context.tenant_id, actor_id=context.actor_id, action="upload"
     )
     material = _locked_material(db, context, material_id)
+    if material.media_type != "VIDEO":
+        raise DomainError(
+            "image_distribution_pending", "图片等待专用平台分发，不支持视频上传"
+        )
     obj = db.exec(
         select(TemporaryMaterialObject).where(
             TemporaryMaterialObject.tenant_id == context.tenant_id,

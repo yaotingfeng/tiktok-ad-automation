@@ -2314,6 +2314,10 @@ export type IngestFileInput = {
      */
     mime_type: string;
     /**
+     * Media Type
+     */
+    media_type?: 'VIDEO' | 'IMAGE';
+    /**
      * Client Index
      */
     client_index: number;
@@ -2347,6 +2351,10 @@ export type IngestFilePublic = {
      * Mime Type
      */
     mime_type: string;
+    /**
+     * Media Type
+     */
+    media_type?: 'VIDEO' | 'IMAGE';
     /**
      * Last Modified Ms
      */
@@ -3279,6 +3287,10 @@ export type ManualLinkPatch = {
  * MaterialPublic
  */
 export type MaterialPublic = {
+    /**
+     * Media Type
+     */
+    media_type?: 'VIDEO' | 'IMAGE';
     /**
      * Material Id
      */

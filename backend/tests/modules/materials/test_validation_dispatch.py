@@ -468,7 +468,7 @@ def test_streaming_validator_uses_real_media_probe_and_removes_temporary_copy(
         storage_bucket="private-test",
         object_key="owned-test/original",
     )
-    file = SimpleNamespace(mime_type="video/mp4")
+    file = SimpleNamespace(mime_type="video/mp4", media_type="VIDEO")
     folders = []
 
     @contextmanager

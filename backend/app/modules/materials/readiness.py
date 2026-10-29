@@ -67,6 +67,8 @@ def load_material(
     material = session.exec(statement).first()
     if material is None:
         raise DomainError("material_not_found", "未找到当前租户 BC 素材")
+    if material.media_type != "VIDEO":
+        raise DomainError("image_distribution_pending", "图片等待专用平台分发")
     return material
 
 
@@ -434,6 +436,11 @@ def get_material_readiness_batch(
     )
     result: dict[UUID, MaterialReadiness] = {}
     for material in materials:
+        if material.media_type != "VIDEO":
+            result[material.id] = blocked(
+                DomainError("image_distribution_pending", "图片等待专用平台分发")
+            )
+            continue
         mapping = mappings.get(material.id)
         operation = operations.get(material.id)
         try:

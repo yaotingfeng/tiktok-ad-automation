@@ -27,7 +27,7 @@ from app.modules.tenants.models import Tenant
 from tests.modules.conftest import create_context
 
 
-def material(session, context, name, *, bc="bc-a", state="stored"):
+def material(session, context, name, *, bc="bc-a", state="stored", historical=False):
     if session.get(TenantBC, (context.tenant_id, bc)) is None:
         session.add(TenantBC(tenant_id=context.tenant_id, bc_id=bc))
         session.flush()
@@ -41,7 +41,12 @@ def material(session, context, name, *, bc="bc-a", state="stored"):
         byte_size=4_000_000_000,
         storage_state=state,
     )
-    session.add(row)
+    if historical:
+        from tests.migration_database import insert_historical_material
+
+        insert_historical_material(session, row)
+    else:
+        session.add(row)
     session.flush()
     return row
 

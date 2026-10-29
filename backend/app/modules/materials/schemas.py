@@ -170,6 +170,7 @@ class UploadCompleted(BaseModel):
 
 
 class MaterialPublic(BaseModel):
+    media_type: Literal["VIDEO", "IMAGE"] = "VIDEO"
     material_id: UUID
     content_key: str
     bc_id: str

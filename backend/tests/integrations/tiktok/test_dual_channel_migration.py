@@ -7,7 +7,6 @@ from sqlalchemy import text
 from sqlmodel import Session
 
 from app.modules.materials.ingest_models import OriginalUse, TemporaryMaterialObject
-from app.modules.materials.models import MaterialFile
 from tests.migration_database import historical_database
 from tests.modules.builds.test_route_migration import historical_rows, snapshot
 from tests.modules.materials.test_cover_evidence_migration import (
@@ -30,9 +29,15 @@ def _original_history(db, context, operation_id):
         text("SELECT material_id FROM material_asset_operation WHERE id=:id"),
         {"id": operation_id},
     ).scalar_one()
-    file = db.get(MaterialFile, material_id)
-    assert file is not None
-    file.current_object_generation = 1
+    # 使用旧版实际列读取/更新原件，避免当前 IMAGE 字段渗入历史迁移夹具。
+    file = db.execute(
+        text("SELECT id,bc_id,object_key,byte_size FROM material_file WHERE id=:id"),
+        {"id": material_id},
+    ).one()
+    db.execute(
+        text("UPDATE material_file SET current_object_generation=1 WHERE id=:id"),
+        {"id": material_id},
+    )
     original = TemporaryMaterialObject(
         tenant_id=context.tenant_id,
         bc_id=file.bc_id,
@@ -47,7 +52,7 @@ def _original_history(db, context, operation_id):
         digest_verified_at=datetime.now(UTC),
         digest_source="historical-verifier",
     )
-    db.add_all([file, original])
+    db.add(original)
     db.flush()
     db.add(
         OriginalUse(

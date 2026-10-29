@@ -235,6 +235,11 @@ export function AssetDetails({
               <p className="text-sm">原始上传 BC：{detail.data.bc_id}</p>
               <p className="text-sm">
                 {bytes(detail.data.byte_size)} · {detail.data.mime_type}
+                {detail.data.media_type === "IMAGE" &&
+                detail.data.width != null &&
+                detail.data.height != null
+                  ? ` · ${detail.data.width} × ${detail.data.height}`
+                  : ""}
               </p>
               <p className="text-sm text-muted-foreground">
                 {detail.data.original_available
@@ -280,24 +285,36 @@ export function AssetDetails({
                   </AlertDescription>
                 </Alert>
               )}
-              {preview && (
-                <video
-                  aria-label={
-                    preview.kind === "remote"
-                      ? "账户素材视频预览"
-                      : "原文件视频预览"
-                  }
+              {preview && detail.data.media_type === "IMAGE" ? (
+                <img
+                  alt="原文件图片预览"
                   src={preview.url}
-                  controls
-                  preload="metadata"
-                  className="max-h-80 w-full rounded-lg"
+                  className="max-h-80 w-full rounded-lg object-contain"
                   onError={() => {
                     setPreviewError(true)
                     setPreview(null)
                   }}
-                >
-                  <track kind="captions" />
-                </video>
+                />
+              ) : (
+                preview && (
+                  <video
+                    aria-label={
+                      preview.kind === "remote"
+                        ? "账户素材视频预览"
+                        : "原文件视频预览"
+                    }
+                    src={preview.url}
+                    controls
+                    preload="metadata"
+                    className="max-h-80 w-full rounded-lg"
+                    onError={() => {
+                      setPreviewError(true)
+                      setPreview(null)
+                    }}
+                  >
+                    <track kind="captions" />
+                  </video>
+                )
               )}
             </section>
           )

@@ -101,6 +101,11 @@ const errors: Record<string, string> = {
   upload_not_retryable: "该步骤当前不能重试，请刷新核实进度。",
   object_result_unknown: "原文件接收结果待核实，请刷新进度。",
   invalid_file: "文件不符合要求，请查看文件信息。",
+  invalid_image: "图片内容损坏或无法解码，请更换静态 JPG、PNG 文件。",
+  unsupported_image: "仅支持静态 JPG、PNG 图片，暂不支持动画或多帧图片。",
+  image_pixel_limit: "图片像素超过服务运行上限，请选择尺寸较小的图片。",
+  image_type_mismatch: "图片实际内容与声明类型不一致，请核对文件格式。",
+  image_distribution_pending: "图片已入库，等待图片平台分发。",
   permission_denied: "上传权限已失效，请联系管理员。",
   blocked_auth: "平台账户授权失效，原文件保留。",
 }

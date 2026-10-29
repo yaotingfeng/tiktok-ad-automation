@@ -619,6 +619,7 @@ export class IngestManager {
       if (
         current.material_id !== file.material_id ||
         current.client_index !== file.client_index ||
+        current.media_type !== file.media_type ||
         current.generation !== file.generation
       )
         throw new UploadError("upload_identity_changed")

@@ -9,11 +9,22 @@ import psycopg
 from alembic import command
 from alembic.config import Config
 from psycopg import sql
-from sqlalchemy import create_engine, text
+from sqlalchemy import MetaData, Table, create_engine, text
 from sqlalchemy.engine import make_url
 
 from app.core.config import settings
 from tests.database import require_test_database
+
+
+def insert_historical_material(session, row):
+    """历史素材只播种当时的列，新媒体类型不能渗入旧 schema。"""
+    table = Table("material_file", MetaData(), autoload_with=session.connection())
+    session.execute(
+        table.insert().values(
+            **{key: value for key, value in row.model_dump().items() if key in table.c}
+        )
+    )
+    return row
 
 
 def insert_historical_bc(session, *, tenant_id, bc_id):

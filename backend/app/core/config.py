@@ -100,6 +100,9 @@ class Settings(BaseSettings):
     MATERIAL_STORAGE_TENANT_BYTES: int = Field(default=0, ge=0)
     MATERIAL_PART_URL_SECONDS: int = Field(default=900, ge=60, le=900)
     MATERIAL_INGEST_URL_SECONDS: int = Field(default=7200, ge=60, le=7200)
+    # 图片运行准入，独立于 TikTok 平台未核实的上传限制。
+    MATERIAL_IMAGE_MAX_UPLOAD_BYTES: int = Field(default=20 * 1024**2, gt=0, le=1024**3)
+    MATERIAL_IMAGE_MAX_PIXELS: int = Field(default=16_000_000, gt=0, le=32_000_000)
     MATERIAL_VALIDATION_SECONDS: int = Field(default=300, ge=30, le=600)
     MATERIAL_ABANDON_SECONDS: int = Field(default=86400, ge=3600)
     # Exact platform media hosts must be verified for the deployment before relay.

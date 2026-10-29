@@ -5,6 +5,8 @@ import { Input } from "@/components/ui/input"
 import { namingHint } from "./presentation"
 import { MAX_BROWSER_FILE_BYTES } from "./upload-scheduler"
 export const supportedTypes = new Set([
+  "image/jpeg",
+  "image/png",
   "video/mp4",
   "video/quicktime",
   "video/x-msvideo",
@@ -17,7 +19,16 @@ export function fileIssue(file: File) {
   if (file.size > MAX_BROWSER_FILE_BYTES)
     return "文件超过单文件 1 GiB（1024 MiB）上限"
   if (!supportedTypes.has(file.type))
-    return "请选择 MP4、MOV、AVI、WebM、MPEG 或 MKV 视频"
+    return "请选择 JPG、PNG 图片或 MP4、MOV、AVI、WebM、MPEG、MKV 视频"
+  if (file.type.startsWith("image/")) {
+    const suffix = file.name.split(".").pop()?.toLowerCase()
+    if (
+      !(file.type === "image/png"
+        ? suffix === "png"
+        : suffix === "jpg" || suffix === "jpeg")
+    )
+      return "图片后缀与类型不一致"
+  }
   if (
     !file.name.trim() ||
     [...file.name].length > 1000 ||
@@ -39,7 +50,7 @@ export function UploadPanel({
       <FieldLabel htmlFor="material-files">选择本地素材</FieldLabel>
       <FieldDescription>{namingHint}</FieldDescription>
       <section
-        aria-label="本地视频拖放区"
+        aria-label="本地素材拖放区"
         className="flex min-w-0 flex-col items-start gap-3 rounded-lg border border-dashed p-4 lg:p-6"
         onDragOver={(e) => e.preventDefault()}
         onDrop={(e) => {
@@ -48,8 +59,9 @@ export function UploadPanel({
         }}
       >
         <p className="text-sm text-muted-foreground">
-          一次最多选择 20000 个视频，每个文件最多 1 GiB（1024
-          MiB）。刷新后未传完的文件需要重新选择。
+          一次最多选择 20000 个视频或静态 JPG、PNG 图片。视频最多 1 GiB；
+          图片默认最多 20 MiB、1600 万像素，以服务端运行配置和验真结果为准。
+          不支持动画或多帧图片。刷新后未传完的文件需要重新选择。
         </p>
         <Button
           type="button"
@@ -65,7 +77,7 @@ export function UploadPanel({
           tabIndex={-1}
           id="material-files"
           type="file"
-          accept="video/*"
+          accept="video/*,image/jpeg,image/png"
           multiple
           disabled={disabled}
           onChange={(e) => {

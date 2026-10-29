@@ -68,6 +68,10 @@ def _material(
         session, actor_id=context.actor_id, tenant_id=context.tenant_id, action=action
     )
     row = _locked_material(session, context, material_id)
+    if row.media_type != "VIDEO":
+        raise DomainError(
+            "image_distribution_pending", "图片等待专用平台分发，不支持视频上传"
+        )
     if require_stored and row.storage_state != "stored":
         raise DomainError("original_unavailable", "素材原文件尚未完整入库")
     return row

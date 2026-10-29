@@ -100,9 +100,11 @@ export function MaterialTable({
         <div className="wrap-anywhere whitespace-normal">
           {bytes(r.byte_size)}
           <p className="text-xs text-muted-foreground">
-            {r.duration != null && r.width != null && r.height != null
-              ? `${r.duration} 秒 · ${r.width} × ${r.height}`
-              : "待识别文件信息"}
+            {r.media_type === "IMAGE" && r.width != null && r.height != null
+              ? `${r.width} × ${r.height}`
+              : r.duration != null && r.width != null && r.height != null
+                ? `${r.duration} 秒 · ${r.width} × ${r.height}`
+                : "待识别文件信息"}
           </p>
         </div>
       ),

@@ -194,6 +194,9 @@ class IngestSessionFile(SQLModel, table=True):
         ),
         CheckConstraint(f"status IN ({FILE_STATUSES})", name="ck_ingest_file_status"),
         CheckConstraint(
+            "media_type IN ('VIDEO','IMAGE')", name="ck_ingest_file_media_type"
+        ),
+        CheckConstraint(
             "(source_advertiser_id IS NULL) = (connection_id IS NULL)",
             name="ck_ingest_file_source",
         ),
@@ -223,6 +226,7 @@ class IngestSessionFile(SQLModel, table=True):
     bc_id: str = Field(max_length=128)
     session_id: UUID
     client_index: int
+    media_type: str = Field(default="VIDEO", max_length=16)
     material_id: UUID
     byte_size: int = Field(sa_column=bigint())
     manifest_digest: str = Field(max_length=64)

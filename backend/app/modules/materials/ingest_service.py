@@ -29,6 +29,7 @@ from app.modules.materials.ingest_models import (
 from app.modules.materials.ingest_schemas import (
     IngestChunkCreate,
     IngestChunkResult,
+    IngestFileInput,
     IngestFilePublic,
     IngestSealIssue,
     IngestSealResult,
@@ -43,6 +44,14 @@ from app.modules.materials.repository import (
 from app.modules.materials.storage import part_layout
 from app.modules.materials.uploads import public_error, require_bc
 from app.modules.tenants.permissions import require_tenant
+
+
+def manifest_identity(item: IngestFileInput) -> dict[str, Any]:
+    # 保留视频已有清单摘要，升级后浏览器断点续传不会失去幂等身份。
+    # 图片使用独立类型前缀字段，不同类型不能复用同一个清单序号。
+    return item.model_dump(
+        mode="json", exclude={"media_type"} if item.media_type == "VIDEO" else set()
+    )
 
 
 def require_ingest_storage(*, reconciliation: bool = False) -> None:
@@ -215,6 +224,7 @@ def file_public(
         file_name=material.file_name,
         size=row.byte_size,
         mime_type=material.mime_type,
+        media_type=material.media_type,
         last_modified_ms=row.last_modified_ms,
         generation=row.current_generation,
         upload_id=original.s3_upload_id if original else None,
@@ -292,7 +302,7 @@ def register_chunk(
 ) -> IngestChunkResult:
     parent = get_session(db, context=context, session_id=session_id, action="upload")
     ordered = sorted(body.files, key=lambda item: item.client_index)
-    request_digest = digest([item.model_dump(mode="json") for item in ordered])
+    request_digest = digest([manifest_identity(item) for item in ordered])
     existing = db.exec(
         select(IngestChunk).where(
             col(IngestChunk.tenant_id) == context.tenant_id,
@@ -309,7 +319,13 @@ def register_chunk(
         raise DomainError("version_conflict", "导入清单已冻结")
     maximum = settings.MATERIAL_URL_MAX_UPLOAD_BYTES
     if any(
-        item.client_index >= parent.expected_files or item.size > maximum
+        item.client_index >= parent.expected_files
+        or item.size
+        > (
+            settings.MATERIAL_IMAGE_MAX_UPLOAD_BYTES
+            if item.media_type == "IMAGE"
+            else maximum
+        )
         for item in ordered
     ):
         raise DomainError("invalid_file", "文件序号或大小超过本次导入上限")
@@ -350,7 +366,7 @@ def register_chunk(
     }
     materials, candidates = [], []
     for item in ordered:
-        manifest_digest = digest(item.model_dump(mode="json"))
+        manifest_digest = digest(manifest_identity(item))
         if item.client_index in known:
             if known[item.client_index].manifest_digest != manifest_digest:
                 raise DomainError(
@@ -370,6 +386,7 @@ def register_chunk(
                 ),
                 byte_size=item.size,
                 mime_type=item.mime_type,
+                media_type=item.media_type,
                 current_object_generation=1,
             ).model_dump()
         )
@@ -379,6 +396,7 @@ def register_chunk(
                 bc_id=parent.bc_id,
                 session_id=session_id,
                 client_index=item.client_index,
+                media_type=item.media_type,
                 material_id=identity,
                 byte_size=item.size,
                 manifest_digest=manifest_digest,
@@ -410,7 +428,7 @@ def register_chunk(
             )
         ).all()
         wanted = {
-            item.client_index: digest(item.model_dump(mode="json")) for item in ordered
+            item.client_index: digest(manifest_identity(item)) for item in ordered
         }
         if any(row.manifest_digest != wanted[row.client_index] for row in actual):
             raise DomainError("idempotency_conflict", "相同文件序号的清单内容已改变")

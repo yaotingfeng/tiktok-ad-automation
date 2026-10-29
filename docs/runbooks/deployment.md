@@ -374,3 +374,32 @@ Beat 每秒触发一次 outbox 发布。单次发布默认最多 20 个公平轮
 
 
 素材子运行冻结明细放自身AdDirectoryPage保留页2147483647（MATERIAL_CONTEXT），不是provider页、无published_version；query.material_child_v1仅保留source/context指针，原parent_ids与workload路由不变。实际分页从1开始，只有经scope核验的子运行允许剥离自身context后校验完整链，普通孤页不忽略。子created_at沿原source逻辑请求年龄以延续公平排队，不能据此当作物理插入时间；新子范围验收可用request_sequence或确定性ID。旧全账户creative仍降后，子素材续页与原请求同序。
+
+
+### 手动图片入库运行参数（P1-T2）
+
+`MATERIAL_IMAGE_MAX_UPLOAD_BYTES=20971520`（20 MiB）与
+`MATERIAL_IMAGE_MAX_PIXELS=16000000`（宽×高）为本服务有限资源准入，
+不是 TikTok 上传平台硬限制；平台证据仍见图片轮播验证记录。它们不增加业务开关，
+沿用 `MATERIAL_INGEST_ENABLED`、对象容量预算及清理开关。
+Settings 拒绝非正数、超过 1 GiB 的图片字节预算或超过 3200 万的像素预算。
+调整时按 Worker 实际并发核算 Pillow 解码峰值内存；默认单图 RGB/RGBA 像素缓冲
+约 48–64 MB，实际进程峰值可能更高。API、资源 Worker 通过现有环境注入加载相同值，
+部署时核对实际值。前端提示默认值，服务端执行最终边界，不把浏览器 MIME 当作验真。
+本任务只在专用本地测试库迁移与验证，尚未部署。
+
+只支持手动上传静态 JPG/JPEG、PNG；外部 push/来源 URL 业务入口继续视频限定。
+图片经过完整解码、尺寸、摘要和 MIME 格式一致性验证，拒绝动画/多帧、坏图和解码炸弹，
+不改写原图。失败原件登记清理意图，删除/HEAD 回读确认前不释放额度；关闭清理开关时
+会保留容量等待恢复清理，不能报告已回收。
+
+T2 至 T3 的交接：同 tenant/BC/material/current generation，`MaterialFile.media_type=IMAGE`、
+`TemporaryMaterialObject.status=verified`、`IngestSessionFile.status=stored`、`dispatch_id IS NULL`。
+该状态表示待图片平台分发，ready_count 不增加。恢复验证只扫描有 dispatch 的记录，
+不会重新探测；超期遗弃扫描只保护这一交接组合，用户取消仍按引用和删除证据回收。
+T3 必须在持有素材/原件锁、重新核验权限与冻结路线后，从此查询集合登记图片专用任务，
+替换 `object_validation.validate_original` 的 IMAGE 交接分支；不得调用视频
+`materials.upload_original`、`source_url_uploads` 或封面生成管线。
+同时更新 `readiness`、`repository` 视频候选和 source 重试入口的 IMAGE 守卫，
+统一接入图片分发状态机，不保留平行上传路线。获得可核验的图片平台回执后，
+再按 `object_uses` 和清理证据合同解除原件保护。

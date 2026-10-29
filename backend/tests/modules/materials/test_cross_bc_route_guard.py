@@ -11,8 +11,10 @@ from tests.modules.materials.test_tenant_materials import mapping, material
 
 
 def seed_routes(session, context, *, historical=False):
-    source = material(session, context, "source.mp4")
-    destination = material(session, context, "target.mp4", bc="bc-b")
+    source = material(session, context, "source.mp4", historical=historical)
+    destination = material(
+        session, context, "target.mp4", bc="bc-b", historical=historical
+    )
     source_asset = mapping(session, context, source, historical=historical)
     target_asset = mapping(
         session, context, destination, account="account-b", historical=historical

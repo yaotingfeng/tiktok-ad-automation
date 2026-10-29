@@ -16,7 +16,8 @@ def content_key(material: MaterialFile) -> str:
         and re.fullmatch(r"[0-9a-f]{64}", material.sha256 or "")
         and re.fullmatch(r"[0-9a-f]{32}", material.video_md5 or "")
     ):
-        return f"sha256:{material.sha256}:{material.video_md5}:{material.byte_size}"
+        prefix = "image:" if material.media_type == "IMAGE" else ""
+        return f"{prefix}sha256:{material.sha256}:{material.video_md5}:{material.byte_size}"
     return f"material:{material.id}"
 
 
@@ -30,7 +31,8 @@ def material_content_key_expression(material: Any = MaterialFile) -> ColumnEleme
     return case(
         (
             verified,
-            literal("sha256:")
+            case((material.media_type == "IMAGE", literal("image:")), else_=literal(""))
+            + literal("sha256:")
             + col(material.sha256)
             + ":"
             + col(material.video_md5)

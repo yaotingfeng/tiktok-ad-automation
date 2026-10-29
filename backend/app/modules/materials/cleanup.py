@@ -172,6 +172,44 @@ def schedule_cleanup(
     return cleanup.id
 
 
+def schedule_invalid_image_cleanup(
+    session: Session, *, object_id: UUID, error_code: str
+) -> UUID:
+    """验真已确认无效的图片可回收；容量仍须等删除回读后才释放。"""
+    obj = locked_object(session, object_id=object_id)
+    row = _file(session, obj)
+    if (
+        row.media_type != "IMAGE"
+        or row.status != "failed"
+        or obj.claim_token is not None
+    ):
+        raise storage_error("cleanup_unverified")
+    cleanup = session.exec(
+        select(ObjectCleanup).where(
+            ObjectCleanup.tenant_id == obj.tenant_id,
+            ObjectCleanup.material_id == obj.material_id,
+            ObjectCleanup.generation == obj.generation,
+        )
+    ).one_or_none()
+    if cleanup is None:
+        cleanup = ObjectCleanup(
+            tenant_id=obj.tenant_id,
+            bc_id=obj.bc_id,
+            material_id=obj.material_id,
+            generation=obj.generation,
+            reason="abandoned",
+            eligibility_evidence={
+                "generation": obj.generation,
+                "validation_error": error_code,
+            },
+        )
+        session.add(cleanup)
+        session.flush()
+    obj.status = "cleanup_pending"
+    _queue(session, obj, cleanup)
+    return cleanup.id
+
+
 def _active_uses(session: Session, obj: TemporaryMaterialObject) -> list[OriginalUse]:
     now = datetime.now(UTC)
     uses = session.exec(

@@ -12,7 +12,11 @@ from sqlmodel import Session
 
 from app.modules.materials.cover_models import MaterialCoverJob, MaterialCoverReceipt
 from app.modules.materials.models import MaterialFile
-from tests.migration_database import historical_database, insert_historical_bc
+from tests.migration_database import (
+    historical_database,
+    insert_historical_bc,
+    insert_historical_material,
+)
 from tests.modules.conftest import create_context
 from tests.modules.materials.test_tenant_materials import mapping
 
@@ -28,7 +32,7 @@ def _history(db):
         byte_size=4000000000,
         storage_state="stored",
     )
-    db.add(file)
+    insert_historical_material(db, file)
     db.flush()
     asset = mapping(db, context, file, historical=True)
     row = MaterialCoverJob(

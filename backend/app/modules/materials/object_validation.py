@@ -20,6 +20,7 @@ from app.jobs.models import PendingDispatch
 from app.jobs.outbox import enqueue_after_commit
 from app.jobs.tasks import register_dispatch_task
 
+from .image_validation import inspect_image
 from .ingest_models import (
     IngestSession,
     IngestSessionFile,
@@ -192,7 +193,12 @@ def inspect_video(path: Path, *, remaining: float) -> dict[str, Any]:
 def _read_original(
     s3: Any, obj: TemporaryMaterialObject, file: MaterialFile
 ) -> tuple[str, str, dict[str, Any]]:
-    if not 0 < obj.expected_bytes <= settings.MATERIAL_URL_MAX_UPLOAD_BYTES:
+    maximum = (
+        settings.MATERIAL_IMAGE_MAX_UPLOAD_BYTES
+        if file.media_type == "IMAGE"
+        else settings.MATERIAL_URL_MAX_UPLOAD_BYTES
+    )
+    if not 0 < obj.expected_bytes <= maximum:
         raise storage_error("invalid_file")
     deadline = monotonic() + settings.MATERIAL_VALIDATION_SECONDS
     params = {"Bucket": obj.storage_bucket, "Key": obj.object_key}
@@ -228,7 +234,22 @@ def _read_original(
                     target.write(chunk)
             if length != obj.expected_bytes:
                 raise storage_error("incomplete_object")
-            media = inspect_video(path, remaining=deadline - monotonic())
+            if file.media_type == "IMAGE":
+                metadata = inspect_image(
+                    path, max_pixels=settings.MATERIAL_IMAGE_MAX_PIXELS
+                )
+                expected = {"image/jpeg": "JPEG", "image/png": "PNG"}.get(
+                    file.mime_type
+                )
+                if metadata.format != expected:
+                    raise storage_error("image_type_mismatch")
+                media = {
+                    "width": metadata.width,
+                    "height": metadata.height,
+                    "duration": None,
+                }
+            else:
+                media = inspect_video(path, remaining=deadline - monotonic())
         after = s3.head_object(**params)
         _metadata(after, obj, file)
         if before.get("ETag") and (
@@ -363,6 +384,26 @@ def validate_original(
             else:
                 # 确定性坏内容或瞬断预算耗尽都是可见失败，不再自动投递。
                 row.dispatch_id = None
+                file = session.get(MaterialFile, current.material_id)
+                if (
+                    file
+                    and file.media_type == "IMAGE"
+                    and error_code
+                    in {
+                        "invalid_image",
+                        "unsupported_image",
+                        "image_pixel_limit",
+                        "image_type_mismatch",
+                        "invalid_file",
+                        "incomplete_object",
+                    }
+                ):
+                    from .cleanup import schedule_invalid_image_cleanup
+
+                    file.storage_state = "unavailable"
+                    schedule_invalid_image_cleanup(
+                        session, object_id=current.id, error_code=error_code
+                    )
             return
         sha256, md5, media = hashes
         current.sha256, current.video_md5 = sha256, md5
@@ -391,12 +432,18 @@ def validate_original(
             "object_id": str(current.id),
             "generation": current.generation,
         }
-        row.dispatch_id = enqueue_after_commit(
-            session,
-            context=context,
-            task_name="materials.upload_original",
-            task_key=f"source-ingest:{current.id}:{current.generation}",
-            payload=payload,
+        # 图片主图由独立分发阶段接手，不得进入视频上传/封面链路。
+        # verified + stored + 无 dispatch 是待图片平台分发，不是平台可用。
+        row.dispatch_id = (
+            None
+            if file.media_type == "IMAGE"
+            else enqueue_after_commit(
+                session,
+                context=context,
+                task_name="materials.upload_original",
+                task_key=f"source-ingest:{current.id}:{current.generation}",
+                payload=payload,
+            )
         )
         transition_ingest_file(
             session,

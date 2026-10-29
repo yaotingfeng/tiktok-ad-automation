@@ -727,3 +727,104 @@ test("tenant directory remains readable without a target BC", async ({
     page.getByRole("button", { name: "批量上传", exact: true }),
   ).toBeDisabled()
 })
+
+test("手动批量选择40张图片不套用创意35张限制", async ({ page }) => {
+  await boundary(page)
+  await page.goto(url)
+  await page.getByRole("button", { name: "批量上传", exact: true }).click()
+  await page.getByLabel("选择本地素材").setInputFiles(
+    Array.from({ length: 40 }, (_, index) => ({
+      name: `完整剧名_${index}.png`,
+      mimeType: "image/png",
+      buffer: Buffer.from("image-content"),
+    })),
+  )
+  await expect(
+    page.getByRole("button", { name: "开始上传 40 个文件", exact: true }),
+  ).toBeEnabled()
+  await expect(page.locator("#material-files")).toHaveAttribute(
+    "accept",
+    /image\/png/,
+  )
+})
+
+test("图片目录和详情显示尺寸并以图片元素预览", async ({ page }) => {
+  const { records } = await boundary(page)
+  const picture: MaterialPublic = {
+    ...original,
+    media_type: "IMAGE",
+    file_name: "完整剧名_图片.png",
+    mime_type: "image/png",
+    duration: null,
+    width: 1200,
+    height: 1600,
+    status: "stored",
+    available_account_count: 0,
+  }
+  records[0] = picture
+  await page.route(`**/api/tenants/${A}/materials/${M}`, (route) =>
+    route.fulfill({ json: picture }),
+  )
+  await page.goto(url)
+  await expect(page.getByText("1200 × 1600", { exact: true })).toBeVisible()
+  await page
+    .getByRole("button", { name: picture.file_name, exact: true })
+    .click()
+  await page.getByRole("button", { name: "预览原文件", exact: true }).click()
+  await expect(
+    page.getByRole("img", { name: "原文件图片预览" }),
+  ).toHaveAttribute("src", /original-preview/)
+  await expect(page.locator("video")).toHaveCount(0)
+})
+
+test("混合文件登记保留选择顺序并显式发送媒体类型", async ({ page }) => {
+  await boundary(page)
+  let manifest: any[] | undefined
+  await page.route("**/materials/ingest-sessions", async (route) => {
+    if (route.request().method() !== "POST") return route.fallback()
+    const body = route.request().postDataJSON()
+    return route.fulfill({
+      json: {
+        session_id: B,
+        bc_id: BC,
+        expected_count: body.file_count,
+        total_bytes: body.total_bytes,
+        status: "registering",
+        registration_cursor: 0,
+        accepted_count: 0,
+        uploaded_count: 0,
+        ready_count: 0,
+        failed_count: 0,
+        cleaned_count: 0,
+        reserved_bytes: 0,
+        stored_bytes: 0,
+        created_at: original.created_at,
+      },
+    })
+  })
+  await page.route(
+    `**/materials/ingest-sessions/${B}/chunks`,
+    async (route) => {
+      manifest = route.request().postDataJSON().files
+      // 此用例只验证浏览器到 API 的清单合同，不签发对象上传权限。
+      return route.fulfill({ status: 422, json: { code: "invalid_file" } })
+    },
+  )
+  await page.goto(url)
+  await page.getByRole("button", { name: "批量上传", exact: true }).click()
+  await page.getByLabel("选择本地素材").setInputFiles([
+    { name: "首张.png", mimeType: "image/png", buffer: Buffer.from("image") },
+    { name: "视频.mp4", mimeType: "video/mp4", buffer: Buffer.from("video") },
+    { name: "末张.jpg", mimeType: "image/jpeg", buffer: Buffer.from("image") },
+  ])
+  await page
+    .getByRole("button", { name: "开始上传 3 个文件", exact: true })
+    .click()
+  await expect
+    .poll(() => manifest?.map((item) => [item.client_index, item.media_type]))
+    .toEqual([
+      [0, "IMAGE"],
+      [1, "VIDEO"],
+      [2, "IMAGE"],
+    ])
+})

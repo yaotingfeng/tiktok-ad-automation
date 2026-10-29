@@ -11,7 +11,11 @@ from app.core.errors import DomainError
 from app.modules.accounts.models import AdvertiserAccount, TikTokConnection
 from app.modules.materials.models import MaterialFile
 from app.modules.materials.routes import load_material_route
-from tests.migration_database import historical_database, insert_historical_bc
+from tests.migration_database import (
+    historical_database,
+    insert_historical_bc,
+    insert_historical_material,
+)
 from tests.modules.conftest import create_context
 
 
@@ -27,7 +31,7 @@ def old_rows(db, connections):
         byte_size=4_000_000_000,
         storage_state="stored",
     )
-    db.add(file)
+    insert_historical_material(db, file)
     account_table = Table(
         "advertiser_account", MetaData(), autoload_with=db.connection()
     )

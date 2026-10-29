@@ -1,12 +1,13 @@
 """Public, bounded ingest contracts. Signed URLs exist only in response DTOs."""
 
 from datetime import datetime
+from pathlib import Path
 from typing import Literal, Self
 from uuid import UUID, uuid4
 
 from pydantic import BaseModel, Field, model_validator
 
-from .schemas import UploadFileRequest
+from .schemas import VIDEO_MIME_TYPES
 
 
 class IngestSessionCreate(BaseModel):
@@ -17,7 +18,29 @@ class IngestSessionCreate(BaseModel):
     total_bytes: int = Field(gt=0, le=20_000 * 5 * 1024**4, strict=True)
 
 
-class IngestFileInput(UploadFileRequest):
+class IngestFileInput(BaseModel):
+    # 仅手动 ingest 接受图片；外部 push/URL 与旧上传合同仍只支持视频。
+    model_config = {"extra": "forbid"}
+    file_name: str = Field(min_length=1, max_length=1000)
+    size: int = Field(gt=0, le=5 * 1024**4, strict=True)
+    mime_type: str = Field(min_length=1, max_length=128)
+    media_type: Literal["VIDEO", "IMAGE"] = "VIDEO"
+
+    @model_validator(mode="after")
+    def valid_file(self) -> Self:
+        if not self.file_name.strip() or any(ord(char) < 32 for char in self.file_name):
+            raise ValueError("文件名无效")
+        if self.media_type == "VIDEO":
+            if self.mime_type not in VIDEO_MIME_TYPES:
+                raise ValueError("请选择视频文件")
+        else:
+            allowed = {"image/jpeg": {".jpg", ".jpeg"}, "image/png": {".png"}}
+            if Path(self.file_name).suffix.lower() not in allowed.get(
+                self.mime_type, set()
+            ):
+                raise ValueError("请选择后缀与类型一致的 JPG、PNG 图片")
+        return self
+
     client_index: int = Field(ge=0, lt=20_000, strict=True)
     last_modified_ms: int | None = Field(default=None, ge=0, strict=True)
 
@@ -71,6 +94,7 @@ class IngestFilePublic(BaseModel):
     file_name: str
     size: int
     mime_type: str
+    media_type: Literal["VIDEO", "IMAGE"] = "VIDEO"
     last_modified_ms: int | None = None
     generation: int
     upload_id: str | None

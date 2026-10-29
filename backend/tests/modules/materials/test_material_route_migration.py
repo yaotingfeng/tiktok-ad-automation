@@ -26,6 +26,7 @@ from tests.migration_database import (
     historical_database,
     insert_historical_account,
     insert_historical_bc,
+    insert_historical_material,
 )
 from tests.modules.conftest import create_context
 
@@ -74,7 +75,7 @@ def test_history_is_preserved_and_new_route_evidence_cannot_be_rewritten_or_drop
                 object_key="synthetic/old",
                 byte_size=42,
             )
-            db.add(material)
+            insert_historical_material(db, material)
             db.flush()
             asset = AccountMaterial(
                 **scope,

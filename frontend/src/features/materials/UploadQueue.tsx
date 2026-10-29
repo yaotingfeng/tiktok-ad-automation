@@ -324,7 +324,7 @@ export function UploadQueue({
             aria-label="重新选择未传完的文件"
             type="file"
             multiple
-            accept="video/*"
+            accept="video/*,image/jpeg,image/png"
             onChange={(event) => {
               const files = Array.from(event.target.files ?? [])
               event.target.value = ""
@@ -348,7 +348,7 @@ export function UploadQueue({
         className="hidden"
         aria-label="重选单个原文件"
         type="file"
-        accept="video/*"
+        accept="video/*,image/jpeg,image/png"
         onChange={(event) => {
           const files = Array.from(event.target.files ?? [])
           event.target.value = ""

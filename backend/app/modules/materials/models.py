@@ -90,6 +90,13 @@ class MaterialFile(SQLModel, table=True):
         ),
         CheckConstraint("byte_size > 0", name="ck_material_size"),
         CheckConstraint(
+            "media_type IN ('VIDEO','IMAGE')", name="ck_material_media_type"
+        ),
+        CheckConstraint(
+            "media_type != 'IMAGE' OR duration IS NULL",
+            name="ck_material_image_duration",
+        ),
+        CheckConstraint(
             "storage_state IN ('receiving','stored','unavailable')",
             name="ck_material_storage",
         ),
@@ -120,6 +127,7 @@ class MaterialFile(SQLModel, table=True):
     byte_size: int = Field(sa_column=Column(BigInteger, nullable=False))
     sha256: str | None = Field(default=None, max_length=64)
     video_md5: str | None = Field(default=None, max_length=32)
+    media_type: str = Field(default="VIDEO", max_length=16)
     mime_type: str = Field(default="video/mp4", max_length=128)
     duration: float | None = None
     width: int | None = None

@@ -30,7 +30,7 @@ def _history(db):
         ordinal=1,
     )
     db.add(submission)
-    file = material(db, context, "old.mp4", bc=preview.bc_id)
+    file = material(db, context, "old.mp4", bc=preview.bc_id, historical=True)
     asset = mapping(db, context, file, historical=True)
     scope = {
         "tenant_id": context.tenant_id,

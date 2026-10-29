@@ -336,6 +336,7 @@ def _material_public(record: Any) -> MaterialPublic:
         file_name=file.file_name,
         byte_size=file.byte_size,
         mime_type=file.mime_type,
+        media_type=file.media_type,
         duration=file.duration,
         width=file.width,
         height=file.height,

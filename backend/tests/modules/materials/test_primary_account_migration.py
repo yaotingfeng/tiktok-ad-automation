@@ -5,7 +5,11 @@ from sqlalchemy import MetaData, Table, inspect, text
 from sqlmodel import Session
 
 from app.modules.materials.models import MaterialAssetOperation, MaterialFile
-from tests.migration_database import historical_database, insert_historical_bc
+from tests.migration_database import (
+    historical_database,
+    insert_historical_bc,
+    insert_historical_material,
+)
 from tests.modules.conftest import create_context
 from tests.modules.materials.test_tenant_materials import mapping
 
@@ -29,7 +33,7 @@ def test_primary_account_upgrade_preserves_distributed_source_history(monkeypatc
                     object_key=f"synthetic/old-{index}",
                     byte_size=100,
                 )
-                db.add(file)
+                insert_historical_material(db, file)
                 db.flush()
                 asset = mapping(
                     db, context, file, account=f"actual-source-{index}", historical=True

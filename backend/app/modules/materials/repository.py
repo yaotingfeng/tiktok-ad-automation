@@ -227,6 +227,8 @@ def matching_page(
     }
     statement = select(MaterialFile).where(
         MaterialFile.tenant_id == context.tenant_id,
+        # 当前剧目视频候选合同不能把图片作为视频发送；图片创意另接类型化候选。
+        MaterialFile.media_type == "VIDEO",
         material_visible(tenant_id=context.tenant_id),
         col(MaterialFile.file_name_folded).contains(needle, autoescape=True),
     )
