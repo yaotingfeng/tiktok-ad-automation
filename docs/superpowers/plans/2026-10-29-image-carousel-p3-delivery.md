@@ -32,6 +32,8 @@
 
 **来自 P2 的切换责任：** 本任务同时迁移未冻结视频草稿为一素材一单元，并将当前视频草稿读写与所有规划调用方切换到单元模型。P2-T1 只先建类型/表，不双写视频镜像；本任务分配实际新 Alembic revision，按原分组顺序回填，保留草稿 request_id，不重排视频文件名。以既有视频草稿新增/编辑及迁移夹具验证切换前后结构等价；历史冻结正文仍由原记录只读展示，不重写。
 
+**前置审阅交接：** P2-T1 的 `CreativeUnitContent` 当前仅供图片算法使用；切换 VIDEO 单元生产者前，补齐与数据库一致的 VIDEO 音乐约束（`NOT_REQUIRED` 且 `music_id` 为空），以 schema 行为测试关闭该已登记次要项。
+
 **Files:** 修改 `backend/app/modules/strategies/structure.py`、`builds/previews.py`、`preview_validation.py`、`scene.py`、`scene_constraints.py`、`scene_schemas.py`、`strategies/schemas.py`；更新 `frontend/src/features/strategies/StrategyStructureExample.tsx` 和 `frontend/src/features/builds/PreviewWorkspace.tsx`；扩展 `backend/tests/modules/strategies/test_structure.py`、`backend/tests/modules/builds/test_structure_preview.py`、`scene/test_scene_route_versions.py`。
 
 **Interfaces:** 将结构输入重命名为 `NamedCreativeUnit.unit_id`，输出 `AdCreativePlan.unit_ids` 和 `GroupCreativePlan.unit_ids`；`plan_structure(units, *, config, pool, seed)` 保留原签名风格与分配顺序。新 `effective_structure_config(strategy_version, draft_override) -> StrategyConfig` 只允许结构字段，不把预算/身份混入该patch。场景scope纳入 media_kind 和合同版本。
