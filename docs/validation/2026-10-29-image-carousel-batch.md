@@ -96,3 +96,6 @@ Computer Use 单独验证：音乐全部就绪时可预览；整批 N 从5改3�
 
 
 修复提交07ca7837的定向复审结论：全部3项ADDRESSED，未发现新增问题，可合并本地main。随后整合main 1f4a01fb（查询预算嵌套恢复）至4470a787；`TEST_REDIS_URL=redis://localhost:6379/14 uv run pytest tests/modules/reporting/test_nested_query_budget.py tests/modules/reporting/test_carousel_ad_links.py tests/modules/reporting/test_planning_commits.py tests/modules/reporting/test_material_links.py -q` 结果 **73 passed / 33.42s**。该整合没有改变已验收的界面和缩略图代码。
+
+
+最终合并前main又新增cfc7baff健康探测日期收窄，已合入。初次整合33通过/1失败：结果与参考SQL一致，性能断言把EXPLAIN每循环取整均值3乘1000当作精确3000行，超过理论2668行。实际计划为主键Index Scan、512/488次、日期条件位于Index Cond、无Filter。仅给测试增加每次半行取整容差；34项回归通过（5.48s），Ruff通过。独立进程将查询改回“各账户固定读两天但保留原返回值”作负向探针，仍在同一性能断言失败（4000 > 3168），证明没有放过原扫描回退。原失败和探针日志保留，不改生产查询。此为main整合测试校正，不是第二轮轮播功能修复。
