@@ -42,7 +42,7 @@ from common import (
     run,
     write,
 )
-from routine import needs_full_backup, recent_backup, snapshot_release
+from routine import needs_full_backup
 from runtime_migrations import sync_runtime_values
 
 LOCK = PROJECT + "-release-lock"
@@ -391,7 +391,7 @@ class Release:
             old_defaults == new_defaults,
             "ConfigMap defaults changed; review configuration before automatic release",
         )
-        if not self.state.get("skip_backup_reason"):
+        if self.state.get("backup_policy") != "none":
             self.ensure_backup_disk(rendered)
             self.state["database_bytes"] = self.database_bytes(old_pods)
         else:
@@ -595,7 +595,7 @@ class Release:
             template["volumes"] = [
                 v for v in template["volumes"] if v["name"] != "verify"
             ]
-        if self.state.get("skip_backup_reason"):
+        if self.state.get("backup_policy") == "none":
             # 用户明确豁免本次备份：辅助容器只做排空/只读核对，不挂载备份盘。
             require(lightweight, "Backup waiver requires routine release")
             template["volumes"] = [
@@ -628,7 +628,7 @@ class Release:
         self.cluster.k("wait", "--for=condition=Ready", "pod/" + name, "--timeout=600s")
         self.state["backup_dir"] = BACKUP_ROOT + "/.pending-" + self.state["token"][:12]
         # 余量不足时在取消 Worker 消费前停止，仍可直接 recover 恢复原版。
-        if not self.state.get("skip_backup_reason"):
+        if self.state.get("backup_policy") != "none":
             self.state["backup_space"] = check_space(
                 self.pod, 0 if lightweight else self.state["database_bytes"]
             )
@@ -1045,20 +1045,16 @@ class Release:
             not needs_full_backup(self.state["old_sha"], sha),
             "Data/deployment changes require full release",
         )
-        if self.state.get("skip_backup_reason"):
-            waiver = json.loads((self.folder / "backup-waiver.json").read_text())
-            require(
-                waiver["token"] == self.state["token"]
-                and waiver["old_sha"] == self.state["old_sha"]
-                and waiver["candidate_sha"] == sha
-                and waiver["reason"] == self.state["skip_backup_reason"],
-                "Backup waiver does not match this release",
-            )
-        else:
-            require(
-                (self.folder / "release-archive.json").exists(),
-                "Program/config/Redis archive required",
-            )
+        policy = json.loads((self.folder / "release-policy.json").read_text())
+        require(
+            self.state.get("backup_policy") == "none"
+            and policy["token"] == self.state["token"]
+            and policy["old_sha"] == self.state["old_sha"]
+            and policy["candidate_sha"] == sha
+            and policy["backup"] == "not-created"
+            and policy["restore_verification"] == "not-performed",
+            "Release policy does not match this release",
+        )
         self.save("image-update-started")
         for deployment in current.values():
             container = deployment["spec"]["template"]["spec"]["containers"][0]
@@ -1082,26 +1078,24 @@ class Release:
         self.state["candidate_applied"] = True
         self.save("candidate-held")
 
-    def execute(self, action, sha, *, full_backup=False, skip_backup_reason=None):
-        if skip_backup_reason is not None:
-            require(
-                action == "deploy"
-                and sha
-                and not full_backup
-                and skip_backup_reason.strip(),
-                "Backup waiver requires deploy, a reason, and no --full-backup",
-            )
-        self.begin(action)
-        routine = (
-            sha
-            and self.original_roles == set(ROLES)
-            and not needs_full_backup(self.state["old_sha"], sha, force=full_backup)
+    def execute(self, action, sha, *, full_backup=False):
+        require(
+            not full_backup or action == "deploy",
+            "--full-backup is only valid for deploy",
         )
-        if skip_backup_reason:
-            require(
-                routine, "Backup waiver requires unchanged data/deployment contracts"
+        self.begin(action)
+        routine = bool(sha) and not full_backup
+        if routine and (
+            self.original_roles != set(ROLES)
+            or needs_full_backup(self.state["old_sha"], sha)
+        ):
+            # 不暗中把普通发布变成全备/演练；需要人工选定完整发布方案。
+            self.save("cancelled-before-freeze")
+            self.unlock()
+            raise RuntimeError(
+                "Data/deployment changes require an explicit release plan; use --full-backup only when requested"
             )
-            self.state["skip_backup_reason"] = skip_backup_reason.strip()
+        self.state["backup_policy"] = "none" if routine else "explicit"
         self.prepare_tools(sha)
         if sha:
             self.state["candidate_sha"] = sha
@@ -1134,32 +1128,26 @@ class Release:
         self.state["mode"] = "routine" if routine else "full"
         self.save("prepared")
         if routine:
-            # 最新备份无效时在停服之前失败，保留现场供 recover 释放锁。
+            # 不读取旧备份、不归档生产数据；仅保留发布状态和配置核对材料。
             self.helper()
             heads = self.probe("schema")["migration_heads"]
-            if skip_backup_reason:
-                # 豁免不是验证通过；独立记录范围与理由，finish 仍须匹配本批版本和锁。
-                write(
-                    self.folder / "backup-waiver.json",
-                    {
-                        "token": self.state["token"],
-                        "old_sha": self.state["old_sha"],
-                        "candidate_sha": sha,
-                        "reason": self.state["skip_backup_reason"],
-                        "migration_heads": heads,
-                        "backup": "not-created",
-                        "restore_verification": "not-performed",
-                    },
-                )
-            else:
-                recent_backup(self.pod, self.folder, heads)
+            # 默认不备份是用户确定的发布策略，不伪装成备份/恢复验证通过。
+            write(
+                self.folder / "release-policy.json",
+                {
+                    "token": self.state["token"],
+                    "old_sha": self.state["old_sha"],
+                    "candidate_sha": sha,
+                    "migration_heads": heads,
+                    "backup": "not-created",
+                    "restore_verification": "not-performed",
+                },
+            )
             self.pause()
             require(
                 self.probe("schema")["migration_heads"] == heads,
                 "Database schema changed during release",
             )
-            if not skip_backup_reason:
-                snapshot_release(self)
             self.apply_images()
             self.resume(sha)
             return
@@ -1209,17 +1197,9 @@ def main():
     parser.add_argument(
         "--full-backup",
         action="store_true",
-        help="Data/task compatibility changes require a full frozen backup",
-    )
-    parser.add_argument(
-        "--skip-backup-reason",
-        help="Explicit user authorization for this no-backup code release",
+        help="Explicitly request a full frozen backup and restore verification before deployment",
     )
     args = parser.parse_args()
-    require(
-        not args.skip_backup_reason or args.action == "deploy",
-        "Backup waiver is only valid for deploy",
-    )
     release = Release(args.state_dir)
     if args.action == "status":
         state = json.loads((release.folder / "state.json").read_text())
@@ -1249,7 +1229,6 @@ def main():
             args.action,
             args.sha if args.action == "deploy" else None,
             full_backup=args.full_backup,
-            skip_backup_reason=args.skip_backup_reason,
         )
 
 

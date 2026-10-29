@@ -776,3 +776,32 @@ def test_mini_choice_queues_only_scene_refresh_and_preserves_prepared_inputs(
         assert snapshot(db) == before
         assert db.exec(select(CapabilityJob.id)).all() == capabilities_before
     assert len(wire[0]) == 6
+
+
+@pytest.mark.parametrize("resource", ["cta", "done"])
+def test_manual_minis_refresh_expires_current_route_catalog(
+    job_env, wire, redis_client, resource
+):
+    from datetime import UTC, datetime
+
+    from app.modules.builds.mini_selection import (
+        draft_minis,
+        expire_draft_minis_catalog,
+    )
+
+    env = job_env
+    draft_id, _, catalog = selection_draft(env, wire, redis_client)
+    with Session(engine) as db, db.begin():
+        current = db.get(SceneJob, catalog.id)
+        current.resource = resource
+    with Session(engine) as db, db.begin():
+        assert (
+            expire_draft_minis_catalog(db, context=env["context"], draft_id=draft_id)
+            >= 1
+        )
+    with Session(engine) as db:
+        assert db.get(SceneJob, catalog.id).expires_at <= datetime.now(UTC)
+        assert (
+            draft_minis(db, context=env["context"], draft_id=draft_id).state
+            == "pending"
+        )

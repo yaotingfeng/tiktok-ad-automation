@@ -885,54 +885,11 @@ class ReleaseTests(unittest.TestCase):
         ):
             self.release.state["old_sha"] = "a" * 40
             with self.assertRaises(RuntimeError):
-                self.release.execute("deploy", "b" * 40)
+                self.release.execute("deploy", "b" * 40, full_backup=True)
             self.assertEqual(self.release.state["phase"], "migration-started")
             resume.assert_not_called()
 
-    def test_routine_release_checks_backup_before_freezing_and_never_migrates(self):
-        events = []
-        with (
-            patch.object(self.release, "begin"),
-            patch.object(self.release, "prepare_tools"),
-            patch.object(self.release, "check_remote"),
-            patch("release.needs_full_backup", return_value=False),
-            patch.object(
-                self.release, "helper", side_effect=lambda: events.append("helper")
-            ),
-            patch.object(
-                self.release, "probe", return_value={"migration_heads": ["test"]}
-            ),
-            patch(
-                "release.recent_backup", side_effect=lambda *a: events.append("verify")
-            ),
-            patch.object(
-                self.release, "pause", side_effect=lambda: events.append("freeze")
-            ),
-            patch(
-                "release.snapshot_release",
-                side_effect=lambda *a: events.append("archive"),
-            ),
-            patch.object(
-                self.release,
-                "apply_images",
-                side_effect=lambda: events.append("images"),
-            ),
-            patch.object(
-                self.release, "resume", side_effect=lambda *a: events.append("resume")
-            ),
-            patch("release.snapshot") as snapshot,
-            patch("release.restore_verify") as restore,
-            patch.object(self.release, "migrate_targeted_queue") as migrate,
-        ):
-            self.release.execute("deploy", "b" * 40)
-            self.assertEqual(
-                events, ["helper", "verify", "freeze", "archive", "images", "resume"]
-            )
-            snapshot.assert_not_called()
-            restore.assert_not_called()
-            migrate.assert_not_called()
-
-    def test_authorized_no_backup_release_skips_all_backup_steps(self):
+    def test_default_deploy_skips_all_backup_steps(self):
         events = []
         with (
             patch.object(self.release, "begin"),
@@ -942,13 +899,6 @@ class ReleaseTests(unittest.TestCase):
             patch.object(self.release, "helper"),
             patch.object(
                 self.release, "probe", return_value={"migration_heads": ["v1"]}
-            ),
-            patch(
-                "release.recent_backup",
-                side_effect=AssertionError("backup gate called"),
-            ),
-            patch(
-                "release.snapshot_release", side_effect=AssertionError("archive called")
             ),
             patch("release.snapshot", side_effect=AssertionError("backup called")),
             patch(
@@ -966,11 +916,9 @@ class ReleaseTests(unittest.TestCase):
                 self.release, "resume", side_effect=lambda *a: events.append("resume")
             ),
         ):
-            self.release.execute(
-                "deploy", "b" * 40, skip_backup_reason="User explicitly waived backup"
-            )
+            self.release.execute("deploy", "b" * 40)
         self.assertEqual(events, ["freeze", "images", "resume"])
-        proof = json.loads((self.release.folder / "backup-waiver.json").read_text())
+        proof = json.loads((self.release.folder / "release-policy.json").read_text())
         self.assertEqual(proof["candidate_sha"], "b" * 40)
         self.assertEqual(proof["backup"], "not-created")
         self.assertEqual(proof["restore_verification"], "not-performed")
@@ -985,14 +933,15 @@ class ReleaseTests(unittest.TestCase):
                 side_effect=AssertionError("prepared unsafe release"),
             ),
             patch("release.needs_full_backup", return_value=True),
-            self.assertRaisesRegex(RuntimeError, "unchanged data/deployment"),
+            patch.object(self.release, "unlock"),
+            self.assertRaisesRegex(RuntimeError, "explicit release plan"),
         ):
-            self.release.execute("deploy", "b" * 40, skip_backup_reason="User waiver")
+            self.release.execute("deploy", "b" * 40)
 
     def test_no_backup_image_switch_requires_matching_release_waiver(self):
         release = self.release
         release.state.update(
-            mode="routine", candidate_sha="b" * 40, skip_backup_reason="User waiver"
+            mode="routine", candidate_sha="b" * 40, backup_policy="none"
         )
         for name, deployment in self.deployments.items():
             deployment["spec"]["replicas"] = 0
@@ -1001,9 +950,10 @@ class ReleaseTests(unittest.TestCase):
             "token": "fixture",
             "old_sha": "a" * 40,
             "candidate_sha": "c" * 40,
-            "reason": "User waiver",
+            "backup": "not-created",
+            "restore_verification": "not-performed",
         }
-        write(release.folder / "backup-waiver.json", waiver)
+        write(release.folder / "release-policy.json", waiver)
 
         def switch(*args):
             self.assertEqual(args[:2], ("set", "image"))
@@ -1022,7 +972,7 @@ class ReleaseTests(unittest.TestCase):
             patch("release.needs_full_backup", return_value=False),
             patch.object(release.cluster, "k", side_effect=switch),
         ):
-            with self.assertRaisesRegex(RuntimeError, "waiver does not match"):
+            with self.assertRaisesRegex(RuntimeError, "policy does not match"):
                 release.apply_images()
             self.assertEqual(
                 {
@@ -1032,7 +982,7 @@ class ReleaseTests(unittest.TestCase):
                 {VPC + "a" * 40},
             )
             waiver["candidate_sha"] = "b" * 40
-            write(release.folder / "backup-waiver.json", waiver)
+            write(release.folder / "release-policy.json", waiver)
             release.apply_images()
         self.assertEqual(
             {
@@ -1044,30 +994,8 @@ class ReleaseTests(unittest.TestCase):
         self.assertTrue(release.state["candidate_applied"])
         self.assertEqual(release.state["phase"], "candidate-held")
 
-    def test_no_backup_invalid_cli_combination_fails_before_environment_access(self):
-        for args in (
-            ["check", "--skip-backup-reason", "User waiver"],
-            ["deploy", "--full-backup", "--skip-backup-reason", "User waiver"],
-            ["deploy", "--skip-backup-reason", "   "],
-        ):
-            result = subprocess.run(
-                [
-                    sys.executable,
-                    str(ROOT / "deploy/local.py"),
-                    *args,
-                    "--config",
-                    "/missing/config.json",
-                ],
-                capture_output=True,
-                text=True,
-                check=False,
-            )
-            self.assertNotEqual(result.returncode, 0)
-            self.assertIn("--skip-backup-reason requires", result.stderr)
-            self.assertNotIn("No such file", result.stderr)
-
     def test_no_backup_helper_needs_no_backup_disk_or_restore_services(self):
-        self.release.state.update(mode="routine", skip_backup_reason="User waiver")
+        self.release.state.update(mode="routine", backup_policy="none")
         created = {}
 
         def create(obj):
@@ -1176,8 +1104,19 @@ class ReleaseTests(unittest.TestCase):
         for name, d in self.deployments.items():
             d["spec"]["replicas"] = 0
             d["spec"]["template"]["spec"]["containers"][0]["name"] = name
-        self.release.state.update(mode="routine", candidate_sha="b" * 40)
-        write(self.release.folder / "release-archive.json", {"test": True})
+        self.release.state.update(
+            mode="routine", candidate_sha="b" * 40, backup_policy="none"
+        )
+        write(
+            self.release.folder / "release-policy.json",
+            {
+                "token": "fixture",
+                "old_sha": "a" * 40,
+                "candidate_sha": "b" * 40,
+                "backup": "not-created",
+                "restore_verification": "not-performed",
+            },
+        )
         with (
             patch.object(self.release, "assert_lock"),
             patch.object(self.release, "config_unchanged"),

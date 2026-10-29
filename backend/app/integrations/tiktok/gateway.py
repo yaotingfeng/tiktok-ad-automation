@@ -2,7 +2,7 @@
 
 import json
 from collections.abc import Callable, Iterator
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
@@ -15,6 +15,7 @@ from sqlmodel import Session, col, select
 from app.core.config import settings
 from app.core.context import TenantContext
 from app.core.credentials import decrypt_credentials
+from app.core.diagnostics import span
 from app.core.errors import DomainError
 from app.integrations.tiktok.adapters.ads_read import (
     ADS_OPERATIONS,
@@ -83,6 +84,7 @@ from app.integrations.tiktok.official.authorization import (
     material_authorization as api_material_authorization,
 )
 from app.integrations.tiktok.official.scenes import OfficialScenesGateway
+from app.integrations.tiktok.request_diagnostics import trace_sdk_request
 from app.integrations.tiktok.response_capture import (
     ResponseObserver,
     capture_sdk_response,
@@ -365,8 +367,10 @@ def open_tiktok_gateway(
         advertiser_id: str | None,
         operation: str,
         entity_kind: str | None = None,
+        *,
+        check_workflow: bool = True,
     ) -> None:
-        if before_request is not None:
+        if check_workflow and before_request is not None:
             before_request()
         capability = _capability(advertiser_id, operation)
         management_operation = (
@@ -475,22 +479,37 @@ def open_tiktok_gateway(
             ):
                 yield
 
+    # share_arguments逐账户核验当前授权；完整业务围栏由物理请求入口在准入前后
+    # 各执行一次，不随共享目标数反复扫描整个批次，也不跨请求缓存授权。
     @contextmanager
     def request_scope(
         advertiser_id: str | None, operation: str, deadline: datetime
     ) -> Iterator[None]:
         if deadline != task_deadline:
             raise DomainError("read_deadline_invalid", "调用期限与任务不一致")
-        authorize(advertiser_id, operation)
-        with admit(advertiser_id, operation):
+        diagnostic = operation.startswith(("materials.", "build."))
+        fields = {
+            "tenant_id": str(context.tenant_id),
+            "bc_id": route.bc_id,
+            "advertiser_id": advertiser_id,
+            "operation": operation,
+        }
+        with span("request_scope", **fields) if diagnostic else nullcontext():
             authorize(advertiser_id, operation)
-            with capture_sdk_response(
-                official,
-                operation=operation,
-                advertiser_id=advertiser_id,
-                observer=response_observer,
-            ):
-                yield
+            with admit(advertiser_id, operation):
+                authorize(advertiser_id, operation)
+                with (
+                    trace_sdk_request(official, **fields)
+                    if diagnostic
+                    else nullcontext(),
+                    capture_sdk_response(
+                        official,
+                        operation=operation,
+                        advertiser_id=advertiser_id,
+                        observer=response_observer,
+                    ),
+                ):
+                    yield
 
     def check_report_request(operation: str, arguments: dict[str, Any]) -> None:
         # 合并账户读取必须逐一核验；BC 报表只能读取本次冻结绑定的 BC。
@@ -599,7 +618,7 @@ def open_tiktok_gateway(
                     materials=MCPMaterialOperations(
                         client,
                         share_authorize=lambda account: authorize(
-                            account, "materials.share_assets"
+                            account, "materials.share_assets", check_workflow=False
                         ),
                         preview_allowed_hosts=settings.MATERIAL_REMOTE_MEDIA_HOSTS,
                         upload_policy=material_upload_policy(
@@ -664,7 +683,7 @@ def open_tiktok_gateway(
                     materials=SDKMaterialOperations(
                         official,
                         share_authorize=lambda account: authorize(
-                            account, "materials.share_assets"
+                            account, "materials.share_assets", check_workflow=False
                         ),
                         request_scope=request_scope,
                         deadline=task_deadline,

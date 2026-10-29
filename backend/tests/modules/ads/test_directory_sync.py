@@ -29,15 +29,6 @@ from app.modules.ads.sync import publish_directory, stage_directory_page
 from app.modules.ads.sync_models import AdDirectoryPage, AdDirectoryRun
 
 
-def _freeze_refill_clock(monkeypatch):
-    from app.modules.ads import directory_dispatch
-
-    now = datetime.now(UTC)
-    monkeypatch.setattr(
-        directory_dispatch, "datetime", SimpleNamespace(now=lambda tz: now)
-    )
-
-
 def _route(seed):
     return {
         "tenant_id": str(seed.context.tenant_id),
@@ -504,7 +495,6 @@ def test_staged_terminal_page_publishes_without_another_provider_call(
 ):
     from app.modules.ads import tasks
 
-    _freeze_refill_clock(monkeypatch)
     _authority(session, directory_seed)
     monkeypatch.setattr(settings, "ADS_SYNC_ENABLED", True)
     run = _run(session, directory_seed)
@@ -551,9 +541,7 @@ def test_staged_terminal_page_publishes_without_another_provider_call(
             ),
         )
     ).all()
-    assert len(wakeups) == 1
-    assert wakeups[0].task_name == "reporting.plan_due"
-    assert wakeups[0].payload == {"dispatch_only": True}
+    assert not wakeups
 
 
 def test_directory_version_allocation_does_not_scan_business_tables(session):
@@ -576,7 +564,6 @@ def test_directory_version_allocation_does_not_scan_business_tables(session):
 def test_terminal_fetch_commits_page_and_durable_publish_successor(
     session, directory_seed, monkeypatch, targeted, workload
 ):
-    from types import SimpleNamespace
 
     from app.modules.ads import tasks
 
@@ -679,7 +666,6 @@ def test_invalid_material_rolls_back_the_entire_bulk_publish(session, directory_
 def test_old_page_response_cannot_clear_a_new_generation_lease(
     session, directory_seed, monkeypatch
 ):
-    from types import SimpleNamespace
 
     from app.modules.ads import tasks
 
@@ -802,7 +788,6 @@ def test_superseded_directory_task_finishes_without_poisoning_window(
 ):
     from app.modules.ads import tasks
 
-    _freeze_refill_clock(monkeypatch)
     _authority(session, directory_seed)
     monkeypatch.setattr(settings, "ADS_SYNC_ENABLED", True)
     older = _run(session, directory_seed)
@@ -835,14 +820,14 @@ def test_superseded_directory_task_finishes_without_poisoning_window(
     assert older.status == "STALE" and older.error_code == "directory_run_stale"
     assert older.published_version is None and older.claimed_until is None
     assert session.get(AdDirectoryPage, (older.id, 1)) is not None
-    wake = session.exec(
+    wakeups = session.exec(
         select(PendingDispatch).where(
             col(PendingDispatch.task_key).startswith(
                 f"directory-refill:{older.tenant_id}:{older.actor_id}:"
             )
         )
-    ).one()
-    assert wake.payload == {"dispatch_only": True}
+    ).all()
+    assert not wakeups
     assert (
         tasks.run_directory_step(
             database_engine=session.connection(),
@@ -863,7 +848,7 @@ def test_superseded_directory_task_finishes_without_poisoning_window(
                 )
             ).all()
         )
-        == 1
+        == 0
     )
 
 
@@ -872,7 +857,6 @@ def test_superseded_directory_task_finishes_without_poisoning_window(
 def test_directory_admission_wait_releases_lease_and_persists_due_successor(
     session, directory_seed, monkeypatch, targeted, retry_ms
 ):
-    from types import SimpleNamespace
 
     from app.integrations.tiktok.sdk import AccountAdmissionDeferred
     from app.modules.ads import tasks
@@ -943,7 +927,6 @@ def test_directory_admission_wait_releases_lease_and_persists_due_successor(
 def test_admission_wait_cannot_release_a_replaced_directory_claim(
     session, directory_seed, monkeypatch
 ):
-    from types import SimpleNamespace
 
     from app.integrations.tiktok.sdk import AccountAdmissionDeferred
     from app.modules.ads import tasks
@@ -986,7 +969,6 @@ def test_admission_wait_cannot_release_a_replaced_directory_claim(
 def test_directory_recovers_after_admission_wait_from_the_same_page(
     session, directory_seed, monkeypatch
 ):
-    from types import SimpleNamespace
 
     from app.modules.ads import tasks
 

@@ -103,3 +103,12 @@ def test_production_control_task_uses_bounded_drain(monkeypatch):
     )
     assert tasks.flush_dispatch_task.run(limit=7) == 12
     assert called == [7]
+
+
+def test_build_messages_leave_high_priority_for_short_dispatch_ticks(queues):
+    db, first, _, sent = queues
+    with Session(db) as session, session.begin():
+        enqueue(session, first)
+    assert tasks.drain_dispatch() == 1
+    assert sent[0][1]["queue"] == "builds"
+    assert sent[0][1].get("priority", 0) == 3

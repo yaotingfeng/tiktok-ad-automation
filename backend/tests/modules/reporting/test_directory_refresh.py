@@ -29,6 +29,7 @@ def prepared(session, seed, *, day=None, spend="30", tier="hot", count=1, types=
         frozen_route=_route(seed),
         actor_id=seed.actor_id,
     )
+    assert job_id is not None
     rows = [
         ad_row(
             f"a{x}", day, adv="acc-2", campaign=f"c{x}", adgroup=f"g{x}", spend=spend
@@ -156,7 +157,7 @@ def test_account_refresh_chunks_all_ids_and_does_not_duplicate_pending_work(
     monkeypatch.setattr(settings, "ADS_SYNC_ENABLED", True)
     job = prepared(session, sync_seed, count=101)
     assert refresh_report_directory(session, job) == 6
-    # 同一轮即覆盖全部101个对象；同账户同层在途期间不能再拆出小运行。
+    # 同一轮覆盖全部101个对象；每个候选 ID 均已在途，不重复创建运行。
     assert refresh_report_directory(session, job) == 0
     runs = session.exec(
         select(AdDirectoryRun).where(
@@ -245,7 +246,7 @@ def runs_for(session, seed):
     ).all()
 
 
-def test_expiry_refreshes_whole_account_layer_across_job_snapshots(
+def test_expiry_only_refreshes_due_objects_across_job_snapshots(
     session, sync_seed, monkeypatch
 ):
     from uuid import uuid4
@@ -262,14 +263,14 @@ def test_expiry_refreshes_whole_account_layer_across_job_snapshots(
             select(AdReportDay).where(AdReportDay.tenant_id == sync_seed.tenant_id)
         ).all()
     }
-    # 另一任务写入的仍新鲜广告也要跟账户整批刷新；零消耗与历史行不能混入。
+    # 另一任务写入的新鲜广告不随到期邻居重读；零消耗与历史行也不能混入。
     facts["a1"].sync_job_id = uuid4()
     facts["a2"].spend = 0
     facts["a3"].stat_date -= timedelta(days=1)
     session.flush()
     assert refresh_report_directory(session, job, now=now) == 1
     run = runs_for(session, sync_seed)[0]
-    assert run.kind == "ad" and run.query["ids"] == ["a0", "a1"]
+    assert run.kind == "ad" and run.query["ids"] == ["a0"]
 
 
 def test_missing_object_is_read_immediately_without_refreshing_fresh_neighbors(
@@ -329,7 +330,7 @@ def test_layer_refresh_intervals_include_half_hot_interval_margin(
 @pytest.mark.parametrize(
     "status", ["QUEUED", "RUNNING", "ADMISSION_WAIT", "WAITING_REMOTE"]
 )
-def test_live_run_for_other_ids_blocks_the_same_account_type_and_layer(
+def test_live_run_for_other_ids_does_not_block_missing_objects(
     session, sync_seed, monkeypatch, status
 ):
     monkeypatch.setattr(settings, "ADS_SYNC_ENABLED", True)
@@ -339,7 +340,7 @@ def test_live_run_for_other_ids_blocks_the_same_account_type_and_layer(
         run.query = run.query | {"ids": ["different-object"]}
         run.status = status
     session.flush()
-    assert refresh_report_directory(session, job) == 0
+    assert refresh_report_directory(session, job) == 3
 
 
 @pytest.mark.parametrize(
@@ -460,7 +461,7 @@ def test_concurrent_reports_plan_only_one_chunked_account_round(
         assert all(1 <= len(run.query["ids"]) <= 100 for run in runs)
 
 
-def test_expiry_aligns_the_account_layer_across_ad_types(
+def test_expiry_does_not_refresh_fresh_objects_of_other_ad_types(
     session, sync_seed, monkeypatch
 ):
     monkeypatch.setattr(settings, "ADS_SYNC_ENABLED", True)
@@ -472,12 +473,9 @@ def test_expiry_aligns_the_account_layer_across_ad_types(
         types=["UPGRADED_SMART_PLUS", "MANUAL", "UPGRADED_SMART_PLUS"],
     )
     directory_objects(session, sync_seed, now, count=3, ages={("ad", 0): 26})
-    assert refresh_report_directory(session, job, now=now) == 2
+    assert refresh_report_directory(session, job, now=now) == 1
     runs = runs_for(session, sync_seed)
-    assert {r.ad_type: r.query["ids"] for r in runs} == {
-        "SMART_PLUS": ["a0", "a2"],
-        "REGULAR": ["a1"],
-    }
+    assert {r.ad_type: r.query["ids"] for r in runs} == {"SMART_PLUS": ["a0"]}
     assert all(r.kind == "ad" for r in runs)
 
 
@@ -513,3 +511,61 @@ def test_refresh_uses_account_local_today_and_job_account_boundary(
         "adgroup": ["g0"],
         "campaign": ["c0"],
     }
+
+
+@pytest.mark.parametrize(
+    "kind,ids,parents,remaining",
+    [
+        ("ad", ["a0"], [], ["a1"]),
+        ("adgroup", ["g0"], [], ["g1"]),
+        ("campaign", ["c0"], [], ["c1"]),
+        ("ad", [], ["g0"], ["a1"]),
+        ("ad", [], ["c0"], ["a0", "a1"]),
+        ("adgroup", [], ["c0"], ["g1"]),
+        ("campaign", [], ["c0"], ["c0", "c1"]),
+        ("ad", ["a0", "a1"], ["g0"], ["a1"]),
+        ("ad", ["a0"], ["g1"], ["a0", "a1"]),
+        ("ad", [], [], []),
+    ],
+)
+@pytest.mark.parametrize("include_deleted", [False, True])
+def test_pending_query_only_covers_matching_ids_and_direct_parents(
+    session, sync_seed, monkeypatch, kind, ids, parents, remaining, include_deleted
+):
+    monkeypatch.setattr(settings, "ADS_SYNC_ENABLED", True)
+    now = datetime.now(UTC)
+    job = prepared(session, sync_seed, count=2)
+    directory_objects(
+        session,
+        sync_seed,
+        now,
+        count=2,
+        ages={(kind, index): 61 for index in range(2)},
+    )
+    assert refresh_report_directory(session, job, now=now) == 1
+    pending = runs_for(session, sync_seed)[0]
+    pending.query = pending.query | {
+        "ids": ids,
+        "parent_ids": parents,
+        "include_deleted": include_deleted,
+    }
+    session.flush()
+    assert refresh_report_directory(session, job, now=now) == bool(remaining)
+    fresh = [run for run in runs_for(session, sync_seed) if run.id != pending.id]
+    assert [run.query["ids"] for run in fresh] == ([remaining] if remaining else [])
+
+
+def test_material_child_scope_does_not_cover_generic_directory_refresh(
+    session, sync_seed, monkeypatch
+):
+    from app.modules.ads.material_directory_children import MATERIAL_CHILD_KEY
+
+    monkeypatch.setattr(settings, "ADS_SYNC_ENABLED", True)
+    now = datetime.now(UTC)
+    job = prepared(session, sync_seed)
+    directory_objects(session, sync_seed, now, ages={("ad", 0): 31})
+    assert refresh_report_directory(session, job, now=now) == 1
+    pending = runs_for(session, sync_seed)[0]
+    pending.query = pending.query | {MATERIAL_CHILD_KEY: {"source_run_id": "other"}}
+    session.flush()
+    assert refresh_report_directory(session, job, now=now) == 1

@@ -24,7 +24,7 @@ from backup import (
     verify_archives,
 )
 from common import digest, write
-from routine import needs_full_backup, recent_backup
+from routine import needs_full_backup
 
 
 class LocalPod:
@@ -112,35 +112,6 @@ class ClusterBackupTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "checksum"):
             verify_archives(self.pod, self.state, directory)
 
-    def test_routine_backup_age_schema_and_corruption_gates(self):
-        self.fixture(b"first")
-        pending = self.disk / ".pending-one"
-        write(pending / "source-fingerprint.json", {"migration_heads": ["v1"]})
-        manifest = json.loads((self.state / "manifest.json").read_text())
-        manifest["captured_at"] = 100000
-        manifest["files"]["source-fingerprint.json"] = digest(
-            pending / "source-fingerprint.json"
-        )
-        write(self.state / "manifest.json", manifest)
-        write(pending / "manifest.json", manifest)
-        proof = {
-            "manifest_sha256": digest(self.state / "manifest.json"),
-            "postgres_matches": True,
-            "redis": {},
-            "verified_at": 100100,
-        }
-        write(self.state / "restore-verified.json", proof)
-        write(pending / "restore-verified.json", proof)
-        publish(self.pod, self.state, BACKUP_ROOT + "/.pending-one")
-        recent_backup(self.pod, self.state, ["v1"], now=100200)
-        with self.assertRaisesRegex(RuntimeError, "24 hours"):
-            recent_backup(self.pod, self.state, ["v1"], now=186401)
-        with self.assertRaisesRegex(RuntimeError, "schema"):
-            recent_backup(self.pod, self.state, ["v2"], now=100200)
-        (self.disk / "latest" / PG_DUMP / "3001.dat.lz4").write_bytes(b"damaged")
-        with self.assertRaisesRegex(RuntimeError, "checksum"):
-            recent_backup(self.pod, self.state, ["v1"], now=100200)
-
     def test_data_and_deployment_changes_force_full_release(self):
         for path in (
             "backend/app/alembic/versions/new.py",
@@ -161,7 +132,6 @@ class ClusterBackupTests(unittest.TestCase):
             return_value=b"backend/app/modules/ads/read.py\nfrontend/src/page.tsx",
         ):
             self.assertFalse(needs_full_backup("a" * 40, "b" * 40))
-            self.assertTrue(needs_full_backup("a" * 40, "b" * 40, force=True))
 
     def test_manifest_must_match_release_record(self):
         directory = self.fixture(b"first")

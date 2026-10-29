@@ -6,7 +6,7 @@ from urllib.parse import urlsplit
 from uuid import UUID, uuid5
 
 from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy import text
+from sqlalchemy import CursorResult, text
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session as SASession
 from sqlmodel import Session, col, select
@@ -510,6 +510,57 @@ def reuse_minis_catalog(
         # 新 Mini 未命中旧目录时，只补查 Mini；其余四类已按本账户当前授权复核。
         # 不延长旧事实有效期，实际读取前仍由 Worker 重验能力与路由。
         job.resource = "minis"
+
+
+def expire_draft_minis_catalog(
+    session: Session, *, context: TenantContext, draft_id: UUID
+) -> int:
+    """强制过期该 draft 所有账户的小程序目录缓存，返回过期的 job 数量。"""
+    from .drafts import get_draft
+
+    draft = get_draft(session, context=context, draft_id=draft_id, lock=True)
+    route = freeze_route(
+        session,
+        context=context,
+        bc_id=draft.bc_id,
+        connection_id=draft.execution_connection_id,
+    )
+    accounts = session.exec(
+        select(DraftAccount.advertiser_id).where(
+            DraftAccount.tenant_id == context.tenant_id,
+            DraftAccount.draft_id == draft.id,
+        )
+    ).all()
+    if not accounts:
+        return 0
+    now = datetime.now(UTC)
+    result = cast(
+        SASession,
+        session,
+    ).execute(
+        text(
+            """
+            UPDATE build_scene_job
+            SET expires_at = :now
+            WHERE tenant_id = :tenant_id
+              AND resource IN ('cta', 'vbo', 'regions', 'budget', 'done')
+              AND connection_id = :connection_id
+              AND frozen_route = CAST(:route AS jsonb)
+              AND bc_id = :bc_id
+              AND advertiser_id = ANY(:accounts)
+              AND expires_at > :now
+            """
+        ),
+        {
+            "tenant_id": context.tenant_id,
+            "bc_id": draft.bc_id,
+            "accounts": list(accounts),
+            "connection_id": route.connection_id,
+            "route": route.model_dump_json(),
+            "now": now,
+        },
+    )
+    return cast(CursorResult, result).rowcount
 
 
 def _fresh_mini_independent_scene(

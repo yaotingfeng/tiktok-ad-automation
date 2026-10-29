@@ -244,6 +244,8 @@ import type {
   buildsReconcileSubmissionData,
   buildsReconcileSubmissionResponse,
   buildsRefreshData,
+  buildsRefreshMinisCatalogData,
+  buildsRefreshMinisCatalogResponse,
   buildsRefreshResponse,
   buildsRequestMusicData,
   buildsRequestMusicResponse,
@@ -594,6 +596,7 @@ export const DEMO_OPERATIONS = {
   "builds-read_music": { method: "POST", path: "/api/tenants/{tenant_id}/build-drafts/{draft_id}/music/read", query: {} },
   "builds-reconcile_submission": { method: "POST", path: "/api/tenants/{tenant_id}/submissions/{submission_id}/reconcile", query: {} },
   "builds-refresh": { method: "POST", path: "/api/tenants/{tenant_id}/build-drafts/{draft_id}/image-composition/candidates/refresh", query: {} },
+  "builds-refresh_minis_catalog": { method: "POST", path: "/api/tenants/{tenant_id}/build-drafts/{draft_id}/minis/refresh", query: {} },
   "builds-request_music": { method: "POST", path: "/api/tenants/{tenant_id}/build-drafts/{draft_id}/music/units/{unit_id}", query: {} },
   "builds-retry_selected_music": { method: "POST", path: "/api/tenants/{tenant_id}/build-drafts/{draft_id}/music/batch-retries", query: {} },
   "builds-retry_submission": { method: "POST", path: "/api/tenants/{tenant_id}/submissions/{submission_id}/retry", query: {} },
@@ -833,6 +836,7 @@ export interface DemoOperationTypes {
   "builds-read_music": { data: buildsReadMusicData; response: buildsReadMusicResponse }
   "builds-reconcile_submission": { data: buildsReconcileSubmissionData; response: buildsReconcileSubmissionResponse }
   "builds-refresh": { data: buildsRefreshData; response: buildsRefreshResponse }
+  "builds-refresh_minis_catalog": { data: buildsRefreshMinisCatalogData; response: buildsRefreshMinisCatalogResponse }
   "builds-request_music": { data: buildsRequestMusicData; response: buildsRequestMusicResponse }
   "builds-retry_selected_music": { data: buildsRetrySelectedMusicData; response: buildsRetrySelectedMusicResponse }
   "builds-retry_submission": { data: buildsRetrySubmissionData; response: buildsRetrySubmissionResponse }

@@ -495,6 +495,24 @@ def select_mini(
     return DraftSaved(draft_id=draft_id, revision=revision)
 
 
+@router.post("/build-drafts/{draft_id}/minis/refresh")
+def refresh_minis_catalog(
+    tenant_id: UUID,
+    draft_id: UUID,
+    session: SessionDep,
+    user: CurrentUser,
+) -> dict[str, int]:
+    """强制过期该 draft 账户的小程序目录缓存，下次查询时会重新拉取。"""
+    from .mini_selection import expire_draft_minis_catalog
+
+    context = require_tenant(
+        session, actor_id=user.id, tenant_id=tenant_id, action="build"
+    )
+    count = expire_draft_minis_catalog(session, context=context, draft_id=draft_id)
+    session.commit()
+    return {"expired": count}
+
+
 @router.get("/build-drafts/{draft_id}/identities", response_model=DraftIdentities)
 def identity_options(
     tenant_id: UUID,

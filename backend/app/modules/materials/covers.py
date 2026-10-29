@@ -14,6 +14,7 @@ from sqlmodel import Session, col, select
 from sqlmodel.sql.expression import SelectOfScalar
 
 from app.core.context import TenantContext
+from app.core.diagnostics import emit, error_fields, span
 from app.core.errors import DomainError
 from app.integrations.tiktok.bounded_resources import bounded_session
 from app.integrations.tiktok.contracts import materials as material_types
@@ -778,7 +779,14 @@ def _call[T](
                     current.request_armed_at = None
         raise
     if receipt:
-        receipt(result)  # 实际image_id须先落库，再离开可能失败的HTTP客户端清理。
+        with span(
+            "cover_receipt",
+            tenant_id=str(context.tenant_id),
+            job_id=str(job.id),
+            operation=operation,
+            image_id=getattr(result, "image_id", None),
+        ):
+            receipt(result)  # 实际image_id须先落库，再离开可能失败的HTTP客户端清理。
     return result
 
 
@@ -914,8 +922,21 @@ def _save_receipt(
             else:
                 _access(session, context, current, upload=True)
                 _publish_result(session, context, current, evidence)
-    except Exception:
-        _preserve_receipt(database_engine, context, job.id, value)
+    except Exception as error:
+        emit(
+            "cover_receipt_primary_failed",
+            tenant_id=str(context.tenant_id),
+            job_id=str(job.id),
+            image_id=value.image_id,
+            **error_fields(error),
+        )
+        with span(
+            "cover_receipt_fallback",
+            tenant_id=str(context.tenant_id),
+            job_id=str(job.id),
+            image_id=value.image_id,
+        ):
+            _preserve_receipt(database_engine, context, job.id, value)
 
 
 def _read_result(
@@ -1437,6 +1458,15 @@ def run_cover(
                     delay=max(1, ceil(error.retry_after_ms / 1000)),
                 )
     except Exception as error:
+        emit(
+            "cover_failed",
+            tenant_id=str(context.tenant_id),
+            job_id=str(job.id),
+            dispatch_id=str(dispatch_id),
+            revision=revision,
+            read_only=read,
+            **error_fields(error),
+        )
         with Session(database_engine) as session, session.begin():
             current = _fenced(session, context, job.id, nonce)
             if current is None:

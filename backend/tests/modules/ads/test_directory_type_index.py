@@ -98,7 +98,6 @@ def test_directory_type_index_roundtrip_semantics_and_bounded_probes(
                         tenant_id=seed.tenant_id,
                         advertiser_ids=["acc-1", "acc-2"],
                         active_ids=[],
-                        now=now,
                     )
                 finally:
                     event.remove(conn, "before_cursor_execute", capture)

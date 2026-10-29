@@ -59,6 +59,26 @@ def test_directory_cursor_survives_due_list_shrinking_and_preserves_other_keys(
     assert plan.next_directory_at == now + planner.DIRECTORY_INTERVAL
 
 
+def test_obsolete_minute_gate_is_removed_without_resetting_cursor(
+    session, sync_seed, monkeypatch
+):
+    now, plan = _case(session, sync_seed, monkeypatch)
+    job_tasks._plan_directory_step(session, plan, accounts=["acc-1", "acc-2"], now=now)
+    plan.screening_progress = {
+        **plan.screening_progress,
+        "directory_batch_not_before_v1": (now + timedelta(minutes=1)).isoformat(),
+    }
+    job_tasks._plan_directory_step(
+        session, plan, accounts=["acc-1", "acc-2"], now=now + timedelta(seconds=5)
+    )
+    assert _advertisers(session, plan) == {"acc-1", "acc-2"}
+    assert plan.screening_progress == {
+        "rule_sync_original_phase": "keep",
+        "active_screen": {"cursor": "keep"},
+    }
+    assert plan.next_directory_at == now + planner.DIRECTORY_INTERVAL
+
+
 def test_directory_progress_rolls_back_with_batch_transaction(
     session, sync_seed, monkeypatch
 ):
@@ -83,7 +103,7 @@ def test_new_account_before_cursor_restarts_cycle(session, sync_seed, monkeypatc
         session,
         plan,
         accounts=["acc-1", "acc-2", "acc-3"],
-        now=now + timedelta(seconds=30),
+        now=now + timedelta(seconds=5),
     )
     assert _advertisers(session, plan) == {"acc-1", "acc-2"}
     assert (
@@ -168,6 +188,7 @@ def test_full_64_account_batch_enqueues_all_types_within_budget(
     now = datetime.now(UTC)
     planner.ensure_bc_plans(session, now=now)
     plan = session.get(AdSyncBc, (sync_seed.tenant_id, "bc-a"))
+    monkeypatch.setattr(job_tasks, "DIRECTORY_PLAN_ACCOUNTS", 64)
     accounts = [f"batch-{index:02}" for index in range(64)]
     for account in accounts:
         session.add(

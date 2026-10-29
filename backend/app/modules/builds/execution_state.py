@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session as SASession
 from sqlmodel import Session, col, select
 
 from app.core.context import TenantContext
+from app.core.diagnostics import emit
 from app.core.errors import DomainError
 from app.integrations.tiktok.adapters.build_results import safe_identifier
 from app.integrations.tiktok.contracts.builds import CreatedObject
@@ -130,10 +131,9 @@ def arm_request(
         from app.modules.builds.cover_execution import validate_ad_assets
 
         validate_ad_assets(session, step=step, unit=unit, body=body)
-    if (
-        claim.kind in {"CAMPAIGN", "ADGROUP", "AD"}
-        and body.get("operation_status") not in {"ENABLE", "DISABLE"}
-    ):
+    if claim.kind in {"CAMPAIGN", "ADGROUP", "AD"} and body.get(
+        "operation_status"
+    ) not in {"ENABLE", "DISABLE"}:
         raise DomainError("invalid_creation_status", "创建状态必须为 ENABLE 或 DISABLE")
     try:
         encoded = json.dumps(
@@ -149,9 +149,7 @@ def arm_request(
     strategy_metadata: dict[str, str] = {}
     if claim.kind == "CAMPAIGN":
         strategy_metadata["budget_strategy"] = (
-            "ADGROUP"
-            if body.get("budget_mode") == "BUDGET_MODE_INFINITE"
-            else "SERIES"
+            "ADGROUP" if body.get("budget_mode") == "BUDGET_MODE_INFINITE" else "SERIES"
         )
     elif claim.kind == "ADGROUP":
         strategy_metadata["budget_strategy"] = (
@@ -303,6 +301,23 @@ def finish_local(
         raise ValueError("unsupported local outcome")
     if not active_attempt(step, claim, phase="CLAIMED"):
         return step.status
+    if (
+        status == "PENDING"
+        and claim.kind == "AD"
+        and code == "material_refresh_required"
+    ):
+        # 短暂依赖仍快，长期等待按15/30/60秒复查；已发送请求不走这个本地分支。
+        delay = max(delay, min(60, 15 * 2 ** min(max(step.attempt - 1, 0), 2)))
+    emit(
+        "build_local_transition",
+        tenant_id=str(claim.tenant_id),
+        submission_id=str(claim.submission_id),
+        step_id=str(claim.step_id),
+        attempt=step.attempt,
+        outcome=status,
+        error_code=code,
+        retry_after_seconds=delay,
+    )
     step.status, step.phase, step.error_code = (
         status,
         "IDLE" if status == "PENDING" else "DONE",

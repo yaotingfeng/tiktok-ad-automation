@@ -20,3 +20,13 @@
 - 修复前：新测试复现无备份参数缺失、无备份仍访问备份盘；超过24小时的旧备份未被拦截。
 - 修复后：52项 release-tools、12项 cluster-backup、24项 k8s-deployment、6项 build-release 全部通过（deployment-assets入口包含四组）。
 - 后续 Jenkins 与生产结果在完成后追加；本节本地测试不代表已上线或真实广告创建成功。
+
+## 上线结果
+
+- 修复提交 `4880c7a57c63119f0eed3d4d7ddcc7b8f6efbe10` 已推公司 main。#160 是推送后未带豁免参数的自动构建，在进入发布前主动中止；#161 明确携带 `SKIP_BACKUP_REASON`，最终 SUCCESS。
+- #161 复用 #158 的业务检查，从288bb713增量只跑受影响发布检查；deploy线1分34秒通过。UTC10:25:45（北京时间18:25:45）发布 complete。
+- 11角色 Ready、9 Worker 检查通过、唯一Beat、HTTPS通过，实际镜像摘要 `sha256:747d58916b143264d0cb532a12386ab8d8461eb735b4f9e80093b031b0ead539`。原四开关保持true，角色配置指纹和数据库池与发布前匹配。
+- 本次未创建PG/Redis/程序备份，未执行恢复演练；`backup-waiver.json`明确记录 `not-created` / `not-performed`。数据库仍为 `0045_directory_type_index`，没有迁移。
+- 在生产只读事务中重放历史失败预览的剧目快照和名称生成，插入快照仅保存在内存：同一条缺ID记录上线前返回 `naming_context_missing`，上线后得到系统编号并生成3层名称；已有正常ID样本也通过。此验证不修改历史预览、不创建广告，不等于完整平台搭建验收。
+- 历史FAILED预览是冻结记录；同一草稿版本重复请求会返回原预览。用户需重新准备剧目或调整草稿形成新版本，再生成新预览，不能只刷新旧错误页。
+- 私有复验证据在 `.runtime/claude-session-debug-20261029/`；Jenkins证据在批次 `20261029T102051-b59c45`。定时在线备份本轮未重跑，未宣称其链路已实测恢复。

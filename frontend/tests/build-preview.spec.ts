@@ -384,9 +384,7 @@ test("零组合汇总仍保持生成中，失败后停止转圈并展示原因",
   await expect(page.getByRole("progressbar")).toHaveCount(0)
   api.preview.status = "FAILED"
   api.preview.error_code = "preview_naming_outdated"
-  await expect(
-    page.getByText(/命名规则已更新，请修改草稿后重新生成预览/),
-  ).toBeVisible()
+  await expect(page.getByText(/命名规则已更新，请重试生成预览/)).toBeVisible()
   await expect(
     page.getByRole("status", { name: "正在生成搭建预览" }),
   ).toHaveCount(0)
@@ -825,11 +823,45 @@ test("旧版未完成预览显示中文重建提示并禁止提交", async ({ pa
     previewError: "preview_naming_outdated",
   })
   await page.goto(`/tenants/${T}/build-previews/${P}?bc_id=${BC}`)
-  await expect(
-    page.getByText(/命名规则已更新，请修改草稿后重新生成预览/),
-  ).toBeVisible()
+  await expect(page.getByText(/命名规则已更新，请重试生成预览/)).toBeVisible()
   await expect(
     page.getByRole("button", { name: /创建并立即启用/ }),
   ).toHaveCount(0)
   expect(api.requests.filter((r) => r.method !== "GET")).toHaveLength(0)
+})
+
+test("失败预览可在原页重试且不创建广告", async ({ page }) => {
+  const api = await buildsBoundary(page, {
+    previewStatus: "FAILED",
+    previewError: "naming_context_missing",
+  })
+  const retriedId = "99999999-9999-4999-8999-999999999999"
+  await page.route(`**/build-previews/${retriedId}`, (route) =>
+    route.fulfill({
+      json: {
+        ...api.preview,
+        preview_id: retriedId,
+        draft_revision: 2,
+        status: "BUILDING",
+        error_code: null,
+      },
+    }),
+  )
+  let retries = 0
+  await page.route("**/build-drafts/*/previews", async (route) => {
+    expect(route.request().method()).toBe("POST")
+    expect(route.request().postDataJSON()).toEqual({ expected_revision: 1 })
+    retries += 1
+    api.preview.status = "BUILDING"
+    api.preview.error_code = null
+    await route.fulfill({ status: 202, json: { preview_id: retriedId } })
+  })
+  await page.goto(`/tenants/${T}/build-previews/${P}?bc_id=${BC}`)
+  await page.getByRole("button", { name: "重试生成预览", exact: true }).click()
+  await expect(
+    page.getByRole("status", { name: "正在生成搭建预览" }),
+  ).toBeVisible()
+  await expect(page).toHaveURL(new RegExp(`/build-previews/${retriedId}`))
+  expect(retries).toBe(1)
+  expect(api.requests.some((r) => r.path.endsWith("/submit"))).toBe(false)
 })

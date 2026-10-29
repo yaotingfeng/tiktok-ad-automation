@@ -1,4 +1,5 @@
 import { useQueryClient } from "@tanstack/react-query"
+import { RotateCw } from "lucide-react"
 import { useState } from "react"
 import { BuildsService, type DraftSummary } from "@/client"
 import { PaginationSummary } from "@/components/Common/PaginationSummary"
@@ -39,6 +40,7 @@ export function MiniTargetPicker({
   const [input, setInput] = useState("")
   const [search, setSearch] = useState("")
   const [busy, setBusy] = useState(false)
+  const [refreshing, setRefreshing] = useState(false)
   const [error, setError] = useState<unknown>()
   const [confirmedMini, setConfirmedMini] = useState<{
     revision: number
@@ -90,6 +92,28 @@ export function MiniTargetPicker({
       setBusy(false)
     }
   }
+
+  async function refresh() {
+    if (refreshing || busy) return
+    setRefreshing(true)
+    setError(undefined)
+    try {
+      await BuildsService.refreshMinisCatalog({
+        path: { tenant_id: tenantId, draft_id: summary.draft_id },
+      })
+      await client.invalidateQueries({
+        queryKey: [...buildKey(tenantId, bcId), summary.draft_id],
+      })
+      await onPrepare()
+      onRefresh()
+    } catch (e) {
+      setError(e)
+      reportError(e)
+    } finally {
+      setRefreshing(false)
+    }
+  }
+
   return (
     <Card>
       <CardContent className="flex min-w-0 flex-col gap-3">
@@ -110,22 +134,41 @@ export function MiniTargetPicker({
                       : "请按名称选择本批次剧目对应的小程序")}
             </p>
           </div>
-          {write && (
-            <Button
-              variant="outline"
-              disabled={busy || !data?.catalog_job_id}
-              onClick={() => {
-                setPage(1)
-                setInput("")
-                setSearch("")
-                setOpen(true)
-              }}
-            >
-              {data?.selected ? "更换小程序" : "选择小程序"}
-            </Button>
-          )}
+          <div className="flex gap-2">
+            {write &&
+              (data?.state === "choose" || data?.state === "selected") && (
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  disabled={refreshing || busy}
+                  onClick={() => void refresh()}
+                  title="刷新可用小程序列表"
+                  aria-label="刷新可用小程序列表"
+                >
+                  <RotateCw
+                    className={refreshing ? "animate-spin" : ""}
+                    size={16}
+                  />
+                </Button>
+              )}
+            {write && (
+              <Button
+                variant="outline"
+                disabled={busy || !data?.catalog_job_id}
+                onClick={() => {
+                  setPage(1)
+                  setInput("")
+                  setSearch("")
+                  setOpen(true)
+                }}
+              >
+                {data?.selected ? "更换小程序" : "选择小程序"}
+              </Button>
+            )}
+          </div>
         </div>
         {query.error ? <BuildError error={query.error} /> : null}
+        {error ? <BuildError error={error} /> : null}
         {data?.state === "pending" && summary.status === "READY" && write && (
           <Button
             className="self-start"

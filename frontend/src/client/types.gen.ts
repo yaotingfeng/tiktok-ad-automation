@@ -16443,6 +16443,44 @@ export type buildsSelectMiniResponses = {
 
 export type buildsSelectMiniResponse = buildsSelectMiniResponses[keyof buildsSelectMiniResponses];
 
+export type buildsRefreshMinisCatalogData = {
+    body?: never;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+        /**
+         * Draft Id
+         */
+        draft_id: string;
+    };
+    query?: never;
+    url: '/api/tenants/{tenant_id}/build-drafts/{draft_id}/minis/refresh';
+};
+
+export type buildsRefreshMinisCatalogErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type buildsRefreshMinisCatalogError = buildsRefreshMinisCatalogErrors[keyof buildsRefreshMinisCatalogErrors];
+
+export type buildsRefreshMinisCatalogResponses = {
+    /**
+     * Response Builds-Refresh Minis Catalog
+     *
+     * Successful Response
+     */
+    200: {
+        [key: string]: number;
+    };
+};
+
+export type buildsRefreshMinisCatalogResponse = buildsRefreshMinisCatalogResponses[keyof buildsRefreshMinisCatalogResponses];
+
 export type buildsIdentityOptionsData = {
     body?: never;
     path: {

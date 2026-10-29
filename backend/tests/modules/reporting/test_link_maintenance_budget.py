@@ -230,7 +230,7 @@ def test_candidates_read_active_index_instead_of_completed_history(
         {"id": job.id},
     )
     session.execute(text("ANALYZE report_sync_job"))
-    sql = getattr(link_work, query_name)
+    sql = getattr(link_work, query_name).format(after="")
     params = {
         "now": now,
         "limit": 50,

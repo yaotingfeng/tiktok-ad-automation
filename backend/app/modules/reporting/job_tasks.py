@@ -30,6 +30,7 @@ from app.jobs.outbox import enqueue_after_commit, validate_dispatch_payload
 from app.jobs.tasks import register_dispatch_task
 from app.modules.accounts.models import AdvertiserAccount
 from app.modules.accounts.routing import verify_route
+from app.modules.ads.directory_calibration import calibration_interval
 from app.modules.ads.directory_dispatch import (
     PUBLISH_TASK_NAME,
     TARGETED_TASK_NAME,
@@ -40,7 +41,7 @@ from app.modules.ads.directory_dispatch import (
 )
 from app.modules.ads.directory_requests import (
     directory_ad_types,
-    directory_due_accounts,
+    directory_unblocked_accounts,
     request_directory,
 )
 from app.modules.ads.material_directory_children import MATERIAL_CHILD_KEY
@@ -99,8 +100,10 @@ PUBLISH_MESSAGE_LOST_AFTER = timedelta(minutes=30)
 TARGETED_MESSAGE_LOST_AFTER = timedelta(minutes=2)
 # 一轮周期目录分批推进；此游标不占用账户筛选或规则相位的进度键。
 DIRECTORY_PLAN_PROGRESS = "directory_cycle_v1"
+# 批量上限配合查询预算保护数据库；不再按固定分钟额度延迟必要任务发现。
 DIRECTORY_PLAN_ACCOUNTS = 64
 DIRECTORY_PLAN_SECONDS = 3
+DIRECTORY_PLAN_BATCH_INTERVAL = timedelta(seconds=5)
 
 register_dispatch_task("reporting.job_step", "ads-reporting")
 register_dispatch_task("reporting.backfill_step", "ads-backfill")
@@ -331,6 +334,8 @@ def _dispatch_directories(session, now):
     ).one()
     available = max(0, DIRECTORY_DISPATCH_WINDOW - inflight)
     targeted_available = targeted_capacity(session, now)
+    if not available and not targeted_available:
+        return 0
     # 原背景总窗口内，定向依赖和全量各保底一半；空闲份额可借用。
     # 不能把后台依赖改成 live 绕过服务分类，也不能让更早全量永久占满窗口。
     dependency_share = DIRECTORY_DISPATCH_WINDOW // 2
@@ -503,6 +508,10 @@ def _dispatch_directories(session, now):
     count = 0
     served = set()
     for row in rows:
+        from app.modules.ads.directory_backlog import review_unstarted_directory
+
+        if review_unstarted_directory(session, row, now):
+            continue
         if is_live_directory(row):
             if targeted_available <= 0:
                 continue
@@ -550,22 +559,26 @@ def plan_due_runs(*, database_engine, redis_client, now=None):
     dispatched = _dispatch_pending(database_engine, now, allow_backfill=allow_backfill)
     # 两类维护各自提交：旧任务归并读慢时，不能回滚/挡住目录依赖的复核游标。
     # 先唤醒再归并，各一秒预算；正常事实派发已提交，不受维护失败影响。
-    from app.modules.reporting.link_work import (
-        reconcile_link_work,
-        wake_link_dependencies,
-    )
+    from app.modules.reporting.link_reconciliation import reconcile_link_work_batch
+    from app.modules.reporting.link_work import wake_link_dependencies
 
-    for action in (wake_link_dependencies, reconcile_link_work):
-        try:
-            with Session(database_engine) as session, session.begin():
-                session.connection().execute(text("SET LOCAL statement_timeout='1s'"))
-                session.connection().execute(text("SET LOCAL lock_timeout='100ms'"))
-                maintenance_deadline = datetime.now(UTC) + timedelta(seconds=1)
-                action(session, now=now, deadline=maintenance_deadline)
-        except Exception:
-            logger.exception(
-                "report link maintenance deferred phase=%s", action.__name__
-            )
+    try:
+        with Session(database_engine) as session, session.begin():
+            session.connection().execute(text("SET LOCAL statement_timeout='1s'"))
+            session.connection().execute(text("SET LOCAL lock_timeout='100ms'"))
+            maintenance_deadline = datetime.now(UTC) + timedelta(seconds=1)
+            wake_link_dependencies(session, now=now, deadline=maintenance_deadline)
+    except Exception:
+        logger.exception(
+            "report link maintenance deferred phase=wake_link_dependencies"
+        )
+    try:
+        # runner 独立提交后才保存轮转位置，超时或 Redis 故障只会安全重扫。
+        reconcile_link_work_batch(
+            database_engine=database_engine, redis_client=redis_client, now=now
+        )
+    except Exception:
+        logger.exception("report link maintenance deferred phase=reconcile_link_work")
     for key in keys:
         if datetime.now(UTC) >= deadline:
             break
@@ -624,6 +637,13 @@ def _defer_plan(plan, retry_at):
 
 def _plan_directory_step(session, plan, *, accounts, now):
     """稳定账户ID游标；成功批次才推进，单个慢账户退避后不阻挡其余账户。"""
+    # 撤销固定分钟门槛，只清理其私有标记，保留目录游标及其他业务进度。
+    if "directory_batch_not_before_v1" in plan.screening_progress:
+        plan.screening_progress = {
+            key: value
+            for key, value in plan.screening_progress.items()
+            if key != "directory_batch_not_before_v1"
+        }
     accounts = sorted(set(accounts))
     scope = sha256(
         json.dumps(
@@ -661,14 +681,13 @@ def _plan_directory_step(session, plan, *, accounts, now):
                 session.begin_nested(),
                 query_budget(session, seconds=DIRECTORY_PLAN_SECONDS),
             ):
-                due = directory_due_accounts(
+                due = directory_unblocked_accounts(
                     session,
                     tenant_id=plan.tenant_id,
                     bc_id=plan.bc_id,
                     actor_id=plan.actor_id,
                     frozen_route=plan.frozen_route,
                     advertiser_ids=batch,
-                    active_ids=plan.last_active_advertiser_ids,
                     now=now,
                 )
                 request_directory(
@@ -679,12 +698,16 @@ def _plan_directory_step(session, plan, *, accounts, now):
                     frozen_route=plan.frozen_route,
                     advertiser_ids=due,
                     scope="directory",
+                    now=now,
+                    periodic_intervals={
+                        account: calibration_interval(plan, account, now)
+                        for account in due
+                    },
                     ad_types=directory_ad_types(
                         session,
                         tenant_id=plan.tenant_id,
                         advertiser_ids=due,
                         active_ids=plan.last_active_advertiser_ids,
-                        now=now,
                     ),
                 )
                 session.flush()
@@ -726,7 +749,7 @@ def _plan_directory_step(session, plan, *, accounts, now):
             DIRECTORY_PLAN_PROGRESS: state,
         }
         plan.next_directory_at = (
-            now + timedelta(seconds=5)
+            now + DIRECTORY_PLAN_BATCH_INTERVAL
             if remaining
             else min(datetime.fromisoformat(at) for at in deferred.values())
         )
@@ -825,8 +848,8 @@ def _plan_one(
                         session.connection().execute(
                             text("SELECT set_config('statement_timeout', '8s', true)")
                         )
-                        # 全量目录（含已删除）已覆盖只读在投对象的需求，周期只发这一种；
-                        # 无消耗账户按天刷新，未使用类型只探测广告系列。
+                        # 完整目录作为低频校准，活跃对象由热报和操作后的定向回读维护；
+                        # 分区按每日/每周到期，未知类型只探测系列；账户游标与超时缩批进度跨轮保留。
                         _plan_directory_step(session, plan, accounts=accounts, now=now)
                         session.connection().execute(
                             text(
