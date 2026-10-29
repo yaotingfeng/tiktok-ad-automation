@@ -3,7 +3,7 @@
 import json
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
 
@@ -29,6 +29,10 @@ from app.integrations.tiktok.adapters.sdk_ads import SdkAdsReadOperations
 from app.integrations.tiktok.adapters.sdk_builds import ApiBuildOperations
 from app.integrations.tiktok.adapters.sdk_management import SdkManagementOperations
 from app.integrations.tiktok.adapters.sdk_materials import SDKMaterialOperations
+from app.integrations.tiktok.adapters.sdk_music import (
+    MUSIC_OPERATION,
+    SDKMusicOperations,
+)
 from app.integrations.tiktok.adapters.sdk_report_reader import SdkReportReader
 from app.integrations.tiktok.admission import (
     PROTOCOL_OPERATIONS,
@@ -49,6 +53,10 @@ from app.integrations.tiktok.contracts.management import (
     ManagementOperations,
 )
 from app.integrations.tiktok.contracts.materials import MaterialOperations
+from app.integrations.tiktok.contracts.music import (
+    MusicOperations,
+    UnsupportedMusicOperations,
+)
 from app.integrations.tiktok.contracts.report_reader import ReportReader
 from app.integrations.tiktok.contracts.scenes import ScenesGateway
 from app.integrations.tiktok.group_isolation import (
@@ -93,6 +101,7 @@ _OPERATION_CAPABILITIES: dict[str, Capability] = {
     **dict.fromkeys(PROTOCOL_OPERATIONS, "read"),
     **dict.fromkeys(ADS_OPERATIONS.values(), "read"),
     FINANCE_OPERATION: "read",
+    MUSIC_OPERATION: "read",
     "accounts.authorization_facts": "read",
     "accounts.list_bcs": "read",
     "accounts.list_bc_assets": "read",
@@ -154,6 +163,7 @@ class TikTokGateway:
     ads: AdsReadOperations
     management: ManagementOperations
     report_reader: ReportReader | None = None
+    music: MusicOperations = field(default_factory=UnsupportedMusicOperations)
 
 
 def _capability(advertiser_id: str | None, operation: str) -> Capability:
@@ -585,6 +595,7 @@ def open_tiktok_gateway(
                             advertiser, f"management.{operation}", kind
                         ),
                     ),
+                    music=UnsupportedMusicOperations(),
                     materials=MCPMaterialOperations(
                         client,
                         share_authorize=lambda account: authorize(
@@ -642,6 +653,12 @@ def open_tiktok_gateway(
                         ),
                         management_scope=management_scope,
                         before_send=before_request,
+                        deadline=task_deadline,
+                    ),
+                    music=SDKMusicOperations(
+                        official,
+                        route=route,
+                        request_scope=request_scope,
                         deadline=task_deadline,
                     ),
                     materials=SDKMaterialOperations(

@@ -52,3 +52,27 @@ uv run --directory backend pytest tests/integrations/tiktok/test_carousel_asset_
 ## 真实联调待项
 
 取得具体授权后，分别验证：实际图片格式/容量/尺寸边界；上传回执；源和目标账户 info/search 对 `is_carousel_usable` 的返回稳定性；IMAGE 原生共享后目标 image_id 与 true 回读；推荐接口当前原始限制；各 SDK scope 与目标账户适用性。T1 没有数据库迁移，也没有验证图片广告投放资格或创建广告。
+
+## P1-T4：音乐只读适配器（2026-10-29）
+
+新增 `gateway.music`，只使用当前冻结 `OFFICIAL_API` 路线的官方 SDK `ApiClient.call_api` 读取 `GET /open_api/v1.3/file/music/get/`。固定 SDK 没有音乐生成方法；已检查其原生 `async_req` / `_preload_content=False` 支持，以有界原始回执严格解析，未引入自定义 HTTP 客户端。退役 MCP 对三种音乐读取均返回 `music_channel_unsupported`，未新增工具合同、音乐 MCP 适配器或授权入口。
+
+证据边界：端点列于[官方 Postman File music get](https://www.postman.com/tiktok/tiktok-api-for-business/request/n2bio7t/file-music-get)；[官方 Get the music list 文档](https://business-api.tiktok.com/portal/docs?id=1740053909509122)当前正文受开发者状态限制。详细请求字段和 `data.musics` / `data.page_info` 响应结构来自已发表工具元数据与历史已接受请求证据。**本轮未取得当前官方正文，未进行真实 SDK 音乐调用，不能将本地合成测试写成平台验收。** 未复制历史真实账户、URL 或完整回执。
+
+接口与本地界限：
+
+- `search(advertiser_id, keyword, cursor, budget)`：固定 `CAROUSEL_ADS` + `SEARCH_BY_KEYWORD`，每次仅一页；签名游标绑定完整冻结路线、账户、查询、场景和页大小，同一范围可跨 gateway 会话续读。密钥复用部署 `SECRET_KEY`，不新增密钥或持久状态。
+- `recommend(advertiser_id, image_urls, budget)`：固定 `SEARCH_BY_RECOMMEND`；按本阶段合同本地校验 2–35 张 HTTPS 预览地址，不能传 image_id。返回首批最多 100 个候选；平台有后续页时 `MusicPage.truncated=True`、`next_cursor=None`，不自动翻页。2–35 是本阶段执行约束；图片字节、尺寸等当前官方限制仍待验，不作为上传硬门槛。
+- `read(advertiser_id, music_ids, budget)`：固定 `SEARCH_BY_MUSIC_ID`；本地限 1–100 个不同 ID，拒绝未请求或重复 ID；缺失 ID 保持缺失。结果需要后续页时明确 `music_read_incomplete`，不以部分结果冒充完整读取。
+- `MusicItem` 只保留 `music_id/display_name/author/duration/preview_url`，名称按 name → file_name → ID；零时长合法，缺失时长为 None。查询成功不生成投放资格或自动选曲。预览 URL 及游标均不出现在 DTO repr；证据只保留安全 request_id/数字业务码，不记录 provider 原文、凭据或请求 URL。
+- 统一 `music.get` 授权/admission 操作和物理端点配额，三种读取不能拆桶；每个发送重新核验账户权限与冻结代次。沿用 `RemoteCallBudget` 与真实任务硬期限/租约约束；严格区分成功空列表、超时、限流、非法响应。
+
+P2 调用方仍须使用 `gateway.materials.read_image_preview` 从实际 seed account 新鲜读取图片 URL，并在业务结果落库前复核冻结路线、当前权限与持久输入身份。T4 不创建选择策略、音乐收藏、任务或数据库表，不持久化预览 URL；原始 VIDEO/IMAGE 素材没有音乐字段。
+
+本地验证：`test_music_adapters.py` **46 passed**；计划指定音乐/素材 DTO/素材适配器组合 **78 passed, 37 deselected**（当时含音乐 43 项，最终增加的 3 项由 46 项独立全套覆盖）；相邻 SDK 网关配额/范围回归 **8 passed, 34 deselected**。PG 与 Redis 使用专用本地测试实例；Redis DB14 按测试配额前缀清理，无 FLUSH。provider 只在官方 SDK 最终 HTTP 边界使用合成回执。Ruff、格式、ty、compileall 与 diff 空白检查通过。无广告创建、远端调用、推送或部署。
+
+```bash
+TEST_REDIS_URL=redis://127.0.0.1:6379/14 uv run --directory backend pytest tests/integrations/tiktok/test_music_adapters.py -q
+TEST_REDIS_URL=redis://127.0.0.1:6379/14 uv run --directory backend pytest tests/integrations/tiktok/test_music_adapters.py tests/integrations/tiktok/test_material_contracts.py tests/integrations/tiktok/test_material_adapters.py -m 'not mcp' -k 'not MCP' -q
+TEST_REDIS_URL=redis://127.0.0.1:6379/14 uv run --directory backend pytest tests/integrations/tiktok/test_sdk_report_reader.py -m 'not mcp' -k 'gateway or service_class or physical_report_aliases or content_identity_reads' -q
+```

@@ -288,7 +288,7 @@ Beat 每秒触发一次 outbox 发布。单次发布默认最多 20 个公平轮
 
 ## 准入配置键迁移
 
-双通道 gateway 使用逻辑操作键查询 `TIKTOK_CALL_POLICIES.endpoints`，当前操作分组为 `accounts.*`、`scene.*`、`materials.*`、`build.*`、`reports.*` 和 `protocol.*`（以发布版本的实际 operation 名称为准）。以上指网关业务/协议键；独立 MCP 刷新仍使用 `auth_refresh`，不将它改名为点分前缀。升级时逐项迁移原 SDK URL 路径覆盖；旧 URL 条目不会命中，也没有兼容回退。共享 base 与配额归属域继续生效，不能通过改键绕过共享额度。
+双通道 gateway 使用逻辑操作键查询 `TIKTOK_CALL_POLICIES.endpoints`，当前操作分组为 `accounts.*`、`scene.*`、`materials.*`、`music.get`、`build.*`、`reports.*` 和 `protocol.*`（以发布版本的实际 operation 名称为准）。以上指网关业务/协议键；独立 MCP 刷新仍使用 `auth_refresh`，不将它改名为点分前缀。升级时逐项迁移原 SDK URL 路径覆盖；旧 URL 条目不会命中，也没有兼容回退。共享 base 与配额归属域继续生效，不能通过改键绕过共享额度。
 
 例如旧 `/open_api/v1.3/file/video/ad/upload/` 覆盖需分别配置 `materials.upload_video_file` 与 `materials.upload_video_url`。二者当前 worker hard limit 为 900 秒，lease 必须严格大于 hard limit 加 5 秒，即 **大于 905000ms**；仅保留旧 URL 条目会落到 base，短 lease 会被门禁拒绝。容量/频率/并发值应依据目标环境及实际已核实的通道额度设置，测试里的 970000ms 和宽松 quota 不是官方生产默认。配额配置正确仍不能替代账户权限及实际上传回读验收。
 
@@ -353,6 +353,9 @@ Beat 每秒触发一次 outbox 发布。单次发布默认最多 20 个公平轮
 
 
 2026-10-20补充：官方SDK报表内容解析的`materials.get_videos`、`materials.search_videos`、`scene.get_identity_video`分别对应视频信息、视频搜索与帖子视频信息物理GET端点，均按应用+物理接口共享速率，跨BC/连接不得拆桶。生产仅给`OFFICIAL_API:`前缀的这三个操作配置`endpoint_calls_per_window=10`、`endpoint_max_inflight=6`，沿用1000ms窗口与960000ms租约；通用3QPS基线及写入/MCP不变。依据为[官方默认Basic额度与物理端点独立规则](https://business-api.tiktok.com/gateway/docs/index?doc_id=1740029171730433)，不代表申请到了更高级额度；真实40100继续按平台信号退避。
+
+2026-10-29音乐读取补充：`gateway.music.search/recommend/read` 三个只读方法统一使用 `music.get` 授权与准入操作，对应 `GET /open_api/v1.3/file/music/get/` 同一物理接口；没有独立的 `music.search` / `music.recommend` 配额键。默认继承有效 `base`，需要覆盖时使用 `music.get` 或仅 SDK 的 `OFFICIAL_API:music.get`，不得按关键词、账户、BC 或查询模式拆分上游配额。沿用调用方冻结路线与 `RemoteCallBudget`；部署租约须覆盖该任务硬期限及既有余量（预算要求大于硬限加5秒，网关还核对剩余绝对期限加1秒），P1-T4不新增Worker或后台任务。未变更实际环境策略、模板默认值或布尔开关；发布时核对API/实际调用Worker加载的策略。当前音乐接口数字额度、scope与真实账户可用性仍待授权联调，不能照搬上述报表10QPS覆盖作为音乐平台额度证明。MCP不支持音乐读取。
+
 
 
 ### 2026-10-27 同步积压无迁移补修
