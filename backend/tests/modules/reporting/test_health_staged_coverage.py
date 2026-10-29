@@ -298,7 +298,7 @@ def test_stage_reserve_yields_without_reducing_the_query_budget(
                     plan,
                     redis_client,
                     cycle=progress["cycle"],
-                    deadline=monotonic() + 3.25,
+                    deadline=monotonic() + 0.9,
                 )
                 == "CONTINUE"
             )

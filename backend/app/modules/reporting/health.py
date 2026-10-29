@@ -58,6 +58,7 @@ HEALTH_CHUNK_SIZE = 64
 HEALTH_MAX_CHUNKS = 16
 HEALTH_CYCLE_SECONDS = 120
 HEALTH_STAGE_SECONDS = 3
+HEALTH_MIN_STAGE_SECONDS = 0.5
 HEALTH_FINISH_RESERVE = 0.5
 COVERAGE_STAGES = ("directory", "material")
 FRESHNESS_BATCH_SIZE = 512
@@ -935,10 +936,13 @@ def _save_coverage_batch_hint(redis_client, plan, progress):
     )
 
 
-def _log_coverage_stage(progress, stage, start, end, size, started, deadline, outcome):
+def _log_coverage_stage(
+    progress, stage, start, end, size, started, deadline, outcome, *, allocated_seconds
+):
     logger.info(
         "health coverage cycle=%s stage=%s offset=%s attempted_end=%s saved_offset=%s "
-        "batch_size=%s outcome=%s elapsed=%.3fs cycle_age=%.3fs remaining=%.3fs",
+        "batch_size=%s outcome=%s elapsed=%.3fs cycle_age=%.3fs remaining=%.3fs "
+        "budget=%.3fs slice=%s",
         progress["cycle"],
         stage,
         start,
@@ -949,6 +953,8 @@ def _log_coverage_stage(progress, stage, start, end, size, started, deadline, ou
         monotonic() - started,
         (datetime.now(UTC) - datetime.fromisoformat(progress["at"])).total_seconds(),
         max(0, deadline - monotonic()),
+        allocated_seconds,
+        "full" if allocated_seconds == HEALTH_STAGE_SECONDS else "tail",
     )
 
 
@@ -978,11 +984,14 @@ def _advance_health(session, plan, redis_client, *, cycle, deadline):
     total = max(1, len(owned))
     # 原16个账户块各含两种测量，仍允许32个阶段批；不把上限误砍成8个完整块。
     for _ in range(HEALTH_MAX_CHUNKS * len(COVERAGE_STAGES)):
-        if (
-            progress["offset"] >= total
-            or deadline - monotonic() < HEALTH_STAGE_SECONDS + HEALTH_FINISH_RESERVE
-        ):
+        batch_started = monotonic()
+        available_seconds = deadline - batch_started - HEALTH_FINISH_RESERVE
+        if progress["offset"] >= total or available_seconds < HEALTH_MIN_STAGE_SECONDS:
             break
+        # 按进入时取得的墙钟片分类，监听器递减/50ms取整后的SQL期限不是分类依据。
+        # 完整片的3秒包含SAVEPOINT与测量准备；这些耗时不能把完整片变成免缩批尾片。
+        allocated_seconds = min(HEALTH_STAGE_SECONDS, available_seconds)
+        full_slice = allocated_seconds == HEALTH_STAGE_SECONDS
         stage_name = min(
             COVERAGE_STAGES, key=lambda name: progress["stages"][name]["offset"]
         )
@@ -991,16 +1000,12 @@ def _advance_health(session, plan, redis_client, *, cycle, deadline):
         before_size = stage["batch_size"]
         end = min(total, start + before_size)
         # SAVEPOINT只包本阶段。另一阶段的紧凑汇总已经保存，不因末阶段取消而重读。
-        batch_started = monotonic()
         try:
             with (
                 session.begin_nested(),
                 query_budget(
                     session,
-                    seconds=min(
-                        HEALTH_STAGE_SECONDS,
-                        deadline - monotonic() - HEALTH_FINISH_RESERVE,
-                    ),
+                    seconds=max(0, allocated_seconds - (monotonic() - batch_started)),
                 ),
             ):
                 metrics, issues, repairs = measure_coverage(
@@ -1016,6 +1021,21 @@ def _advance_health(session, plan, redis_client, *, cycle, deadline):
                 and getattr(error.orig, "sqlstate", None) != "57014"
             ):
                 raise
+            if not full_slice:
+                # 尾片不足原3秒并非测量失败；仅回滚未完成阶段，保留另一阶段与批提示。
+                # 正常续投不写FAILED、不缩批，也不把单户送入60秒冷却。
+                _log_coverage_stage(
+                    progress,
+                    stage_name,
+                    start,
+                    end,
+                    before_size,
+                    batch_started,
+                    deadline,
+                    "tail_yield",
+                    allocated_seconds=allocated_seconds,
+                )
+                break
             attempted = end - start
             stage["batch_size"] = max(1, attempted // 2)
             stage["success_streak"] = 0
@@ -1036,6 +1056,7 @@ def _advance_health(session, plan, redis_client, *, cycle, deadline):
                 batch_started,
                 deadline,
                 "deferred",
+                allocated_seconds=allocated_seconds,
             )
             raise _HealthBatchTimeout(progress["cycle"]) from error
         batch_seconds = monotonic() - batch_started
@@ -1082,6 +1103,7 @@ def _advance_health(session, plan, redis_client, *, cycle, deadline):
             batch_started,
             deadline,
             "completed",
+            allocated_seconds=allocated_seconds,
         )
     if progress["offset"] < total:
         _enqueue_health_continuation(session, plan, redis_client, progress)
