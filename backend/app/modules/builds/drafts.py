@@ -566,8 +566,9 @@ def prepare_selected_mini(
         draft_revision=draft.revision,
         actor_id=context.actor_id,
         request_id=request_id,
-        # 剧目、账户、链接和素材都沿用上一版本；直接进入账户场景校验。
-        phase="scenes",
+        # 剧目、账户、链接和素材沿用上一版本；视频校验场景，图片只复核候选。
+        # CAROUSEL 的格式场景与最终预览门禁由 P3 接入，不能借视频资格放行。
+        phase="materials" if draft.media_kind == "CAROUSEL" else "scenes",
         provider_task_id=previous.provider_task_id if previous else None,
     )
     return _enqueue_draft_preparation(session, context, draft, prep, route, request_id)
@@ -1065,6 +1066,13 @@ def _links_page(
                         first_line=result.line_no,
                     )
                 )
+            elif draft.media_kind == "CAROUSEL":
+                # 图片历史 generation 保留剧目引用；当前输入重新解析时更新现行展示位置。
+                prior.first_line, prior.link_id, prior.title = (
+                    result.line_no,
+                    result.link_id,
+                    result.title,
+                )
             elif prior.first_line != result.line_no:
                 row.status, row.duplicate_of = "duplicate", prior.first_line
         session.add(row)
@@ -1079,7 +1087,9 @@ def _materials_page(
     session: Session, context: TenantContext, draft: BuildDraft, prep: DraftPreparation
 ) -> None:
     if draft.media_kind != "VIDEO":
-        raise DomainError("draft_media_kind_mismatch", "图片草稿须使用图片候选与创意编排")
+        raise DomainError(
+            "draft_media_kind_mismatch", "图片草稿须使用图片候选与创意编排"
+        )
     drama = session.exec(
         select(DraftDrama)
         .where(
@@ -1172,9 +1182,19 @@ def continue_draft(session: Session, *, context: TenantContext, task_id: UUID) -
     elif prep.phase == "links":
         _links_page(session, context, draft, prep)
     elif prep.phase == "materials":
-        _materials_page(session, context, draft, prep)
+        if draft.media_kind == "CAROUSEL":
+            from .image_composition_service import prepare_image_candidates
+
+            prepare_image_candidates(session, context, draft, prep)
+        else:
+            _materials_page(session, context, draft, prep)
     elif prep.phase == "scenes":
-        _scenes_page(session, context, draft, prep)
+        if draft.media_kind == "CAROUSEL":
+            from .image_composition_service import prepare_image_candidates
+
+            prepare_image_candidates(session, context, draft, prep)
+        else:
+            _scenes_page(session, context, draft, prep)
     draft.updated_at = datetime.now(UTC)
     session.add_all([prep, draft])
     session.flush()
@@ -1182,6 +1202,9 @@ def continue_draft(session: Session, *, context: TenantContext, task_id: UUID) -
 
 
 def _bump_revision(session: Session, draft: BuildDraft, expected_revision: int) -> int:
+    from .image_composition_service import assert_no_image_run
+
+    assert_no_image_run(session, draft)
     if type(expected_revision) is not int or draft.revision != expected_revision:
         raise DomainError(
             "draft_revision_conflict", "草稿已更新，请保留当前编辑并读取最新版本"
@@ -1373,7 +1396,33 @@ def update_draft(
     if intent == old_intent and list(manual.values()) == old_manual:
         return draft.revision
     revision = _bump_revision(session, draft, expected_revision)
-    for model in (DraftGroupMaterial, DraftDrama, DraftAccount, DraftInput):
+    if draft.media_kind == "CAROUSEL":
+        from .image_composition_state import ImageCompositionState
+
+        state = session.get(ImageCompositionState, (draft.tenant_id, draft.id))
+        drama_changed = (
+            any(
+                intent[key] != old_intent[key]
+                for key in (
+                    "provider_connection_id",
+                    "application_id",
+                    "drama_lines",
+                    "link_config",
+                )
+            )
+            or list(manual.values()) != old_manual
+        )
+        if drama_changed:
+            # 输入范围显式改变即开始新的图片准备；旧快照/单元/试算保留供审计，
+            # 不删除被历史 FK 引用的剧目，也不清除用户显式排除。
+            draft.active_image_generation = 0
+            draft.applied_image_rule_revision = None
+            if state:
+                state.snapshot_id, state.drama_patches = None, {}
+        reset_models = (DraftAccount, DraftInput)
+    else:
+        reset_models = (DraftGroupMaterial, DraftDrama, DraftAccount, DraftInput)
+    for model in reset_models:
         SASession.execute(
             session,
             delete(model).where(

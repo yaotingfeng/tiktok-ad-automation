@@ -44,7 +44,8 @@ def list_drafts(
         except ValueError, TypeError:
             raise DomainError("invalid_cursor", "分页游标无效") from None
     total = int(
-        cast(SASession, session).execute(
+        cast(SASession, session)
+        .execute(
             text("""
 SELECT count(*) FROM build_draft d
 WHERE d.tenant_id=:tenant AND d.bc_id=:bc
@@ -52,7 +53,8 @@ AND NOT EXISTS (SELECT 1 FROM build_submission s
   WHERE s.tenant_id=d.tenant_id AND s.draft_id=d.id)
 """),
             {"tenant": context.tenant_id, "bc": bc_id},
-        ).scalar_one()
+        )
+        .scalar_one()
     )
     # 已提交批次统一从搭建任务继续；先分页，再统计该页输入，避免展开剧目×账户。
     rows = (
@@ -109,4 +111,22 @@ ORDER BY d.updated_at DESC,d.id DESC
         if len(rows) > limit
         else None,
         total=total,
+    )
+
+
+def current_image_drama_clause():
+    """图片历史快照保留旧剧目 FK；现行目录只统计当前输入实际解析的剧目。"""
+    from sqlmodel import select
+
+    from app.modules.builds.models import DraftDrama, DraftInput
+
+    return (
+        select(DraftInput.line_no)
+        .where(
+            DraftInput.tenant_id == DraftDrama.tenant_id,
+            DraftInput.draft_id == DraftDrama.draft_id,
+            DraftInput.drama_id == DraftDrama.drama_id,
+            DraftInput.kind == "drama",
+        )
+        .exists()
     )

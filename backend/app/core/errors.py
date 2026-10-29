@@ -3,6 +3,14 @@ from fastapi.responses import JSONResponse
 
 # Register exact business codes here; never infer status from provider text.
 ERROR_HTTP_STATUS: dict[str, int] = {
+    "image_composition_busy": 409,
+    "image_composition_not_found": 404,
+    "image_composition_conflict": 409,
+    "image_candidates_required": 409,
+    "image_candidate_unavailable": 409,
+    "image_edit_invalid": 422,
+    "image_reuse_confirmation_required": 409,
+    "image_protected_music_conflict": 409,
     "image_source_unavailable": 409,
     "image_preview_unavailable": 409,
     "image_not_carousel_usable": 409,

@@ -226,10 +226,19 @@ def test_media_kind_is_part_of_creation_identity_and_blocks_video_writes(
         if session.get(DraftPreparation, task).phase == "materials":
             break
         continue_draft(session, context=context, task_id=task)
+    from app.modules.builds.drafts import _materials_page
+
     with pytest.raises(
         DomainError, check=lambda e: e.code == "draft_media_kind_mismatch"
     ):
-        continue_draft(session, context=context, task_id=task)
+        _materials_page(
+            session,
+            context,
+            session.get(BuildDraft, identity),
+            session.get(DraftPreparation, task),
+        )
+    # P2 已接通独立图片候选；继续准备不会再进入旧视频选材函数。
+    continue_draft(session, context=context, task_id=task)
     with pytest.raises(
         DomainError, check=lambda e: e.code == "draft_media_kind_mismatch"
     ):

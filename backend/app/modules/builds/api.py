@@ -638,3 +638,9 @@ def update_delivery(
     revision = save_delivery(session, context=context, draft_id=draft_id, body=body)
     session.commit()
     return DraftSaved(draft_id=draft_id, revision=revision)
+
+
+# 图片编排使用独立的类型化 API，旧视频素材组保持原合同。
+from .image_composition_api import router as image_composition_router  # noqa: E402
+
+router.include_router(image_composition_router)

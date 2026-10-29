@@ -18,6 +18,7 @@ from app.modules.builds.image_composition_schemas import (
     ImageCandidate,
     ImageRule,
     ImageRulePatch,
+    MusicStatus,
     ProposedCreativeUnit,
 )
 
@@ -65,13 +66,28 @@ def _upload_key(candidate: ImageCandidate) -> tuple:
     )
 
 
-def _music_rule(rule: ImageRule, count: int) -> dict[str, Any]:
+def effective_music_rule(rule: ImageRule, count: int) -> dict[str, Any]:
     # 无关曲目字段不使已有推荐作废；只有该单元真正生效的配乐规则入摘要。
     if rule.music_mode == "FIXED":
         return {"mode": "FIXED", "music_id": rule.fixed_music_id}
     if count == 1:
         return {"mode": "SINGLE", "music_id": rule.single_music_id}
     return {"mode": "RECOMMEND", "version": 1}
+
+
+def music_rule_digest(rule: ImageRule, count: int) -> str:
+    """T2/T3 共享有效规则身份，单图不会误用多图推荐摘要。"""
+    return _digest(effective_music_rule(rule, count))
+
+
+def pending_music_status(rule: ImageRule, count: int) -> MusicStatus:
+    """新手工创意不猜原曲；已有显式候选交 T3 核验后采用。"""
+    effective = effective_music_rule(rule, count)
+    return (
+        "PENDING"
+        if effective["mode"] == "RECOMMEND" or effective.get("music_id")
+        else "NEEDS_SELECTION"
+    )
 
 
 def compose_images(
@@ -148,7 +164,7 @@ def compose_images(
     def configure_music(
         unit: CreativeUnit | ProposedCreativeUnit, prior: CreativeUnit | None
     ):
-        effective = _music_rule(rule, len(unit.ordered_material_ids))
+        effective = effective_music_rule(rule, len(unit.ordered_material_ids))
         digest = _digest(effective)
         if prior and mode == "PRESERVE_MANUAL" and prior.music_protected:
             return unit
@@ -166,9 +182,7 @@ def compose_images(
                 "music_id": music_id,
                 "music_status": "READY"
                 if music_id
-                else (
-                    "PENDING" if effective["mode"] == "RECOMMEND" else "NEEDS_SELECTION"
-                ),
+                else (pending_music_status(rule, len(unit.ordered_material_ids))),
                 "music_protected": False,
                 "music_revision": prior.music_revision + 1 if prior else 0,
                 "music_request_generation": prior.music_request_generation + 1

@@ -12,6 +12,7 @@ from app.core.context import TenantContext
 from app.core.errors import DomainError
 from app.core.pagination import Page, count_rows
 from app.modules.accounts.resolver import decode_cursor, encode_cursor
+from app.modules.builds.draft_catalog import current_image_drama_clause
 from app.modules.builds.drafts import get_draft
 from app.modules.builds.models import (
     DraftAccount,
@@ -65,7 +66,9 @@ def draft_summary(
         select(func.count())
         .select_from(DraftDrama)
         .where(
-            DraftDrama.tenant_id == context.tenant_id, DraftDrama.draft_id == draft_id
+            DraftDrama.tenant_id == context.tenant_id,
+            DraftDrama.draft_id == draft_id,
+            current_image_drama_clause() if row.media_kind == "CAROUSEL" else True,
         )
     ).one()
     account_count = session.exec(
@@ -205,6 +208,9 @@ def inputs_page(
                     DraftDrama.tenant_id == context.tenant_id,
                     DraftDrama.draft_id == draft_id,
                     col(DraftDrama.first_line).in_([row.line_no for row in items]),
+                    current_image_drama_clause()
+                    if draft.media_kind == "CAROUSEL"
+                    else True,
                 )
             ).all()
         }
