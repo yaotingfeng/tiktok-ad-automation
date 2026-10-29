@@ -273,6 +273,8 @@ def image_preview_readiness(session, *, context, route, advertiser_id, material_
     from app.modules.materials.routes import load_material_route, require_same_route
     from app.modules.materials.schemas import MaterialReadiness
 
+    # 同图可在多个完整创意中复用；仅查询资源身份去重，不修改冻结成员或顺序。
+    material_ids = tuple(dict.fromkeys(material_ids))
     if not material_ids or len(material_ids) > 10000:
         raise DomainError("image_distribution_limit", "图片组超出批量上限")
 

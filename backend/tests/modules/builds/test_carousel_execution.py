@@ -475,8 +475,9 @@ def test_arm_requires_current_attempt_song_and_exact_image_order(carousel_case):
         assert step.phase == "REQUEST_ARMED" and step.request_body == body
 
 
+@pytest.mark.parametrize("unit_count", [2000, 4000])
 def test_async_large_shared_group_has_bounded_member_queries_and_per_ad_facts(
-    session, context, image_draft
+    session, context, image_draft, unit_count
 ):
     from time import monotonic
 
@@ -522,7 +523,7 @@ def test_async_large_shared_group_has_bounded_member_queries_and_per_ad_facts(
         )
     ).all()
     added_units, added_members, added_mappings = [], [], []
-    for index in range(4, 2001):
+    for index in range(4, unit_count + 1):
         identity = uuid4()
         added_units.append(
             PreviewCreativeUnit(
@@ -607,7 +608,7 @@ def test_async_large_shared_group_has_bounded_member_queries_and_per_ad_facts(
     copy = CopyEntry(pool_version_id=pool.id, position=1, text="Offline copy")
     session.add(copy)
     session.flush()
-    for base in range(1, 2001):
+    for base in range(1, unit_count + 1):
         session.add(
             PreviewCopy(
                 **shared,
@@ -680,14 +681,29 @@ def test_async_large_shared_group_has_bounded_member_queries_and_per_ad_facts(
     facts = session.exec(
         select(PreviewAdReadiness).where(PreviewAdReadiness.preview_id == preview.id)
     ).all()
-    assert len(facts) == 2000 and sum(f.included for f in facts) == 1999
+    assert len(facts) == unit_count and sum(f.included for f in facts) == unit_count - 1
     assert next(f for f in facts if not f.included).reason_codes == [
         "image_source_unavailable"
     ]
     assert unit.readiness == "PREPARING"
     assert "carousel_music_unverified" in unit.reason_codes
+    # 查询资源可去重，冻结创意之间的复用和每个单元内的顺序不能改变。
+    original_members = tuple(
+        m.material_id for m in sorted(members, key=lambda m: m.position)
+    )
+    reused = frozen_ad_creative_units(
+        session,
+        tenant_id=context.tenant_id,
+        preview_id=preview.id,
+        drama_id=drama.drama_id,
+        group_no=1,
+        base_ad_no=unit_count,
+    )
+    assert len(reused) == 1
+    assert tuple(m.material_id for m in reused[0].members) == original_members
+    assert len(all_members) == unit_count * 3 - 2
     print(  # noqa: T201 - retain bounded worker benchmark evidence
-        f"async 2000 units / 5998 members / 2000 Ads: {len(statements)} SQL, {elapsed:.3f}s"
+        f"async {unit_count} units / {len(all_members)} members / {unit_count} Ads: {len(statements)} SQL, {elapsed:.3f}s"
     )
 
 
@@ -760,3 +776,76 @@ def test_frozen_per_ad_exclusion_cannot_change(carousel_case):
             {"preview": preview},
         )
         session.flush()
+
+
+def test_submission_image_pages_allow_other_origin_bc_with_exact_target_ids(
+    carousel_case,
+):
+    from sqlmodel import Session
+
+    from app.modules.accounts.models import TenantBC
+    from app.modules.builds.execution_models import ExecutionStep
+    from app.modules.builds.preview_models import PlannedGroup
+    from app.modules.builds.submission_catalog import get_submission_materials
+    from app.modules.materials.models import MaterialFile
+    from app.modules.materials.repository import asset_public
+
+    engine, context, route, submission, units, _ = carousel_case
+    with Session(engine) as session, session.begin():
+        session.add(TenantBC(tenant_id=context.tenant_id, bc_id="original-other-bc"))
+        session.flush()
+        mappings = session.exec(
+            select(AccountMaterial).where(
+                AccountMaterial.tenant_id == context.tenant_id,
+                AccountMaterial.bc_id == route.bc_id,
+            )
+        ).all()
+        by_target = {(m.advertiser_id, m.material_id): m for m in mappings}
+        for identity in {m.material_id for m in mappings}:
+            session.get(MaterialFile, identity).bc_id = "original-other-bc"
+        for index, unit_id in enumerate(units):
+            for step in session.exec(
+                select(ExecutionStep).where(
+                    ExecutionStep.unit_id == unit_id, ExecutionStep.kind == "MATERIAL"
+                )
+            ).all():
+                mapping = by_target[(f"account-{'AB'[index]}", step.material_id)]
+                step.resolved = {
+                    "mapping": asset_public(mapping).model_dump(mode="json")
+                }
+    # 跨原件 BC 仍沿当前冻结账户映射准备整条广告，不借原件来源替换目标 ID。
+    claim = claim_ad(carousel_case)
+    _, body = prepare_ad(carousel_case, claim)
+    assert all(
+        item["web_uri"].startswith("account-A-")
+        for item in body["creative_list"][0]["creative_info"]["image_info"]
+    )
+    with Session(engine) as session:
+        for index, unit_id in enumerate(units):
+            group = session.exec(
+                select(PlannedGroup).where(PlannedGroup.unit_id == unit_id)
+            ).one()
+            cursor, collected, page_sizes = None, [], []
+            while True:
+                page = get_submission_materials(
+                    session,
+                    context=context,
+                    submission_id=submission,
+                    unit_id=unit_id,
+                    group_id=group.id,
+                    cursor=cursor,
+                    limit=2,
+                )
+                assert page.total == 7
+                collected.extend(page.items)
+                page_sizes.append(len(page.items))
+                if page.next_cursor is None:
+                    break
+                assert page.next_cursor != cursor
+                cursor = page.next_cursor
+            assert page_sizes == [2, 2, 2, 1]
+            assert [item.position for item in collected] == list(range(1, 8))
+            assert len({item.material_id for item in collected}) == 7
+            for item in collected:
+                assert item.media_type == "IMAGE" and item.video_id is None
+                assert item.image_id == f"account-{'AB'[index]}-{item.material_id}"

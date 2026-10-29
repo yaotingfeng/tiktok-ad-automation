@@ -900,7 +900,8 @@ AND g.unit_id=:unit AND g.id=:group""",
  CASE WHEN e.status='SUCCEEDED' THEN e.resolved->'mapping'->>'image_id' ELSE NULL END image_id,
  """
                 + STEP_JSON
-                + """ step FROM page m JOIN material_file f ON f.tenant_id=m.tenant_id AND f.bc_id=m.bc_id AND f.id=m.material_id
+                # 原件 BC 仅记录来源；本次范围与目标 ID 由冻结预览及执行步骤约束。
+                + """ step FROM page m JOIN material_file f ON f.tenant_id=m.tenant_id AND f.id=m.material_id
  LEFT JOIN execution_step e ON e.tenant_id=m.tenant_id AND e.submission_id=:submission AND e.unit_id=:unit AND e.kind='MATERIAL' AND e.material_id=m.material_id ORDER BY m.position"""
             ),
             params,
