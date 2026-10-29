@@ -40,6 +40,10 @@ class QueryMembershipReader:
         key = hashlib.sha256(
             json.dumps([sorted(ads), str(first), str(last)]).encode()
         ).hexdigest()
+        # 长分页可能刚在本 reader 中完成；完整集合仍从第一页观察起点计时，
+        # 不能仅靠构造时清缓存，把刚完成的旧负证据当成新的五分钟命中。
+        if key in self.entries and self.now - self.entries[key]["at"] >= CACHE_SECONDS:
+            del self.entries[key]
         if page == 1 and key in self.entries:
             members = self.entries[key]["members"]
             return RawReportPage(
@@ -67,12 +71,10 @@ class QueryMembershipReader:
             # 升级时已经在第2页的旧游标没有完整集合证据，先重启当前查询。
             raise DomainError("report_snapshot_changed", "定位查询缺少完整分页证据")
         assert pending is not None
-        if (
-            pending["signature"] != signature
-            or pending["next_page"] != page
-            or self.now - pending["at"] >= CACHE_SECONDS
-        ):
+        if pending["signature"] != signature or pending["next_page"] != page:
             raise DomainError("report_snapshot_changed", "定位查询分页发生变化")
+        # 部分页是续点而非可复用负缓存。排队时长本身不证明平台集合变化；
+        # 保留范围、总数、页次和下方重复维度校验，完整缓存仍沿原 at 过期。
         keys = [
             hashlib.sha256(
                 json.dumps(row.get("dimensions") or {}, sort_keys=True).encode()
