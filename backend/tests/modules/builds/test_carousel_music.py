@@ -933,3 +933,205 @@ def test_deduped_job_skips_stale_twenty_subscribers_then_serves_remaining(
     assert not wire["calls"]
     assert run_job(engine, redis_client, identity)["status"] == "READY"
     assert len([p for p, _ in wire["calls"] if "/music/" in p]) == 1
+
+
+@pytest.fixture
+def fixed_music_case(music_case):
+    from app.modules.builds.image_composition_schemas import ImageRule
+    from app.modules.builds.models import DraftDrama
+
+    engine, scope = music_case
+    with Session(engine) as session, session.begin():
+        draft = session.get(BuildDraft, scope.draft_id)
+        drama = session.exec(
+            select(DraftDrama).where(DraftDrama.draft_id == draft.id)
+        ).one()
+        units = apply_rule(
+            session,
+            (draft, drama, scope),
+            ImageRule(music_mode="FIXED", fixed_music_id="configured"),
+        )
+        multi = next(unit for unit in units if len(unit["ordered_material_ids"]) > 1)
+        unit_id = UUID(multi["id"])
+    return engine, scope, unit_id
+
+
+def test_fixed_multi_rejects_explicit_recommend_without_mutation(
+    fixed_music_case, wire
+):
+    from app.core.errors import DomainError
+
+    engine, scope, unit_id = fixed_music_case
+    with Session(engine) as session, session.begin():
+        draft = session.get(BuildDraft, scope.draft_id)
+        unit = session.get(
+            DraftCreativeUnit,
+            (scope.tenant_id, scope.draft_id, draft.active_image_generation, unit_id),
+        )
+        before, revision = unit.model_dump(), draft.revision
+        jobs_before = session.exec(select(MusicSelectionJob.id)).all()
+        with pytest.raises(DomainError) as error:
+            request_music(
+                session,
+                scope,
+                unit_id,
+                unit.revision,
+                unit.music_revision,
+                uuid4(),
+                "RECOMMEND",
+            )
+        assert error.value.code == "music_request_invalid"
+        assert unit.model_dump() == before and draft.revision == revision
+        assert session.exec(select(MusicSelectionJob.id)).all() == jobs_before
+        # FIXED 仅禁止推荐；显式手工指定仍可覆写并保护该单元。
+        request_music(
+            session,
+            scope,
+            unit_id,
+            unit.revision,
+            unit.music_revision,
+            uuid4(),
+            "SET_MANUAL",
+            "manual",
+        )
+        assert unit.music_id == "manual" and unit.music_protected
+    assert not wire["calls"]
+
+
+def test_cancelled_job_requeues_new_same_content_unit_from_real_edit(
+    music_case, wire, redis_client
+):
+    from app.modules.builds.image_composition_commands import Create, SetMusic
+    from app.modules.builds.image_composition_service import (
+        _unit_value,
+        edit_creative_units,
+    )
+
+    engine, scope = music_case
+    identity = job_ids(engine)[0]
+    with Session(engine) as session, session.begin():
+        job = session.get(MusicSelectionJob, identity)
+        original_id = UUID(job.targets[0]["unit_id"])
+        original = session.get(
+            DraftCreativeUnit,
+            (scope.tenant_id, scope.draft_id, job.active_generation, original_id),
+        )
+        material_ids = _unit_value(session, original).ordered_material_ids
+        drama_id = original.drama_id
+        draft = session.get(BuildDraft, scope.draft_id)
+        edit_creative_units(
+            session,
+            scope,
+            uuid4(),
+            draft.revision,
+            SetMusic(kind="SET_MUSIC", unit_id=original_id, music_id="manual"),
+        )
+        finish_music_preparation(session)
+    cancelled = run_job(engine, redis_client, identity)
+    assert cancelled["status"] == "CANCELLED" and not wire["calls"]
+    with Session(engine) as session, session.begin():
+        draft = session.get(BuildDraft, scope.draft_id)
+        created = edit_creative_units(
+            session,
+            scope,
+            uuid4(),
+            draft.revision,
+            Create(
+                kind="CREATE",
+                drama_id=drama_id,
+                material_ids=material_ids,
+                allow_reuse=True,
+            ),
+        )
+        new_id = UUID(created["affected_units"][0])
+        finish_music_preparation(session)
+        job = session.get(MusicSelectionJob, identity)
+        assert job.status == "PENDING" and job.generation > cancelled["generation"]
+        assert len(job.targets) == 2 and job.cursor == 1
+    stale = advance_music(
+        identity,
+        cancelled["generation"],
+        database_engine=engine,
+        redis_client=redis_client,
+    )
+    assert stale["status"] == "PENDING" and not wire["calls"]
+    assert run_job(engine, redis_client, identity)["status"] == "READY"
+    with Session(engine) as session:
+        original = session.get(
+            DraftCreativeUnit, (scope.tenant_id, scope.draft_id, 1, original_id)
+        )
+        new = session.get(
+            DraftCreativeUnit, (scope.tenant_id, scope.draft_id, 1, new_id)
+        )
+        assert original.music_id == "manual" and original.music_protected
+        assert new.music_id == "recommended" and new.music_status == "READY"
+    assert len([path for path, _ in wire["calls"] if "/music/" in path]) == 1
+
+
+def test_failed_fixed_retry_reads_configured_song_without_recommend(
+    fixed_music_case, wire, redis_client
+):
+    from app.modules.builds.image_composition_commands import Create
+    from app.modules.builds.image_composition_service import (
+        _unit_value,
+        edit_creative_units,
+    )
+
+    engine, scope, unit_id = fixed_music_case
+    with Session(engine) as session, session.begin():
+        draft = session.get(BuildDraft, scope.draft_id)
+        generation = draft.active_image_generation
+        unit = session.get(
+            DraftCreativeUnit, (scope.tenant_id, scope.draft_id, generation, unit_id)
+        )
+        result = edit_creative_units(
+            session,
+            scope,
+            uuid4(),
+            draft.revision,
+            Create(
+                kind="CREATE",
+                drama_id=unit.drama_id,
+                material_ids=_unit_value(session, unit).ordered_material_ids,
+                allow_reuse=True,
+            ),
+        )
+        created_id = UUID(result["affected_units"][0])
+        finish_music_preparation(session)
+        job = session.exec(
+            select(MusicSelectionJob).where(
+                MusicSelectionJob.active_generation == generation
+            )
+        ).one()
+        failed_id = job.id
+    wire["rows"] = []
+    assert run_job(engine, redis_client, failed_id)["status"] == "FAILED"
+    with Session(engine) as session, session.begin():
+        unit = session.get(
+            DraftCreativeUnit, (scope.tenant_id, scope.draft_id, generation, created_id)
+        )
+        assert unit.music_status == "FAILED"
+        retried = request_music(
+            session,
+            scope,
+            created_id,
+            unit.revision,
+            unit.music_revision,
+            uuid4(),
+            "RETRY",
+        )
+        retry_id = UUID(retried["job_ids"][0])
+        assert session.get(MusicSelectionJob, retry_id).parameters == {
+            "mode": "FIXED",
+            "music_id": "configured",
+        }
+    wire["rows"] = [music_row("configured", duration=0)]
+    assert run_job(engine, redis_client, retry_id)["status"] == "READY"
+    assert len(wire["calls"]) == 2
+    assert all(
+        query["search_type"] == ["SEARCH_BY_MUSIC_ID"] for _, query in wire["calls"]
+    )
+    assert all(
+        json.loads(query["filtering"][0])["music_ids"] == ["configured"]
+        for _, query in wire["calls"]
+    )

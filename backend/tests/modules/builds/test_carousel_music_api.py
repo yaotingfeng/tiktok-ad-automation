@@ -8,6 +8,9 @@ from app.main import app
 from app.modules.builds.carousel_music import browse_music
 from tests.modules.accounts.conftest import app_config as app_config
 from tests.modules.accounts.conftest import policy as policy
+from tests.modules.builds.test_carousel_music import (
+    fixed_music_case as fixed_music_case,
+)
 from tests.modules.builds.test_carousel_music import music_case as music_case
 from tests.modules.builds.test_carousel_music import wire as wire
 
@@ -227,3 +230,68 @@ def test_other_bc_cannot_borrow_recorded_seed(music_case, wire, redis_client):
             keyword="moon",
         )
     assert error.value.code == "image_source_unavailable" and not wire["calls"]
+
+
+def test_http_fixed_multi_recommend_rejected_without_job(fixed_music_case, wire):
+    from uuid import uuid4
+
+    from fastapi.testclient import TestClient
+
+    from app.api.deps import get_current_user, get_db
+    from app.models import User
+    from app.modules.builds.image_composition_models import DraftCreativeUnit
+    from app.modules.builds.models import BuildDraft
+    from tests.modules.builds.test_carousel_music import job_ids
+
+    engine, scope, unit_id = fixed_music_case
+
+    def database():
+        with Session(engine) as session:
+            yield session
+
+    def user():
+        with Session(engine) as session:
+            return session.get(User, scope.actor_id)
+
+    with Session(engine) as session:
+        draft = session.get(BuildDraft, scope.draft_id)
+        generation, revision = draft.active_image_generation, draft.revision
+        unit = session.get(
+            DraftCreativeUnit, (scope.tenant_id, scope.draft_id, generation, unit_id)
+        )
+        before = unit.model_dump()
+        body = {
+            "request_id": str(uuid4()),
+            "expected_content_revision": unit.revision,
+            "expected_music_revision": unit.music_revision,
+            "action": "RECOMMEND",
+        }
+    old_jobs = job_ids(engine)
+    original = dict(app.dependency_overrides)
+    app.dependency_overrides[get_db], app.dependency_overrides[get_current_user] = (
+        database,
+        user,
+    )
+    try:
+        with TestClient(app) as client:
+            response = client.post(
+                f"/api/tenants/{scope.tenant_id}/build-drafts/{scope.draft_id}/music/units/{unit_id}",
+                json=body,
+            )
+            assert (
+                response.status_code == 422
+                and response.json()["code"] == "music_request_invalid"
+            )
+        with Session(engine) as session:
+            assert session.get(BuildDraft, scope.draft_id).revision == revision
+            assert (
+                session.get(
+                    DraftCreativeUnit,
+                    (scope.tenant_id, scope.draft_id, generation, unit_id),
+                ).model_dump()
+                == before
+            )
+        assert job_ids(engine) == old_jobs and not wire["calls"]
+    finally:
+        app.dependency_overrides.clear()
+        app.dependency_overrides.update(original)

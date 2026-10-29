@@ -141,6 +141,14 @@ def _matches(unit, target):
     return unit is not None and _target(unit) == target and not unit.music_protected
 
 
+def _effective_parameters(state, unit, image_count):
+    rule = resolve_image_rule(
+        ImageRule.model_validate(state.rule or {}),
+        state.drama_patches.get(str(unit.drama_id), {}),
+    )
+    return effective_music_rule(rule, image_count)
+
+
 def enqueue_music(session, scope, draft, *, unit_ids=None):
     """与激活/编辑同事务入队；不展开目标账户，不在事务里访问平台。"""
     from .carousel_music_tasks import queue_music
@@ -169,14 +177,11 @@ def enqueue_music(session, scope, draft, *, unit_ids=None):
     result = []
     for unit in units:
         ids = _items(session, unit)
-        rule = resolve_image_rule(
-            ImageRule.model_validate(state.rule or {}),
-            state.drama_patches.get(str(unit.drama_id), {}),
-        )
         intent = unit.music_snapshot.get("pending_request", {})
-        parameters = intent.get("parameters") or effective_music_rule(rule, len(ids))
-        if intent.get("action") == "RECOMMEND" and len(ids) > 1:
-            parameters = {"mode": "RECOMMEND", "version": 1}
+        # 显式请求只隔离请求身份，不获得覆盖 FIXED/SINGLE 规则的权限。
+        parameters = intent.get("parameters") or _effective_parameters(
+            state, unit, len(ids)
+        )
         if intent:
             # 结构重生成继承该快照；RUNNING 不应丢失用户已经接受的显式请求。
             unit.music_snapshot = {
@@ -223,7 +228,7 @@ def enqueue_music(session, scope, draft, *, unit_ids=None):
             queue_music(session, job)
         elif target not in job.targets:
             job.targets = [*job.targets, target]
-            if job.status in {"READY", "FAILED"}:
+            if job.status in {"READY", "FAILED", "CANCELLED"}:
                 job.status = "PENDING"
                 job.generation += 1
                 queue_music(session, job)
@@ -287,6 +292,15 @@ def request_music(
         unit.music_snapshot = {"selection_source": "MANUAL"}
         jobs = []
     elif action in {"RECOMMEND", "RETRY"}:
+        effective = _effective_parameters(
+            _state(session, draft), unit, len(_items(session, unit))
+        )
+        if action == "RECOMMEND" and effective["mode"] == "FIXED":
+            # 必须在改版本/保护/状态之前拒绝；手工指定仍走 SET_MANUAL。
+            raise DomainError(
+                "music_request_invalid",
+                "指定曲模式不支持重新推荐，请手工选择曲目或修改配乐规则",
+            )
         if action == "RETRY" and unit.music_status != "FAILED":
             raise DomainError("music_request_invalid", "仅失败项可以重试")
         unit.music_request_generation += 1
@@ -298,6 +312,9 @@ def request_music(
             if action == "RETRY"
             else None
         )
+        if effective["mode"] == "FIXED":
+            # 失败重试仍精确读取当前配置曲，不能恢复成推荐请求。
+            old_parameters = effective
         unit.music_snapshot = {
             **unit.music_snapshot,
             "pending_request": {
