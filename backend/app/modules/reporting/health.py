@@ -209,7 +209,7 @@ def measure_freshness(session, plan, *, now, accounts=None):
     """分钟检查只读发布水位、筛选与动作队列，不触碰目录或素材关联事实。"""
     owned = owned_accounts(session, plan) if accounts is None else accounts
     params = _measurement_params(session, plan, now=now, owned=owned, coverage=False)
-    # 每账户合并今日/昨日两类水位，只按主键读取最多四行；聚合保留缺失的 NULL。
+    # 每账户合并两类水位；只在当地零点后的新鲜度窗口读取昨日，平时主键只读两行。
     # 不再让双 JOIN 在大池重复随机读取，或改走整租户历史水位的哈希扫描。
     # 一次求出完整活跃归属集合；只拆SQL执行，不降低覆盖、不分批发布。
     # 每句仍受原5秒限制，调用方10秒总预算覆盖全部批次与后续指标。
@@ -239,14 +239,22 @@ def measure_freshness(session, plan, *, now, accounts=None):
               FROM report_sync_state s
               WHERE s.tenant_id=:t AND s.advertiser_id=a.advertiser_id
                 AND s.report_kind IN ('ad_day','material_day')
-                AND s.stat_date BETWEEN a.local_day-1 AND a.local_day
+                AND s.stat_date BETWEEN CASE
+                  WHEN (CAST(:now AS timestamptz) AT TIME ZONE a.timezone)
+                    < a.local_day + CAST(:previous_grace AS interval)
+                  THEN a.local_day-1 ELSE a.local_day END AND a.local_day
             ) recent ON true
             CROSS JOIN LATERAL (VALUES
               ('ad_day',recent.ad_at,recent.ad_previous_at),
               ('material_day',recent.material_at,recent.material_previous_at)
             ) kinds(kind,last_success_at,previous_success_at)
         """),
-                {**params, "ids": active[offset : offset + FRESHNESS_BATCH_SIZE]},
+                {
+                    **params,
+                    "ids": active[offset : offset + FRESHNESS_BATCH_SIZE],
+                    # 两种水位共用一次探测；各自是否可借昨日仍由fresh_report_success裁定。
+                    "previous_grace": max(FRESHNESS.values()),
+                },
             )
             .mappings()
             .all()

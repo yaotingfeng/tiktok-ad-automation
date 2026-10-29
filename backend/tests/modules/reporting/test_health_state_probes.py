@@ -2,6 +2,7 @@
 
 from datetime import UTC, datetime
 from types import SimpleNamespace
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import event, text
 
@@ -20,6 +21,7 @@ LEFT JOIN report_sync_state s ON s.tenant_id=:t AND s.advertiser_id=a.advertiser
 LEFT JOIN report_sync_state previous ON previous.tenant_id=:t
   AND previous.advertiser_id=a.advertiser_id AND previous.stat_date=a.local_day-1
   AND previous.report_kind=k.kind
+  AND (:now AT TIME ZONE a.timezone)-a.local_day < interval '20 minutes'
 """
 
 
@@ -103,5 +105,14 @@ def test_health_states_use_one_bounded_probe_per_account(session, sync_seed):
         batch_visits, batch_rows = _state_work(explain["Plan"])
         visits += batch_visits
         rows += batch_rows
-    assert rows <= 4 * len(accounts)
+    # 只有当地零点后20分钟允许借用昨天，白天不能为无用水位支付随机读成本。
+    grace_accounts = sum(
+        now.astimezone(ZoneInfo(zone)).time().hour == 0
+        and now.astimezone(ZoneInfo(zone)).time().minute < 20
+        for zone in (
+            ["UTC", "Pacific/Kiritimati", "America/Adak"][i % 3]
+            for i in range(len(accounts))
+        )
+    )
+    assert rows <= 2 * len(accounts) + 2 * grace_accounts
     assert visits <= len(accounts)
