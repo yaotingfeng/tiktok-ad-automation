@@ -24,6 +24,7 @@ from app.integrations.tiktok.contracts.report_reader import RawReportPage, Repor
 from app.integrations.tiktok.sdk import AccountAdmissionDeferred
 from app.modules.accounts.models import AdvertiserAccount
 from app.modules.reporting import (
+    diagnostics,
     material_identity,
     material_links,
     publish,
@@ -767,29 +768,30 @@ def _run_material(session, job, reader, accounts):
                 rows=rows,
                 requested_at=observed_at,
             )
-            if material_links.needs_material_links(
-                session,
-                tenant_id=job.tenant_id,
-                advertiser_id=job.advertiser_ids[0],
-                start=job.start_date,
-                end=job.end_date,
-            ):
-                enqueue_job(
+            with diagnostics.stage("links_enqueued"):
+                if material_links.needs_material_links(
                     session,
                     tenant_id=job.tenant_id,
-                    bc_id=job.bc_id,
-                    kind="material_links",
-                    tier=next(
-                        tier
-                        for tier, priority in PRIORITY.items()
-                        if priority == job.priority
-                    ),
-                    advertiser_ids=job.advertiser_ids,
+                    advertiser_id=job.advertiser_ids[0],
                     start=job.start_date,
                     end=job.end_date,
-                    frozen_route=job.frozen_route,
-                    actor_id=job.actor_id,
-                )
+                ):
+                    enqueue_job(
+                        session,
+                        tenant_id=job.tenant_id,
+                        bc_id=job.bc_id,
+                        kind="material_links",
+                        tier=next(
+                            tier
+                            for tier, priority in PRIORITY.items()
+                            if priority == job.priority
+                        ),
+                        advertiser_ids=job.advertiser_ids,
+                        start=job.start_date,
+                        end=job.end_date,
+                        frozen_route=job.frozen_route,
+                        actor_id=job.actor_id,
+                    )
             return count
         page = result.next_page
     # 只有完整页边界才让出账户锁；已提交页和游标在同一事务中持久化。
@@ -1065,7 +1067,8 @@ class _CountingReader:
                 json.dumps([name, kwargs], sort_keys=True, default=str).encode()
             ).hexdigest()
             try:
-                result = read(**kwargs)
+                with diagnostics.stage("read"):
+                    result = read(**kwargs)
                 self.successful_queries.add(query)
                 return result
             except AccountAdmissionDeferred:
@@ -1116,6 +1119,7 @@ def _admission_delay(
     return delays[attempts - 1] + randint(0, 1000)
 
 
+@diagnostics.timed("execute")
 def execute_job(
     session_factory: Callable[[], Session],
     *,
@@ -1148,44 +1152,45 @@ def execute_job(
                 if not acquired:
                     raise AccountAdmissionDeferred(5000)
             more = _run(session, job, counted) is None
-            _clear_completed_throttle(job, counted)
-            if (
-                job.kind == "material_links"
-                and not more
-                and material_links.wait_for_dependencies(
-                    session, job, now=datetime.now(UTC)
-                )
-            ):
-                job.status = "WAITING"
-                result = "WAITING"
-            elif more:
-                job.status, job.error_code = "WAITING", None
-                job.due_at = datetime.now(UTC)
-                result = "WAITING"
-            else:
-                job.status, job.error_code, job.finished_at = (
-                    "COMPLETE",
-                    None,
-                    datetime.now(UTC),
-                )
-                result = "COMPLETE"
-                if job.kind in BASIC_KINDS and "basic_paging" in job.progress:
-                    # 财务事实已原子发布，暂存正文立即回收；保留观测/页数审计，避免热刷堆盘。
-                    checkpoint = job.progress["basic_paging"]
-                    job.progress = {
-                        k: v for k, v in job.progress.items() if k != "basic_paging"
-                    } | {
-                        "basic_snapshot": {
-                            "observed_at": checkpoint["observed_at"],
-                            "pages": len(checkpoint["pages"]),
-                            "scope": checkpoint["scope"],
-                        }
-                    }
-                    session.connection().execute(
-                        delete(ReportSyncPage).where(
-                            col(ReportSyncPage.job_id) == job.id
-                        )
+            with diagnostics.stage("job_finalize"):
+                _clear_completed_throttle(job, counted)
+                if (
+                    job.kind == "material_links"
+                    and not more
+                    and material_links.wait_for_dependencies(
+                        session, job, now=datetime.now(UTC)
                     )
+                ):
+                    job.status = "WAITING"
+                    result = "WAITING"
+                elif more:
+                    job.status, job.error_code = "WAITING", None
+                    job.due_at = datetime.now(UTC)
+                    result = "WAITING"
+                else:
+                    job.status, job.error_code, job.finished_at = (
+                        "COMPLETE",
+                        None,
+                        datetime.now(UTC),
+                    )
+                    result = "COMPLETE"
+                    if job.kind in BASIC_KINDS and "basic_paging" in job.progress:
+                        # 财务事实已原子发布，暂存正文立即回收；保留观测/页数审计，避免热刷堆盘。
+                        checkpoint = job.progress["basic_paging"]
+                        job.progress = {
+                            k: v for k, v in job.progress.items() if k != "basic_paging"
+                        } | {
+                            "basic_snapshot": {
+                                "observed_at": checkpoint["observed_at"],
+                                "pages": len(checkpoint["pages"]),
+                                "scope": checkpoint["scope"],
+                            }
+                        }
+                        session.connection().execute(
+                            delete(ReportSyncPage).where(
+                                col(ReportSyncPage.job_id) == job.id
+                            )
+                        )
         except AccountAdmissionDeferred as deferred:
             # 完整的私有页可以保留；额度退避不能迫使多页报表反复从首页开始。
             if job.kind not in BASIC_KINDS | {"material_day"}:
@@ -1214,7 +1219,9 @@ def execute_job(
             result = _handle_error(session, job, error)
         job.request_count += counted.count
         job.claim_token = job.claimed_until = None
-        session.commit()
+        with diagnostics.stage("job_commit"):
+            session.commit()
+        diagnostics.committed(result)
         return result
 
 

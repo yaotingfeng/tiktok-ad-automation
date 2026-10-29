@@ -15,6 +15,7 @@ from sqlalchemy import delete, insert, or_, text, tuple_
 from sqlmodel import Session, col, select
 
 from app.core.errors import DomainError
+from app.modules.reporting import diagnostics
 from app.modules.reporting.metrics import (
     basic_metric_values,
     material_metric_values,
@@ -67,6 +68,7 @@ def _in_range(day: date, start: date, end: date) -> date:
     return day
 
 
+@diagnostics.timed("publish_buckets")
 def _writable_buckets(session, *, tenant_id, accounts, kind, start, end, requested_at):
     """在账户锁内比较本地发布水位；这不是平台事件或归因水位。
 
@@ -111,6 +113,7 @@ def _bucket_days(buckets):
     return grouped.items()
 
 
+@diagnostics.timed("publish_state")
 def _set_state(session, *, tenant_id, kind, buckets, counts):
     now = _database_now(session)
     for advertiser, day in sorted(buckets):
@@ -190,6 +193,7 @@ def _rollup_sql() -> str:
     """
 
 
+@diagnostics.timed("financial_publish")
 def publish_ad_day(
     session: Session,
     *,
@@ -250,33 +254,39 @@ def publish_ad_day(
     )
     if not buckets:
         return 0
+    diagnostics.counts(buckets=len(buckets))
     records = [r for r in records if (r["advertiser_id"], r["stat_date"]) in buckets]
-    ensure_month_partitions_for_range(session, start, end, tables=("ad_report_day",))
-    statement = delete(AdReportDay).where(
-        col(AdReportDay.tenant_id) == tenant_id,
-        _bucket_filter(AdReportDay, buckets),
-    )
-    if campaign_ids:
-        statement = statement.where(col(AdReportDay.campaign_id).in_(campaign_ids))
-    session.connection().execute(statement)
-    if records:
-        session.connection().execute(insert(AdReportDay), records)
-    session.connection().execute(
-        delete(CampaignReportDay).where(
-            col(CampaignReportDay.tenant_id) == tenant_id,
-            _bucket_filter(CampaignReportDay, buckets),
+    with diagnostics.stage("publish_partitions"):
+        ensure_month_partitions_for_range(
+            session, start, end, tables=("ad_report_day",)
         )
-    )
-    for advertiser, days in _bucket_days(buckets):
+    with diagnostics.stage("publish_facts"):
+        statement = delete(AdReportDay).where(
+            col(AdReportDay.tenant_id) == tenant_id,
+            _bucket_filter(AdReportDay, buckets),
+        )
+        if campaign_ids:
+            statement = statement.where(col(AdReportDay.campaign_id).in_(campaign_ids))
+        session.connection().execute(statement)
+        if records:
+            session.connection().execute(insert(AdReportDay), records)
+    with diagnostics.stage("publish_rollup"):
         session.connection().execute(
-            text(_rollup_sql()),
-            {
-                "tenant_id": tenant_id,
-                "advertiser": advertiser,
-                "days": days,
-                "job_id": job_id,
-            },
+            delete(CampaignReportDay).where(
+                col(CampaignReportDay.tenant_id) == tenant_id,
+                _bucket_filter(CampaignReportDay, buckets),
+            )
         )
+        for advertiser, days in _bucket_days(buckets):
+            session.connection().execute(
+                text(_rollup_sql()),
+                {
+                    "tenant_id": tenant_id,
+                    "advertiser": advertiser,
+                    "days": days,
+                    "job_id": job_id,
+                },
+            )
     # 系列分片只替换其范围，不能把部分成功声明成整个账户当天 COMPLETE。
     if not campaign_ids:
         _set_state(
@@ -286,8 +296,10 @@ def publish_ad_day(
             buckets=buckets,
             counts=counts,
         )
-    session.flush()
+    with diagnostics.stage("publish_flush"):
+        session.flush()
     _refresh_reconciliation_sums(session, tenant_id, buckets)
+    diagnostics.counts(rows=len(records))
     return len(records)
 
 
@@ -342,23 +354,28 @@ def _publish_simple(
     records = [
         r for r, bucket in zip(records, record_days, strict=True) if bucket in buckets
     ]
-    if model is MaterialReportDay:
-        ensure_month_partitions_for_range(
-            session, start, end, tables=("material_report_day",)
+    with diagnostics.stage("publish_partitions"):
+        if model is MaterialReportDay:
+            ensure_month_partitions_for_range(
+                session, start, end, tables=("material_report_day",)
+            )
+    with diagnostics.stage("publish_facts"):
+        session.connection().execute(
+            delete(model).where(
+                model.tenant_id == tenant_id,
+                time_filter(model, buckets),
+            )
         )
-    session.connection().execute(
-        delete(model).where(
-            model.tenant_id == tenant_id,
-            time_filter(model, buckets),
-        )
-    )
-    if records:
-        session.connection().execute(insert(model), records)
+        if records:
+            session.connection().execute(insert(model), records)
     _set_state(session, tenant_id=tenant_id, kind=kind, buckets=buckets, counts=counts)
-    session.flush()
+    with diagnostics.stage("publish_flush"):
+        session.flush()
+    diagnostics.counts(rows=len(records), buckets=len(buckets))
     return len(records)
 
 
+@diagnostics.timed("financial_publish")
 def publish_campaign_hour(
     session, *, tenant_id, job_id, accounts, day, rows, requested_at=None
 ) -> int:
@@ -408,6 +425,7 @@ def publish_campaign_hour(
     )
 
 
+@diagnostics.timed("financial_publish")
 def publish_material_day(
     session, *, tenant_id, job_id, accounts, start, end, rows, requested_at=None
 ) -> int:
@@ -440,6 +458,7 @@ def publish_material_day(
     )
 
 
+@diagnostics.timed("financial_publish")
 def publish_account_reconciliation(
     session, *, tenant_id, accounts, start, end, rows, requested_at=None
 ) -> int:
@@ -489,16 +508,19 @@ def publish_account_reconciliation(
         buckets=buckets,
         counts=dict.fromkeys(reported, 1),
     )
-    session.flush()
+    with diagnostics.stage("publish_flush"):
+        session.flush()
     _refresh_reconciliation_sums(session, tenant_id, buckets)
     return len(buckets)
 
 
+@diagnostics.timed("reconciliation")
 def _refresh_reconciliation_sums(session, tenant_id, buckets):
     # 两种完成顺序均引用当前事实；平台 NULL 仍传播，完整空结果才为零。
     for advertiser, days in _bucket_days(buckets):
-        session.connection().execute(
-            text("""
+        with diagnostics.stage("reconciliation_account"):
+            session.connection().execute(
+                text("""
         UPDATE account_reconciliation_day r SET (ad_sum_spend, ad_sum_revenue_total) = (
             SELECT
               CASE WHEN COUNT(*)=0 THEN CASE WHEN EXISTS (
@@ -515,5 +537,5 @@ def _refresh_reconciliation_sums(session, tenant_id, buckets):
               AND a.advertiser_id=r.advertiser_id AND a.stat_date=r.stat_date
         ) WHERE r.tenant_id=:t AND r.advertiser_id=:a AND r.stat_date=ANY(:days)
         """),
-            {"t": tenant_id, "a": advertiser, "days": days},
-        )
+                {"t": tenant_id, "a": advertiser, "days": days},
+            )

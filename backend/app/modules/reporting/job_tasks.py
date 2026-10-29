@@ -50,7 +50,7 @@ from app.modules.ads.directory_requests import (
 )
 from app.modules.ads.material_directory_children import MATERIAL_CHILD_KEY
 from app.modules.ads.sync_models import AdDirectoryPage, AdDirectoryRun
-from app.modules.reporting import planner, publish
+from app.modules.reporting import diagnostics, planner, publish
 from app.modules.reporting.jobs import (
     LEASE,
     claim_jobs,
@@ -1046,18 +1046,21 @@ def _report_refill_after(database_engine, redis_client, job):
     finally:
         if settings.ADS_SYNC_ENABLED:
             try:
-                now = datetime.now(UTC)
-                allow_backfill = planner.backfill_allowed(redis_client, now)
-                # 当前步骤提交后直接执行有锁本地领取；新消息仍写正常 outbox，
-                # 去掉先发 control 唤醒再领取的双跳，不在读取 Worker 内发送 broker。
-                # 仅补报表槽；目录保留自身完成唤醒和Control调度，不能每个事实步骤
-                # 都重新搬运其独立积压、延长报表窗口锁和CPU占用。
-                _dispatch_pending(
-                    database_engine,
-                    now,
-                    allow_backfill=allow_backfill,
-                    include_directories=False,
-                )
+                with diagnostics.stage("refill"):
+                    now = datetime.now(UTC)
+                    allow_backfill = planner.backfill_allowed(redis_client, now)
+                    # 当前步骤提交后直接执行有锁本地领取；新消息仍写正常 outbox，
+                    # 去掉先发 control 唤醒再领取的双跳，不在读取 Worker 内发送 broker。
+                    # 仅补报表槽；目录保留自身完成唤醒和Control调度，不能每个事实步骤
+                    # 都重新搬运其独立积压、延长报表窗口锁和CPU占用。
+                    with diagnostics.stage("refill_dispatch"):
+                        count = _dispatch_pending(
+                            database_engine,
+                            now,
+                            allow_backfill=allow_backfill,
+                            include_directories=False,
+                        )
+                    diagnostics.counts(refill_jobs=count)
             except Exception:
                 # 已提交的报表不能因补位消息失败改成失败；30 秒 Beat 会再次补位。
                 logger.exception("report direct refill failed: job=%s", job.id)
@@ -1105,42 +1108,50 @@ def _failed(session, job, code):
     )
 
 
+@diagnostics.summarize_job
 def run_job_step(*, database_engine, redis_client, job_id, claim_token):
-    with Session(database_engine, expire_on_commit=False) as session:
-        job = session.get(ReportSyncJob, job_id, with_for_update=True)
-        now = datetime.now(UTC)
-        if job is None or job.claim_token != claim_token or job.status != "RUNNING":
-            return "FAILED"
-        # 旧积压消息不能越过有界派发窗口自行续租；只结束本条消息，
-        # 业务运行仍留给扫描器按当前优先级重新领取，不记终态失败。
-        if job.claimed_until is None or job.claimed_until <= now:
-            return "FAILED"
-        if not settings.ADS_SYNC_ENABLED:
-            job.status, job.due_at = "WAITING", now + timedelta(minutes=1)
-            job.claim_token = job.claimed_until = None
-            session.commit()
-            return "WAITING"
-        try:
-            route = FrozenTikTokRoute.model_validate(job.frozen_route)
-            if route.channel != "OFFICIAL_API":
-                raise DomainError("api_binding_required", "报表需要 API 绑定")
-            for advertiser in job.advertiser_ids:
-                verify_route(
-                    session,
-                    context=_context(job),
-                    route=route,
-                    advertiser_id=advertiser,
-                    capability="read",
-                )
-        except DomainError as error:
-            _failed(session, job, error.code)
-            session.commit()
-            return "FAILED"
-        workload = report_workload(session, job, now=now)
-        before = job.request_count
-        # 排队等待不侵占实际读取期限，避免刚开始执行就被扫描器换代。
-        job.claimed_until = now + LEASE
-        session.commit()
+    with diagnostics.stage("step_prepare"):
+        with Session(database_engine, expire_on_commit=False) as session:
+            job = session.get(ReportSyncJob, job_id, with_for_update=True)
+            now = datetime.now(UTC)
+            if job is None or job.claim_token != claim_token or job.status != "RUNNING":
+                return "FAILED"
+            diagnostics.set_job_scope(job.kind, len(job.advertiser_ids))
+            # 旧积压消息不能越过有界派发窗口自行续租；只结束本条消息，
+            # 业务运行仍留给扫描器按当前优先级重新领取，不记终态失败。
+            if job.claimed_until is None or job.claimed_until <= now:
+                return "FAILED"
+            if not settings.ADS_SYNC_ENABLED:
+                job.status, job.due_at = "WAITING", now + timedelta(minutes=1)
+                job.claim_token = job.claimed_until = None
+                with diagnostics.stage("job_commit"):
+                    session.commit()
+                diagnostics.committed("WAITING")
+                return "WAITING"
+            try:
+                route = FrozenTikTokRoute.model_validate(job.frozen_route)
+                if route.channel != "OFFICIAL_API":
+                    raise DomainError("api_binding_required", "报表需要 API 绑定")
+                for advertiser in job.advertiser_ids:
+                    verify_route(
+                        session,
+                        context=_context(job),
+                        route=route,
+                        advertiser_id=advertiser,
+                        capability="read",
+                    )
+            except DomainError as error:
+                _failed(session, job, error.code)
+                with diagnostics.stage("job_commit"):
+                    session.commit()
+                diagnostics.committed("FAILED")
+                return "FAILED"
+            workload = report_workload(session, job, now=now)
+            before = job.request_count
+            # 排队等待不侵占实际读取期限，避免刚开始执行就被扫描器换代。
+            job.claimed_until = now + LEASE
+            with diagnostics.stage("claim_commit"):
+                session.commit()
 
     def factory():
         return Session(database_engine)
@@ -1169,22 +1180,27 @@ def run_job_step(*, database_engine, redis_client, job_id, claim_token):
                         milliseconds=max(1000, error.retry_after_ms)
                     )
                     current.claim_token = current.claimed_until = None
-                    session.commit()
+                    with diagnostics.stage("job_commit"):
+                        session.commit()
+                    diagnostics.committed("WAITING")
             return "WAITING"
         except DomainError as error:
             with factory() as session:
                 current = session.get(ReportSyncJob, job_id, with_for_update=True)
                 if current is not None and current.claim_token == claim_token:
                     _failed(session, current, error.code)
-                    session.commit()
+                    with diagnostics.stage("job_commit"):
+                        session.commit()
+                    diagnostics.committed("FAILED")
             return "FAILED"
-        with factory() as session:
-            current = session.get(ReportSyncJob, job_id)
-            if current is not None:
-                # 计增量，不能在每次重试重复计入历史请求数。
-                planner.record_calls(
-                    redis_client, now, max(0, current.request_count - before)
-                )
+        with diagnostics.stage("record_calls"):
+            with factory() as session:
+                current = session.get(ReportSyncJob, job_id)
+                if current is not None:
+                    # 计增量，不能在每次重试重复计入历史请求数。
+                    planner.record_calls(
+                        redis_client, now, max(0, current.request_count - before)
+                    )
         return result
 
 
