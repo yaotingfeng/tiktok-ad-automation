@@ -5,7 +5,7 @@ import logging
 from datetime import UTC, datetime, timedelta
 from hashlib import sha256
 from time import monotonic
-from typing import Any, TypedDict
+from typing import Any, NotRequired, TypedDict
 from uuid import UUID, uuid4
 
 from redis import Redis
@@ -60,6 +60,7 @@ HEALTH_CYCLE_SECONDS = 120
 HEALTH_STAGE_SECONDS = 3
 HEALTH_MIN_STAGE_SECONDS = 0.5
 HEALTH_FINISH_RESERVE = 0.5
+HEALTH_GROWTH_CAP_SECONDS = 600
 COVERAGE_STAGES = ("directory", "material")
 FRESHNESS_BATCH_SIZE = 512
 COVERAGE_REFRESH = timedelta(minutes=3)
@@ -72,6 +73,9 @@ class _CoverageStage(TypedDict):
     offset: int
     batch_size: int
     success_streak: int
+    # v3已有续点可缺省这两项，沿用原64上限；仅保存运行经验，不复用旧事实。
+    growth_cap: NotRequired[int]
+    cap_until: NotRequired[str]
 
 
 class _HealthProgress(TypedDict):
@@ -815,7 +819,7 @@ def _health_progress_key(tenant_id, bc_id):
 
 
 def _health_batch_hint_key(tenant_id, bc_id):
-    return f"reporting:health:batch-hint:v1:{tenant_id}:{bc_id}"
+    return f"reporting:health:batch-hint:v2:{tenant_id}:{bc_id}"
 
 
 def _health_scope(session, plan, owned, *, now=None):
@@ -852,28 +856,39 @@ def _health_scope(session, plan, owned, *, now=None):
     ).hexdigest()
 
 
+def _active_growth_cap(stage, *, now=None):
+    until = stage.get("cap_until")
+    now = now or datetime.now(UTC)
+    if not until or datetime.fromisoformat(until) <= now:
+        return HEALTH_CHUNK_SIZE, None
+    return max(1, min(HEALTH_CHUNK_SIZE, int(stage["growth_cap"]))), until
+
+
 def _new_coverage_progress(scope, hints=None):
-    sizes = (
-        (hints or {}).get("sizes", {}) if (hints or {}).get("scope") == scope else {}
-    )
+    hints = hints or {}
+    if hints.get("scope") != scope:
+        hints = {}
+    sizes, caps = hints.get("sizes", {}), hints.get("growth_caps", {})
+    now = datetime.now(UTC)
+    stages: dict[str, _CoverageStage] = {}
+    for name in COVERAGE_STAGES:
+        cap, until = _active_growth_cap(caps.get(name, {}), now=now)
+        stages[name] = {
+            "offset": 0,
+            "batch_size": max(1, min(cap, int(sizes.get(name, HEALTH_CHUNK_SIZE)))),
+            "success_streak": 0,
+        }
+        if until is not None:
+            stages[name].update(growth_cap=cap, cap_until=until)
     return {
         "cycle": uuid4().hex,
         "scope": scope,
-        "at": datetime.now(UTC).isoformat(),
+        "at": now.isoformat(),
         "offset": 0,
         "metrics": {},
         "issues": [],
         "repairs": {"ad": [], "material": [], "links": []},
-        "stages": {
-            name: {
-                "offset": 0,
-                "batch_size": max(
-                    1, min(HEALTH_CHUNK_SIZE, int(sizes.get(name, HEALTH_CHUNK_SIZE)))
-                ),
-                "success_streak": 0,
-            }
-            for name in COVERAGE_STAGES
-        },
+        "stages": stages,
         "continuation_seq": 0,
         "retry_not_before": None,
     }
@@ -920,19 +935,25 @@ def _enqueue_health_continuation(
 
 
 def _save_coverage_batch_hint(redis_client, plan, progress):
-    # 跨周期只保留同范围的两项批大小；计数、修复集合与观测时间绝不复用。
+    # 只保留同范围运行提示；快批写hint不能续长失败经验的绝对期限。
+    now = datetime.now(UTC)
+    caps = {}
+    for name, stage in progress["stages"].items():
+        cap, until = _active_growth_cap(stage, now=now)
+        if until is not None:
+            caps[name] = {"growth_cap": cap, "cap_until": until}
+    hint = {
+        "scope": progress["scope"],
+        "sizes": {
+            name: stage["batch_size"] for name, stage in progress["stages"].items()
+        },
+    }
+    if caps:
+        hint["growth_caps"] = caps
     redis_client.set(
         _health_batch_hint_key(plan.tenant_id, plan.bc_id),
-        json.dumps(
-            {
-                "scope": progress["scope"],
-                "sizes": {
-                    name: stage["batch_size"]
-                    for name, stage in progress["stages"].items()
-                },
-            }
-        ),
-        ex=600,
+        json.dumps(hint),
+        ex=HEALTH_GROWTH_CAP_SECONDS,
     )
 
 
@@ -942,7 +963,7 @@ def _log_coverage_stage(
     logger.info(
         "health coverage cycle=%s stage=%s offset=%s attempted_end=%s saved_offset=%s "
         "batch_size=%s outcome=%s elapsed=%.3fs cycle_age=%.3fs remaining=%.3fs "
-        "budget=%.3fs slice=%s",
+        "budget=%.3fs slice=%s growth_cap=%s cap_until=%s",
         progress["cycle"],
         stage,
         start,
@@ -955,6 +976,7 @@ def _log_coverage_stage(
         max(0, deadline - monotonic()),
         allocated_seconds,
         "full" if allocated_seconds == HEALTH_STAGE_SECONDS else "tail",
+        *_active_growth_cap(progress["stages"][stage]),
     )
 
 
@@ -1038,6 +1060,14 @@ def _advance_health(session, plan, redis_client, *, cycle, deadline):
                 break
             attempted = end - start
             stage["batch_size"] = max(1, attempted // 2)
+            # 同范围密集区失败后，两个邻近快批不能立即恢复刚失败的大批。
+            # 只有完整片失败更新cap期限；尾片取消不惩罚，期限到后允许重新学习。
+            now = datetime.now(UTC)
+            cap, _ = _active_growth_cap(stage, now=now)
+            stage["growth_cap"] = min(cap, stage["batch_size"])
+            stage["cap_until"] = (
+                now + timedelta(seconds=HEALTH_GROWTH_CAP_SECONDS)
+            ).isoformat()
             stage["success_streak"] = 0
             # 单账户已无法再拆；不跳账户，也不让重复消息绕过冷却形成忙循环。
             progress["retry_not_before"] = (
@@ -1089,7 +1119,8 @@ def _advance_health(session, plan, redis_client, *, cycle, deadline):
             stage["success_streak"] + 1 if batch_seconds <= 1 else 0
         )
         if stage["success_streak"] >= 2:
-            stage["batch_size"] = min(HEALTH_CHUNK_SIZE, stage["batch_size"] * 2)
+            cap, _ = _active_growth_cap(stage)
+            stage["batch_size"] = min(cap, stage["batch_size"] * 2)
             stage["success_streak"] = 0
         redis_client.set(key, json.dumps(progress), ex=180)
         if stage["batch_size"] != before_size:

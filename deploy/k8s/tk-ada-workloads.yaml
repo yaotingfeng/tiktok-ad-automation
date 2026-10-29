@@ -304,7 +304,9 @@ spec:
           resources:
             requests: {cpu: "250m", memory: 1Gi}
             limits: {cpu: "1", memory: 2Gi}
-          command: [celery, -A, "app.jobs.celery_app:celery_app", worker, -Q, control, --pool, prefork, --concurrency, "2", --loglevel=INFO, --hostname, "control@%h"]
+          # 控制任务多在等待数据库/平台；独立第三槽降低健康续点和实时规划的排队。
+          # 本轮仅增一个prefork（池上限+3），仍保留1核/2Gi和正常退出后零副本切换。
+          command: [celery, -A, "app.jobs.celery_app:celery_app", worker, -Q, control, --pool, prefork, --concurrency, "3", --loglevel=INFO, --hostname, "control@%h"]
           readinessProbe:
             exec:
               command: [python, -c, "import socket; from app.jobs.celery_app import celery_app; r=celery_app.control.ping(destination=['control@'+socket.gethostname()], timeout=5); raise SystemExit(0 if r else 1)"]

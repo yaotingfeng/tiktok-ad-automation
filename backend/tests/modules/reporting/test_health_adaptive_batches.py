@@ -111,7 +111,8 @@ def test_same_offset_timeouts_shrink_and_publish_distinct_immediate_retries(
             assert result == "CONTINUE"
             progress = json.loads(redis_client.get(key))
             sizes.append(progress["stages"]["directory"]["batch_size"])
-        assert result == "COMPLETE" and 32 in sizes
+        # 两次完整片取消已把增长上限定为16，不能被后续快批立即覆盖。
+        assert result == "COMPLETE" and sizes and max(sizes) <= 16
         with factory() as session:
             row = session.get(ReportSyncHealth, (seed.tenant_id, "bc-a"))
             assert (
