@@ -282,6 +282,22 @@ export type AdMaterialsPublic = {
      */
     items?: Array<AdMaterialPublic>;
     /**
+     * Carousel Creatives
+     */
+    carousel_creatives?: Array<CarouselCreativeIdentity>;
+    /**
+     * Carousel Linkage Complete
+     */
+    carousel_linkage_complete?: boolean;
+    /**
+     * Metric Scope
+     */
+    metric_scope?: 'AD' | 'MATERIAL';
+    /**
+     * Frozen Creative Links
+     */
+    frozen_creative_links?: Array<FrozenCarouselLink>;
+    /**
      * Coverage
      */
     coverage?: {
@@ -851,6 +867,32 @@ export type CapabilityRefreshRequest = {
      * Connection Id
      */
     connection_id: string;
+};
+
+/**
+ * CarouselCreativeIdentity
+ */
+export type CarouselCreativeIdentity = {
+    /**
+     * Advertiser Id
+     */
+    advertiser_id: string;
+    /**
+     * Ad Id
+     */
+    ad_id: string;
+    /**
+     * Remote Creative Id
+     */
+    remote_creative_id: string | null;
+    /**
+     * Ordered Image Ids
+     */
+    ordered_image_ids: Array<string>;
+    /**
+     * Music Id
+     */
+    music_id: string;
 };
 
 /**
@@ -2570,6 +2612,28 @@ export type FrozenAd = {
      * Material Ids
      */
     material_ids: Array<string>;
+};
+
+/**
+ * FrozenCarouselLink
+ */
+export type FrozenCarouselLink = {
+    /**
+     * Submission Id
+     */
+    submission_id: string;
+    /**
+     * Unit Id
+     */
+    unit_id: string;
+    /**
+     * Group Id
+     */
+    group_id: string;
+    /**
+     * Planned Ad Id
+     */
+    planned_ad_id: string;
 };
 
 /**
@@ -7170,6 +7234,10 @@ export type ReportRow = {
      * Row Key
      */
     row_key: string;
+    /**
+     * Carousel Creatives
+     */
+    carousel_creatives?: Array<CarouselCreativeIdentity>;
     /**
      * Display
      */

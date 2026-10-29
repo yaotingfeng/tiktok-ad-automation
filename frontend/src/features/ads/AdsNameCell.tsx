@@ -72,6 +72,11 @@ export function AdsNameCell({
         >
           {name}
         </button>
+        {row.display?.creative_format === "CAROUSEL_ADS" && (
+          <div className="text-[11px] text-muted-foreground">
+            图片轮播 · 广告级数据
+          </div>
+        )}
         {id && id !== name && (
           <div className="truncate text-[11px] text-muted-foreground">{id}</div>
         )}

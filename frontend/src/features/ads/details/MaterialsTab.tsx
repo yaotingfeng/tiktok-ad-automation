@@ -1,4 +1,5 @@
 import { useQuery } from "@tanstack/react-query"
+import { Link } from "@tanstack/react-router"
 import { useState } from "react"
 import {
   type AdMaterialPublic,
@@ -171,6 +172,57 @@ export function AdMaterialsTab({
       </div>
     )
   const items = query.data?.items ?? []
+  if (query.data?.metric_scope === "AD")
+    return (
+      <div className="space-y-3">
+        <Badge variant="secondary">图片轮播</Badge>
+        <p className="text-sm text-muted-foreground">
+          当前仅显示广告级消耗与收入，请在概览或趋势查看；图片和轮播单元不拆分金额。
+          图片创意暂不支持素材级自动规则
+        </p>
+        {!query.data.carousel_linkage_complete && (
+          <p className="text-sm text-muted-foreground">
+            轮播关联不完整：缺少图片顺序或曲目证据，广告级数据仍可查看。
+          </p>
+        )}
+        {(query.data.carousel_creatives ?? []).map((creative, index) => (
+          <section
+            className="space-y-1 rounded-md border p-3 text-sm"
+            key={`${index}:${creative.remote_creative_id ?? ""}`}
+          >
+            <div className="font-medium">
+              轮播 {index + 1} · {creative.ordered_image_ids.length} 张图片
+            </div>
+            <div className="break-all text-muted-foreground">
+              图片顺序：{creative.ordered_image_ids.join(" → ")}
+            </div>
+            <div>曲目：{creative.music_id}</div>
+            <div className="text-muted-foreground">
+              平台创意 ID：{creative.remote_creative_id ?? "未返回"}
+            </div>
+          </section>
+        ))}
+        {(query.data.frozen_creative_links ?? []).map((link) => (
+          <div key={link.planned_ad_id} className="space-y-1">
+            <Button variant="outline" size="sm" asChild>
+              <Link
+                to="/tenants/$tenantId/build-tasks/$submissionId"
+                params={{
+                  tenantId: tenantId!,
+                  submissionId: link.submission_id,
+                }}
+                search={{ tab: "details" }}
+              >
+                查看冻结创意与投放任务
+              </Link>
+            </Button>
+            <p className="text-xs text-muted-foreground">
+              冻结内容为提交时的原始意图，不代表当前远端曲目已重新验证。
+            </p>
+          </div>
+        ))}
+      </div>
+    )
   if (!items.length)
     return (
       <p className="text-sm text-muted-foreground">

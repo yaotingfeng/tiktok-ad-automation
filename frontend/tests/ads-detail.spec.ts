@@ -564,3 +564,86 @@ test.describe("ads detail", () => {
     ).toHaveCount(0)
   })
 })
+
+for (const complete of [true, false]) {
+  test(`轮播说明保留顺序和曲目且不显示单元金额（完整=${complete}）`, async ({
+    page,
+  }) => {
+    await adsBoundary(page)
+    await page.route("**/ads/ad/ad-1/materials?*", (route) =>
+      route.fulfill({
+        json: {
+          items: [],
+          metric_scope: "AD",
+          carousel_linkage_complete: complete,
+          carousel_creatives: [
+            {
+              advertiser_id: "adv-1",
+              ad_id: "ad-1",
+              remote_creative_id: null,
+              ordered_image_ids: ["shared", "second"],
+              music_id: "song-one",
+            },
+            {
+              advertiser_id: "adv-1",
+              ad_id: "ad-1",
+              remote_creative_id: "native-2",
+              ordered_image_ids: ["second", "shared"],
+              music_id: "song-two",
+            },
+          ],
+          frozen_creative_links: [
+            {
+              submission_id: "submission",
+              unit_id: "unit",
+              group_id: "group",
+              planned_ad_id: "planned",
+            },
+          ],
+        },
+      }),
+    )
+    await page.goto(`/tenants/${TENANT}/ads?bc_id=${BC_A}`)
+    await page.getByRole("tab", { name: "广告", exact: true }).click()
+    await page
+      .getByRole("button", { name: /嘉书-总裁归来/ })
+      .first()
+      .click()
+    const sheet = page.getByRole("dialog")
+    await sheet.getByRole("tab", { name: "素材" }).click()
+    await expect(sheet.getByText("图片轮播", { exact: true })).toBeVisible()
+    await expect(
+      sheet.getByText("图片顺序：shared → second", { exact: true }),
+    ).toBeVisible()
+    await expect(
+      sheet.getByText("图片顺序：second → shared", { exact: true }),
+    ).toBeVisible()
+    await expect(
+      sheet.getByText("曲目：song-one", { exact: true }),
+    ).toBeVisible()
+    await expect(
+      sheet.getByText("曲目：song-two", { exact: true }),
+    ).toBeVisible()
+    await expect(
+      sheet.getByText("平台创意 ID：未返回", { exact: true }),
+    ).toBeVisible()
+    await expect(sheet.getByText(/当前仅显示广告级消耗与收入/)).toBeVisible()
+    await expect(
+      sheet.getByText(/图片创意暂不支持素材级自动规则/),
+    ).toBeVisible()
+    await expect(sheet.getByRole("columnheader", { name: "消耗" })).toHaveCount(
+      0,
+    )
+    await expect(sheet.getByRole("checkbox")).toHaveCount(0)
+    await expect(
+      sheet.getByRole("link", { name: "查看冻结创意与投放任务" }),
+    ).toHaveAttribute(
+      "href",
+      new RegExp(`/tenants/${TENANT}/build-tasks/submission`),
+    )
+    await expect(sheet.getByText(/冻结内容为提交时的原始意图/)).toBeVisible()
+    await expect(sheet.getByText(/轮播关联不完整/)).toHaveCount(
+      complete ? 0 : 1,
+    )
+  })
+}

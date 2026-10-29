@@ -941,3 +941,38 @@ def test_optional_material_quota_keeps_successful_directory_page(
         with pytest.raises(AccountAdmissionDeferred):
             client.ads.read_page(query(gateway_case, ad_type="SMART_PLUS"))
     assert len(business_calls(gateway_wire, "OFFICIAL_API")) == 1
+
+
+@pytest.mark.parametrize("gateway_case", ["OFFICIAL_API"], indirect=True)
+@pytest.mark.parametrize("partial", [False, True])
+def test_sdk_carousel_directory_retains_composition_and_partial_evidence(
+    database_engine, redis_client, gateway_case, gateway_wire, partial
+):
+    from app.integrations.tiktok.contracts.carousel import decode_carousels
+    from tests.modules.reporting.test_carousel_ad_links import creative
+
+    entries = [
+        creative(("shared", "second"), "song-1"),
+        creative(("second", "shared"), "song-2", "native-2"),
+    ]
+    if partial:
+        del entries[0]["creative_info"]["music_info"]
+    row = {
+        "advertiser_id": gateway_case[2],
+        "smart_plus_ad_id": "ad",
+        "adgroup_id": "group",
+        "creative_list": entries,
+    }
+    replies(gateway_wire, "OFFICIAL_API", {"smart_plus_ad_get": [page([row])]})
+    with gateway(database_engine, redis_client, gateway_case) as client:
+        result = client.ads.read_primary_page(query(gateway_case, ad_type="SMART_PLUS"))
+    decoded = decode_carousels(
+        result.items[0].configuration,
+        advertiser_id=gateway_case[2],
+        ad_id="ad",
+        smart=True,
+    )
+    assert decoded.complete is not partial
+    assert decoded.identities[-1].ordered_image_ids == ("second", "shared")
+    assert decoded.identities[-1].music_id == "song-2"
+    assert {use.use_ref.material_type for use in result.materials} == {"IMAGE"}

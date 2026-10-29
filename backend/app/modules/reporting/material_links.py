@@ -47,6 +47,7 @@ POST_VIDEO_SQL = """
     FROM material_post_link l
     WHERE l.tenant_id = :tenant AND l.advertiser_id = ANY(:advs)
       AND l.platform_material_id IS NOT NULL
+      AND l.main_material_type IN ('VIDEO_SPARK_ADS','VIDEO_NON_SPARK_ADS')
     ORDER BY l.advertiser_id, l.main_material_id, l.platform_material_id COLLATE "C"
 """
 
@@ -83,6 +84,7 @@ def post_video_map(
                 SELECT l.platform_material_id AS vid FROM material_post_link l
                 WHERE l.tenant_id = :tenant AND l.advertiser_id = f.adv
                   AND l.main_material_id = f.mid AND l.platform_material_id IS NOT NULL
+                  AND l.main_material_type IN ('VIDEO_SPARK_ADS','VIDEO_NON_SPARK_ADS')
                 ORDER BY l.platform_material_id COLLATE "C" LIMIT 1
             ) v
             """
@@ -595,7 +597,8 @@ def _resolve_videos(
             AND {valuable_material_condition("l")}
             AND NULLIF(l.ad_material_id, '') IS NOT NULL
             AND NULLIF(u.platform_material_id, '') IS NOT NULL
-            AND (l.main_material_type<>'VIDEO_SPARK_ADS' OR u.material_type='VIDEO')
+            AND l.main_material_type IN ('VIDEO_SPARK_ADS','VIDEO_NON_SPARK_ADS')
+            AND u.material_type='VIDEO'
             AND (u.complete OR (l.main_material_type='VIDEO_SPARK_ADS' AND u.material_type='VIDEO'))
           GROUP BY l.main_material_id,l.ad_remote_id
           HAVING count(DISTINCT u.platform_material_id)=1

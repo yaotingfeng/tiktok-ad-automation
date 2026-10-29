@@ -17,6 +17,7 @@ from app.integrations.tiktok.contracts.ads import (
     EntityRef,
     MaterialUseRef,
 )
+from app.integrations.tiktok.contracts.carousel import decode_carousels
 from app.integrations.tiktok.contracts.common import CallEvidence, McpBusinessResponse
 from app.integrations.tiktok.contracts.context import FrozenTikTokRoute
 
@@ -231,8 +232,18 @@ class AdsReadAdapter:
         entries = row.get("creative_list") if smart else [row]
         if type(entries) is not list:
             return [], False
+        try:
+            carousel = decode_carousels(
+                row,
+                advertiser_id=ad_ref.advertiser_id,
+                ad_id=ad_ref.remote_id,
+                smart=smart,
+                creative_id=creative_id,
+            )
+        except ValueError as exc:
+            raise invalid() from exc
         usages = []
-        complete = True
+        complete = carousel.complete
         for entry in entries:
             if type(entry) is not dict:
                 raise invalid()
@@ -262,6 +273,9 @@ class AdsReadAdapter:
                         if type(item) is dict
                         else item
                     )
+                    if image_id is None:
+                        complete = False
+                        continue
                     assets.append((identifier(image_id), "IMAGE"))
             if not assets:
                 complete = False

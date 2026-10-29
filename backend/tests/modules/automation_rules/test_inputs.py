@@ -254,8 +254,6 @@ def test_materials_carry_video_from_report_links(session, sync_seed):
                 ad_material_id=f"am-{main}",
                 material_type="VIDEO",
                 name=main,
-                main_material_id=main,
-                main_material_type="VIDEO",
                 operation_status="ENABLE",
                 complete=True,
                 published_version=1,
@@ -267,7 +265,7 @@ def test_materials_carry_video_from_report_links(session, sync_seed):
             advertiser_id="acc-1",
             main_material_id="p1",
             ad_remote_id="a1",
-            main_material_type="VIDEO",
+            main_material_type="VIDEO_SPARK_ADS",
             platform_material_id="v-p1",
             observed_at=NOW,
         )

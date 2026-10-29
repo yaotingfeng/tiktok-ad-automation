@@ -13,6 +13,7 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.integrations.tiktok.contracts.ads import EntityRef, MaterialUseRef
+from app.integrations.tiktok.contracts.carousel import CarouselCreativeIdentity
 
 Dimension = Literal["account", "campaign", "adgroup", "ad", "material", "drama"]
 # PARTIAL 表示部分合计：只合计有值的成员（跨日、跨账户或跨对象），缺失成员既不
@@ -154,6 +155,8 @@ class ReportRow(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     row_key: str
+    # 描述性轮播组合；指标仍以广告行唯一键发布。
+    carousel_creatives: tuple[CarouselCreativeIdentity, ...] = ()
     display: dict[str, str | None] = Field(default_factory=dict)
     refs: tuple[EntityRef, ...] = ()
     material_uses: tuple[MaterialUseRef, ...] = ()

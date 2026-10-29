@@ -18,6 +18,7 @@ MATERIAL_WINDOW_VALUES_SQL = """
       FROM unnest(CAST(:value_advertisers AS text[]), CAST(:value_starts AS date[]),
                   CAST(:value_ends AS date[])) WITH ORDINALITY AS w(adv,s,e,ordinality)
       JOIN material_report_day f ON f.tenant_id=:value_tenant AND f.advertiser_id=w.adv
+        AND (CAST(:value_material_types AS text[]) IS NULL OR f.main_material_type=ANY(CAST(:value_material_types AS text[])))
         AND (w.s IS NULL OR f.stat_date>=w.s) AND (w.e IS NULL OR f.stat_date<=w.e)
       GROUP BY w.ordinality,f.advertiser_id,f.main_material_id
     ) per_window GROUP BY advertiser_id,main_material_id
@@ -25,10 +26,16 @@ MATERIAL_WINDOW_VALUES_SQL = """
 
 
 def material_value_parameters(
-    tenant_id: UUID, windows: Sequence[tuple[str, date | None, date | None]]
+    tenant_id: UUID,
+    windows: Sequence[tuple[str, date | None, date | None]],
+    *,
+    material_types: tuple[str, ...] | None = None,
 ) -> dict[str, Any]:
     return {
         "value_tenant": tenant_id,
+        "value_material_types": list(material_types)
+        if material_types is not None
+        else None,
         "value_advertisers": [w[0] for w in windows],
         "value_starts": [w[1] for w in windows],
         "value_ends": [w[2] for w in windows],
@@ -39,9 +46,12 @@ def material_window_values(
     session: Session,
     tenant_id: UUID,
     windows: Sequence[tuple[str, date | None, date | None]],
+    *,
+    material_types: tuple[str, ...] | None = None,
 ) -> dict[tuple[str, str], bool]:
     rows = session.connection().execute(
-        text(MATERIAL_WINDOW_VALUES_SQL), material_value_parameters(tenant_id, windows)
+        text(MATERIAL_WINDOW_VALUES_SQL),
+        material_value_parameters(tenant_id, windows, material_types=material_types),
     )
     return {(r.advertiser_id, r.main_material_id): r.has_value for r in rows}
 

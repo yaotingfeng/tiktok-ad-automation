@@ -25,6 +25,8 @@ from app.modules.reporting.material_value import material_window_values
 from app.modules.reporting.metric_catalog import DERIVED_RATIOS, STORED_KEYS
 from app.modules.reporting.store_models import MaterialPostLink
 
+VIDEO_REPORT_TYPES = ("VIDEO_SPARK_ADS", "VIDEO_NON_SPARK_ADS")
+
 
 def material_use_id(ad_id: str, video_id: str, material_type: str) -> str:
     """广告内视频的稳定身份；广告内素材 ID 重建不改变规则频控/选择身份。"""
@@ -63,6 +65,7 @@ def load_material_entities(
     links = session.exec(
         select(MaterialPostLink).where(
             MaterialPostLink.tenant_id == tenant_id,
+            col(MaterialPostLink.main_material_type).in_(VIDEO_REPORT_TYPES),
             col(MaterialPostLink.advertiser_id).in_(list(accounts)),
         )
     ).all()
@@ -80,7 +83,13 @@ def load_material_entities(
         if now is not None
         else []
     )
-    values = material_window_values(session, tenant_id, windows) if windows else {}
+    values = (
+        material_window_values(
+            session, tenant_id, windows, material_types=VIDEO_REPORT_TYPES
+        )
+        if windows
+        else {}
+    )
     by_video = defaultdict(list)
     owners = defaultdict(set)
     unresolved_ads = set()
@@ -125,6 +134,8 @@ def load_material_entities(
             AdMaterialReference.tenant_id == tenant_id,
             col(AdMaterialReference.advertiser_id).in_(list(accounts)),
             col(AdMaterialReference.complete).is_(True),
+            # 素材级规则仅有视频经济事实；图片和帖子身份不能借同名 ID 进入。
+            AdMaterialReference.material_type == "VIDEO",
         )
         .order_by(AdMaterialReference.advertiser_id, AdMaterialReference.ad_remote_id)
         .execution_options(yield_per=256)

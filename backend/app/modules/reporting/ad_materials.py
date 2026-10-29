@@ -11,6 +11,7 @@ import hashlib
 import json
 from collections import defaultdict
 from datetime import UTC, date, datetime, timedelta
+from typing import Literal
 from uuid import uuid4
 
 from fastapi import HTTPException
@@ -21,8 +22,17 @@ from sqlmodel import Session, select
 from app.core.context import TenantContext
 from app.core.errors import DomainError
 from app.integrations.tiktok.contracts.ads import EntityRef, MaterialUseRef
+from app.integrations.tiktok.contracts.carousel import (
+    CarouselCreativeIdentity,
+    CarouselDirectory,
+)
 from app.modules.accounts.models import AdvertiserAccount
 from app.modules.ads import directory
+from app.modules.ads.directory import directory_carousels
+from app.modules.reporting.carousel_links import (
+    FrozenCarouselLink,
+    frozen_carousel_links,
+)
 from app.modules.reporting.dimension_query import (
     COMPLETE_COVERAGE_STATUSES,
     _aggregate,
@@ -63,6 +73,10 @@ class AdMaterialsPublic(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     items: tuple[AdMaterialPublic, ...] = ()
+    carousel_creatives: tuple[CarouselCreativeIdentity, ...] = ()
+    carousel_linkage_complete: bool = True
+    metric_scope: Literal["AD", "MATERIAL"] = "MATERIAL"
+    frozen_creative_links: tuple[FrozenCarouselLink, ...] = ()
     coverage: dict[str, object] = {}
 
 
@@ -98,7 +112,15 @@ def list_ad_materials(
     ref = _locate_ad(
         session, context=context, bc_id=bc_id, advertiser_id=advertiser_id, ad_id=ad_id
     )
-    uses = directory.current_ad_materials(session, ref)
+    entity = directory.locate(session, context=context, bc_id=bc_id, ref=ref)
+    carousel = directory_carousels(entity)
+    current_uses = directory.current_ad_materials(session, ref)
+    if not carousel.is_carousel and any(
+        use.material_type == "IMAGE" for use in current_uses
+    ):
+        # 目录主响应缺内容时只能确认图片格式，不以扁平使用记录猜顺序和曲目。
+        carousel = CarouselDirectory(is_carousel=True, complete=False)
+    uses = [use for use in current_uses if use.material_type != "IMAGE"]
     links = session.connection().execute(
         text("""
         SELECT l.platform_material_id AS vid, l.main_material_id,
@@ -107,6 +129,7 @@ def list_ad_materials(
                 AND o.main_material_id = l.main_material_id) > 1 AS shared
         FROM material_post_link l
         WHERE l.tenant_id = :t AND l.advertiser_id = :a AND l.ad_remote_id = :ad
+          AND l.main_material_type IN ('VIDEO_SPARK_ADS','VIDEO_NON_SPARK_ADS')
         """),
         {"t": context.tenant_id, "a": advertiser_id, "ad": ad_id},
     )
@@ -177,7 +200,22 @@ def list_ad_materials(
                 metric_buckets=merge_metric_buckets([(vectors, incomplete)]),
             )
         )
-    return AdMaterialsPublic(items=tuple(items), coverage=coverage)
+    return AdMaterialsPublic(
+        items=tuple(items),
+        coverage=coverage,
+        carousel_creatives=carousel.identities,
+        carousel_linkage_complete=carousel.complete,
+        metric_scope="AD" if carousel.is_carousel else "MATERIAL",
+        frozen_creative_links=frozen_carousel_links(
+            session,
+            tenant_id=context.tenant_id,
+            bc_id=bc_id,
+            advertiser_id=advertiser_id,
+            ad_id=ad_id,
+        )
+        if carousel.is_carousel
+        else (),
+    )
 
 
 def freeze_ad_material_selection(

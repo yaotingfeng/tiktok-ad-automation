@@ -139,6 +139,11 @@ export function TrendTab({
     metrics.find((column) => column.key === metricKey) ?? metrics[0]
   return (
     <div className="flex flex-col gap-4 text-sm">
+      {row.display?.creative_format === "CAROUSEL_ADS" && (
+        <p className="text-muted-foreground">
+          图片轮播趋势仅显示广告级数据，不拆分到图片或轮播单元。
+        </p>
+      )}
       <div className="flex flex-wrap items-center gap-2">
         {RANGES.map((option) => (
           <Button

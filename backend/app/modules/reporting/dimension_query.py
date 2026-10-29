@@ -20,6 +20,7 @@ from sqlmodel import Session, col, select
 from app.core.context import TenantContext
 from app.integrations.tiktok.contracts.ads import EntityRef
 from app.modules.accounts.models import AdvertiserAccount
+from app.modules.ads.directory import directory_carousels
 from app.modules.ads.models import AdObject, CampaignNameProjection
 from app.modules.reporting.filters import authorized_grants, compile_filter
 from app.modules.reporting.metric_catalog import DERIVED_RATIOS
@@ -842,6 +843,13 @@ def _member_row(
             if all(r.account_spend is not None for r in reconciliations)
             else None
         )
+    carousel = directory_carousels(entity) if entity and kind == "ad" else None
+    if carousel and carousel.is_carousel:
+        display.update(
+            creative_format="CAROUSEL_ADS",
+            metric_scope="AD",
+            creative_linkage="COMPLETE" if carousel.complete else "INCOMPLETE",
+        )
     vectors = tuple(fact_vector(item) for item in items) or (
         metric_vector(
             empty_values,
@@ -851,6 +859,7 @@ def _member_row(
     )
     return ReportRow(
         row_key=f"{adv}:{kind}:{rid}",
+        carousel_creatives=carousel.identities if carousel else (),
         display=display,
         metric_buckets=vectors,
         directory_versions={f"{adv}:{rid}": entity.published_version} if entity else {},

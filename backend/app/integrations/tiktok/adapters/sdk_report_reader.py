@@ -211,6 +211,7 @@ class SdkReportReader:
         return page_from_data(data, requested_page=page)
 
     def ad_day(self, *, advertiser_ids, start, end, page, campaign_ids=()):
+        # 轮播沿用广告唯一维度；图片/曲目仅用于说明，不加 creative/image 维度展开金额。
         _check_range(start, end, max_days=30)
         filtering = [_STATUS_ALL]
         if campaign_ids:

@@ -504,6 +504,7 @@ export function RuleEditorSheet({
         </RadioGroup>
         {def.apply_to.level === "material" && (
           <p className="text-xs text-muted-foreground">
+            图片创意暂不支持素材级自动规则。
             {def.aggregation === "VIDEO"
               ? "同一视频在所选各账户的数据合计判断，命中后暂停该视频在这些账户里的全部使用；任一使用位置的数据无法准确归属时，该视频不参与判断；所选账户有报表过期时，本轮不作视频合计判断。"
               : "按每条广告内该素材的表现分别判断，命中后只暂停这条广告里的该素材；同一视频在其他广告里的使用不受影响。无法准确拆分表现的数据会跳过并说明原因。"}

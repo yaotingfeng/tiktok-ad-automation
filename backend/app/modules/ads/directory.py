@@ -13,6 +13,10 @@ from app.integrations.tiktok.contracts.ads import (
     EntityRef,
     MaterialUseRef,
 )
+from app.integrations.tiktok.contracts.carousel import (
+    CarouselDirectory,
+    decode_carousels,
+)
 from app.modules.accounts.access import usable_grants
 from app.modules.accounts.models import BCAccountAccess
 from app.modules.ads.models import AdMaterialReference, AdObject, CampaignNameProjection
@@ -270,3 +274,19 @@ def latest_ad_materials(
     return sorted(
         result, key=lambda row: (row.name, row.platform_material_id, row.material_type)
     )
+
+
+def directory_carousels(entity: AdObject) -> CarouselDirectory:
+    if entity.kind not in {"ad", "creative"}:
+        return CarouselDirectory()
+    try:
+        return decode_carousels(
+            entity.configuration or {},
+            advertiser_id=entity.advertiser_id,
+            ad_id=entity.remote_id if entity.kind == "ad" else entity.parent_remote_id,
+            smart=entity.ad_type == "SMART_PLUS" and entity.kind == "ad",
+            creative_id=entity.remote_id if entity.kind == "creative" else None,
+        )
+    except ValueError:
+        # 历史已发布的坏结构不影响广告金额；说明关系明确不可用。
+        return CarouselDirectory(is_carousel=True, complete=False)
