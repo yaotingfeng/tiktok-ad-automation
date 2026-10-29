@@ -140,7 +140,7 @@ def _project_creative(shape, actual, path, missing):
     return _project({"creative_info": common}, actual, path, missing)
 
 
-def _video_omissions(expected, observed):
+def _video_omissions(expected, observed, missing):
     if (
         not isinstance(expected, AdCreate)
         or not isinstance(observed, AdCreate)
@@ -156,28 +156,60 @@ def _video_omissions(expected, observed):
     # IDs have different requested covers, and another occurrence omits a cover.
     wanted_assets = cast(tuple[VideoCreative, ...], expected.assets)
     actual_assets = cast(tuple[VideoCreative, ...], observed.assets)
-    pairs = {}
+    optional_fields = {
+        "cover_image_id": "image_info",
+        "file_name": "video_info.file_name",
+    }
 
-    def assign(index, seen):
-        wanted = wanted_assets[index]
-        for actual_index, actual in enumerate(actual_assets):
-            if (
-                actual_index in seen
-                or wanted.video_id != actual.video_id
-                or any(
+    def matching(mode):
+        pairs = {}
+
+        def assign(index, seen):
+            wanted = wanted_assets[index]
+            for actual_index, actual in enumerate(actual_assets):
+                if actual_index in seen or wanted.video_id != actual.video_id:
+                    continue
+                if mode != "identity" and any(
                     getattr(wanted, field) is not None
-                    and getattr(wanted, field) != getattr(actual, field)
-                    for field in ("cover_image_id", "file_name")
-                )
-            ):
-                continue
-            seen.add(actual_index)
-            if actual_index not in pairs or assign(pairs[actual_index], seen):
-                pairs[actual_index] = index
-                return True
-        return False
+                    and (
+                        getattr(actual, field) is None
+                        or (
+                            mode == "exact"
+                            and getattr(wanted, field) != getattr(actual, field)
+                        )
+                    )
+                    for field in optional_fields
+                ):
+                    continue
+                seen.add(actual_index)
+                if actual_index not in pairs or assign(pairs[actual_index], seen):
+                    pairs[actual_index] = index
+                    return True
+            return False
 
-    if not all(assign(index, set()) for index in range(len(expected.assets))):
+        return (
+            pairs
+            if all(assign(index, set()) for index in range(len(wanted_assets)))
+            else None
+        )
+
+    pairs = matching("exact")
+    if pairs is None:
+        # Explicitly different values are complete mismatch evidence; absent
+        # requested facts are not. Presence matching also respects duplicates,
+        # so an omitted request cannot consume another occurrence's only cover.
+        if matching("present") is None:
+            identities = matching("identity")
+            if identities is not None:
+                for actual_index, wanted_index in identities.items():
+                    for field, wire_path in optional_fields.items():
+                        if (
+                            getattr(wanted_assets[wanted_index], field) is not None
+                            and getattr(actual_assets[actual_index], field) is None
+                        ):
+                            missing.append(
+                                f"creative_list.{actual_index}.creative_info.{wire_path}"
+                            )
         return observed
     return observed.model_copy(
         update={
@@ -262,7 +294,7 @@ def parse_page(*, query: BuildReadQuery, response: McpBusinessResponse) -> Build
         if not missing and isinstance(projected, dict):
             try:
                 intent = _video_omissions(
-                    query.intent, decode_observed_intent(kind, projected)
+                    query.intent, decode_observed_intent(kind, projected), missing
                 )
             except ValidationError as error:
                 missing.extend(

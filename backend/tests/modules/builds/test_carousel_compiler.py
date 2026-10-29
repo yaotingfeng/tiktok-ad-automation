@@ -66,7 +66,7 @@ def test_music_and_conflicting_format_fields_rejected():
         decode_intent("AD", body)
 
 
-def observed(value, body):
+def observed_record(value, body):
     row = {**body, "smart_plus_ad_id": "ad"}
     response = McpBusinessResponse(
         data={
@@ -81,9 +81,12 @@ def observed(value, body):
         evidence=CallEvidence(),
     )
     query = BuildReadQuery(intent=value, remote_id="ad")
-    return compare_record(
-        query=query, record=parse_page(query=query, response=response).rows[0]
-    )
+    return query, parse_page(query=query, response=response).rows[0]
+
+
+def observed(value, body):
+    query, record = observed_record(value, body)
+    return compare_record(query=query, record=record)
 
 
 def test_readback_preserves_order_music_and_prohibited_fields():
@@ -171,3 +174,38 @@ def test_duplicate_video_with_optional_wildcard_matches_without_greedy_loss():
     body = encode_intent(value)
     body["creative_list"].reverse()
     assert observed(value, body) == "MATCH"
+
+
+@pytest.mark.parametrize("field", ["cover_image_id", "file_name"])
+def test_missing_requested_video_fact_cannot_complete_known_id_reconciliation(field):
+    from app.modules.builds.reconciliation_scan import conclusion
+
+    rich = VideoCreative(
+        kind="VIDEO", video_id="a", cover_image_id="cover", file_name="a.mp4"
+    )
+    plain = VideoCreative(kind="VIDEO", video_id="b")
+    value = intent().model_copy(update={"assets": (rich, plain, rich)})
+    body = encode_intent(value)
+    body["creative_list"] = [
+        body["creative_list"][1],
+        body["creative_list"][2],
+        body["creative_list"][0],
+    ]
+    info = body["creative_list"][1]["creative_info"]
+    if field == "cover_image_id":
+        info.pop("image_info")
+    else:
+        info["video_info"].pop("file_name")
+    query, record = observed_record(value, body)
+    assert compare_record(query=query, record=record) == "INCOMPLETE"
+    assert record.missing_fields
+    assert conclusion(query, record) == "UNKNOWN"
+    # Explicitly different returned facts are complete evidence of a mismatch.
+    if field == "cover_image_id":
+        info["image_info"] = [{"web_uri": "different"}]
+    else:
+        info["video_info"]["file_name"] = "different.mp4"
+    query, record = observed_record(value, body)
+    assert compare_record(query=query, record=record) == "MISMATCH"
+    assert not record.missing_fields
+    assert conclusion(query, record) == "COMPLETE"
