@@ -110,6 +110,8 @@ class ImageRecord:
     displayable: bool | None
     evidence: CallEvidence
     mid: str | None = None
+    # 主图资格只接受平台回读事实；视频封面/displayable 不能推导轮播可用。
+    is_carousel_usable: bool | None = None
 
 
 @dataclass(frozen=True)

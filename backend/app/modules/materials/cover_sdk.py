@@ -210,6 +210,7 @@ def image_search_page(
         "material_id",
         "file_name",
         "displayable",
+        "is_carousel_usable",
         "signature",
         "width",
         "height",

@@ -349,6 +349,10 @@ def image_record(
     row: dict[str, Any], *, advertiser_id: str, evidence: CallEvidence
 ) -> material_types.ImageRecord:
     _record_fields(row, advertiser_id=advertiser_id, identity_key="image_id")
+    # 未返回字段保持未知；禁止把字符串或数字的 truthiness 当平台能力事实。
+    usable = row.get("is_carousel_usable")
+    if usable is not None and type(usable) is not bool:
+        raise _schema_error()
     return material_types.ImageRecord(
         advertiser_id,
         row["image_id"],
@@ -359,6 +363,7 @@ def image_record(
         row.get("displayable"),
         evidence,
         mid=row.get("material_id"),
+        is_carousel_usable=usable,
     )
 
 
