@@ -36,7 +36,7 @@
 
 **Files:** 修改 `backend/app/modules/strategies/structure.py`、`builds/previews.py`、`preview_validation.py`、`scene.py`、`scene_constraints.py`、`scene_schemas.py`、`strategies/schemas.py`；更新 `frontend/src/features/strategies/StrategyStructureExample.tsx` 和 `frontend/src/features/builds/PreviewWorkspace.tsx`；扩展 `backend/tests/modules/strategies/test_structure.py`、`backend/tests/modules/builds/test_structure_preview.py`、`scene/test_scene_route_versions.py`。
 
-**Interfaces:** 将结构输入重命名为 `NamedCreativeUnit.unit_id`，输出 `AdCreativePlan.unit_ids` 和 `GroupCreativePlan.unit_ids`；`plan_structure(units, *, config, pool, seed)` 保留原签名风格与分配顺序。新 `effective_structure_config(strategy_version, draft_override) -> StrategyConfig` 只允许结构字段，不把预算/身份混入该patch。场景scope纳入 media_kind 和合同版本。
+**Interfaces:** 将结构输入重命名为 `NamedCreativeUnit.unit_id`，输出 `AdCreativePlan.unit_ids` 和 `GroupCreativePlan.unit_ids`；`plan_structure(units, *, config, pool, seed)` 保留原签名风格与分配顺序。接入 P2-T5 提供的 `effective_structure_config(strategy_version, draft_override) -> StrategyConfig` 只允许结构字段，不把预算/身份混入该patch。场景scope纳入 media_kind 和合同版本。
 
 - [ ] 测试 60/N5/M6/K1/单SHARED组/10账户=20广告；K3=60；双SHARED组/K1=40；SEQUENTIAL_AVERAGE不足报错；轮播成员不被切片；视频旧样本逐组/逐广告输出与基线一致；同图不同曲两个unit不合并。先运行 `uv run pytest tests/modules/strategies/test_structure.py tests/modules/builds/test_structure_preview.py -q` 观察新用例失败。
 - [ ] 改规划器单位及所有调用点，单元 ID不冒充文件ID。把共享/均分、文案pool去重、seed、已有单策略10,000及固定100限制保留；加全批10,000最终广告预估门槛，超限在跨账户展开前报错。

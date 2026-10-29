@@ -79,13 +79,15 @@
 
 **Interfaces:** `save_preset_version(scope, source_unit_id, expected_revision, name, request_id) -> PresetVersion`；`load_preset_into_draft(scope, preset_version_id, request_id, expected_draft_revision) -> CreativeUnit`。PresetVersion 保存tenant、来源BC、名称、顺序、音乐及内容摘要；载入生成独立单元并保护 composition/music，执行目标授权仍用草稿 route。
 
-- [ ] 测试旧版本不可变、载入后改草稿不改源、库中升级不改已载入单元、成员图片不重复自动纳入、跨租户拒绝、引用删除保护；运行 `uv run pytest tests/modules/materials/test_carousel_presets.py -q` 观察失败。
-- [ ] 实现显式另存、按名搜索、版本复制和引用保留；未完成配乐的预设只能作为待配乐草稿，不能绕过 READY 门槛。
-- [ ] 新测试和 `test_object_uses.py`、`test_cleanup.py` 通过后提交。
+- [x] 测试旧版本不可变、载入后改草稿不改源、库中升级不改已载入单元、成员图片不重复自动纳入、跨租户拒绝、引用删除保护；运行 `uv run pytest tests/modules/materials/test_carousel_presets.py -q` 观察失败。
+- [x] 实现显式另存、按名搜索、版本复制和引用保留；未完成配乐的预设只能作为待配乐草稿，不能绕过 READY 门槛。
+- [x] 新测试和 `test_object_uses.py`、`test_cleanup.py` 通过后提交。
 
 ### P2-T5：批量配置界面与契约
 
 **Files:** 新建 `frontend/src/features/builds/ImageBatchConfig.tsx`、`ImageCompositionDiff.tsx`、`CarouselCreativeSheet.tsx`、`MusicPicker.tsx`；修改 `BuildInputPage.tsx`、`BuildPreparationPage.tsx`、`BuildDramaTable.tsx`、`DramaMaterialSheet.tsx`、`MaterialBatchPicker.tsx`、`api.ts`；素材库新增 `CarouselPresetList.tsx` 并接入 `MaterialsPage.tsx`；新增 `frontend/tests/image-composition.spec.ts`，修改 `frontend/playwright.config.ts`，更新 demo fixtures 与生成客户端。
+
+**补齐接口范围：** 为 composition/music/preset API 增加与真实响应一致的公共 Pydantic DTO/response_model，再使用正式脚本生成客户端；不暴露内部音乐请求意图，不以 any 手写响应替代。补齐 `structure_override` 的结构字段类型、草稿读取与独立 CAS/幂等保存入口及界面，复用策略结构校验，仅允许整批结构字段，空覆盖恢复继承；不得重置候选、创意或修改 StrategyVersion。`effective_structure_config(strategy_version, draft_override)` 在此提供与验证，P3-T1 接入规划器；此阶段不得显示未经规划核验的最终广告数。补充相应后端合同和保存回归测试。
 
 **Interfaces:** 用 P2-T2 的试算/应用/手工修改响应与 P2-T3 聚合状态和搜索/read API，UI 不复制自然排序或广告计数算法。分页creative与image子项；服务端同质草稿校验优先于隐藏按钮。
 
