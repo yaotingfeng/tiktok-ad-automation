@@ -528,3 +528,31 @@ def test_top_level_carousel_empty_entry_stays_incomplete(info):
         smart=True,
     )
     assert result.is_carousel and not result.complete and result.identities == ()
+
+
+@pytest.mark.parametrize("carousel", [True, False])
+def test_missing_creative_parent_never_invents_ad_identity(carousel):
+    from app.modules.ads.directory import directory_carousels
+
+    entity = AdObject(
+        tenant_id=uuid4(),
+        advertiser_id="synthetic-account",
+        kind="creative",
+        remote_id="synthetic-creative",
+        parent_remote_id=None,
+        ad_type="SMART_PLUS",
+        name="synthetic",
+        observed_at=datetime.now(UTC),
+        published_version=1,
+        configuration={
+            "ad_format": "CAROUSEL_ADS",
+            "image_ids": ["image"],
+            "music_id": "song",
+        }
+        if carousel
+        else {"video_id": "video"},
+    )
+    result = directory_carousels(entity)
+    assert not result.identities
+    assert result.is_carousel is carousel
+    assert result.complete is (not carousel)

@@ -1,3 +1,4 @@
+import type { AdMaterialsPublic, CarouselCreativeIdentity } from "@/client"
 // 体验版假后端：广告报表与广告管理。
 
 import METRIC_CATALOG_JSON from "../fixtures/ads-metric-catalog.json"
@@ -83,6 +84,7 @@ handle("ads_reporting-query_ads", (req) => {
     display: Record<string, unknown>
     refs: unknown[]
     metrics: Record<string, string>
+    carousel_creatives?: CarouselCreativeIdentity[]
     campaign: (typeof campaigns)[0]
   }> = []
 
@@ -185,6 +187,9 @@ handle("ads_reporting-query_ads", (req) => {
               campaign_id: campaign.campaign_id,
               adgroup_name: adgroup.name,
               adgroup_id: adgroup.adgroup_id,
+              creative_format: ad.carousel_creatives ? "CAROUSEL_ADS" : "VIDEO",
+              metric_scope: ad.carousel_creatives ? "AD" : "MATERIAL",
+              creative_linkage: ad.carousel_creatives ? "COMPLETE" : null,
               ad_name: ad.name,
               ad_id: ad.ad_id,
               advertiser_id: campaign.advertiser_id,
@@ -203,6 +208,7 @@ handle("ads_reporting-query_ads", (req) => {
                 remote_id: ad.ad_id,
               },
             ],
+            carousel_creatives: ad.carousel_creatives,
             metrics: generateMetrics(campaign, startDate, "ad", ad.ad_id),
             campaign,
           })
@@ -631,6 +637,7 @@ handle("ads_reporting-query_ads", (req) => {
       publication_versions: {},
     },
     items: paged.items.map((row) => ({
+      carousel_creatives: row.carousel_creatives ?? [],
       row_key: row.rowKey,
       display: Object.fromEntries(
         Object.entries(row.display as Record<string, unknown>).map(([k, v]) => [
@@ -908,6 +915,15 @@ handle("ads_reporting-ad_materials", (req) => {
   }
 
   const { campaign, ad } = found
+  if (ad.carousel_creatives)
+    return {
+      items: [],
+      coverage: { status: "COMPLETE" },
+      carousel_creatives: ad.carousel_creatives,
+      carousel_linkage_complete: true,
+      metric_scope: "AD",
+      frozen_creative_links: ad.frozen_creative_links ?? [],
+    } satisfies AdMaterialsPublic
   const materials = materialsOfDrama(campaign.drama_id).filter(
     (m) => m.id === ad.material_id,
   )

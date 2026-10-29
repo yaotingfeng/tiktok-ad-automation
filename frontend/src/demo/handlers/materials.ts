@@ -746,6 +746,9 @@ function fileToPublic(file: IngestFileState) {
     file_name: file.file_name,
     size: file.size,
     mime_type: file.mime_type,
+    media_type: file.mime_type.startsWith("image/")
+      ? ("IMAGE" as const)
+      : ("VIDEO" as const),
     last_modified_ms: file.last_modified_ms,
     generation: file.generation,
     upload_id: file.upload_id,

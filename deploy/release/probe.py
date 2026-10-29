@@ -62,6 +62,190 @@ def fingerprint(count_rows=True):
         }
 
 
+# 候选代码审阅过的历史 migration head。未知 head 不靠缺表或字符串大小猜版本。
+LEGACY_CREATIVE_HEADS = frozenset(
+    """
+0003_provider_links
+0004_materials
+0004b_material_checks
+0004c_object_claims
+0005_strategies
+0005b_build_drafts
+0005c_scene_facts
+0005d_build_previews
+0005e_account_capabilities
+0005f_draft_mutations
+0006_build_execution
+0006a_unit_dispatch
+0007_directory_revision
+0008_scene_jobs
+0009_execution_dispatch_indexes
+0010_submission_recovery
+0011_recovery_evidence_index
+0012_material_covers
+0013_dispatch_expansion_index
+0014_recovery_candidates
+0015_username_auth
+0016_provider_session_refresh
+0017_preview_naming
+0018_scene_budget_evidence
+0019_scene_budget_page
+0020_draft_delivery_mutation
+0021_report_run_retry_count
+0022_provider_link_defaults
+0023_reporting_store
+0024_drop_legacy_reporting
+0025_drop_campaign_day_utc
+0026_automation_rules
+0027_automation_execution
+0028_automation_summary
+0029_material_post_link
+0030_actor_user_reference
+0031_cancel_stacked_dir_runs
+0032_drop_management_capability
+0033_management_rename_values
+0034_directory_publish_version
+0035_report_dispatch_cursor
+0036_drop_rule_safety_settings
+0037_realtime_sync
+0038_sync_work_indexes
+0039_sync_service_class
+0040_material_production
+0041_rule_frequency
+0042_drop_ad_material_main
+0043_material_video_index
+0044_sync_probe_indexes
+0045_directory_type_index
+0046_image_materials
+0047_image_account_assets
+0048_image_reissue_routes
+0049_image_composition
+0050_image_composition_runs
+0051_image_state_scope
+0052_image_candidate_build
+0053_carousel_music
+0054_music_preparation
+0055_carousel_presets
+0056_carousel_preset_copy
+0057_carousel_copy_integrity
+0058_selected_music_retry
+0059_video_creative_units
+02a_tenants
+02b_connections
+02c_directory
+1a31ce608336
+20261004_general_strategy
+20261005_build_delivery_config
+20261005_merge_delivery_heads
+20261005_merge_preview_heads
+20261005_preview_ad_material
+20261005_preview_copy_unique
+9c0a54914c78
+ad_management
+ad_management_cancelled
+ad_management_execution
+ad_management_integrity
+ad_management_task_item_audit
+ad_same_group_reissue
+ads_reporting_data
+audience_targeting
+automatic_mini_targets
+build_batching
+cover_claim_reissue
+cover_rejected_reissue
+d98dd8ec85a3
+draft_identity_selection
+draft_scene_phase
+e2412789c190
+fe56fa70289e
+manual_promotion_links
+mat_response_archive
+material_approved_reissue
+material_batch_candidate_index
+material_bc_seed
+material_cover_sharing
+material_primary_account
+material_push
+material_route_scope
+material_seed_generations
+material_share_receipts
+material_source_bc
+material_target_scope
+mcp01
+mcp02
+mcp_build_recovery
+mcp_build_routes
+mcp_capability_routes
+mcp_cover_evidence
+mcp_directory_bc_scope
+mcp_directory_semantics
+mcp_draft_connection
+mcp_material_routes
+mcp_multi_bc
+mcp_multibc_runtime
+mcp_stage_directory
+outbox_payload_compaction
+p01_dispatch
+preview_display_drama_id
+preview_skipped_materials
+provider_display_drama_id
+provider_kinds_expansion
+r2_ingest_chunks
+r2_part_receipts
+r2_transient_ingest
+reporting_account_history_start
+reporting_queries
+tenant_material_library
+""".split()
+)
+V2_CREATIVE_HEADS = {"0060_frozen_creative_units", "0061_carousel_ad_readiness"}
+
+
+def creative_unit_drain(connection=None):
+    """旧镜像内也可运行的只读 SQL 门禁；不导入新 ORM，不更改任务或队列。"""
+    from sqlalchemy import create_engine, text
+    from sqlalchemy.pool import NullPool
+
+    if connection is None:
+        from app.core.config import settings
+
+        engine = create_engine(str(settings.DATABASE_URL), poolclass=NullPool)
+        try:
+            with engine.connect() as conn:
+                return creative_unit_drain(conn)
+        finally:
+            engine.dispose()
+    heads = list(
+        connection.execute(text("SELECT version_num FROM alembic_version")).scalars()
+    )
+    if len(heads) != 1 or heads[0] not in LEGACY_CREATIVE_HEADS | V2_CREATIVE_HEADS:
+        raise RuntimeError("Unknown creative contract schema; review release plan")
+    legacy = heads[0] in LEGACY_CREATIVE_HEADS
+    # 0060 已给每个旧预览写入显式 descriptor；缺失不是 V1，必须单独阻断。
+    join = (
+        ""
+        if legacy
+        else " LEFT JOIN preview_contract c ON c.tenant_id=p.tenant_id AND c.preview_id=p.id"
+    )
+    predicate = "true" if legacy else "(c.version=1 OR c.preview_id IS NULL)"
+    blockers = {}
+    queries = {
+        "preview_building": f"SELECT p.id FROM build_preview p{join} WHERE {predicate} AND p.status='BUILDING'",
+        "submission_runnable": f"SELECT s.id FROM build_submission s JOIN build_preview p ON p.tenant_id=s.tenant_id AND p.id=s.preview_id{join} WHERE {predicate} AND (NOT s.expanded OR s.status NOT IN ('COMPLETED','PARTIAL','FAILED'))",
+        "step_runnable_or_unknown": f"SELECT e.id FROM execution_step e JOIN build_preview p ON p.tenant_id=e.tenant_id AND p.id=e.preview_id{join} WHERE {predicate} AND e.status IN ('QUEUED','PENDING','RUNNING','RETRYABLE','UNKNOWN')",
+    }
+    if not legacy:
+        queries["missing_descriptor"] = (
+            f"SELECT p.id FROM build_preview p{join} WHERE c.preview_id IS NULL"
+        )
+    # 每类仅取一个阻断样本，避免读取整批正文、凭据或无界历史结果。
+    for kind, query in queries.items():
+        value = connection.execute(text(query + " LIMIT 1")).scalar_one_or_none()
+        if value is not None:
+            blockers[kind] = str(value)
+    return {"migration_heads": heads, "drained": not blockers, "blockers": blockers}
+
+
 def redis_logical(client, key, kind):
     """按内容规范化，避免不同 Redis 版本的 DUMP 编码造成假失败。"""
 
@@ -315,6 +499,8 @@ if __name__ == "__main__":
         result = fingerprint()
     elif action == "schema":
         result = fingerprint(count_rows=False)
+    elif action == "creative-unit-drain":
+        result = creative_unit_drain()
     elif action == "credentials":
         result = credentials()
     elif action == "redis":

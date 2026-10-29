@@ -1,3 +1,4 @@
+import type { CarouselCreativeIdentity, FrozenCarouselLink } from "@/client"
 import { dateDaysAgo, demoUuid, isoDaysAgo } from "../runtime/clock"
 
 // 体验版共享“演示世界”：各领域的假后端都从这里取租户、BC、账户、剧、素材和已上线广告，
@@ -328,6 +329,8 @@ export const DEMO_STRATEGIES = [
 
 /** 已上线的广告结构：搭建提交后追加，广告报表与广告管理从这里读取。 */
 export interface DemoLaunchedAd {
+  carousel_creatives?: CarouselCreativeIdentity[]
+  frozen_creative_links?: FrozenCarouselLink[]
   ad_id: string
   name: string
   material_id: string

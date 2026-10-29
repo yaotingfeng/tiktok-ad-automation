@@ -57,7 +57,11 @@ def effective_structure_config(strategy_version, draft_override) -> StrategyConf
 
 
 def save_image_structure(
-    session: Session, *, context: TenantContext, draft_id: UUID, body: ImageStructureChange
+    session: Session,
+    *,
+    context: TenantContext,
+    draft_id: UUID,
+    body: ImageStructureChange,
 ) -> int:
     from datetime import UTC, datetime
 

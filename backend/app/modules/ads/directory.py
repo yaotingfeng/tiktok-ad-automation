@@ -280,10 +280,14 @@ def directory_carousels(entity: AdObject) -> CarouselDirectory:
     if entity.kind not in {"ad", "creative"}:
         return CarouselDirectory()
     try:
+        # 空值只交给严格解析器拒绝轮播身份；不能把无父ID的视频误标成轮播。
+        ad_id = (
+            entity.remote_id if entity.kind == "ad" else (entity.parent_remote_id or "")
+        )
         return decode_carousels(
             entity.configuration or {},
             advertiser_id=entity.advertiser_id,
-            ad_id=entity.remote_id if entity.kind == "ad" else entity.parent_remote_id,
+            ad_id=ad_id,
             smart=entity.ad_type == "SMART_PLUS" and entity.kind == "ad",
             creative_id=entity.remote_id if entity.kind == "creative" else None,
         )

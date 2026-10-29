@@ -1016,7 +1016,11 @@ def process_step(
                     )
             except DomainError as error:
                 # 素材依赖与等待结果同事务提交，保持已经冻结的目标连接。
-                if hasattr(error, "issues"):
+                if (
+                    hasattr(error, "issues")
+                    and step is not None
+                    and active_attempt(step, claim, phase="CLAIMED")
+                ):
                     step.resolved = {**step.resolved, "carousel_issues": error.issues}
                     session.flush()
                 return finish_local(
@@ -1101,7 +1105,9 @@ def process_step(
                     frozen = _frozen(session, context, claim)
                     if carousel_proof is not None:
                         step = session.get(ExecutionStep, claim.step_id)
-                        if not active_attempt(step, claim, phase="CLAIMED"):
+                        if step is None or not active_attempt(
+                            step, claim, phase="CLAIMED"
+                        ):
                             raise DomainError("execution_lease_lost", "执行租约已变化")
                         step.resolved = {
                             **step.resolved,

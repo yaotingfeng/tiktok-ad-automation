@@ -865,6 +865,73 @@ class ReleaseTests(unittest.TestCase):
                 self.release.resume("b" * 40)
             scale.assert_not_called()
 
+    def test_creative_contract_guard_blocks_before_snapshot_and_allows_recheck(self):
+        marker = b"backend/app/alembic/versions/0060_frozen_creative_units.py\n"
+        with (
+            patch("release.run", return_value=marker),
+            patch.object(
+                self.release,
+                "probe",
+                side_effect=[
+                    {
+                        "drained": False,
+                        "blockers": {"step_runnable_or_unknown": "fixture"},
+                    },
+                    {"drained": True, "blockers": {}},
+                ],
+            ) as probe,
+        ):
+            with self.assertRaisesRegex(
+                RuntimeError, "Old creative-contract work remains"
+            ):
+                self.release.require_creative_unit_drain("b" * 40)
+            self.release.require_creative_unit_drain("b" * 40)
+            self.assertEqual(
+                [c.args for c in probe.call_args_list], [("creative-unit-drain",)] * 2
+            )
+        self.assertTrue(
+            json.loads((self.release.folder / "creative-unit-drain.json").read_text())[
+                "drained"
+            ]
+        )
+
+    def test_contract_cutover_failure_precedes_backup_and_migration(self):
+        with (
+            patch.object(self.release, "begin"),
+            patch.object(self.release, "prepare_tools"),
+            patch.object(self.release, "check_remote"),
+            patch.object(self.release, "pause") as pause,
+            patch.object(
+                self.release,
+                "require_creative_unit_drain",
+                side_effect=RuntimeError("old UNKNOWN"),
+            ),
+            patch("release.snapshot") as snapshot,
+            patch.object(self.release, "resume") as resume,
+        ):
+            with self.assertRaisesRegex(RuntimeError, "old UNKNOWN"):
+                self.release.execute("deploy", "b" * 40, full_backup=True)
+            pause.assert_called_once()
+            snapshot.assert_not_called()
+            resume.assert_not_called()
+
+    def test_contract_guard_abort_recovers_old_image_without_task_mutation(self):
+        # guard 停在迁移前 frozen：recover 只正常恢复原程序，持久任务留给原消费者。
+        self.release.state["phase"] = "frozen"
+        self.release.state["image_digests"] = {"a" * 40: "sha256:old"}
+        with (
+            patch.object(self.release, "load"),
+            patch.object(self.release, "validate_deployments"),
+            patch.object(self.release, "config_unchanged"),
+            patch.object(self.release, "resume") as resume,
+            patch.object(self.release, "probe") as probe,
+            patch("release.run") as command,
+        ):
+            self.release.recover()
+            resume.assert_called_once_with("a" * 40)
+            probe.assert_not_called()
+            command.assert_not_called()
+
     def test_failed_migration_keeps_zero_replicas_for_inspection(self):
         with (
             patch("release.needs_full_backup", return_value=True),
@@ -872,6 +939,7 @@ class ReleaseTests(unittest.TestCase):
             patch.object(self.release, "prepare_tools"),
             patch.object(self.release, "check_remote"),
             patch.object(self.release, "pause"),
+            patch.object(self.release, "require_creative_unit_drain"),
             patch("release.snapshot"),
             patch("release.restore_verify"),
             patch("release.publish"),

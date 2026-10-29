@@ -655,6 +655,7 @@ class Release:
             "credentials",
             "broker",
             "inspect",
+            "creative-unit-drain",
         }
         return json.loads(
             self.cluster.k(*args, data=PROBE.read_bytes(), idempotent=idempotent)
@@ -699,6 +700,23 @@ class Release:
         # 原租约，由既有投递恢复和 UNKNOWN 保护处理。不能清队列、手工重放或
         # 将 Redis 内部记录非零误认为仍有在执行任务；完整数据迁移仍要求零未确认。
         self.save("frozen")
+
+    def require_creative_unit_drain(self, sha):
+        # 仅显式迁移候选使用；普通发布和独立备份不扩大排空范围。
+        marker = "backend/app/alembic/versions/0060_frozen_creative_units.py"
+        present = (
+            run(["git", "-C", str(ROOT), "ls-tree", "--name-only", sha, "--", marker])
+            .decode()
+            .strip()
+        )
+        if not present:
+            return
+        result = self.probe("creative-unit-drain")
+        write(self.folder / "creative-unit-drain.json", result)
+        require(
+            result.get("drained") is True,
+            "Old creative-contract work remains; preserve queues and recover old workers to drain normally",
+        )
 
     def wait_drained(self, expected):
         deadline = time.monotonic() + self.timeout
@@ -1152,6 +1170,8 @@ class Release:
             self.resume(sha)
             return
         self.pause()
+        if sha:
+            self.require_creative_unit_drain(sha)
         snapshot(self)
         self.save("backed-up")
         directory = self.state["backup_dir"]

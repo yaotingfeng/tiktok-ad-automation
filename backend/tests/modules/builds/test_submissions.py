@@ -54,8 +54,11 @@ def test_duplicate_alias_is_permanent_and_submission_is_one(session, context, fr
 
 def test_expansion_is_bounded_idempotent_and_snapshot_scoped(session, context, frozen):
     from app.modules.builds.preview_models import PreviewContract, PreviewGroupMaterial
+
     assert session.get(PreviewContract, (context.tenant_id, frozen)).version == 2
-    assert not session.exec(select(PreviewGroupMaterial).where(PreviewGroupMaterial.preview_id == frozen)).all()
+    assert not session.exec(
+        select(PreviewGroupMaterial).where(PreviewGroupMaterial.preview_id == frozen)
+    ).all()
     receipt = submissions.submit_preview(
         session, context=context, preview_id=frozen, request_id=uuid4()
     )

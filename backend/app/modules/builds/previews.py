@@ -7,6 +7,7 @@ from typing import Any, Literal, cast
 from uuid import UUID
 
 from sqlalchemy import and_, func, text
+from sqlalchemy.orm import Session as SQLAlchemySession
 from sqlalchemy.orm import aliased
 from sqlmodel import Session, col, select
 
@@ -230,11 +231,18 @@ def _generate_preview(
             BuildPreview.draft_revision == expected_revision,
         )
     ).one_or_none()
+    legacy = bool(
+        existing
+        and preview_contract(
+            session, tenant_id=context.tenant_id, preview_id=existing.id
+        ).version
+        == 1
+    )
     if draft.revision != expected_revision:
-        # 原请求响应丢失/重复点击：仅返回由这个失败预览直接重试得到的新版本。
+        # 响应丢失/重复点击仅返回失败重试或 V1 升级直接产生的下一版本。
         if (
             existing
-            and existing.status == "FAILED"
+            and (existing.status == "FAILED" or legacy)
             and draft.revision == expected_revision + 1
         ):
             retried = session.exec(
@@ -249,7 +257,7 @@ def _generate_preview(
         raise DomainError("draft_revision_conflict", "草稿已变更")
     if existing:
         existing = _preview(session, context, existing.id, lock=True)
-        if existing.status != "FAILED":
+        if existing.status != "FAILED" and not legacy:
             return existing.id
         if draft.status != "READY":
             raise DomainError("draft_not_ready", "草稿尚未准备完成")
@@ -263,7 +271,7 @@ def _generate_preview(
             is not None
         ):
             raise DomainError("preview_already_submitted", "已提交的预览不能重试生成")
-        # FAILED 记录受数据库冻结保护；只提升草稿版本，复用已准备的输入创建新预览。
+        # FAILED/V1 历史正文受冻结保护；仅提升草稿版本，复用输入创建 V2。
         _bump_preview_retry_revision(session, draft, expected_revision)
         session.flush()
         identity = generate_preview(
@@ -844,7 +852,8 @@ def _expand_unit(
             _block(unit, ["materials_missing"])
         from .ad_readiness import included_group_sql
 
-        if not session.execute(
+        if not SQLAlchemySession.execute(
+            session,
             text(
                 "SELECT EXISTS(SELECT 1 FROM planned_group g WHERE g.tenant_id=:tenant AND g.unit_id=:unit AND "
                 + included_group_sql()
@@ -1273,7 +1282,8 @@ def get_preview_summary(
     n, g, a = (sum(x[i] for x in eligible) for i in range(3))
     from .ad_readiness import included_ad_sql
 
-    n, g, a = session.execute(
+    n, g, a = SQLAlchemySession.execute(
+        session,
         text(
             """SELECT count(DISTINCT u.id),count(DISTINCT g.id),count(a.id)
       FROM build_unit u JOIN planned_group g ON g.tenant_id=u.tenant_id AND g.unit_id=u.id

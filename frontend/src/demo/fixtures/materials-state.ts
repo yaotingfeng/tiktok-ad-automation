@@ -1,3 +1,4 @@
+import { imageCandidates } from "./image-composition-state"
 // 素材领域运行时状态：ingest 会话、上传任务、素材制作状态
 import {
   demoNumericId,
@@ -198,6 +199,19 @@ function publishMaterial(file: IngestFileState, bcId: string) {
       .find((d) => lower.includes(d.title.toLowerCase())) ?? null
   const advertiser = materialAdvertisers(bcId)[0] ?? materialAdvertisers()[0]
   file.source_advertiser_id = advertiser.advertiser_id
+  if (file.mime_type.startsWith("image/")) {
+    // 合成图片进入图片候选，不制造 video_id 或污染视频目录。
+    imageCandidates.push({
+      material_id: file.material_id,
+      drama_id: drama?.id ?? "",
+      file_name_snapshot: file.file_name,
+      created_at: isoAt(now()),
+      content_digest: "synthetic-demo-upload",
+      enabled: true,
+      cross_drama_allowed: false,
+    })
+    return
+  }
   DEMO_MATERIALS.unshift({
     id: file.material_id,
     drama_id: drama?.id ?? "",

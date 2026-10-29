@@ -334,7 +334,9 @@ def request_music(
         unit.music_snapshot = {"selection_source": "MANUAL"}
         jobs = []
     elif action in {"RECOMMEND", "RETRY"}:
-        jobs = request_unit_recommendation(session, scope, draft, unit, request_id, action)
+        jobs = request_unit_recommendation(
+            session, scope, draft, unit, request_id, action
+        )
     else:
         raise DomainError("music_request_invalid", "配乐动作无效")
     # 用户意图使旧计划失效；后台完成不增加草稿版本。

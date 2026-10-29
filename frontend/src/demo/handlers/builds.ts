@@ -1,3 +1,10 @@
+import { imageState } from "../fixtures/image-composition-state"
+import {
+  findImageUnit,
+  freezeImageDemo,
+  imageDeliveries,
+  IMAGE_DEMO_STRUCTURE,
+} from "../fixtures/image-delivery"
 // 体验版假后端：批量搭建领域（builds）
 
 import {
@@ -619,6 +626,32 @@ handle("builds-generate_preview", (req) => {
   const draft = demoDrafts.find((d) => d.draft_id === draft_id)
   if (!draft) return demoError(404, "draft_not_found", "草稿不存在")
 
+  if (draft.media_kind === "CAROUSEL") {
+    const state = imageState(draft_id)
+    if (!state.preview_ready)
+      return demoError(
+        409,
+        state.preview_reason_codes?.[0] ?? "image_rules_not_applied",
+        "请完成图片规则与配乐",
+      )
+    if (
+      Object.entries(IMAGE_DEMO_STRUCTURE).some(
+        ([key, value]) =>
+          draft.structure_override?.[
+            key as keyof typeof IMAGE_DEMO_STRUCTURE
+          ] !== value,
+      )
+    )
+      return demoError(
+        409,
+        "demo_structure_scope",
+        "本合成验收使用固定1共享组、每广告6单元、1文案的代表性结构",
+      )
+  }
+  const previous = demoPreviews.find(
+    (p) => p.draft_id === draft_id && p.draft_revision === draft.revision,
+  )
+  if (previous) return new DemoReply(202, { preview_id: previous.preview_id })
   const preview_id = demoUuid()
 
   // 计算剧目和账户数量
@@ -691,6 +724,26 @@ handle("builds-generate_preview", (req) => {
     build_started_at: now(),
   }
 
+  if (draft.media_kind === "CAROUSEL") {
+    const units = freezeImageDemo(draft, preview_id)
+    const ads = units.reduce((sum, u) => sum + u.ads.length, 0)
+    Object.assign(preview, {
+      preparing_count: units.length,
+      adgroup_count: units.length,
+      ad_count: ads,
+      group_generation_mode: "FIXED",
+      ad_generation_mode: "BY_MATERIAL",
+      creative_count: 1,
+      unique_material_count: new Set(
+        units.flatMap((u) => u.ads.flatMap((a) => a.material_ids)),
+      ).size,
+      material_allocation_count: units.reduce(
+        (n, u) => n + u.ads.reduce((m, a) => m + a.material_ids.length, 0),
+        0,
+      ),
+      structure_summary: `合成演示 · ${units.length} 个系列 / 共享广告组 · ${ads} 条广告 · M6 · K1`,
+    })
+  }
   demoPreviews.push(preview)
 
   return new DemoReply(202, { preview_id })
@@ -730,8 +783,8 @@ handle("builds-preview_summary", (req) => {
   const draft = demoDrafts.find((d) => d.draft_id === preview.draft_id)
 
   return {
-    contract_version: 1 as const,
-    media_kind: "VIDEO" as const,
+    contract_version: (draft?.media_kind === "CAROUSEL" ? 2 : 1) as 1 | 2,
+    media_kind: draft?.media_kind ?? "VIDEO",
     preview_id: preview.preview_id,
     draft_id: preview.draft_id,
     draft_revision: preview.draft_revision,
@@ -805,6 +858,34 @@ handle("builds-preview_dramas", (req) => {
     )
     .filter((d): d is NonNullable<typeof d> => d !== null)
 
+  if (imageDeliveries.has(preview_id)) {
+    const units = imageDeliveries.get(preview_id)!
+    return paginate(
+      dramas.map((drama) => {
+        const owned = units.filter((u) => u.preview.drama_id === drama.id)
+        const sample = owned[0]?.preview
+        return {
+          drama_id: drama.id,
+          title: drama.title,
+          account_count: owned.length,
+          ready_count: 0,
+          preparing_count: owned.length,
+          blocked_count: 0,
+          material_count: sample?.material_count ?? 0,
+          skipped_material_count: 0,
+          material_group_count: 1,
+          eligible_campaign_count: owned.length,
+          eligible_adgroup_count: owned.length,
+          eligible_ad_count: owned.reduce((n, u) => n + u.ads.length, 0),
+          daily_budget_sum: `${owned.length * 100}.00`,
+          daily_budget_label: "系列预算合计",
+          structure_summary: sample?.structure_summary ?? "合成演示",
+        }
+      }),
+      req.query,
+      (row) => row.drama_id,
+    )
+  }
   const accountCount = draft.account_lines.length
 
   const items = dramas.map((drama) => {
@@ -865,6 +946,20 @@ handle("builds-preview_units", (req) => {
     )
     .filter((a): a is NonNullable<typeof a> => a !== null)
 
+  if (imageDeliveries.has(preview_id))
+    return paginate(
+      imageDeliveries
+        .get(preview_id)!
+        .map((u) => u.preview)
+        .filter(
+          (u) =>
+            (!drama_id || u.drama_id === drama_id) &&
+            (!readiness || u.readiness === readiness),
+        ),
+      req.query,
+      (u) => u.unit_id,
+    )
+
   const allUnits = dramas.flatMap((drama) =>
     accounts.map((account, _accountIndex) => {
       const materials = materialsOfDrama(drama.id)
@@ -906,6 +1001,31 @@ handle("builds-preview_units", (req) => {
 handle("builds-frozen_unit", (req) => {
   const { unit_id } = req.path
 
+  const image = findImageUnit(unit_id)
+  if (image) {
+    const p = demoPreviews.find((p) => p.preview_id === image.previewId)!
+    const u = image.unit.preview
+    return {
+      ...u,
+      contract_version: 2 as const,
+      media_kind: "CAROUSEL" as const,
+      preview_id: p.preview_id,
+      tenant_id: MAIN_TENANT_ID,
+      link_id: demoUuid(1200),
+      strategy_version_id: DEMO_STRATEGIES[0].version_id,
+      bc_id: p.bc_id,
+      connection_id: demoUuid(301),
+      currency: "USD",
+      timezone: "UTC",
+      protected_base: u.title,
+      url: "https://minis.example.invalid/synthetic",
+      budget: "100.00",
+      target_roas: "1.08",
+      budget_strategy: "SERIES" as const,
+      bid_strategy: "TARGET_ROAS" as const,
+      scene_snapshot: { synthetic_demo: true },
+    }
+  }
   // 返回单元详细信息
   return {
     contract_version: 1 as const,
@@ -945,7 +1065,9 @@ handle("builds-frozen_unit", (req) => {
 })
 
 // 获取冻结单元分组
-handle("builds-frozen_groups", (_req) => {
+handle("builds-frozen_groups", (req) => {
+  const image = findImageUnit(req.path.unit_id)
+  if (image) return paginate([image.unit.group], req.query, (g) => g.group_id)
   const materials = materialsOfDrama(DEMO_DRAMAS[0].id).slice(0, 12)
   const groups = [0, 1, 2].map((groupIndex) => {
     const groupMaterials = materials.filter((_, i) => i % 3 === groupIndex)
@@ -1044,6 +1166,13 @@ handle("builds-saved_mutation", (req) => {
 })
 
 // 此演示数据是历史视频预览；V2 广告分页只读取实际 V2 冻结记录。
-handle("builds-frozen_ads", () =>
-  demoError(409, "preview_contract_expired", "此演示预览使用历史分组详情"),
-)
+handle("builds-frozen_ads", (req) => {
+  const image = findImageUnit(req.path.unit_id)
+  if (!image || image.unit.group.group_id !== req.path.group_id)
+    return demoError(
+      409,
+      "preview_contract_expired",
+      "此演示预览使用历史分组详情",
+    )
+  return paginate(image.unit.ads, req.query, (ad) => ad.ad_id)
+})

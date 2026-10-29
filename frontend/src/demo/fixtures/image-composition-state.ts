@@ -16,6 +16,8 @@ export const imageState = (id: string) => {
   let state = imageStates.get(id)
   if (!state) {
     state = {
+      preview_ready: false,
+      preview_reason_codes: ["music_not_ready"],
       revision: 1,
       active_generation: 1,
       applied_rule_revision: 1,
@@ -54,6 +56,26 @@ export const imageState = (id: string) => {
   for (const unit of imageUnits.get(id) ?? [])
     state.music_counts[unit.music_status ?? "PENDING"] =
       (state.music_counts[unit.music_status ?? "PENDING"] ?? 0) + 1
+  // 演示仍按真实就绪语义阻断；不能把配乐/规则未完成伪装成平台资格通过。
+  const reasons: string[] = []
+  if (
+    !state.active_generation ||
+    state.applied_rule_revision !== state.revision
+  )
+    reasons.push("image_rules_not_applied")
+  if (
+    state.run?.status === "PENDING" ||
+    state.candidate_build?.status === "PENDING"
+  )
+    reasons.push("image_composition_pending")
+  const units = imageUnits.get(id) ?? []
+  if (
+    !units.length ||
+    units.some((unit) => unit.music_status !== "READY" || !unit.music_id)
+  )
+    reasons.push("music_not_ready")
+  state.preview_reason_codes = reasons
+  state.preview_ready = reasons.length === 0
   return state
 }
 

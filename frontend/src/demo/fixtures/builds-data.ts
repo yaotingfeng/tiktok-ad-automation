@@ -1,3 +1,4 @@
+import { IMAGE_DEMO_STRUCTURE } from "./image-delivery"
 // 批量搭建领域的私有数据：草稿、预览、提交、执行步骤。
 import type {
   AudienceTargeting,
@@ -210,7 +211,8 @@ export function seedHistorySubmissions() {
     ...draft1,
     draft_id: demoUuid(723),
     media_kind: "CAROUSEL",
-    structure_override: {},
+    revision: 1,
+    structure_override: { ...IMAGE_DEMO_STRUCTURE },
   })
 }
 

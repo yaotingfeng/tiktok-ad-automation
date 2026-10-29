@@ -1,3 +1,4 @@
+import { imageDeliveries, type DemoImageUnit } from "../fixtures/image-delivery"
 import type {
   ObjectCounts,
   RecoveryReceipt,
@@ -40,6 +41,7 @@ import { DemoReply, demoError, handle } from "../runtime/registry"
 type UnitOutcome = "SUCCEEDED" | "RETRYABLE" | "UNKNOWN"
 
 interface Unit {
+  image?: DemoImageUnit
   unit_id: string
   drama: DemoDrama
   advertiser: DemoAdvertiser
@@ -89,19 +91,71 @@ function strategyLabel(versionId: string | undefined) {
 
 type UnitState = "QUEUED" | "RUNNING" | UnitOutcome | "EXCLUDED"
 
+function imageId(unit: Unit, materialId: string) {
+  return `demo-image-${unit.advertiser.advertiser_id}-${materialId}`
+}
+
 function unitState(sub: Submission, unit: Unit): UnitState {
   if (unit.excluded_reason) return "EXCLUDED"
   const elapsed = now() - sub.started
   if (elapsed < QUEUE_MS) return "QUEUED"
   if (elapsed < unit.finish_at) return "RUNNING"
   // 成功的单元在完成那一刻上线 Campaign（只做一次）。
-  if (unit.outcome === "SUCCEEDED" && !unit.campaign) {
+  if (
+    (unit.outcome === "SUCCEEDED" ||
+      (unit.image && unit.outcome === "UNKNOWN")) &&
+    !unit.campaign
+  ) {
     unit.campaign =
       launchCampaigns({
         submissionId: sub.submission_id,
         dramaIds: [unit.drama.id],
         advertiserIds: [unit.advertiser.advertiser_id],
       })[0] ?? null
+  }
+  if (
+    unit.image &&
+    unit.campaign &&
+    !unit.campaign.adgroups[0]?.ads[0]?.carousel_creatives
+  ) {
+    // 响应丢失仍保存同一远端模拟对象；核查只能读回，不重复创建。
+    const campaign = unit.campaign
+    campaign.name = unit.image.preview.campaign_name
+    campaign.adgroups = [
+      {
+        adgroup_id: `demo-group-${unit.image.group.group_id}`,
+        name: "模拟图片共享组",
+        budget: sub.daily_budget,
+        status: "ENABLE",
+        ads: unit.image.ads.map((ad) => {
+          const adId = `demo-ad-${ad.ad_id}`
+          return {
+            ad_id: adId,
+            name: ad.name,
+            material_id: "",
+            status: "ENABLE" as const,
+            carousel_creatives: (ad.creative_units ?? []).map((c) => ({
+              advertiser_id: unit.advertiser.advertiser_id,
+              ad_id: adId,
+              remote_creative_id: null,
+              ordered_image_ids: c.members.map(
+                (m) =>
+                  imageId(unit, m.material_id),
+              ),
+              music_id: c.music_id!,
+            })),
+            frozen_creative_links: [
+              {
+                submission_id: sub.submission_id,
+                unit_id: unit.unit_id,
+                group_id: unit.image!.group.group_id,
+                planned_ad_id: ad.ad_id,
+              },
+            ],
+          }
+        }),
+      },
+    ]
   }
   return unit.outcome
 }
@@ -344,7 +398,11 @@ function step(
     operation_status:
       status === "SUCCEEDED" && kind !== "MATERIAL" ? "ENABLE" : null,
     review_status:
-      status === "SUCCEEDED" && kind !== "MATERIAL" ? "审核通过" : null,
+      status === "SUCCEEDED" && kind !== "MATERIAL"
+        ? unit.image
+          ? "模拟回读"
+          : "审核通过"
+        : null,
     mismatch: false,
     checked_at:
       status === "SUCCEEDED" ? isoAt(sub.started + unit.finish_at) : null,
@@ -370,7 +428,7 @@ function campaignStep(sub: Submission, unit: Unit) {
 function groups(sub: Submission, unit: Unit): SubmissionGroupPublic[] {
   const p = unitProgress(sub, unit)
   return Array.from({ length: unit.group_count }, (_, g) => {
-    const groupId = unitStepId(unit, `g${g}`)
+    const groupId = unit.image?.group.group_id ?? unitStepId(unit, `g${g}`)
     const done = (g + 1) / unit.group_count <= p
     const materials = unit.materials.filter(
       (_, i) => i % unit.group_count === g,
@@ -411,7 +469,8 @@ function ads(
   const group = groups(sub, unit).find((g) => g.group_id === groupId)
   if (!group) return []
   return Array.from({ length: unit.ads_per_group }, (_, a) => ({
-    planned_ad_id: unitStepId(unit, `a${group.group_no}${a}`),
+    planned_ad_id:
+      unit.image?.ads[a]?.ad_id ?? unitStepId(unit, `a${group.group_no}${a}`),
     group_id: groupId,
     creative_no: a + 1,
     name: `${unit.drama.external_id}-组${group.group_no}-创意${a + 1}`,
@@ -421,9 +480,12 @@ function ads(
       id: unitStepId(unit, `sa${group.group_no}${a}`),
       group_id: groupId,
       group_no: group.group_no,
-      planned_ad_id: unitStepId(unit, `a${group.group_no}${a}`),
+      planned_ad_id:
+        unit.image?.ads[a]?.ad_id ?? unitStepId(unit, `a${group.group_no}${a}`),
       creative_no: a + 1,
-      remote_id: `19${unit.unit_id.replace(/\D/g, "").slice(-11)}${group.group_no}${a}`,
+      remote_id: unit.image
+        ? `demo-ad-${unit.image.ads[a].ad_id}`
+        : `19${unit.unit_id.replace(/\D/g, "").slice(-11)}${group.group_no}${a}`,
       done: group.step?.status === "SUCCEEDED",
       title: `广告 ${a + 1}`,
     }),
@@ -441,12 +503,14 @@ function unitMaterials(sub: Submission, unit: Unit, groupId: string) {
         position: position + 1,
         file_name: material.file_name,
         preview_available: true,
-        video_id: material.video_id,
-        image_id: null,
+        video_id: unit.image ? null : material.video_id,
+        image_id: unit.image
+          ? imageId(unit, material.id)
+          : null,
         step: step(sub, unit, "MATERIAL", {
           id: unitStepId(unit, `m${material.index}`),
           material_id: material.id,
-          remote_id: material.video_id,
+          remote_id: unit.image ? imageId(unit, material.id) : material.video_id,
           done: unitState(sub, unit) !== "QUEUED",
           title: material.file_name,
         }),
@@ -500,7 +564,7 @@ function unitSteps(sub: Submission, unit: Unit): StepPublic[] {
       step(sub, unit, "MATERIAL", {
         id: unitStepId(unit, `m${m.index}`),
         material_id: m.id,
-        remote_id: m.video_id,
+        remote_id: unit.image ? imageId(unit, m.id) : m.video_id,
         done: unitState(sub, unit) !== "QUEUED",
         title: m.file_name,
       }),
@@ -621,6 +685,44 @@ handle("builds-submit_preview", ({ path, body }) => {
       100,
     units: makeUnits(dramas, accounts, groupCount, adsPerGroup, 1600),
     request_id: body.request_id,
+  }
+  const imageUnits = imageDeliveries.get(preview.preview_id)
+  if (imageUnits) {
+    sub.units = sub.units.map((unit, index) => {
+      const image = imageUnits.find(
+        (i) =>
+          i.preview.drama_id === unit.drama.id &&
+          i.preview.advertiser_id === unit.advertiser.advertiser_id,
+      )!
+      const members = [
+        ...new Map(
+          image.ads
+            .flatMap((a) => (a.creative_units ?? []).flatMap((c) => c.members))
+            .map((m) => [m.material_id, m]),
+        ).values(),
+      ]
+      return {
+        ...unit,
+        image,
+        unit_id: image.preview.unit_id,
+        group_count: 1,
+        ads_per_group: image.ads.length,
+        materials: members.map((m, i) => ({
+          id: m.material_id,
+          drama_id: unit.drama.id,
+          index: i,
+          file_name: m.file_name,
+          duration_seconds: 0,
+          size_bytes: 1024,
+          advertiser_id: unit.advertiser.advertiser_id,
+          video_id: "",
+          uploaded_at: sub.created_at,
+          cover_url: "",
+        })),
+        outcome: index === 0 ? ("UNKNOWN" as const) : ("SUCCEEDED" as const),
+        error_code: index === 0 ? "tiktok_call_deadline_exceeded" : null,
+      }
+    })
   }
   preview.submission_id = sub.submission_id
   submissions.unshift(sub)
@@ -837,7 +939,8 @@ function recoveryView(stored: StoredRecovery): RecoveryReceipt {
     for (const unit of stored.units) {
       unit.outcome = "SUCCEEDED"
       unit.error_code = null
-      if (sub && !unit.campaign)
+      if (sub && unit.image) unitState(sub, unit)
+      else if (sub && !unit.campaign)
         unit.campaign =
           launchCampaigns({
             submissionId: sub.submission_id,

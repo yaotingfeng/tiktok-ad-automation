@@ -135,6 +135,18 @@ def submit_preview(
         )
     ).one_or_none()
     if existing is None:
+        from .creative_units import preview_contract
+
+        # 先解析所有历史提交重放；V1 仅禁止创建新的执行任务。
+        if (
+            preview_contract(
+                session, tenant_id=context.tenant_id, preview_id=preview.id
+            ).version
+            == 1
+        ):
+            raise DomainError(
+                "preview_contract_expired", "历史预览仅供查看，请重新生成预览"
+            )
         route = load_preview_route(session, context=context, preview_id=preview.id)
         verify_route(
             session, context=context, route=route, advertiser_id=None, capability="read"

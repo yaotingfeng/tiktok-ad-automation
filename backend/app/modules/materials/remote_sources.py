@@ -123,6 +123,8 @@ def read_frozen_remote_source(
             material.video_md5,
             material.byte_size,
         )
+        if not video_id:
+            raise DomainError("material_remote_source_unavailable", "来源视频身份缺失")
         assert md5
         # 文件原上传来源与实际平台副本分开冻结；跨 BC 消费不能改写原始来源。
         content_identity = (

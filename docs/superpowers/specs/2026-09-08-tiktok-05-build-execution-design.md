@@ -255,3 +255,9 @@ UI-04 路由为 `/tenants/:tenantId/build-tasks`，以 `bc_id` 保存列表范�
 - 未知样例：SP2 请求断连，界面先提供核查；查到原远端 Ad 后补回 ID，不能通过普通重试再建一条。
 - 混合样例：一个账户有确定失败、另一个账户有 UNKNOWN；任务显示待核实，两类动作的数量各自准确，成功结果持续可见。
 - 权限样例：运行中某账户授权失效；展示暂停原因及已建结果，无主动取消、停止远端广告或换 BC 继续的按钮。
+
+## 2026-10-30 V2 冻结合同交付
+
+新预览V2冻结完整创意单元、有序成员和音乐，视频也走统一单元；历史V1正文/hash不改。未提交V1新提交报preview_contract_expired；已有提交先按request_id或preview_id返回原结果，不新增任务。未变草稿复用锁内revision提升生成V2，旧预览可转OBSOLETE；新预览保留retry_of，丢响应重放返回同一新预览。
+
+切换前同时检查进程与持久旧工作：BUILDING预览、未展开/非终态Submission和QUEUED/PENDING/RUNNING/RETRYABLE/UNKNOWN步骤阻断。UNKNOWN按原意图回读，不强制失败、清队列或重建。门禁兼容0060前schema及混合历史，未知head/缺descriptor失败关闭。产品仍三层ENABLE，无额外激活；只有未来独立停用验收清单可在具体授权后创建DISABLE结构，不能混同产品行为。见[验收记录](../../validation/2026-10-29-image-carousel-batch.md)。

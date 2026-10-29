@@ -7,7 +7,7 @@ only their final atomic counter delta touches the shared session header.
 import hashlib
 import json
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal, cast
 from uuid import UUID, uuid4
 
 from sqlalchemy import and_, delete, func, or_, update
@@ -224,7 +224,7 @@ def file_public(
         file_name=material.file_name,
         size=row.byte_size,
         mime_type=material.mime_type,
-        media_type=material.media_type,
+        media_type=cast(Literal["VIDEO", "IMAGE"], material.media_type),
         last_modified_ms=row.last_modified_ms,
         generation=row.current_generation,
         upload_id=original.s3_upload_id if original else None,
