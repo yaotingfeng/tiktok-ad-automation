@@ -48,14 +48,33 @@ def test_directory_cursor_survives_due_list_shrinking_and_preserves_other_keys(
     )
     assert plan.next_directory_at < now + planner.DIRECTORY_INTERVAL
     job_tasks._plan_directory_step(
-        session, plan, accounts=["acc-1", "acc-2"], now=now + timedelta(minutes=1)
+        session, plan, accounts=["acc-1", "acc-2"], now=now + timedelta(seconds=5)
     )
     assert _advertisers(session, plan) == {"acc-1", "acc-2"}
     assert job_tasks.DIRECTORY_PLAN_PROGRESS not in plan.screening_progress
     assert plan.screening_progress == {
         "rule_sync_original_phase": "keep",
         "active_screen": {"cursor": "keep"},
-        job_tasks.DIRECTORY_PLAN_NOT_BEFORE: (now + timedelta(minutes=2)).isoformat(),
+    }
+    assert plan.next_directory_at == now + planner.DIRECTORY_INTERVAL
+
+
+def test_obsolete_minute_gate_is_removed_without_resetting_cursor(
+    session, sync_seed, monkeypatch
+):
+    now, plan = _case(session, sync_seed, monkeypatch)
+    job_tasks._plan_directory_step(session, plan, accounts=["acc-1", "acc-2"], now=now)
+    plan.screening_progress = {
+        **plan.screening_progress,
+        "directory_batch_not_before_v1": (now + timedelta(minutes=1)).isoformat(),
+    }
+    job_tasks._plan_directory_step(
+        session, plan, accounts=["acc-1", "acc-2"], now=now + timedelta(seconds=5)
+    )
+    assert _advertisers(session, plan) == {"acc-1", "acc-2"}
+    assert plan.screening_progress == {
+        "rule_sync_original_phase": "keep",
+        "active_screen": {"cursor": "keep"},
     }
     assert plan.next_directory_at == now + planner.DIRECTORY_INTERVAL
 
@@ -84,7 +103,7 @@ def test_new_account_before_cursor_restarts_cycle(session, sync_seed, monkeypatc
         session,
         plan,
         accounts=["acc-1", "acc-2", "acc-3"],
-        now=now + timedelta(minutes=1),
+        now=now + timedelta(seconds=5),
     )
     assert _advertisers(session, plan) == {"acc-1", "acc-2"}
     assert (
@@ -105,7 +124,7 @@ def test_directory_frozen_scope_change_restarts_account_cursor(
     plan.frozen_route = plan.frozen_route | {"binding_revision": binding.revision}
     session.flush()
     job_tasks._plan_directory_step(
-        session, plan, accounts=["acc-1", "acc-2"], now=now + timedelta(minutes=1)
+        session, plan, accounts=["acc-1", "acc-2"], now=now + timedelta(seconds=5)
     )
     state = plan.screening_progress[job_tasks.DIRECTORY_PLAN_PROGRESS]
     assert state["scope"] != old_scope and state["after"] == "acc-1"
@@ -138,7 +157,7 @@ def test_slow_account_is_retained_and_does_not_block_other_accounts(
         and not _advertisers(session, plan)
     )
     job_tasks._plan_directory_step(
-        session, plan, accounts=["acc-1", "acc-2"], now=now + timedelta(minutes=1)
+        session, plan, accounts=["acc-1", "acc-2"], now=now + timedelta(seconds=5)
     )
     assert (
         "acc-1"
@@ -146,7 +165,7 @@ def test_slow_account_is_retained_and_does_not_block_other_accounts(
     )
     monkeypatch.setattr(job_tasks, "DIRECTORY_PLAN_SECONDS", 3)
     job_tasks._plan_directory_step(
-        session, plan, accounts=["acc-1", "acc-2"], now=now + timedelta(minutes=2)
+        session, plan, accounts=["acc-1", "acc-2"], now=now + timedelta(seconds=10)
     )
     assert _advertisers(session, plan) == {"acc-2"}
     assert job_tasks.DIRECTORY_PLAN_PROGRESS in plan.screening_progress

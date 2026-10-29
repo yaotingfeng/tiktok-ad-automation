@@ -114,23 +114,20 @@ def test_unknown_activity_uses_daily_calibration_not_weekly(
     } == {"campaign", "adgroup", "ad"}
 
 
-def test_calibration_batch_budget_persists_between_planner_calls(
+def test_calibration_continues_after_short_batch_interval(
     session, sync_seed, monkeypatch
 ):
     now, plan = case(session, sync_seed, monkeypatch)
     monkeypatch.setattr(job_tasks, "DIRECTORY_PLAN_ACCOUNTS", 1)
     job_tasks._plan_directory_step(session, plan, accounts=["acc-1", "acc-2"], now=now)
+    assert plan.next_directory_at == now + timedelta(seconds=5)
     job_tasks._plan_directory_step(
         session, plan, accounts=["acc-1", "acc-2"], now=now + timedelta(seconds=5)
-    )
-    assert {r.advertiser_id for r in runs(session, sync_seed)} == {"acc-1"}
-    job_tasks._plan_directory_step(
-        session, plan, accounts=["acc-1", "acc-2"], now=now + timedelta(minutes=1)
     )
     assert {r.advertiser_id for r in runs(session, sync_seed)} == {"acc-1", "acc-2"}
 
 
-def test_account_list_change_cannot_reset_calibration_budget(
+def test_account_list_change_restarts_calibration_without_minute_gate(
     session, sync_seed, monkeypatch
 ):
     now, plan = case(session, sync_seed, monkeypatch)
@@ -138,10 +135,6 @@ def test_account_list_change_cannot_reset_calibration_budget(
     job_tasks._plan_directory_step(session, plan, accounts=["acc-2"], now=now)
     job_tasks._plan_directory_step(
         session, plan, accounts=["acc-1", "acc-2"], now=now + timedelta(seconds=5)
-    )
-    assert {r.advertiser_id for r in runs(session, sync_seed)} == {"acc-2"}
-    job_tasks._plan_directory_step(
-        session, plan, accounts=["acc-1", "acc-2"], now=now + timedelta(minutes=1)
     )
     assert {r.advertiser_id for r in runs(session, sync_seed)} == {"acc-1", "acc-2"}
 

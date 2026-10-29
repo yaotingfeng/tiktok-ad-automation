@@ -100,10 +100,10 @@ PUBLISH_MESSAGE_LOST_AFTER = timedelta(minutes=30)
 TARGETED_MESSAGE_LOST_AFTER = timedelta(minutes=2)
 # 一轮周期目录分批推进；此游标不占用账户筛选或规则相位的进度键。
 DIRECTORY_PLAN_PROGRESS = "directory_cycle_v1"
-DIRECTORY_PLAN_NOT_BEFORE = "directory_batch_not_before_v1"
-DIRECTORY_PLAN_ACCOUNTS = 16
+# 批量上限配合查询预算保护数据库；不再按固定分钟额度延迟必要任务发现。
+DIRECTORY_PLAN_ACCOUNTS = 64
 DIRECTORY_PLAN_SECONDS = 3
-DIRECTORY_PLAN_BATCH_INTERVAL = timedelta(minutes=1)
+DIRECTORY_PLAN_BATCH_INTERVAL = timedelta(seconds=5)
 
 register_dispatch_task("reporting.job_step", "ads-reporting")
 register_dispatch_task("reporting.backfill_step", "ads-backfill")
@@ -637,12 +637,13 @@ def _defer_plan(plan, retry_at):
 
 def _plan_directory_step(session, plan, *, accounts, now):
     """稳定账户ID游标；成功批次才推进，单个慢账户退避后不阻挡其余账户。"""
-    resume_at = plan.screening_progress.get(DIRECTORY_PLAN_NOT_BEFORE)
-    if resume_at is not None and now < datetime.fromisoformat(resume_at):
-        plan.next_directory_at = max(
-            plan.next_directory_at, datetime.fromisoformat(resume_at)
-        )
-        return
+    # 撤销固定分钟门槛，只清理其私有标记，保留目录游标及其他业务进度。
+    if "directory_batch_not_before_v1" in plan.screening_progress:
+        plan.screening_progress = {
+            key: value
+            for key, value in plan.screening_progress.items()
+            if key != "directory_batch_not_before_v1"
+        }
     accounts = sorted(set(accounts))
     scope = sha256(
         json.dumps(
@@ -734,11 +735,6 @@ def _plan_directory_step(session, plan, *, accounts, now):
                 deferred.pop(advertiser, None)
             state["batch_size"] = min(DIRECTORY_PLAN_ACCOUNTS, size * 2)
     state["deferred"] = deferred
-    # 预算独立于账户/授权游标，范围变化和完成整轮都不能绕过分钟限额。
-    plan.screening_progress = {
-        **plan.screening_progress,
-        DIRECTORY_PLAN_NOT_BEFORE: (now + DIRECTORY_PLAN_BATCH_INTERVAL).isoformat(),
-    }
     remaining = [a for a in accounts if a > state["after"] and a not in deferred]
     if not remaining and not deferred:
         plan.screening_progress = {
@@ -853,7 +849,7 @@ def _plan_one(
                             text("SELECT set_config('statement_timeout', '8s', true)")
                         )
                         # 完整目录作为低频校准，活跃对象由热报和操作后的定向回读维护；
-                        # 分区按每日/每周到期，未知类型只探测系列，跨轮批次限额持久保存。
+                        # 分区按每日/每周到期，未知类型只探测系列；账户游标与超时缩批进度跨轮保留。
                         _plan_directory_step(session, plan, accounts=accounts, now=now)
                         session.connection().execute(
                             text(
