@@ -1,7 +1,9 @@
+from uuid import UUID
+
 import pytest
 
 from app.core.errors import DomainError
-from app.modules.strategies.naming import render_names
+from app.modules.strategies.naming import local_display_drama_id, render_names
 
 ARGS = {
     "protected_base": "{b30008/s328302/c3}-The Bond",
@@ -78,7 +80,9 @@ def test_inserted_values_are_literal():
 
 
 @pytest.mark.parametrize("protected", ["", ARGS["protected_base"]])
-@pytest.mark.parametrize("drama_id", ["", "0", "-1", "32827A", "３２８２７"])
+@pytest.mark.parametrize(
+    "drama_id", ["", "0", "-1", "32827A", "３２８２７", "ada-", "ada-12a", "ADA-1"]
+)
 def test_attribution_prefix_requires_ascii_numeric_display_drama_id(
     protected, drama_id
 ):
@@ -91,3 +95,12 @@ def test_attribution_prefix_requires_ascii_numeric_display_drama_id(
             }
         )
     assert error.value.code == "naming_context_missing"
+
+
+def test_manual_drama_without_provider_id_uses_stable_local_number():
+    drama = UUID("12345678-1234-5678-1234-567812345678")
+    local_id = local_display_drama_id(drama)
+    assert local_id == local_display_drama_id(drama)
+    assert local_id.startswith("ada-") and len(local_id) == 12
+    names = render_names(**{**ARGS, "protected_base": "", "display_drama_id": local_id})
+    assert names[0] == f"jiashu-The Bond-{local_id}-A7K2"

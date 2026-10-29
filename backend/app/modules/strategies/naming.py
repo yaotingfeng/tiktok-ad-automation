@@ -1,9 +1,17 @@
 from string import Formatter
+from uuid import UUID
 
 from app.core.errors import DomainError
 
 DEFAULT_NAME_TEMPLATE = "{provider_drama}-{drama_id}"
 NAME_FIELDS = frozenset({"provider_drama", "drama_id", "YYYYMMDD"})
+# 没有版权方剧目 ID 的手动剧目在命名时使用系统编号，前缀区分于版权方编号。
+LOCAL_DRAMA_ID_PREFIX = "ada-"
+
+
+def local_display_drama_id(drama_id: UUID) -> str:
+    """按剧目记录生成固定的 ada-8位数字，同一剧目每次预览得到相同编号。"""
+    return f"{LOCAL_DRAMA_ID_PREFIX}{drama_id.int % 10**8:08d}"
 
 
 def validate_name_template(template: str) -> None:
@@ -45,10 +53,11 @@ def render_names(
     ):
         raise DomainError("invalid_group_config", "invalid_group_config")
     drama_id = display_drama_id.strip()
+    digits = drama_id.removeprefix(LOCAL_DRAMA_ID_PREFIX)
     if (
-        not drama_id.isascii()
-        or not drama_id.isdigit()
-        or int(drama_id) < 1
+        not digits.isascii()
+        or not digits.isdigit()
+        or (digits == drama_id and int(digits) < 1)
         or (not protected_base and (not provider_pinyin.strip() or not title.strip()))
     ):
         raise DomainError("naming_context_missing", "缺少有效版权方数字剧目 ID")

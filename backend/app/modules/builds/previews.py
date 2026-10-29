@@ -87,7 +87,7 @@ from app.modules.providers.models import (
     ProviderConnection,
     ProviderDrama,
 )
-from app.modules.strategies.naming import render_names
+from app.modules.strategies.naming import local_display_drama_id, render_names
 from app.modules.strategies.schemas import StrategyConfig
 from app.modules.strategies.service import get_copies, get_version
 from app.modules.strategies.structure import plan_structure
@@ -385,9 +385,10 @@ def _snapshot_drama(
                 ProviderDrama.application_id == link.application_id,
             )
         ).one()
-        display_drama_id = (provider_drama.display_drama_id or "").strip()
-        if not display_drama_id:
-            raise DomainError("naming_context_missing", "缺少版权方剧目 ID")
+        # 手动录入且未填写版权方剧目 ID 时，用系统编号保证广告名称完整。
+        display_drama_id = (
+            provider_drama.display_drama_id or ""
+        ).strip() or local_display_drama_id(provider_drama.id)
         frozen = PreviewDrama(
             **_scope(preview),
             drama_id=drama.drama_id,

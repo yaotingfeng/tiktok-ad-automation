@@ -188,19 +188,12 @@ def materialize(
 
     drama = matching_drama()
     if drama is None:
-        # 用户未填写剧目 ID 时，自动生成 ada-时间戳 格式的数字标识用于广告命名
-        user_provided_id = value.get("external_drama_id", "").strip()
-        auto_generated_id = (
-            None
-            if user_provided_id
-            else f"ada{int(datetime.now(UTC).timestamp() * 1000)}"
-        )
         candidate = ProviderDrama(
             tenant_id=context.tenant_id,
             connection_id=draft.provider_connection_id,
             application_id=draft.application_id,
             external_drama_id=external,
-            display_drama_id=user_provided_id or auto_generated_id,
+            display_drama_id=value.get("external_drama_id", "").strip() or None,
             title=row.raw_text.strip(),
         )
         # 自动发现可能刚以长 ID 保存同一数字编号；撤销本次临时插入后复用它。
