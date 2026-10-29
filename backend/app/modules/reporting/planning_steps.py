@@ -141,8 +141,25 @@ def _save(plan, state):
     plan.screening_progress = {**plan.screening_progress, KEY: copy.deepcopy(state)}
 
 
+def _candidate_accounts(state, phase, plan, accounts):
+    if phase not in {"hot", "material"}:
+        return accounts
+    step = state.get(phase, {})
+    covered = set(step.get("covered", ()))
+    live = state.get("live", {})
+    if live.get("clock_advanced") and step.get("at") == live.get("at"):
+        # 时钟已推进证明本轮完整巡检曾完成，已有事实也已计入covered。
+        # 晚筛查只补新活跃及原重试；旧版重置过的游标也不能再空扫整个账户池。
+        # 完成后出现的新事实由下一live轮的完整巡检发现，不重新打开旧轮。
+        needed = set(plan.last_active_advertiser_ids) | set(step.get("deferred", {}))
+        return [a for a in accounts if a in needed and a not in covered]
+    return [a for a in accounts if a not in covered]
+
+
 def _batch(step, accounts, now):
     deferred = step.setdefault("deferred", {})
+    for account in step.get("covered", ()):
+        deferred.pop(account, None)
     retry = sorted(
         a
         for a, at in deferred.items()
@@ -164,6 +181,7 @@ def _advance_batch(step, batch, accounts):
 
 
 def _eligible(state, phase, plan, now, allow_backfill, accounts):
+    accounts = _candidate_accounts(state, phase, plan, accounts)
     if (
         phase in {"screen_daily", "daily", "empty_daily", "history"}
         and not allow_backfill
@@ -248,14 +266,20 @@ def _execute(
                     plan.active_screened_at = None
                 plan.last_active_advertiser_ids = active
                 state["empty_hot"] = _new(at, active=active)
-                # 分页筛查可能晚于本轮事实批次：重新覆盖已走过的账户，不丢新发现活跃对象。
+                # 保留已检查的前缀和未扫尾部，只将新发现的前缀账户加入补偿重试。
+                # covered只代表已规划活跃/已有事实，不能拿它当全部已检查账户。
                 for name in ("hot", "material"):
-                    if state.get(name, {}).get("after"):
-                        state[name] = _new(
-                            datetime.fromisoformat(state["live"]["at"]),
-                            covered=state[name].get("covered", []),
-                        )
-                if state.get("live", {}).get("done"):
+                    fact = state.get(name)
+                    if not fact or (name == "hot" and not state["live"]["hot_due"]):
+                        continue
+                    for account in set(active) - set(fact.get("covered", ())):
+                        if account <= fact["after"]:
+                            fact["deferred"].setdefault(account, now.isoformat())
+                    candidates = _candidate_accounts(state, name, plan, accounts)
+                    fact["done"] = not fact["deferred"] and not any(
+                        a > fact["after"] for a in candidates
+                    )
+                if not all(state.get(p, {}).get("done") for p in ("hot", "material")):
                     state["live"]["done"] = False
                 if now - at >= planner.HOT_INTERVAL:
                     # 老轮终于完成时保留其真实证据水位，立即再读当前轮，不能冒充刚筛查。
@@ -267,6 +291,7 @@ def _execute(
             if counted:
                 planner.record_calls(redis_client, now, counted.count)
         return
+    accounts = _candidate_accounts(state, phase, plan, accounts)
     batch = _batch(step, accounts, now)
     if not batch:
         if not step["deferred"]:
@@ -484,7 +509,11 @@ def plan_step(
                 if phase == "screen_daily":
                     plan.next_daily_at = now + delay
                 if not phase.startswith("screen_"):
-                    batch = _batch(step, valid_accounts, now)
+                    batch = _batch(
+                        step,
+                        _candidate_accounts(state, phase, plan, valid_accounts),
+                        now,
+                    )
                     step["size"] = max(1, step.get("size", BATCH) // 2)
                     if len(batch) == 1:
                         step["deferred"][batch[0]] = (
