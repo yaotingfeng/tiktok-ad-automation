@@ -57,11 +57,20 @@ register_dispatch_task(HEALTH_BC_TASK, "control")
 HEALTH_CHUNK_SIZE = 64
 HEALTH_MAX_CHUNKS = 16
 HEALTH_CYCLE_SECONDS = 120
+HEALTH_STAGE_SECONDS = 3
+HEALTH_FINISH_RESERVE = 0.5
+COVERAGE_STAGES = ("directory", "material")
 FRESHNESS_BATCH_SIZE = 512
 COVERAGE_REFRESH = timedelta(minutes=3)
 COVERAGE_MAX_AGE = timedelta(minutes=5)
 COVERAGE_COUNTS = {"missing_directory_ads", "unlinked_material_posts"}
 COVERAGE_ISSUES = {"COVERAGE_PENDING", "COVERAGE_STALE", "COVERAGE_QUERY_FAILED"}
+
+
+class _CoverageStage(TypedDict):
+    offset: int
+    batch_size: int
+    success_streak: int
 
 
 class _HealthProgress(TypedDict):
@@ -72,8 +81,7 @@ class _HealthProgress(TypedDict):
     metrics: dict[str, Any]
     issues: list[str]
     repairs: dict[str, list[str]]
-    batch_size: int
-    success_streak: int
+    stages: dict[str, _CoverageStage]
     continuation_seq: int
     retry_not_before: str | None
 
@@ -168,7 +176,7 @@ def _missing_directory_ads(session, params):
     ]
 
 
-def _measurement_params(session, plan, *, now, owned, coverage):
+def _measurement_params(session, plan, *, now, owned, coverage, directory=True):
     # 常驻连接的通用计划不知道BC账户数组长度，会放弃日期索引；按本轮参数
     # 规划，避免“重启后快、复用后慢”使健康检查超时。仅作用于当前事务。
     session.connection().execute(text("SET LOCAL plan_cache_mode='force_custom_plan'"))
@@ -176,19 +184,25 @@ def _measurement_params(session, plan, *, now, owned, coverage):
         rule_accounts(
             session, tenant_id=plan.tenant_id, bc_id=plan.bc_id, accounts=owned
         )
-        if coverage
+        if coverage and directory
         else set()
     )
+    active = set(plan.last_active_advertiser_ids)
+    if not coverage:
+        # 已在活跃集合的账户无需重复证明事实存在；其余归属账户仍按原事实口径查询。
+        unknown = sorted(set(owned) - active)
+        for offset in range(0, len(unknown), FRESHNESS_BATCH_SIZE):
+            active |= known_reporting_accounts(
+                session,
+                plan,
+                accounts=unknown[offset : offset + FRESHNESS_BATCH_SIZE],
+                now=now,
+            )
     return {
         "t": plan.tenant_id,
         "bc": plan.bc_id,
         "ids": owned,
-        "active": []
-        if coverage
-        else sorted(
-            set(plan.last_active_advertiser_ids)
-            | known_reporting_accounts(session, plan, accounts=owned, now=now)
-        ),
+        "active": [] if coverage else sorted(active),
         "now": now,
         "cutoff": now - SLO,
         # 全球当地日只可能落在 UTC 前后一天；先走日期索引，再按事实时区精确判断。
@@ -306,16 +320,25 @@ def measure_freshness(session, plan, *, now, accounts=None):
     return metrics, issues, repairs
 
 
-def measure_coverage(session, plan, *, now, accounts=None):
+def measure_coverage(session, plan, *, now, accounts=None, stage=None):
     """有时间标记的完整覆盖快照；分片期间不对外发布部分指标。"""
     owned = owned_accounts(session, plan) if accounts is None else accounts
-    params = _measurement_params(session, plan, now=now, owned=owned, coverage=True)
+    if stage is not None and stage not in COVERAGE_STAGES:
+        raise ValueError("unknown coverage stage")
+    params = _measurement_params(
+        session,
+        plan,
+        now=now,
+        owned=owned,
+        coverage=True,
+        directory=stage != "material",
+    )
     # 逐批完整测量；任一批失败仍向外抛出，不能把部分覆盖标记为健康。
     # 同批广告共享的父对象只读取一次；缺失/过期子层不再探测父层。
     # 用集合回连保留逐广告缺口数，避免数据库低估基数引起父链平方扫描。
     missing = []
     directory_accounts = sorted(set(owned))
-    for offset in range(0, len(directory_accounts), 256):
+    for offset in range(0, len(directory_accounts) if stage != "material" else 0, 256):
         missing.extend(
             _missing_directory_ads(
                 session,
@@ -324,7 +347,7 @@ def measure_coverage(session, plan, *, now, accounts=None):
         )
     # 素材关联同样逐账户主键前缀短探测，避免反连接扫描所有历史映射。
     unlinked = []
-    for offset in range(0, len(directory_accounts), 256):
+    for offset in range(0, len(directory_accounts) if stage != "directory" else 0, 256):
         unlinked.extend(
             session.execute(
                 text("""
@@ -348,10 +371,11 @@ def measure_coverage(session, plan, *, now, accounts=None):
             .mappings()
             .all()
         )
-    metrics = {
-        "missing_directory_ads": len(missing),
-        "unlinked_material_posts": len(unlinked),
-    }
+    metrics = {}
+    if stage != "material":
+        metrics["missing_directory_ads"] = len(missing)
+    if stage != "directory":
+        metrics["unlinked_material_posts"] = len(unlinked)
     return (
         metrics,
         [key for key, value in metrics.items() if value],
@@ -786,7 +810,11 @@ def _health_lock_key(tenant_id, bc_id):
 
 
 def _health_progress_key(tenant_id, bc_id):
-    return f"reporting:health:progress:v2:{tenant_id}:{bc_id}"
+    return f"reporting:health:progress:v3:{tenant_id}:{bc_id}"
+
+
+def _health_batch_hint_key(tenant_id, bc_id):
+    return f"reporting:health:batch-hint:v1:{tenant_id}:{bc_id}"
 
 
 def _health_scope(session, plan, owned, *, now=None):
@@ -823,7 +851,10 @@ def _health_scope(session, plan, owned, *, now=None):
     ).hexdigest()
 
 
-def _new_coverage_progress(scope):
+def _new_coverage_progress(scope, hints=None):
+    sizes = (
+        (hints or {}).get("sizes", {}) if (hints or {}).get("scope") == scope else {}
+    )
     return {
         "cycle": uuid4().hex,
         "scope": scope,
@@ -832,8 +863,16 @@ def _new_coverage_progress(scope):
         "metrics": {},
         "issues": [],
         "repairs": {"ad": [], "material": [], "links": []},
-        "batch_size": HEALTH_CHUNK_SIZE,
-        "success_streak": 0,
+        "stages": {
+            name: {
+                "offset": 0,
+                "batch_size": max(
+                    1, min(HEALTH_CHUNK_SIZE, int(sizes.get(name, HEALTH_CHUNK_SIZE)))
+                ),
+                "success_streak": 0,
+            }
+            for name in COVERAGE_STAGES
+        },
         "continuation_seq": 0,
         "retry_not_before": None,
     }
@@ -852,7 +891,8 @@ def _schedule_coverage(session, plan, redis_client, *, row, scope, now):
             and datetime.fromisoformat(observed) > now - COVERAGE_REFRESH
         ):
             return "COMPLETE"
-        progress = _new_coverage_progress(scope)
+        hints = redis_client.get(_health_batch_hint_key(plan.tenant_id, plan.bc_id))
+        progress = _new_coverage_progress(scope, json.loads(hints) if hints else None)
     if progress.get("retry_not_before") and now < datetime.fromisoformat(
         progress["retry_not_before"]
     ):
@@ -878,6 +918,40 @@ def _enqueue_health_continuation(
     )
 
 
+def _save_coverage_batch_hint(redis_client, plan, progress):
+    # 跨周期只保留同范围的两项批大小；计数、修复集合与观测时间绝不复用。
+    redis_client.set(
+        _health_batch_hint_key(plan.tenant_id, plan.bc_id),
+        json.dumps(
+            {
+                "scope": progress["scope"],
+                "sizes": {
+                    name: stage["batch_size"]
+                    for name, stage in progress["stages"].items()
+                },
+            }
+        ),
+        ex=600,
+    )
+
+
+def _log_coverage_stage(progress, stage, start, end, size, started, deadline, outcome):
+    logger.info(
+        "health coverage cycle=%s stage=%s offset=%s attempted_end=%s saved_offset=%s "
+        "batch_size=%s outcome=%s elapsed=%.3fs cycle_age=%.3fs remaining=%.3fs",
+        progress["cycle"],
+        stage,
+        start,
+        end,
+        progress["stages"][stage]["offset"],
+        size,
+        outcome,
+        monotonic() - started,
+        (datetime.now(UTC) - datetime.fromisoformat(progress["at"])).total_seconds(),
+        max(0, deadline - monotonic()),
+    )
+
+
 def _advance_health(session, plan, redis_client, *, cycle, deadline):
     """分片只保存私有进度；完整范围测完后才发布健康事实和执行修复。"""
     key = _health_progress_key(plan.tenant_id, plan.bc_id)
@@ -896,27 +970,45 @@ def _advance_health(session, plan, redis_client, *, cycle, deadline):
     if progress is None or progress["scope"] != scope:
         redis_client.delete(key)
         return "IGNORED"
-    # v2 只累计覆盖指标，与旧的全指标进度隔离。
-    progress.setdefault("batch_size", HEALTH_CHUNK_SIZE)
-    progress.setdefault("success_streak", 0)
-    progress.setdefault("continuation_seq", 0)
-    progress.setdefault("retry_not_before", None)
     if progress["retry_not_before"] and datetime.now(UTC) < datetime.fromisoformat(
         progress["retry_not_before"]
     ):
         return "WAIT"
     as_of = datetime.fromisoformat(progress["at"])
     total = max(1, len(owned))
-    for _ in range(HEALTH_MAX_CHUNKS):
-        if progress["offset"] >= total or deadline - monotonic() < 3:
+    # 原16个账户块各含两种测量，仍允许32个阶段批；不把上限误砍成8个完整块。
+    for _ in range(HEALTH_MAX_CHUNKS * len(COVERAGE_STAGES)):
+        if (
+            progress["offset"] >= total
+            or deadline - monotonic() < HEALTH_STAGE_SECONDS + HEALTH_FINISH_RESERVE
+        ):
             break
-        end = min(total, progress["offset"] + progress["batch_size"])
-        # SAVEPOINT 只包本批；失败时已成功批次仍可从 Redis 恢复，不跳过失败账户。
+        stage_name = min(
+            COVERAGE_STAGES, key=lambda name: progress["stages"][name]["offset"]
+        )
+        stage = progress["stages"][stage_name]
+        start = stage["offset"]
+        before_size = stage["batch_size"]
+        end = min(total, start + before_size)
+        # SAVEPOINT只包本阶段。另一阶段的紧凑汇总已经保存，不因末阶段取消而重读。
         batch_started = monotonic()
         try:
-            with session.begin_nested(), query_budget(session, seconds=3):
+            with (
+                session.begin_nested(),
+                query_budget(
+                    session,
+                    seconds=min(
+                        HEALTH_STAGE_SECONDS,
+                        deadline - monotonic() - HEALTH_FINISH_RESERVE,
+                    ),
+                ),
+            ):
                 metrics, issues, repairs = measure_coverage(
-                    session, plan, now=as_of, accounts=owned[progress["offset"] : end]
+                    session,
+                    plan,
+                    now=as_of,
+                    accounts=owned[start:end],
+                    stage=stage_name,
                 )
         except (DBAPIError, QueryBudgetExceeded) as error:
             if (
@@ -924,9 +1016,9 @@ def _advance_health(session, plan, redis_client, *, cycle, deadline):
                 and getattr(error.orig, "sqlstate", None) != "57014"
             ):
                 raise
-            attempted = end - progress["offset"]
-            progress["batch_size"] = max(1, attempted // 2)
-            progress["success_streak"] = 0
+            attempted = end - start
+            stage["batch_size"] = max(1, attempted // 2)
+            stage["success_streak"] = 0
             # 单账户已无法再拆；不跳账户，也不让重复消息绕过冷却形成忙循环。
             progress["retry_not_before"] = (
                 (datetime.now(UTC) + timedelta(seconds=60)).isoformat()
@@ -934,6 +1026,17 @@ def _advance_health(session, plan, redis_client, *, cycle, deadline):
                 else None
             )
             redis_client.set(key, json.dumps(progress), ex=180)
+            _save_coverage_batch_hint(redis_client, plan, progress)
+            _log_coverage_stage(
+                progress,
+                stage_name,
+                start,
+                end,
+                before_size,
+                batch_started,
+                deadline,
+                "deferred",
+            )
             raise _HealthBatchTimeout(progress["cycle"]) from error
         batch_seconds = monotonic() - batch_started
         accumulated = progress["metrics"]
@@ -954,19 +1057,32 @@ def _advance_health(session, plan, redis_client, *, cycle, deadline):
             progress["repairs"][name] = sorted(
                 set(progress["repairs"][name]) | accounts
             )
-        progress["offset"] = end
+        stage["offset"] = end
+        progress["offset"] = min(part["offset"] for part in progress["stages"].values())
         progress["retry_not_before"] = None
         # 成功不等于仍有扩批余量；贴近3秒期限的批次继续倍增会反复取消并重读。
         # 慢成功已计入完整进度，只缩小下一批；仅连续两批不超过1秒才恢复扩批。
         if batch_seconds > 1.5:
-            progress["batch_size"] = max(1, progress["batch_size"] // 2)
-        progress["success_streak"] = (
-            progress["success_streak"] + 1 if batch_seconds <= 1 else 0
+            stage["batch_size"] = max(1, stage["batch_size"] // 2)
+        stage["success_streak"] = (
+            stage["success_streak"] + 1 if batch_seconds <= 1 else 0
         )
-        if progress["success_streak"] >= 2:
-            progress["batch_size"] = min(HEALTH_CHUNK_SIZE, progress["batch_size"] * 2)
-            progress["success_streak"] = 0
+        if stage["success_streak"] >= 2:
+            stage["batch_size"] = min(HEALTH_CHUNK_SIZE, stage["batch_size"] * 2)
+            stage["success_streak"] = 0
         redis_client.set(key, json.dumps(progress), ex=180)
+        if stage["batch_size"] != before_size:
+            _save_coverage_batch_hint(redis_client, plan, progress)
+        _log_coverage_stage(
+            progress,
+            stage_name,
+            start,
+            end,
+            before_size,
+            batch_started,
+            deadline,
+            "completed",
+        )
     if progress["offset"] < total:
         _enqueue_health_continuation(session, plan, redis_client, progress)
         return "CONTINUE"
@@ -1063,9 +1179,19 @@ def run_bc_health(*, database_engine, redis_client, context, bc_id, cycle=None):
                         session, plan, redis_client, row=row, scope=scope, now=now
                     )
                 else:
-                    result = _advance_health(
-                        session, plan, redis_client, cycle=cycle, deadline=deadline
-                    )
+                    with query_budget(session, seconds=max(0, deadline - monotonic())):
+                        result = _advance_health(
+                            session, plan, redis_client, cycle=cycle, deadline=deadline
+                        )
+            if cycle is not None:
+                # COMPLETE 只在事务提交后记录；阶段完成日志不代表完整覆盖已发布。
+                logger.info(
+                    "health coverage cycle=%s result=%s tenant=%s bc=%s elapsed=%.3fs",
+                    cycle,
+                    result,
+                    *key,
+                    monotonic() - (deadline - 10),
+                )
             if result == "COMPLETE" and cycle is not None:
                 # 数据库提交成功后才删除进度；提交失败/进程崩溃可重试完整发布。
                 redis_client.delete(_health_progress_key(*key))
@@ -1073,7 +1199,12 @@ def run_bc_health(*, database_engine, redis_client, context, bc_id, cycle=None):
         except DomainError:
             raise
         except Exception as error:
-            logger.exception("sync health check failed tenant=%s bc=%s", *key)
+            logger.exception(
+                "sync health check failed tenant=%s bc=%s cycle=%s elapsed=%.3fs",
+                *key,
+                cycle,
+                monotonic() - (deadline - 10),
+            )
             # 失败不覆盖上次完整指标；只改变本 BC 的失败可见状态。
             with Session(database_engine) as session, session.begin():
                 session.connection().execute(text("SET LOCAL statement_timeout='5s'"))

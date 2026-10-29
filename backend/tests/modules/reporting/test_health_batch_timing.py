@@ -56,8 +56,11 @@ def test_slow_success_shrinks_next_batch_without_discarding_measured_accounts(
         cycle = json.loads(redis_client.get(key))["cycle"]
         assert health.run_bc_health(**args, cycle=cycle) == "CONTINUE"
         progress = json.loads(redis_client.get(key))
-        assert progress["offset"] == 64 and progress["batch_size"] == expected
-        assert progress["success_streak"] == 0
+        assert (
+            progress["offset"] == 64
+            and progress["stages"]["directory"]["batch_size"] == expected
+        )
+        assert progress["stages"]["directory"]["success_streak"] == 0
         with factory() as session:
             metrics = session.get(ReportSyncHealth, (seed.tenant_id, "bc-a")).metrics
             assert metrics["prior_complete"] == 1
@@ -81,14 +84,21 @@ def test_only_fast_consecutive_successes_regrow_a_reduced_batch(
         assert health.run_bc_health(**args, cycle=cycle) == "CONTINUE"
         progress = json.loads(redis_client.get(key))
         original_at = progress["at"]
-        progress.update(batch_size=16, success_streak=0)
+        for stage in progress["stages"].values():
+            stage.update(batch_size=16, success_streak=0)
         redis_client.set(key, json.dumps(progress), ex=180)
         duration[0] = elapsed
         assert health.run_bc_health(**args, cycle=cycle) == "CONTINUE"
-        assert json.loads(redis_client.get(key))["success_streak"] == first_streak
+        assert (
+            json.loads(redis_client.get(key))["stages"]["directory"]["success_streak"]
+            == first_streak
+        )
         assert health.run_bc_health(**args, cycle=cycle) == "CONTINUE"
         progress = json.loads(redis_client.get(key))
-        assert progress["offset"] == 96 and progress["batch_size"] == expected
+        assert (
+            progress["offset"] == 96
+            and progress["stages"]["directory"]["batch_size"] == expected
+        )
         _finish(args, key, factory, seed, redis_client, duration, original_at)
     finally:
         redis_client.delete(key)

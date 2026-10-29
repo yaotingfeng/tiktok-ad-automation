@@ -752,8 +752,15 @@ def _defer_plan(plan, retry_at):
         setattr(plan, field, max(getattr(plan, field), retry_at))
 
 
-def _plan_directory_step(session, plan, *, accounts, now):
-    """稳定账户ID游标；成功批次才推进，单个慢账户退避后不阻挡其余账户。"""
+def _plan_directory_step(session, plan, *, accounts, now, budget=None):
+    """逐账户保存点合作让出；成功任务与前缀游标同事务提交，慢尾户不撤销前项。"""
+    started = time.monotonic()
+    budget = min(
+        DIRECTORY_PLAN_SECONDS, budget if budget is not None else DIRECTORY_PLAN_SECONDS
+    )
+    # 内外不能同时打满3秒：外层还需保存目录游标/阶段状态并提交。
+    work_budget = max(0, budget - 0.3)
+    work_stop = started + work_budget
     # 撤销固定分钟门槛，只清理其私有标记，保留目录游标及其他业务进度。
     if "directory_batch_not_before_v1" in plan.screening_progress:
         plan.screening_progress = {
@@ -790,13 +797,18 @@ def _plan_directory_step(session, plan, *, accounts, now):
     deferred = {a: at for a, at in state.get("deferred", {}).items() if a in owned}
     retry = sorted(a for a, at in deferred.items() if datetime.fromisoformat(at) <= now)
     fresh = [a for a in accounts if a > state["after"] and a not in deferred]
-    size = max(1, min(DIRECTORY_PLAN_ACCOUNTS, int(state["batch_size"])))
-    batch = (retry + fresh)[:size]
-    if batch:
+    # 64只是单轮上限，不因上一轮尾部耗尽永久缩小；实际能做多少由剩余时间决定。
+    state["batch_size"] = DIRECTORY_PLAN_ACCOUNTS
+    batch = (retry + fresh)[:DIRECTORY_PLAN_ACCOUNTS]
+    completed = 0
+    for account in batch:
+        remaining_budget = work_stop - time.monotonic()
+        if remaining_budget < 0.1:
+            break  # 未开始账户继续留在原游标之后，不误记为失败或完成。
         try:
             with (
                 session.begin_nested(),
-                query_budget(session, seconds=DIRECTORY_PLAN_SECONDS),
+                query_budget(session, seconds=remaining_budget),
             ):
                 due = directory_unblocked_accounts(
                     session,
@@ -804,7 +816,7 @@ def _plan_directory_step(session, plan, *, accounts, now):
                     bc_id=plan.bc_id,
                     actor_id=plan.actor_id,
                     frozen_route=plan.frozen_route,
-                    advertiser_ids=batch,
+                    advertiser_ids=[account],
                     now=now,
                 )
                 request_directory(
@@ -817,8 +829,7 @@ def _plan_directory_step(session, plan, *, accounts, now):
                     scope="directory",
                     now=now,
                     periodic_intervals={
-                        account: calibration_interval(plan, account, now)
-                        for account in due
+                        item: calibration_interval(plan, item, now) for item in due
                     },
                     ad_types=directory_ad_types(
                         session,
@@ -829,28 +840,45 @@ def _plan_directory_step(session, plan, *, accounts, now):
                 )
                 session.flush()
         except (DBAPIError, QueryBudgetExceeded) as error:
-            if (
-                isinstance(error, DBAPIError)
-                and getattr(error.orig, "sqlstate", None) != "57014"
-            ):
+            sqlstate = getattr(getattr(error, "orig", None), "sqlstate", None)
+            if isinstance(error, DBAPIError) and sqlstate not in {
+                "57014",
+                "55P03",
+                "40P01",
+            }:
                 raise
-            state["batch_size"] = max(1, size // 2)
-            if len(batch) == 1:
-                # 失败账户仍持久保留为未完成；只让其他账户继续，不将其伪记为完成。
-                deferred[batch[0]] = (now + timedelta(minutes=5)).isoformat()
+            lock_conflict = sqlstate in {"55P03", "40P01"}
+            # 用配置完整片判定；外层只剩2秒时首户也只是短片，不能误罚五分钟。
+            full_account_slice = remaining_budget >= DIRECTORY_PLAN_SECONDS - 0.3 - 0.1
+            if lock_conflict or full_account_slice:
+                # 锁争用短退避；真正占满单户完整片的账户保留原五分钟延期。
+                deferred[account] = (
+                    now + timedelta(seconds=5)
+                    if lock_conflict
+                    else now + timedelta(minutes=5)
+                ).isoformat()
             logger.warning(
-                "directory planning batch deferred: tenant=%s bc=%s accounts=%s",
+                "directory planning account deferred: tenant=%s bc=%s account=%s budget=%.3f tail=%s",
                 plan.tenant_id,
                 plan.bc_id,
-                len(batch),
+                account,
+                remaining_budget,
+                not lock_conflict and not full_account_slice,
             )
+            if not lock_conflict:
+                break  # 尾部不足不惩罚该户，下轮从此处继续；前项仍在外层事务内。
         else:
-            advanced = [a for a in batch if a not in deferred]
-            if advanced:
-                state["after"] = max(state["after"], *advanced)
-            for advertiser in batch:
-                deferred.pop(advertiser, None)
-            state["batch_size"] = min(DIRECTORY_PLAN_ACCOUNTS, size * 2)
+            state["after"] = max(state["after"], account)
+            deferred.pop(account, None)
+            completed += 1
+    logger.info(
+        "directory planning batch yielded: tenant=%s bc=%s candidates=%d completed=%d remaining_ms=%.1f",
+        plan.tenant_id,
+        plan.bc_id,
+        len(batch),
+        completed,
+        max(0, budget - (time.monotonic() - started)) * 1000,
+    )
     state["deferred"] = deferred
     remaining = [a for a in accounts if a > state["after"] and a not in deferred]
     if not remaining and not deferred:
