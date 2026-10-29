@@ -271,6 +271,51 @@ def _known_ids(session: Session, source: ExecutionStep) -> set[str]:
     return result
 
 
+def _reusable_cta(
+    session: Session, source: ExecutionStep, unit: BuildUnit
+) -> ExecutionStep | None:
+    """同一冻结预览、账户和连接内找完整相同的 CTA；候选还必须远端回读。"""
+    candidates = session.exec(
+        select(ExecutionStep)
+        .join(
+            BuildUnit,
+            (col(BuildUnit.id) == ExecutionStep.unit_id)
+            & (col(BuildUnit.tenant_id) == ExecutionStep.tenant_id),
+        )
+        .where(
+            ExecutionStep.tenant_id == source.tenant_id,
+            ExecutionStep.preview_id == source.preview_id,
+            ExecutionStep.bc_id == source.bc_id,
+            ExecutionStep.kind == "CTA",
+            ExecutionStep.status == "SUCCEEDED",
+            col(ExecutionStep.mismatch).is_(False),
+            ExecutionStep.request_body_digest == source.request_body_digest,
+            col(ExecutionStep.remote_id).is_not(None),
+            BuildUnit.advertiser_id == unit.advertiser_id,
+            BuildUnit.connection_id == unit.connection_id,
+        )
+        .order_by(col(ExecutionStep.id))
+        .limit(20)
+    ).all()
+    for candidate in candidates:
+        if candidate.request_body == source.request_body and _known_ids(
+            session, candidate
+        ) == {candidate.remote_id}:
+            receipt = session.exec(
+                select(StepEvidence.id)
+                .where(
+                    StepEvidence.tenant_id == source.tenant_id,
+                    StepEvidence.step_id == candidate.id,
+                    col(StepEvidence.conclusion).in_(("CREATED", "RECONCILED")),
+                    StepEvidence.summary["remote_id"].astext == candidate.remote_id,
+                )
+                .limit(1)
+            ).first()
+            if receipt is not None:
+                return candidate
+    return None
+
+
 def _evidence(
     session: Session,
     step: ExecutionStep,
@@ -437,13 +482,18 @@ def _claim(
         session.add(step)
         return ReconciliationResult("UNKNOWN")
     known = _known_ids(session, source)
-    if len(known) > 1 or source.kind == "CTA" and not known:
+    reusable = (
+        _reusable_cta(session, source, unit)
+        if source.kind == "CTA" and not known
+        else None
+    )
+    if len(known) > 1 or source.kind == "CTA" and not known and reusable is None:
         _unknown(
             step, "conflicting_remote_receipt" if len(known) > 1 else "cta_unknown_id"
         )
         session.add(step)
         return ReconciliationResult("UNKNOWN")
-    remote_id = next(iter(known), None)
+    remote_id = next(iter(known), None) or (reusable.remote_id if reusable else None)
     progress = dict(step.resolved.get("reconciliation") or {})
     if (
         progress.get("digest") != digest
@@ -460,6 +510,8 @@ def _claim(
             "matches": 0,
             "stage": "OBJECT",
         }
+    if reusable is not None:
+        progress["reused_cta_step_id"] = str(reusable.id)
     token = uuid4()
     step.attempt += 1
     attempt_id = save_attempt_context(session, step=step)
@@ -728,6 +780,15 @@ def _finish(
             candidate_value if isinstance(candidate_value, dict) else {}
         )
         status = candidate.get("operation_status")
+        # 复用不同创建步骤的 CTA 必须完全匹配；不能像原对象核查那样
+        # 把不匹配对象记录为已创建后继续唤醒下游。
+        if (
+            claim.progress.get("reused_cta_step_id")
+            and candidate.get("comparison") != "MATCH"
+        ):
+            _unknown(step, "cta_reuse_mismatch")
+            session.add_all([step, source])
+            return _remember(step, ReconciliationResult("UNKNOWN"))
         if (
             result != "COMPLETE"
             or claim.kind != "CTA"
@@ -762,7 +823,15 @@ def _finish(
             source,
             claim=claim,
             conclusion="RECONCILED",
-            summary={"remote_id": candidate["remote_id"], "mismatch": mismatch},
+            summary={
+                "remote_id": candidate["remote_id"],
+                "mismatch": mismatch,
+                **(
+                    {"reused_cta_step_id": claim.progress["reused_cta_step_id"]}
+                    if claim.progress.get("reused_cta_step_id")
+                    else {}
+                ),
+            },
             request_id=page.evidence.request_id,
         )
         return _remember(

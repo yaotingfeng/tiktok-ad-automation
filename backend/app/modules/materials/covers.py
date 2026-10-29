@@ -2001,7 +2001,9 @@ def repair_cover_dispatches(session: Session, *, limit: int = 100) -> int:
     return count
 
 
-# 自动接续只覆盖近期产生的卡住任务：再久的历史结果交给人工核查入口，
+# 自动接续覆盖近期产生或刚开始发送的任务：排队超过两小时不应让
+# 刚发出的共享失去恢复窗口；读取不会更新 armed 时间，仍不会无限续期。
+# 再久的历史结果交给人工核查入口，
 # 避免对早已废弃的素材无限读取。
 AUTO_RECOVERY_AGE = timedelta(hours=2)
 AUTO_RECOVERY_BACKOFF = timedelta(minutes=2)
@@ -2021,7 +2023,10 @@ def recover_stalled_covers(session: Session, *, limit: int = 100) -> int:
         select(MaterialCoverJob)
         .where(
             col(MaterialCoverJob.superseded_by_id).is_(None),
-            col(MaterialCoverJob.created_at) >= now - AUTO_RECOVERY_AGE,
+            or_(
+                col(MaterialCoverJob.created_at) >= now - AUTO_RECOVERY_AGE,
+                col(MaterialCoverJob.request_armed_at) >= now - AUTO_RECOVERY_AGE,
+            ),
             MaterialCoverJob.repair_after <= now,
             col(MaterialCoverJob.dispatch_id).is_(None),
             or_(

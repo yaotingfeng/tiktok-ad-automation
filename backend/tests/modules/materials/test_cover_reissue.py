@@ -143,15 +143,16 @@ def test_explicitly_rejected_build_share_gets_new_generation_without_reusing_att
         )
 
 
+@pytest.mark.parametrize("code", ["cover_result_unknown", "cover_schema_unsupported"])
 @pytest.mark.parametrize("has_request_id", [False, True])
 def test_authorized_unknown_build_share_uses_target_upload_generation(
-    executable, redis_client, has_request_id
+    executable, redis_client, has_request_id, code
 ):
     step_id, old_id, submission_id = rejected_build(executable, redis_client)
     with Session(executable[0]) as db, db.begin():
         old = db.get(MaterialCoverJob, old_id)
         batch = db.get(MaterialCoverShareBatch, old.share_batch_id)
-        old.status, old.error_code = "UNKNOWN", "cover_result_unknown"
+        old.status, old.error_code = "UNKNOWN", code
         batch.status, batch.error_code = "UNKNOWN", "cover_result_unknown"
         batch.failed_infos = {}
         batch.request_id = "unknown-share-request" if has_request_id else None

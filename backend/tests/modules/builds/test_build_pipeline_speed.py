@@ -289,3 +289,29 @@ def test_material_settlement_starts_cover_before_ad(executable):
             unit.advertiser_id,
         )
         assert job.status == "PENDING" and job.dispatch_id is not None
+
+
+def test_old_cover_just_sent_keeps_its_readonly_recovery_window(
+    executable, redis_client
+):
+    db = executable[0]
+    _, _, job_id, _ = ready_ad_with_cover_job(
+        executable, redis_client, cover_status="UNKNOWN"
+    )
+    with Session(db) as session, session.begin():
+        job = session.get(MaterialCoverJob, job_id)
+        job.created_at = datetime.now(UTC) - timedelta(hours=6)
+        job.request_armed_at = datetime.now(UTC) - timedelta(minutes=1)
+        job.repair_after = datetime.now(UTC) - timedelta(seconds=1)
+        from app.modules.builds.execution import _cover_recovering
+
+        assert _cover_recovering(job)
+    with Session(db) as session, session.begin():
+        assert covers.recover_stalled_covers(session) == 1
+    with Session(db) as session:
+        job = session.get(MaterialCoverJob, job_id)
+        assert job.status == "VERIFYING"
+        assert (
+            session.get(PendingDispatch, job.dispatch_id).task_name
+            == "materials.verify_cover"
+        )

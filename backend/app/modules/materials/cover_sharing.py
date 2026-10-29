@@ -1564,6 +1564,15 @@ def run_shared_cover(
                     active[identity] = job
             retry = (
                 isinstance(error, AccountAdmissionDeferred)
+                # 共享刚完成时图片搜索索引可能暂时返回不完整分页。
+                # 只重试已 armed 批次的读取，保留全部发送身份，最多三次；
+                # 绝不因为读取格式异常重新发送共享或绕过完整性校验。
+                or (
+                    unknown
+                    and phase == "scan"
+                    and code == "cover_schema_unsupported"
+                    and all(job.failure_count < 3 for job in active.values())
+                )
                 or (isinstance(error, DomainError) and error.retryable and not unknown)
                 or (
                     isinstance(error, RemoteCallError)
