@@ -114,5 +114,8 @@ def test_health_states_use_one_bounded_probe_per_account(session, sync_seed):
             for i in range(len(accounts))
         )
     )
-    assert rows <= 2 * len(accounts) + 2 * grace_accounts
+    # EXPLAIN 的 Actual Rows 是每次循环的取整平均值；混合时区下
+    # 实际约2.5行会显示3，乘回1000次不能当作精确3000行。
+    # 容许每次半行的显示误差；旧实现每账户固定读两天仍超过此上限。
+    assert rows <= 2 * len(accounts) + 2 * grace_accounts + visits / 2
     assert visits <= len(accounts)
