@@ -34,6 +34,8 @@
 
 **前置审阅交接：** P2-T1 的 `CreativeUnitContent` 当前仅供图片算法使用；切换 VIDEO 单元生产者前，补齐与数据库一致的 VIDEO 音乐约束（`NOT_REQUIRED` 且 `music_id` 为空），以 schema 行为测试关闭该已登记次要项。
 
+**界面审阅交接：** P2-T5 的本次结构控件文案在本任务同步明确：`creative_count` 显示“每基础广告文案版本数 K”，`max_materials_per_ad` 显示“每广告最多创意单元 M”，FIXED 模式不显示无效 M。
+
 **Files:** 修改 `backend/app/modules/strategies/structure.py`、`builds/previews.py`、`preview_validation.py`、`scene.py`、`scene_constraints.py`、`scene_schemas.py`、`strategies/schemas.py`；更新 `frontend/src/features/strategies/StrategyStructureExample.tsx` 和 `frontend/src/features/builds/PreviewWorkspace.tsx`；扩展 `backend/tests/modules/strategies/test_structure.py`、`backend/tests/modules/builds/test_structure_preview.py`、`scene/test_scene_route_versions.py`。
 
 **Interfaces:** 将结构输入重命名为 `NamedCreativeUnit.unit_id`，输出 `AdCreativePlan.unit_ids` 和 `GroupCreativePlan.unit_ids`；`plan_structure(units, *, config, pool, seed)` 保留原签名风格与分配顺序。接入 P2-T5 提供的 `effective_structure_config(strategy_version, draft_override) -> StrategyConfig` 只允许结构字段，不把预算/身份混入该patch。场景scope纳入 media_kind 和合同版本。
@@ -55,6 +57,8 @@
 - [ ] 聚焦提交并同步展示字段，不在本任务迁移真实环境。
 
 ### P3-T3：逐账户准备、发送与恢复
+
+**来源重试交接：** 同时修复 P1-T3 登记的来源占用账本次要项：`image_distribution.request_image_retry` 对确定未发送失败进行重试时，须通过共享 helper 恰好一次恢复此前 `_close_unsent` 已释放的 `SourceAccountLoad.in_flight/source_slot_held`；成功/终止释放恰好一次，UNKNOWN 仍只读核查。加入失败→重试→成功和重复重试的本地行为测试，不改变准入策略。
 
 **Files:** 修改 `backend/app/modules/builds/execution.py`、`material_execution.py`、`recovery.py`、`cover_execution.py`、`submissions.py`、`preview_materials.py`，新建 `carousel_readiness.py`；新增 `backend/tests/modules/builds/test_carousel_execution.py`、`test_carousel_recovery.py`；扩展 `frontend/src/features/builds/SubmissionTables.tsx`、`presentation.tsx`。
 

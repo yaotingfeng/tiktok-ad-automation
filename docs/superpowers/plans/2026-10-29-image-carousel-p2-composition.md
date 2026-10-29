@@ -93,7 +93,7 @@
 
 界面入口、按钮和保存时机按[操作说明](../specs/2026-10-29-image-carousel-ui-flow.md)落实：先「查看生成结果」，再「应用并生成」；图片编辑暂存在卡片，点「保存图片调整」才写入；选曲点「使用这首音乐」才写入；侧栏关闭不能隐式保存未确认编辑。定向 E2E 补齐取消、未保存离开及待处理时预览禁用。
 
-- [ ] 将 image-composition 和后续 image-delivery 两个文件名加入 Playwright 的 workspaceSpecs，沿用工作台传输边界模拟。浏览器用例断言一次配置多剧、字段覆盖/恢复、61图单图尾部待配乐、批量改曲、取消差异不改原结果、手动保护保留、冲突解决、失败重试、页面刷新恢复进度。运行 `bunx playwright test tests/image-composition.spec.ts --project=workspace` 观察业务断言的预期失败，不以真实登录 setup 失败代替。
-- [ ] 构建“整批规则→应用并生成→按剧摘要→只处理问题”界面；所有新增布局使用现有 shadcn 和黑色主按钮；无音乐ID/请求协议术语暴露给普通用户。
-- [ ] 服务端返回不可提交时禁用生成可提交预览；试算理论数标未核验，不能显示成最终广告数。复制另一媒体类型创建新草稿，不覆盖当前草稿。
-- [ ] 根目录生成客户端，跑定向 E2E、`tests/materials.spec.ts`、`tests/build-preview.spec.ts` 和前端构建；更新阶段进度后提交。P2 不执行真实广告发布。
+- [x] 将 image-composition 和后续 image-delivery 两个文件名加入 Playwright 的 workspaceSpecs，沿用工作台传输边界模拟。浏览器用例断言一次配置多剧、字段覆盖/恢复、61图单图尾部待配乐、批量改曲、取消差异不改原结果、手动保护保留、冲突解决、失败重试、页面刷新恢复进度。运行 `bunx playwright test tests/image-composition.spec.ts --project=workspace` 观察业务断言的预期失败，不以真实登录 setup 失败代替。
+- [x] 构建“整批规则→应用并生成→按剧摘要→只处理问题”界面；所有新增布局使用现有 shadcn 和黑色主按钮；无音乐ID/请求协议术语暴露给普通用户。
+- [x] 服务端返回不可提交时禁用生成可提交预览；试算理论数标未核验，不能显示成最终广告数。复制另一媒体类型创建新草稿，不覆盖当前草稿。
+- [x] 根目录生成客户端，跑定向 E2E、`tests/materials.spec.ts`、`tests/build-preview.spec.ts` 和前端构建；更新阶段进度后提交。P2 不执行真实广告发布。
