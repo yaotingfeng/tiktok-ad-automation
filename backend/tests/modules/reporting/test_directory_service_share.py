@@ -53,12 +53,13 @@ def test_continuous_old_identity_flow_reserves_half_for_status(
 
 
 @pytest.mark.parametrize("occupied", ["status", "identity"])
+@pytest.mark.parametrize("inflight", [16, 31])
 def test_single_refill_honors_share_with_claims_and_batch_one(
-    session, sync_seed, monkeypatch, occupied
+    session, sync_seed, monkeypatch, occupied, inflight
 ):
     now = datetime.now(UTC)
     monkeypatch.setattr(job_tasks, "DIRECTORY_DISPATCH_BATCH", 1)
-    for _ in range(31):
+    for _ in range(inflight):
         run = pending(session, sync_seed, occupied, now, old=True)
         run.status, run.claimed_until = "RUNNING", now + timedelta(minutes=1)
     pending(session, sync_seed, occupied, now, old=True)

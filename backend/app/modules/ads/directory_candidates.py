@@ -179,8 +179,10 @@ WITH active AS MATERIALIZED (
   FROM reserved_services a
 ), chosen AS (
   SELECT p.* FROM pool_ranked p CROSS JOIN capacity
-  WHERE pool_rn<=CASE WHEN targeted THEN live_available ELSE background_available END
-  ORDER BY reserved DESC,rn,last_dispatched_at ASC NULLS FIRST,targeted DESC,creative_last,created_at,id
+  -- 先在各池内裁到本批最多可派数量，保底不会因全局batch缩小而失效。
+  -- 池间再遵循租户轮次，不能把“保底”放到租户排序前而连派同一租户。
+  WHERE pool_rn<=least(:batch_limit,CASE WHEN targeted THEN live_available ELSE background_available END)
+  ORDER BY rn,last_dispatched_at ASC NULLS FIRST,targeted DESC,creative_last,created_at,id
   LIMIT :batch_limit
 )
 SELECT chosen.id,capacity.background_available,capacity.live_available
