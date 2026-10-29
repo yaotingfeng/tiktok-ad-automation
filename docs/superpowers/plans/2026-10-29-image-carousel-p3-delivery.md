@@ -49,6 +49,8 @@
 
 **Files:** 修改 `backend/app/modules/builds/preview_models.py`、`previews.py`、`preview_materials.py`、`request_compiler.py`（含现有 ad_assets 函数）、`readback_compare.py`、`scene.py`、`contracts/builds.py`（完整路径为 `backend/app/integrations/tiktok/contracts/builds.py`）；新增 `creative_units.py`、迁移 `*_frozen_creative_units.py`；新增 `backend/tests/modules/builds/test_carousel_freeze.py`、`test_carousel_compiler.py`。
 
+**规模与读取交接：** 同一草稿锁内以集合式 SQL 保存创意/成员快照及有序摘要，不逐单元查询或 flush；以真实 PostgreSQL 万张图片样例验证查询规模与一致性。所有现行读取、提交展开 SQL 和执行范围触发器通过显式合同版本读取冻结事实，不双写旧表。V2 大分组详情采用准确总数、明确命名的样例以及有界的组内广告分页，单条返回广告包含完整创意单元与图片；界面展示总数并支持翻页，不沿用100素材/100广告等任意组级展示限制，不将截断列表当作完整意图。相关 API/schema/生成客户端及 PreviewWorkspace 在本任务联动，V1 历史只读路径保持明确。
+
 **Interfaces:** `VideoCreative(kind=VIDEO, video_id, cover_image_id)` 与 `CarouselCreative(kind=CAROUSEL, image_ids: tuple[str,...], music_id)` 严格判别联合。`frozen_ad_creative_units(session, tenant_id, preview_id, drama_id, group_no, base_ad_no)` 返回有序冻结单元；冻结单元子项包含 material_id/content_digest/music/version，目标ID通过冻结路由映射。新V2正文与历史V1区分，不从缺字段猜类型。
 
 - [ ] 测试0/36图、缺曲、轮播带video_info拒绝；1/3/35图合法合同；换音乐/顺序改变摘要；同图不同曲保留两项；冻结后原图改名/预设升级不改变正文。运行 `uv run pytest tests/modules/builds/test_carousel_freeze.py tests/modules/builds/test_carousel_compiler.py -q` 观察失败。
@@ -61,6 +63,8 @@
 **来源重试交接：** 同时修复 P1-T3 登记的来源占用账本次要项：`image_distribution.request_image_retry` 对确定未发送失败进行重试时，须通过共享 helper 恰好一次恢复此前 `_close_unsent` 已释放的 `SourceAccountLoad.in_flight/source_slot_held`；成功/终止释放恰好一次，UNKNOWN 仍只读核查。加入失败→重试→成功和重复重试的本地行为测试，不改变准入策略。
 
 **Files:** 修改 `backend/app/modules/builds/execution.py`、`material_execution.py`、`recovery.py`、`cover_execution.py`、`submissions.py`、`preview_materials.py`，新建 `carousel_readiness.py`；新增 `backend/tests/modules/builds/test_carousel_execution.py`、`test_carousel_recovery.py`；扩展 `frontend/src/features/builds/SubmissionTables.tsx`、`presentation.tsx`。
+
+**V2 交接：** P3-T2 先完成冻结内容与只读展示，P3-T3 将已知目标失败从整部剧×账户的 `BuildUnit` 细化到每条原定广告。冻结每广告排除原因并纳入摘要，提交展开、广告计数和预算必须使用同一事实；独立广告继续，不能因一张目标图失败排除同账户的全部广告。必要时新增小范围迁移，不改写历史冻结正文。同步接通图片草稿“生成搭建预览”的实际就绪条件，移除阶段性恒禁用占位；目标资格未核验仍明确阻断相应账户，不能伪造可投资格。
 
 **Interfaces:** `verify_carousel_ad(route: FrozenTikTokRoute, advertiser_id: str, units: tuple[CarouselCreative,...], attempt_id: UUID) -> CarouselReadiness`。结果包含逐单元图片/曲目问题，禁止返回一个删减版units；成功才编译原冻结集合。P1负责资产调用，P2音乐只供已选ID，不调用recommend。
 
