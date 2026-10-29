@@ -134,6 +134,7 @@ def main():
                                 None,
                             )
                         )
+    failed = pods.returncode != 0
     for filename, command, content in commands:
         target = output / (stamp + "-" + filename)
         with target.open("w") as out:
@@ -148,13 +149,23 @@ def main():
                     timeout=90,
                 )
                 status = result.returncode
-            except subprocess.TimeoutExpired:
+                error_output = result.stderr
+            except subprocess.TimeoutExpired as error:
                 status = "timeout"
+                error_output = error.stderr or "kubectl capture timed out"
+                if isinstance(error_output, bytes):
+                    error_output = error_output.decode(errors="replace")
+        # 传输/Pod 切换失败也必须留证，不能只保存空快照。私有目录沿用0600。
+        if error_output:
+            target.with_suffix(target.suffix + ".stderr").write_text(error_output)
+        failed = failed or status != 0
         manifest["files"].append(
             {"file": target.name, "exit": status, "bytes": target.stat().st_size}
         )
     (output / (stamp + "-manifest.json")).write_text(json.dumps(manifest, indent=2))
     print(json.dumps(manifest, indent=2))
+    if failed:
+        raise SystemExit(1)
 
 
 if __name__ == "__main__":

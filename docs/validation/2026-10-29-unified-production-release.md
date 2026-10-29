@@ -15,3 +15,15 @@
 ## 验证
 
 此前搭建、诊断、目录与报表回归详见各自验证记录。新增整合验证：真实 PG/Redis 的草稿准备/清理/投递组合60通过，旧 outbox 精确消息断言补上诊断 header 后单独复验；小程序浏览器10个原有用例及1个新刷新用例通过；前端正式/演示构建、Ruff、ty及人工脚本帮助通过。正式生产结果在本页后续追加。
+
+## 实际发布结果（北京时间 22:20 完成，22:24 业务回读）
+
+生产镜像 `afe47cb5deb95b6cc37c8ed89aedbfb82692bc58`，摘要 `sha256:a5f1d269b49ddbd3f7a719c6f80ebaccd570e0db8be5bc69f66dae3040b66bc5`。公司/GitHub main 已推送。本批11角色全部Ready、单Beat、HTTPS、逐角色运行配置/开关/数据库池核对通过；四开关仍true，schema保持0045。正常终止原Pod后零副本换镜像，避免新旧Worker叠加连接；没有备份、恢复演练或额外全量队列排空。发布锁已正常释放。同SHA推送触发的 Jenkins #163 在全量检查阶段取消，防止重复构建/切换；未关闭 Jenkins 日常触发。
+
+上线后首批四Worker日志包含1945条结构化事件，其中87次SDK HTTP开始/响应成对出现；9次素材视频读取准入失败明确记录 `AccountAdmissionDeferred / advertiser_inflight`。这证明新增追踪可区分本地并发准入与实际HTTP，但不是历史封面失败原因的证明。108次 `jobs.flush_dispatch` 已实际在 builds 消费，broker等待中位2.873毫秒、最大9.214毫秒；这是上线后短窗口派发任务的排队时间，不是180个广告的创建耗时或长期吞吐保证。
+
+WQUV 22:24回读为94广告成功、78失败（56 cover_result_unknown、20 cover_source_unavailable、2 dependency_failed）、8等待上游；待派发消息及该租户到期未发布消息均为空。此前118个封面在22:17、切换前已进入UNKNOWN；本轮未修改这些历史结果，也没有盲目重发。**发布成功不代表 WQUV 已恢复或完成。** 后续需沿冻结范围核实历史不确定结果后走恢复入口。
+
+私有证据：`.runtime/wquv-diagnosis-20261029/unified-release/afe47cb5/state/acceptance.json`、`post-release/`及`post-snapshot.json`。第一次上线后快照采集返回exit1/空文件，独立重读成功；没有保留当次stderr，无法归因。已补强本地采集器保存stderr并在任何采集失败时非零退出，避免再丢失失败证据。这是发布机工具修正，不进入应用镜像；其后记录提交不改变上述生产程序版本。
+
+最终补充验证：outbox模块26通过；新刷新浏览器用例单独复跑通过；生产所有采集日志的Pod重启次数为0。历史unknown仍待恢复，全天永久日志存储尚未部署，目前为结构化容器日志和按需文件采集。
