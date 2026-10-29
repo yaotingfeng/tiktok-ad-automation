@@ -455,10 +455,79 @@ def test_carousel_preview_uses_frozen_units_through_async_expansion(
     apply_rule(
         session,
         image_draft,
-        ImageRule(music_mode="FIXED", fixed_music_id="song", single_music_id="single"),
+        ImageRule(music_mode="RECOMMEND", single_music_id="single"),
     )
     for run in session.exec(
         select(MusicPreparationRun).where(MusicPreparationRun.draft_id == draft.id)
+    ).all():
+        advance_music_preparation(session, run.id, run.generation)
+    from app.modules.builds.carousel_music import request_music
+    from app.modules.builds.image_composition_commands import SetImages
+    from app.modules.builds.image_composition_models import DraftCreativeUnitItem
+    from app.modules.builds.image_composition_service import edit_creative_units
+
+    sources = session.exec(
+        select(DraftCreativeUnit)
+        .where(DraftCreativeUnit.draft_id == draft.id)
+        .order_by(DraftCreativeUnit.position)
+    ).all()
+    for source in sources:
+        request_music(
+            session,
+            image_draft[2],
+            source.id,
+            source.revision,
+            source.music_revision,
+            uuid4(),
+            "SET_MANUAL",
+            "selected-song",
+        )
+    source = sources[0]
+    source.music_snapshot = {
+        **source.music_snapshot,
+        "music_id": "selected-song",
+        "display_name": "Selected title",
+        "author": "Composer",
+        "duration": 12.5,
+        "preview_url": "https://temporary.invalid/private",
+        "unexpected": {"url": "https://temporary.invalid/hidden"},
+    }
+    session.add(source)
+    session.flush()
+    request_music(
+        session,
+        image_draft[2],
+        source.id,
+        source.revision,
+        source.music_revision,
+        uuid4(),
+        "RECOMMEND",
+    )
+    assert "pending_request" in source.music_snapshot
+    ids = session.exec(
+        select(DraftCreativeUnitItem.material_id)
+        .where(DraftCreativeUnitItem.unit_id == source.id)
+        .order_by(DraftCreativeUnitItem.position)
+    ).all()
+    edit_creative_units(
+        session,
+        image_draft[2],
+        uuid4(),
+        draft.revision,
+        SetImages(
+            kind="SET_IMAGES", unit_id=source.id, material_ids=tuple(reversed(ids))
+        ),
+    )
+    source = session.get(
+        DraftCreativeUnit,
+        (context.tenant_id, draft.id, draft.active_image_generation, source.id),
+    )
+    assert source.music_status == "READY" and "pending_request" in source.music_snapshot
+    for run in session.exec(
+        select(MusicPreparationRun).where(
+            MusicPreparationRun.draft_id == draft.id,
+            MusicPreparationRun.status == "PENDING",
+        )
     ).all():
         advance_music_preparation(session, run.id, run.generation)
     draft.status = "READY"
@@ -499,6 +568,17 @@ def test_carousel_preview_uses_frozen_units_through_async_expansion(
     identity = previews.generate_preview(
         session, context=context, draft_id=draft.id, expected_revision=draft.revision
     )
+    stored = session.get(
+        PreviewCreativeUnit, (context.tenant_id, identity, source.id)
+    ).music_snapshot
+    assert stored == {
+        "music_id": "selected-song",
+        "display_name": "Selected title",
+        "author": "Composer",
+        "duration": 12.5,
+        "selection_source": "MANUAL",
+        "images_changed": True,
+    }
     frozen_music = [
         u.music_id
         for u in session.exec(
@@ -539,6 +619,29 @@ def test_carousel_preview_uses_frozen_units_through_async_expansion(
     unit = session.exec(select(BuildUnit).where(BuildUnit.preview_id == identity)).one()
     assert "carousel_format_unverified" in unit.reason_codes
     groups = previews.get_frozen_groups(session, context=context, unit_id=unit.id).items
+    from app.models import User
+    from app.modules.builds.api import frozen_ads
+
+    payload = frozen_ads(
+        context.tenant_id,
+        unit.id,
+        groups[0].group_id,
+        session,
+        session.get(User, context.actor_id),
+        cursor=None,
+        limit=2,
+    ).model_dump_json()
+    assert (
+        "pending_request" not in payload
+        and "unexpected" not in payload
+        and "temporary.invalid" not in payload
+        and "preview_url" not in payload
+    )
+    assert (
+        "Selected title" in payload
+        and "MANUAL" in payload
+        and "selected-song" in payload
+    )
     assert groups and all(
         ad.creative_units
         for group in groups

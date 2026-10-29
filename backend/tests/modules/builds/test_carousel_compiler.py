@@ -139,3 +139,35 @@ def test_outer_creative_multiset_keeps_multiplicity_and_music_pairing():
     body = encode_intent(value)
     body["creative_list"][1]["creative_info"]["image_info"].reverse()
     assert observed(value, body) == "MISMATCH"
+
+
+def test_reordered_video_optional_fields_and_multiplicity():
+    rich = VideoCreative(
+        kind="VIDEO", video_id="a", cover_image_id="cover", file_name="a.mp4"
+    )
+    plain = VideoCreative(kind="VIDEO", video_id="b")
+    value = intent().model_copy(update={"assets": (rich, plain, rich)})
+    body = encode_intent(value)
+    body["creative_list"].reverse()
+    body["creative_list"] = [
+        body["creative_list"][1],
+        body["creative_list"][0],
+        body["creative_list"][2],
+    ]
+    assert observed(value, body) == "MATCH"
+    body["creative_list"][0]["creative_info"]["image_info"] = [{"web_uri": "generated"}]
+    assert observed(value, body) == "MATCH"
+    body["creative_list"].pop()
+    assert observed(value, body) == "MISMATCH"
+    body = encode_intent(value)
+    body["creative_list"][0]["creative_info"]["image_info"][0]["web_uri"] = "wrong"
+    assert observed(value, body) == "MISMATCH"
+
+
+def test_duplicate_video_with_optional_wildcard_matches_without_greedy_loss():
+    plain = VideoCreative(kind="VIDEO", video_id="a")
+    rich = VideoCreative(kind="VIDEO", video_id="a", cover_image_id="cover")
+    value = intent().model_copy(update={"assets": (plain, rich)})
+    body = encode_intent(value)
+    body["creative_list"].reverse()
+    assert observed(value, body) == "MATCH"

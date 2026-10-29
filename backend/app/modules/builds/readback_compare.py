@@ -9,12 +9,14 @@ from app.integrations.tiktok.contracts.builds import (
     CREATE_HIGHEST_VALUE_EVENT,
     SMART_PLUS_READBACK_EVENTS,
     STANDARD_READBACK_EVENTS,
+    AdCreate,
     AdGroupCreate,
     AdGroupObservedFacts,
     AdGroupStatus,
     BuildPage,
     BuildReadQuery,
     BuildRecord,
+    VideoCreative,
 )
 from app.integrations.tiktok.contracts.common import (
     CallEvidence,
@@ -95,22 +97,102 @@ def _project(shape: object, actual: object, path: str, missing: list[str]) -> ob
         if not isinstance(actual, list):
             missing.append(path)
             return None
+        if path == "creative_list" and shape:
+            return [
+                _project_creative(shape[0], item, f"{path}.{index}", missing)
+                for index, item in enumerate(actual)
+            ]
         return (
             [
-                _project(
-                    shape[index]
-                    if path == "creative_list" and index < len(shape)
-                    else shape[0],
-                    item,
-                    f"{path}.{index}",
-                    missing,
-                )
+                _project(shape[0], item, f"{path}.{index}", missing)
                 for index, item in enumerate(actual)
             ]
             if shape
             else actual
         )
+
     return actual
+
+
+def _project_creative(shape, actual, path, missing):
+    # Creative assets are unordered: optional VIDEO fields come from this actual
+    # creative, never from the expected asset occupying the same list position.
+    info = actual.get("creative_info") if isinstance(actual, dict) else None
+    if not isinstance(info, dict):
+        missing.append(f"{path}.creative_info")
+        return None
+    common = {
+        key: value
+        for key, value in shape["creative_info"].items()
+        if key not in {"video_info", "image_info", "music_info"}
+    }
+    if info.get("ad_format") == "SINGLE_VIDEO":
+        common["video_info"] = {"video_id": None}
+        if (
+            isinstance(info.get("video_info"), dict)
+            and info["video_info"].get("file_name") is not None
+        ):
+            common["video_info"]["file_name"] = None
+        if info.get("image_info") is not None:
+            common["image_info"] = [{"web_uri": None}]
+    elif info.get("ad_format") == "CAROUSEL_ADS":
+        common.update(image_info=[{"web_uri": None}], music_info={"music_id": None})
+    return _project({"creative_info": common}, actual, path, missing)
+
+
+def _video_omissions(expected, observed):
+    if (
+        not isinstance(expected, AdCreate)
+        or not isinstance(observed, AdCreate)
+        or not all(
+            isinstance(asset, VideoCreative)
+            for asset in (*expected.assets, *observed.assets)
+        )
+    ):
+        return observed
+    if len(expected.assets) != len(observed.assets):
+        return observed
+    # Maximum bipartite matching preserves multiplicity even when duplicate video
+    # IDs have different requested covers, and another occurrence omits a cover.
+    wanted_assets = cast(tuple[VideoCreative, ...], expected.assets)
+    actual_assets = cast(tuple[VideoCreative, ...], observed.assets)
+    pairs = {}
+
+    def assign(index, seen):
+        wanted = wanted_assets[index]
+        for actual_index, actual in enumerate(actual_assets):
+            if (
+                actual_index in seen
+                or wanted.video_id != actual.video_id
+                or any(
+                    getattr(wanted, field) is not None
+                    and getattr(wanted, field) != getattr(actual, field)
+                    for field in ("cover_image_id", "file_name")
+                )
+            ):
+                continue
+            seen.add(actual_index)
+            if actual_index not in pairs or assign(pairs[actual_index], seen):
+                pairs[actual_index] = index
+                return True
+        return False
+
+    if not all(assign(index, set()) for index in range(len(expected.assets))):
+        return observed
+    return observed.model_copy(
+        update={
+            "assets": tuple(
+                actual.model_copy(
+                    update={
+                        field: None
+                        for field in ("cover_image_id", "file_name")
+                        if getattr(wanted_assets[pairs[index]], field) is None
+                    }
+                )
+                for index, actual in enumerate(actual_assets)
+            )
+        }
+    )
 
 
 def _safe_status(value: object) -> str | None:
@@ -179,7 +261,9 @@ def parse_page(*, query: BuildReadQuery, response: McpBusinessResponse) -> Build
         intent = None
         if not missing and isinstance(projected, dict):
             try:
-                intent = decode_observed_intent(kind, projected)
+                intent = _video_omissions(
+                    query.intent, decode_observed_intent(kind, projected)
+                )
             except ValidationError as error:
                 missing.extend(
                     ".".join(str(part) for part in item["loc"]) or "intent"

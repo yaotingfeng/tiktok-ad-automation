@@ -2606,12 +2606,7 @@ export type FrozenCreativeUnit = {
      * Music Id
      */
     music_id: string | null;
-    /**
-     * Music Snapshot
-     */
-    music_snapshot: {
-        [key: string]: unknown;
-    };
+    music_snapshot: PublicMusicSnapshot;
     /**
      * Members
      */

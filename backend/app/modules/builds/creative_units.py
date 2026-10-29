@@ -2,7 +2,7 @@
 
 import hashlib
 import json
-from typing import Any, Literal
+from typing import Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict
@@ -11,6 +11,7 @@ from sqlmodel import col, select
 
 from app.core.errors import DomainError
 
+from .image_public import PublicMusicSnapshot
 from .preview_models import (
     PreviewAdCreativeUnit,
     PreviewContract,
@@ -35,7 +36,7 @@ class FrozenCreativeUnit(BaseModel):
     music_revision: int
     content_digest: str
     music_id: str | None
-    music_snapshot: dict[str, Any]
+    music_snapshot: PublicMusicSnapshot
     members: tuple[FrozenCreativeMember, ...]
 
 
@@ -196,7 +197,9 @@ WITH current_dramas AS (
 
 def snapshot_creative_units(session, *, preview, draft):
     """固定数量 SQL 拍下全批快照；草稿锁串行化音乐，原件共享锁固定字节事实。"""
-    values = _snapshot_parameters(draft, preview=preview.id)
+    values = _snapshot_parameters(
+        draft, preview=preview.id, music_fields=list(PublicMusicSnapshot.model_fields)
+    )
     # 只返回 count；不把文件或单元全集拉到 Python，也不逐成员 flush。
     session.execute(
         text(
@@ -239,7 +242,7 @@ def snapshot_creative_units(session, *, preview, draft):
       INSERT INTO preview_creative_unit
       (tenant_id,preview_id,bc_id,id,drama_id,kind,position,generation,content_revision,music_revision,content_digest,music_id,music_snapshot)
       SELECT u.tenant_id,:preview,u.bc_id,u.id,u.drama_id,u.kind,u.position,u.generation,u.revision,u.music_revision,
-        encode(sha256(convert_to(json_build_array(2,u.kind,c.members,u.music_id)::text,'UTF8')),'hex'),u.music_id,u.music_snapshot
+        encode(sha256(convert_to(json_build_array(2,u.kind,c.members,u.music_id)::text,'UTF8')),'hex'),u.music_id,coalesce((SELECT jsonb_object_agg(k,v) FROM jsonb_each(u.music_snapshot) AS fact(k,v) WHERE k=ANY(CAST(:music_fields AS text[]))), '{}'::jsonb)
       FROM sources u JOIN content c ON c.id=u.id
     """
         ),
@@ -358,7 +361,7 @@ def frozen_ad_creative_units(
                 music_revision=row.music_revision,
                 content_digest=row.content_digest,
                 music_id=row.music_id,
-                music_snapshot=row.music_snapshot,
+                music_snapshot=PublicMusicSnapshot.model_validate(row.music_snapshot),
                 members=tuple(
                     FrozenCreativeMember(
                         material_id=i.material_id,
