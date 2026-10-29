@@ -141,7 +141,8 @@ def directory_unblocked_accounts(
     session.flush()
     # 旧全量仍在读取/等待时先让它完成；在扫描 ad_object 大表前去掉重叠账户。
     # 定向回读和不同冻结授权不能替代本轮全量，不纳入这个周期去重范围。
-    # 先物化当前范围内的待执行集合，避免账户IN使优化器交叉扫描大量历史索引。
+    # 账户范围必须在物化前生效；否则单户巡检也会重复扫描同授权全部积压。
+    # 保留物化边界与冻结范围过滤，不能拿其它账户/授权的任务遮挡当前请求。
     pending = set(
         session.connection()
         .execute(
@@ -149,6 +150,7 @@ def directory_unblocked_accounts(
             WITH pending AS MATERIALIZED (
               SELECT advertiser_id FROM ad_directory_run
               WHERE tenant_id=:tenant AND bc_id=:bc AND actor_id=:actor
+                AND advertiser_id=ANY(:ids)
                 AND frozen_route=CAST(:route AS jsonb)
                 AND status IN ('QUEUED','RUNNING','ADMISSION_WAIT','WAITING_REMOTE')
                 AND NOT (
@@ -161,7 +163,7 @@ def directory_unblocked_accounts(
                 AND coalesce(jsonb_array_length(query->'ids'),0)=0
                 AND coalesce(jsonb_array_length(query->'parent_ids'),0)=0
             )
-            SELECT DISTINCT advertiser_id FROM pending WHERE advertiser_id=ANY(:ids)
+            SELECT DISTINCT advertiser_id FROM pending
             """),
             {
                 "tenant": tenant_id,

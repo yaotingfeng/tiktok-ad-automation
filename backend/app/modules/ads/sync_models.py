@@ -117,6 +117,15 @@ class AdDirectoryRun(SyncRunFields, table=True):
     __tablename__ = "ad_directory_run"
     __table_args__ = (
         *run_constraints("ad_directory_run"),
+        # 单户在途探测不应为证明“没有积压”读取该户全部终态历史。
+        Index(
+            "ix_ad_directory_pending_account",
+            "tenant_id",
+            "advertiser_id",
+            postgresql_where=text(
+                "status IN ('QUEUED','RUNNING','ADMISSION_WAIT','WAITING_REMOTE')"
+            ),
+        ),
         Index(
             "ix_ad_directory_recent_success",
             "tenant_id",

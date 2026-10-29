@@ -24,18 +24,28 @@ def ensure_month_partitions(
     )
 
 
-def ensure_month_partitions_for_range(session: Session, start: date, end: date) -> None:
-    """建分区时原子迁移 DEFAULT 既有行；父表锁防止搬迁过程中再写入该月。"""
+def ensure_month_partitions_for_range(
+    session: Session,
+    start: date,
+    end: date,
+    *,
+    tables: tuple[str, ...] = PARTITIONED_TABLES,
+) -> None:
+    """原子迁移 DEFAULT 既有行；发布只传本表，预建才准备全部事实表。"""
+    if not tables or any(table not in PARTITIONED_TABLES for table in tables):
+        raise ValueError("unknown reporting partition table")
     cursor = date(start.year, start.month, 1)
     while cursor <= end:
         nxt = _month_start(cursor, 1)
-        for table in PARTITIONED_TABLES:
+        for table in tables:
             name = f"{table}_{cursor:%Y_%m}"
             connection = session.connection()
             if connection.execute(
                 text("SELECT to_regclass(:name)"), {"name": name}
             ).scalar():
                 continue
+            # 只锁本次发布的父表，避免持广告表锁再等素材表，与关联读形成锁环。
+            # 锁后复查处理同月并发创建；搬迁、挂载和事实发布仍由调用方统一提交。
             connection.execute(text(f"LOCK TABLE {table} IN ACCESS EXCLUSIVE MODE"))
             if connection.execute(
                 text("SELECT to_regclass(:name)"), {"name": name}
