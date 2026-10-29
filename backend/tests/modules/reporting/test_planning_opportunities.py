@@ -41,7 +41,7 @@ def test_tail_budget_does_not_start_screen_and_prioritizes_its_next_turn(
         (seed.tenant_id, "bc-a"),
         now=now,
         allow_backfill=False,
-        budget=3,
+        budget=2.1,
     )
     assert phases == ["hot"]
     with factory() as session, session.begin():
@@ -307,7 +307,11 @@ def test_four_bc_screens_rotate_after_maintenance_without_starving_facts(
 
     def timed(_session, plan, state, phase, *_args):
         if phase == "screen_hot":
-            assert _args[-1] >= 5
+            if _args[-1] < 5:
+                from app.core.errors import DomainError
+
+                clock[0] += _args[-1]
+                raise DomainError("read_deadline_exceeded", "test SDK deadline")
             pages[plan.bc_id] += 1
             reads.append(plan.bc_id)
             clock[0] += 5

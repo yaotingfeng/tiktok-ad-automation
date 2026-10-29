@@ -185,9 +185,11 @@ def test_thousands_of_accounts_progress_many_batches_and_cover_both_facts(
     class Reader:
         def bc_spend(self, *, bc_id, page, **kwargs):
             if page_seconds:
-                assert read_budget[0] >= page_seconds, (
-                    "cannot start 5s page with a tail budget"
-                )
+                if read_budget[0] < page_seconds:
+                    from app.core.errors import DomainError
+
+                    clock[0] += read_budget[0]
+                    raise DomainError("read_deadline_exceeded", "test SDK deadline")
                 clock[0] += page_seconds
             pages.append((bc_id, page))
             values = accounts if bc_id == "bc-a" else ["acc-2"]

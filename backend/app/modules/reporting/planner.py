@@ -23,7 +23,6 @@ from app.modules.accounts.models import AdvertiserAccount, DiscoveryRun
 from app.modules.accounts.routing import freeze_route
 from app.modules.reporting.jobs import enqueue_job, enqueue_jobs
 from app.modules.reporting.lanes import CLOSEOUT_PRIORITY
-from app.modules.reporting.partitions import ensure_month_partitions_for_range
 from app.modules.reporting.store_models import (
     AdSyncAccount,
     AdSyncBc,
@@ -300,12 +299,28 @@ def owned_account_timezones(session, plan: AdSyncBc) -> dict[str, str | None]:
     return values
 
 
-def due_plans(session, *, now: datetime, limit: int = 50) -> list[AdSyncBc]:
+def due_plans(
+    session, *, now: datetime, limit: int = 50, realtime_only: bool = False
+) -> list[AdSyncBc]:
+    live_condition = text("""
+      (COALESCE((screening_progress->'planning_steps_v1'->>'retry_at')::timestamptz,
+                '-infinity'::timestamptz) <= :live_now)
+      AND (next_hot_at <= :live_now OR next_material_at <= :live_now
+        OR screening_progress->'planning_steps_v1'->>'force_live' = 'true'
+        OR EXISTS (
+          SELECT 1 FROM jsonb_each(COALESCE(screening_progress->'planning_steps_v1','{}'::jsonb)) p
+          WHERE p.key IN ('screen_hot','hot','material')
+            AND p.value->>'at' IS NOT NULL
+            AND COALESCE(p.value->>'done','false') != 'true'
+            AND COALESCE((p.value->>'retry_at')::timestamptz,'-infinity'::timestamptz) <= :live_now
+        ))
+    """).bindparams(live_now=now)
     return list(
         session.exec(
             select(AdSyncBc)
             .where(
                 col(AdSyncBc.enabled).is_(True),
+                *([live_condition] if realtime_only else []),
                 exists().where(
                     col(AdSyncAccount.tenant_id) == col(AdSyncBc.tenant_id),
                     col(AdSyncAccount.owner_bc_id) == col(AdSyncBc.bc_id),
@@ -923,7 +938,8 @@ def plan_history(session, plan, *, now, accounts=None, progress=None) -> int:
         if start <= end:
             # 单账户多年历史也按原30日窗口提交续点，不能仅按账户缩批仍反复回滚。
             stop = min(end, start + timedelta(days=29)) if progress is not None else end
-            ensure_month_partitions_for_range(session, start, stop)
+            # 规划只保存读取任务；历史月分区由发布端按目标事实表准备，
+            # 不能在control规划事务持有两张事实父表的DDL锁。
             for s, e in _shards(start, stop):
                 count += bool(
                     enqueue_job(
