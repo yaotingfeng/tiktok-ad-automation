@@ -12,6 +12,7 @@ from sqlmodel import Session, col, select
 from app.core.config import settings
 from app.integrations.tiktok.contracts.ads import EntityKind, EntityRef
 from app.modules.ads.directory_requests import request_directory
+from app.modules.ads.material_directory_children import is_material_child
 from app.modules.ads.sync_models import AdDirectoryRun
 from app.modules.automation_rules.models import AutomationRule
 from app.modules.reporting.lanes import report_workload
@@ -68,7 +69,7 @@ def directory_interval(kind: str, *, has_rules: bool) -> timedelta:
 def refresh_report_directory(
     session: Session, job: ReportSyncJob, *, now: datetime | None = None
 ) -> int:
-    """只选本任务账户当地今日有消耗对象，按账户、类型、层级对齐刷新轮次。"""
+    """只刷新本任务账户当地今日有消耗、缺失或到期且未被在途查询覆盖的对象。"""
     if not settings.ADS_SYNC_ENABLED or job.kind != "ad_day" or job.priority != 1:
         return 0
     from app.modules.reporting.planner import REFRESH_MARGIN
@@ -94,8 +95,6 @@ def refresh_report_directory(
             col(AdDirectoryRun.status).in_(_ACTIVE),
         )
     ).all()
-    # 同账户同类型同层任意 live 运行在途即让出本轮，不能因 ID 不同再制造碎片。
-    covered = {(run.advertiser_id, run.ad_type, run.kind) for run in pending}
     rows = (
         session.connection()
         .execute(
@@ -121,46 +120,65 @@ def refresh_report_directory(
         )
         .mappings()
     )
-    # 不限 sync_job_id：同账户今日事实可由不同任务发布，必须整批对齐所有有消耗对象。
-    # 日期粗范围用于分区裁剪，精确当地日条件仍以事实时区为准。
-    objects: dict[tuple[str, str, EntityKind], dict[str, datetime | None]] = (
-        defaultdict(dict)
+    # 不限 sync_job_id：同账户今日事实可由不同任务发布；日期粗范围用于分区裁剪，
+    # 精确当地日仍以事实时区为准。仅收集缺失/到期 ID，不因邻居过期重读新鲜对象。
+    objects: dict[tuple[str, str, EntityKind], set[str]] = defaultdict(set)
+    parents: dict[tuple[str, str, EntityKind], dict[str, set[str]]] = defaultdict(
+        lambda: defaultdict(set)
     )
-    layers: tuple[tuple[EntityKind, str], ...] = (
-        ("campaign", "campaign_id"),
-        ("adgroup", "adgroup_id"),
-        ("ad", "ad_id"),
+    layers: tuple[tuple[EntityKind, str, str | None], ...] = (
+        ("campaign", "campaign_id", None),
+        ("adgroup", "adgroup_id", "campaign_id"),
+        ("ad", "ad_id", "adgroup_id"),
     )
     for row in rows:
         ad_type = _AD_TYPES.get(row.campaign_automation_type)
         if ad_type is None:
             continue  # 类型未获报表证明时不猜测平台端点。
-        for kind, column in layers:
+        for kind, column, parent_column in layers:
+            observed_at = row[f"{kind}_observed_at"]
+            cutoff = now - (
+                directory_interval(kind, has_rules=row.advertiser_id in strict_accounts)
+                - REFRESH_MARGIN
+            )
+            if not row[column] or (observed_at is not None and observed_at > cutoff):
+                continue
             key = (row.advertiser_id, ad_type, kind)
-            if row[column]:
-                objects[key][row[column]] = row[f"{kind}_observed_at"]
-    expired_layers: set[tuple[str, EntityKind]] = set()
-    for (advertiser, _ad_type, kind), observations in objects.items():
-        cutoff = now - (
-            directory_interval(kind, has_rules=advertiser in strict_accounts)
-            - REFRESH_MARGIN
-        )
-        if any(at is not None and at <= cutoff for at in observations.values()):
-            expired_layers.add((advertiser, kind))
+            objects[key].add(row[column])
+            if parent_column and row[parent_column]:
+                parents[key][row[parent_column]].add(row[column])
+    for run in pending:
+        # 素材子运行只读冻结素材桥，不能代替通用对象目录；授权范围已在查询中限定。
+        if is_material_child(run):
+            continue
+        key = (run.advertiser_id, run.ad_type, run.kind)
+        remaining = objects.get(key)
+        if not remaining:
+            continue
+        ids, parent_ids = run.query.get("ids", ()), run.query.get("parent_ids", ())
+        if parent_ids:
+            # parent_ids 只匹配当前层的直接父级；同时有两类筛选时取交集。
+            # 父级索引避免对每个在途查询重复扫描整账户候选。
+            by_parent = parents.get(key, {})
+            covered = {
+                remote_id
+                for parent_id in parent_ids
+                for remote_id in by_parent.get(parent_id, ())
+            }
+            if ids:
+                covered.intersection_update(ids)
+        else:
+            covered = remaining.intersection(ids) if ids else remaining.copy()
+        # 只有完全无筛选的查询覆盖整个层；不相关在途 ID 不会遮住新缺失对象。
+        remaining.difference_update(covered)
     refs_by_type: dict[str, list[EntityRef]] = defaultdict(list)
     types: dict[str, dict[str, set[str]]] = defaultdict(lambda: defaultdict(set))
-    for (advertiser, ad_type, kind), observations in sorted(objects.items()):
-        if (advertiser, ad_type, kind) in covered:
-            continue
-        # 到期按账户/层级合并，跨广告类型一起对齐；在途约束仍按类型分别让出。
-        # 仅缺失时只补缺失，避免新投放一个对象连带重读整个账户。
-        expired = (advertiser, kind) in expired_layers
-        for remote_id, observed_at in sorted(observations.items()):
-            if expired or observed_at is None:
-                refs_by_type[ad_type].append(
-                    EntityRef(job.tenant_id, advertiser, kind, remote_id)
-                )
-                types[advertiser][ad_type].add(kind)
+    for (advertiser, ad_type, kind), remote_ids in sorted(objects.items()):
+        for remote_id in sorted(remote_ids):
+            refs_by_type[ad_type].append(
+                EntityRef(job.tenant_id, advertiser, kind, remote_id)
+            )
+            types[advertiser][ad_type].add(kind)
     created = 0
     # 沿用唯一目录请求入口的100 ID分片；分类型传 refs，避免混合类型误发端点。
     for ad_type, refs in sorted(refs_by_type.items()):
