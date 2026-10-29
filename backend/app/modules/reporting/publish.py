@@ -251,7 +251,7 @@ def publish_ad_day(
     if not buckets:
         return 0
     records = [r for r in records if (r["advertiser_id"], r["stat_date"]) in buckets]
-    ensure_month_partitions_for_range(session, start, end)
+    ensure_month_partitions_for_range(session, start, end, tables=("ad_report_day",))
     statement = delete(AdReportDay).where(
         col(AdReportDay.tenant_id) == tenant_id,
         _bucket_filter(AdReportDay, buckets),
@@ -343,7 +343,9 @@ def _publish_simple(
         r for r, bucket in zip(records, record_days, strict=True) if bucket in buckets
     ]
     if model is MaterialReportDay:
-        ensure_month_partitions_for_range(session, start, end)
+        ensure_month_partitions_for_range(
+            session, start, end, tables=("material_report_day",)
+        )
     session.connection().execute(
         delete(model).where(
             model.tenant_id == tenant_id,
