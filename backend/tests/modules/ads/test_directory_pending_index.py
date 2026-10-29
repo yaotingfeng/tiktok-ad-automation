@@ -1,6 +1,7 @@
 """活动目录索引在0045历史schema上升降，保留运行和发布事实。"""
 
 from time import monotonic
+from typing import Any, cast
 
 import pytest
 from alembic import command
@@ -64,7 +65,7 @@ def test_normal_index_build_requires_stopped_writers(monkeypatch):
 def test_pending_account_index_roundtrip_preserves_runs(monkeypatch, record_property):
     with historical_database(monkeypatch, PREVIOUS) as (engine, config):
         with Session(engine) as session, session.begin():
-            seed = getattr(sync_seed, "__wrapped__")(session)
+            seed = cast(Any, sync_seed).__wrapped__(session)
             run = AdDirectoryRun(
                 tenant_id=seed.tenant_id,
                 advertiser_id="acc-1",

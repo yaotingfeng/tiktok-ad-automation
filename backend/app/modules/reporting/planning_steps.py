@@ -44,6 +44,8 @@ PHASE_ORDER = tuple(
 )
 BATCH = 64
 SECONDS = 3
+SCREEN_START_SECONDS = 2.2  # SDK至少2秒，另给页游标原子提交留0.2秒。
+REALTIME_PHASES = frozenset({"screen_hot", "hot", "material"})
 
 
 class ScreenYield(Exception):
@@ -404,12 +406,17 @@ def plan_step(
     now,
     allow_backfill,
     budget=8,
-    screen_budget=8,
     metrics=None,
+    realtime_only=False,
+    prefer_facts=False,
 ):
     """最多一个阶段事务；返回是否前进，空转阶段不会消耗后续BC的时间预算。"""
     started = monotonic()
-    with Session(database_engine) as session, session.begin():
+    with (
+        Session(database_engine) as session,
+        session.begin(),
+        query_budget(session, seconds=budget),
+    ):
         plan = session.exec(
             select(AdSyncBc)
             .where(AdSyncBc.tenant_id == key[0], AdSyncBc.bc_id == key[1])
@@ -423,6 +430,7 @@ def plan_step(
             and datetime.fromisoformat(previous["retry_at"]) > now
         ):
             _save(plan, {**previous, "last_turn": datetime.now(UTC).isoformat()})
+            session.flush()
             return False
         timezones = planner.owned_account_timezones(session, plan)
         accounts = sorted(timezones)
@@ -447,20 +455,36 @@ def plan_step(
         phase = None
         phase_cursor = state["phase"]
         available = max(0, budget - (monotonic() - started))
-        # SDK在剩余不足2秒时拒绝建连接；外部页要拿到本入口可用的完整读取片。
-        can_screen = available >= 2 and budget + 0.05 >= screen_budget
+        # 每页独立提交；前一页快时可用真实余量续页，不必再等一个完整入口片。
+        can_screen = available >= SCREEN_START_SECONDS
+        facts_ready = prefer_facts and any(
+            _eligible(state, name, plan, now, allow_backfill, valid_accounts)
+            for name in ("hot", "material")
+        )
         if (
             state.get("screen_waiting_since")
             and can_screen
+            and not facts_ready
             and _eligible(
                 state, "screen_hot", plan, now, allow_backfill, valid_accounts
             )
         ):
             phase = "screen_hot"
         if phase is None:
-            for offset in range(len(PHASE_ORDER)):
+            offsets = list(range(len(PHASE_ORDER)))
+            if facts_ready:
+                # 一个外部页后先服务事实，避免另一慢页在入口尾部吞掉全部事实机会。
+                offsets.sort(
+                    key=lambda offset: (
+                        PHASE_ORDER[(phase_cursor + offset) % len(PHASE_ORDER)]
+                        not in {"hot", "material"}
+                    )
+                )
+            for offset in offsets:
                 index = (phase_cursor + offset) % len(PHASE_ORDER)
                 candidate = PHASE_ORDER[index]
+                if realtime_only and candidate not in REALTIME_PHASES:
+                    continue
                 if not _eligible(
                     state,
                     candidate,
@@ -480,12 +504,20 @@ def plan_step(
         if phase is None:
             state["last_turn"] = datetime.now(UTC).isoformat()
             _save(plan, state)
+            session.flush()
             return False
+        waiting_since = state.get("screen_waiting_since")
         if phase == "screen_hot":
             state.pop("screen_waiting_since", None)
+        elif facts_ready and _eligible(
+            state, "screen_hot", plan, now, allow_backfill, valid_accounts
+        ):
+            # 为事实让位同样保留等待年龄，不能让它下一轮排在已读过页的BC之后。
+            state.setdefault("screen_waiting_since", now.isoformat())
         before = copy.deepcopy(state)
         full_budget = 8 if phase.startswith("screen_") else SECONDS
         budget = min(available, full_budget)
+        read_budget = budget - 0.2 if phase.startswith("screen_") else budget
         work_started = monotonic()
         completed = True
         try:
@@ -499,7 +531,7 @@ def plan_step(
                     now,
                     database_engine,
                     redis_client,
-                    budget,
+                    read_budget,
                 )
                 work_seconds = monotonic() - work_started
                 _finish_phase(plan, state, now, timezones, valid_accounts)
@@ -517,8 +549,11 @@ def plan_step(
             delay = timedelta(seconds=5)
             if isinstance(error, DBAPIError) and getattr(
                 error.orig, "sqlstate", None
-            ) not in {"57014", "55P03"}:
+            ) not in {"57014", "55P03", "40P01"}:
                 raise
+            lock_conflict = isinstance(error, DBAPIError) and getattr(
+                error.orig, "sqlstate", None
+            ) in {"55P03", "40P01"}
             if isinstance(error, AccountAdmissionDeferred):
                 delay = timedelta(milliseconds=max(1000, error.retry_after_ms))
             elif isinstance(error, DomainError):
@@ -554,7 +589,10 @@ def plan_step(
                 # 入口余量不足不证明64户批次本身过慢；保留当前轮位置，下次给完整片。
                 state["phase"] = phase_cursor
                 if phase == "screen_hot":
-                    state.setdefault("screen_waiting_since", now.isoformat())
+                    # 短片失败不能刷新等待年龄，否则总在尾部失败的BC会永久让位。
+                    state.setdefault(
+                        "screen_waiting_since", waiting_since or now.isoformat()
+                    )
             elif phase == "directory":
                 plan.next_directory_at = now + delay
                 state["directory_retry"] = (now + delay).isoformat()
@@ -563,7 +601,7 @@ def plan_step(
                 step["retry_at"] = (now + delay).isoformat()
                 if phase == "screen_daily":
                     plan.next_daily_at = now + delay
-                if not phase.startswith("screen_"):
+                if not phase.startswith("screen_") and not lock_conflict:
                     batch = _batch(
                         step,
                         _candidate_accounts(state, phase, plan, valid_accounts),
@@ -584,9 +622,17 @@ def plan_step(
                 budget,
             )
             _finish_phase(plan, state, now, timezones, valid_accounts)
+            # 错误状态也必须在外层总预算内写入；不能留给退出预算后的自动flush。
+            # 若余量已耗尽，当前阶段回滚，由下一轮沿旧游标重试。
+            session.flush()
     total_seconds = monotonic() - started
     metadata_seconds = metadata_done - started
     if metrics is not None:
+        if phase.startswith("screen_"):
+            metrics["screen_attempts"] = metrics.get("screen_attempts", 0) + 1
+            metrics["facts_since_screen"] = 0
+        elif phase in {"hot", "material"}:
+            metrics["facts_since_screen"] = metrics.get("facts_since_screen", 0) + 1
         outcome = "completed" if completed else "deferred"
         metrics[outcome] = metrics.get(outcome, 0) + 1
         for name, value in (
@@ -619,15 +665,13 @@ def run_plan(
     allow_backfill,
     one_step=False,
     time_budget=None,
-    screen_budget=None,
     metrics=None,
+    realtime_only=False,
+    prefer_facts=False,
 ):
     # 测试/恢复可传历史逻辑时钟；运行预算始终使用单调时钟而非业务日期。
     remaining = (deadline - now).total_seconds() if time_budget is None else time_budget
     stop = monotonic() + max(0, min(10, remaining))
-    screen_budget = (
-        min(8, max(2, remaining - 0.1)) if screen_budget is None else screen_budget
-    )
     advanced = False
     while stop - monotonic() >= 2:
         try:
@@ -638,8 +682,9 @@ def run_plan(
                 now=now,
                 allow_backfill=allow_backfill,
                 budget=max(0, stop - monotonic()),
-                screen_budget=screen_budget,
                 metrics=metrics,
+                realtime_only=realtime_only,
+                prefer_facts=prefer_facts,
             )
         except SoftTimeLimitExceeded:
             # 当前事务已退出并回滚；之前各批次仍已提交，下轮继续持久游标。

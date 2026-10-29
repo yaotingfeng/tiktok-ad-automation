@@ -70,6 +70,7 @@ celery_app.conf.update(
         "jobs.flush_dispatch": {"queue": "builds", "priority": 0},
         "jobs.compact_dispatches": {"queue": "control"},
         "reporting.plan_due": {"queue": "control"},
+        "reporting.plan_continue": {"queue": "control"},
         "reporting.check_health": {"queue": "control"},
         "reporting.check_bc_health": {"queue": "control"},
         "reporting.job_step": {"queue": "ads-reporting"},

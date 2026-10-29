@@ -7,10 +7,13 @@ from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from hashlib import sha256
 from typing import Any
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from billiard.exceptions import SoftTimeLimitExceeded
 from redis import Redis
+from redis.backoff import NoBackoff
+from redis.exceptions import RedisError
+from redis.retry import Retry
 from sqlalchemy import delete, func, text, tuple_, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.exc import DBAPIError
@@ -26,7 +29,11 @@ from app.integrations.tiktok.gateway import open_tiktok_gateway
 from app.integrations.tiktok.sdk import AccountAdmissionDeferred
 from app.jobs.celery_app import celery_app
 from app.jobs.models import PendingDispatch
-from app.jobs.outbox import enqueue_after_commit, validate_dispatch_payload
+from app.jobs.outbox import (
+    enqueue_after_commit,
+    enqueue_many_after_commit,
+    validate_dispatch_payload,
+)
 from app.jobs.tasks import register_dispatch_task
 from app.modules.accounts.routing import verify_route
 from app.modules.ads.directory_calibration import calibration_interval
@@ -103,6 +110,7 @@ DIRECTORY_PLAN_BATCH_INTERVAL = timedelta(seconds=5)
 register_dispatch_task("reporting.job_step", "ads-reporting")
 register_dispatch_task("reporting.backfill_step", "ads-backfill")
 register_dispatch_task("reporting.plan_due", "control")
+register_dispatch_task("reporting.plan_continue", "control")
 
 
 def _context(row):
@@ -358,23 +366,202 @@ def _dispatch_directories(session, now):
     return count
 
 
-def plan_due_runs(*, database_engine, redis_client, now=None):
+PLANNING_ENTRY_LOCK = "reporting:planner:entry:v1"
+PLANNING_CONTINUATION = "reporting:planner:continuation:v1"
+
+
+def _release_planning_key(redis_client, key, owner):
+    # 租约过期后不得删除另一进程后来取得的锁；网络故障由TTL恢复，不遮盖原错。
+    try:
+        redis_client.eval(
+            "if redis.call('get',KEYS[1]) == ARGV[1] then return redis.call('del',KEYS[1]) else return 0 end",
+            1,
+            key,
+            owner,
+        )
+    except RedisError:
+        logger.warning("report planning signal: outcome=release_unavailable")
+
+
+def _continuation_contract(payload):
+    validate_dispatch_payload(payload)
+    try:
+        if set(payload) != {"continuation_id", "expires_at"}:
+            raise ValueError()
+        identity = str(UUID(payload["continuation_id"]))
+        expires = datetime.fromisoformat(payload["expires_at"])
+        if expires.tzinfo is None:
+            raise ValueError()
+    except ValueError, TypeError, KeyError:
+        raise DomainError("dispatch_payload_invalid", "规划续点参数无效") from None
+    return identity, expires
+
+
+def _planning_budget_error(error):
+    return isinstance(error, QueryBudgetExceeded) or (
+        isinstance(error, DBAPIError)
+        and getattr(error.orig, "sqlstate", None) in {"57014", "55P03", "40P01"}
+    )
+
+
+def plan_due_runs(*, database_engine, redis_client, now=None, continuation=None):
     if not settings.ADS_SYNC_ENABLED:
         return 0
+    started_at = datetime.now(UTC)
+    stop = time.monotonic() + 10
+    owner = str(uuid4())
+    if not redis_client.set(PLANNING_ENTRY_LOCK, owner, nx=True, ex=35):
+        logger.info(
+            "report planning signal: outcome=entry_busy mode=%s",
+            "realtime_continue" if continuation else "regular",
+        )
+        return 0
+    try:
+        if continuation is not None:
+            identity, expires = _continuation_contract(continuation)
+            marker = redis_client.get(PLANNING_CONTINUATION)
+            if isinstance(marker, bytes):
+                marker = marker.decode()
+            if marker != identity or expires.tzinfo is None:
+                logger.info(
+                    "report planning signal: outcome=obsolete mode=realtime_continue"
+                )
+                return 0
+            left = (expires - datetime.now(UTC)).total_seconds()
+            if left < 12:
+                # 迟到续点不能持锁跨过下一普通轮；不能用排队延迟吞掉维护机会。
+                logger.info(
+                    "report planning signal: outcome=expired_or_late mode=realtime_continue"
+                )
+                return 0
+            stop = min(stop, time.monotonic() + left - 2)
+        result = _run_planning_entry(
+            database_engine=database_engine,
+            redis_client=redis_client,
+            now=now,
+            realtime_only=continuation is not None,
+            stop=stop,
+            started_at=started_at,
+        )
+        return result
+    finally:
+        if continuation is not None and isinstance(continuation, dict):
+            _release_planning_key(
+                redis_client,
+                PLANNING_CONTINUATION,
+                str(continuation.get("continuation_id", "")),
+            )
+        _release_planning_key(redis_client, PLANNING_ENTRY_LOCK, owner)
+
+
+def _schedule_planning_continuation(
+    database_engine, redis_client, now, started_at, *, stop=None
+):
+    # 普通轮最多补一个中间续点；过期消息不追赶，持久阶段由下个Beat正常接管。
+    stop = time.monotonic() + 1 if stop is None else stop
+    if stop - time.monotonic() < 0.2:
+        logger.info("report planning signal: outcome=schedule_no_budget mode=regular")
+        return
+    identity = str(uuid4())
+    expires = started_at + timedelta(seconds=30)
+    if datetime.now(UTC) >= expires:
+        return
+    created = False
+    try:
+        with Session(database_engine) as session, session.begin():
+            with query_budget(session, seconds=max(0, stop - time.monotonic())):
+                plans = planner.due_plans(session, now=now, limit=1, realtime_only=True)
+                if not plans:
+                    return
+                if not redis_client.set(
+                    PLANNING_CONTINUATION, identity, nx=True, ex=60
+                ):
+                    logger.info(
+                        "report planning signal: outcome=coalesced mode=regular"
+                    )
+                    return
+                created = True
+                enqueue_many_after_commit(
+                    session,
+                    context=_context(plans[0]),
+                    entries=[
+                        (
+                            "reporting.plan_continue",
+                            f"report-planning-continue:{identity}",
+                            {
+                                "continuation_id": identity,
+                                "expires_at": expires.isoformat(),
+                            },
+                            started_at + timedelta(seconds=15),
+                        )
+                    ],
+                )
+                session.flush()
+        logger.info("report planning signal: outcome=scheduled mode=regular")
+    except BaseException as error:
+        if created:
+            _release_planning_key(redis_client, PLANNING_CONTINUATION, identity)
+        if not _planning_budget_error(error):
+            raise
+        logger.info(
+            "report planning signal: outcome=schedule_budget_exhausted mode=regular"
+        )
+
+
+def _run_planning_entry(
+    *,
+    database_engine,
+    redis_client,
+    now=None,
+    realtime_only=False,
+    stop=None,
+    started_at=None,
+):
+    started_at = started_at or datetime.now(UTC)
     now = now or datetime.now(UTC)
-    allow_backfill = planner.backfill_allowed(redis_client, now)
-    deadline = datetime.now(UTC) + timedelta(seconds=10)
+    allow_backfill = not realtime_only and planner.backfill_allowed(redis_client, now)
     started = time.monotonic()
-    stop = started + 10
+    stop = started + 10 if stop is None else stop
+    deadline = datetime.now(UTC) + timedelta(seconds=max(0, stop - started))
     # 额度紧张优先让出历史补数，不静默把止损数据降成小时级。
     hot, material = planner.HOT_INTERVAL, planner.MATERIAL_INTERVAL
-    with Session(database_engine) as session, session.begin():
-        ensure_month_partitions(session, today=now.date())
-        planner.ensure_bc_plans(session, now=now)
-        keys = [(p.tenant_id, p.bc_id) for p in planner.due_plans(session, now=now)]
+    try:
+        with (
+            Session(database_engine) as session,
+            session.begin(),
+            query_budget(session, seconds=max(0, stop - time.monotonic())),
+        ):
+            if not realtime_only:
+                ensure_month_partitions(session, today=now.date())
+                planner.ensure_bc_plans(session, now=now)
+            keys = [
+                (p.tenant_id, p.bc_id)
+                for p in planner.due_plans(
+                    session, now=now, realtime_only=realtime_only
+                )
+            ]
+            session.flush()
+    except (DBAPIError, QueryBudgetExceeded) as error:
+        if not _planning_budget_error(error):
+            raise
+        logger.info("report planning signal: outcome=prepare_budget_exhausted")
+        return 0
     prepare_seconds = time.monotonic() - started
+    if not realtime_only:
+        # 在慢派发/阶段之前确认仍有实时工作并持久化一次续点；不能赌尾部有
+        # 剩余预算，否则最需要续跑的满预算普通轮反而永远无法产生信号。
+        _schedule_planning_continuation(
+            database_engine, redis_client, now, started_at, stop=stop
+        )
     dispatch_started = time.monotonic()
-    dispatched = _dispatch_pending(database_engine, now, allow_backfill=allow_backfill)
+    dispatched = _dispatch_planning_entry(
+        database_engine,
+        now,
+        # 首次补位只占短片，慢目录不能每轮吃掉全部维护/规划机会；尾部仍可补位。
+        min(stop, time.monotonic() + 1),
+        allow_backfill=allow_backfill,
+        include_directories=not realtime_only,
+    )
     dispatch_seconds = time.monotonic() - dispatch_started
     # 两类维护各自提交：旧任务归并读慢时，不能回滚/挡住目录依赖的复核游标。
     # 先唤醒再归并，各一秒预算；正常事实派发已提交，不受维护失败影响。
@@ -382,23 +569,31 @@ def plan_due_runs(*, database_engine, redis_client, now=None):
     from app.modules.reporting.link_work import wake_link_dependencies
 
     maintenance_started = time.monotonic()
-    try:
-        with Session(database_engine) as session, session.begin():
-            session.connection().execute(text("SET LOCAL statement_timeout='1s'"))
-            session.connection().execute(text("SET LOCAL lock_timeout='100ms'"))
-            maintenance_deadline = datetime.now(UTC) + timedelta(seconds=1)
-            wake_link_dependencies(session, now=now, deadline=maintenance_deadline)
-    except Exception:
-        logger.exception(
-            "report link maintenance deferred phase=wake_link_dependencies"
-        )
-    try:
-        # runner 独立提交后才保存轮转位置，超时或 Redis 故障只会安全重扫。
-        reconcile_link_work_batch(
-            database_engine=database_engine, redis_client=redis_client, now=now
-        )
-    except Exception:
-        logger.exception("report link maintenance deferred phase=reconcile_link_work")
+    if not realtime_only and stop - time.monotonic() >= 1.2:
+        try:
+            with (
+                Session(database_engine) as session,
+                session.begin(),
+                query_budget(session, seconds=min(1, stop - time.monotonic())),
+            ):
+                session.connection().execute(text("SET LOCAL statement_timeout='1s'"))
+                session.connection().execute(text("SET LOCAL lock_timeout='100ms'"))
+                maintenance_deadline = datetime.now(UTC) + timedelta(seconds=1)
+                wake_link_dependencies(session, now=now, deadline=maintenance_deadline)
+        except Exception:
+            logger.exception(
+                "report link maintenance deferred phase=wake_link_dependencies"
+            )
+        try:
+            # runner 独立提交后才保存轮转位置，超时或 Redis 故障只会安全重扫。
+            if stop - time.monotonic() >= 1.2:
+                reconcile_link_work_batch(
+                    database_engine=database_engine, redis_client=redis_client, now=now
+                )
+        except Exception:
+            logger.exception(
+                "report link maintenance deferred phase=reconcile_link_work"
+            )
     # 每轮每BC只推进一个阶段，预算有余继续下一轮；不以账户数量人为限速。
     remaining = list(keys)
     metrics = {"completed": 0, "deferred": 0}
@@ -423,24 +618,46 @@ def plan_due_runs(*, database_engine, redis_client, now=None):
                     allow_backfill=allow_backfill,
                     one_step=True,
                     time_budget=max(0, stop - time.monotonic()),
-                    screen_budget=screen_budget,
                     metrics=metrics,
+                    realtime_only=realtime_only,
+                    prefer_facts=metrics.get("screen_attempts", 0) > 0
+                    # 每BC两类事实各有轮转机会；全局仅两次会被两个BC的hot
+                    # 耗完，使下一慢筛查再次吞掉所有material的入口余量。
+                    and metrics.get("facts_since_screen", 0) < 2 * len(keys),
                 )
             except SoftTimeLimitExceeded:
                 return dispatched
+            except (DBAPIError, QueryBudgetExceeded) as error:
+                if not _planning_budget_error(error):
+                    logger.exception("report plan failed: tenant=%s bc=%s", *key)
+                    _defer_failed_plan(database_engine, key, now, stop=stop)
+                    continue
+                # 元数据/外层总片耗尽时没有当前业务批可缩；保留持久游标交下轮。
+                logger.info(
+                    "report planning entry stage deferred: bc=%s budget_remaining=%.3f",
+                    key[1],
+                    max(0, stop - time.monotonic()),
+                )
+                continue
             except Exception:
                 logger.exception("report plan failed: tenant=%s bc=%s", *key)
-                _defer_failed_plan(database_engine, key, now)
+                _defer_failed_plan(database_engine, key, now, stop=stop)
                 continue
             if worked:
                 next_round.append(key)
         remaining = next_round
     steps_seconds = time.monotonic() - steps_started
     dispatch_started = time.monotonic()
-    dispatched += _dispatch_pending(database_engine, now, allow_backfill=allow_backfill)
+    dispatched += _dispatch_planning_entry(
+        database_engine,
+        now,
+        stop,
+        allow_backfill=allow_backfill,
+        include_directories=not realtime_only,
+    )
     dispatch_seconds += time.monotonic() - dispatch_started
     logger.info(
-        "report planning entry finished: plans=%d completed=%d deferred=%d prepare_ms=%.1f maintenance_ms=%.1f dispatch_ms=%.1f steps_ms=%.1f metadata_ms=%.1f work_ms=%.1f stage_ms=%.1f total_ms=%.1f step_budget=%.3f screen_budget=%.3f",
+        "report planning entry finished: plans=%d completed=%d deferred=%d prepare_ms=%.1f maintenance_ms=%.1f dispatch_ms=%.1f steps_ms=%.1f metadata_ms=%.1f work_ms=%.1f stage_ms=%.1f total_ms=%.1f step_budget=%.3f screen_budget=%.3f mode=%s",
         len(keys),
         metrics["completed"],
         metrics["deferred"],
@@ -454,38 +671,74 @@ def plan_due_runs(*, database_engine, redis_client, now=None):
         (time.monotonic() - started) * 1000,
         step_budget,
         screen_budget,
+        "realtime_continue" if realtime_only else "regular",
     )
     return dispatched
 
 
+def _dispatch_planning_entry(
+    database_engine, now, stop, *, allow_backfill, include_directories
+):
+    remaining = stop - time.monotonic()
+    if remaining < 0.2:
+        return 0
+    try:
+        return _dispatch_pending(
+            database_engine,
+            now,
+            allow_backfill=allow_backfill,
+            include_directories=include_directories,
+            budget_seconds=remaining,
+        )
+    except (DBAPIError, QueryBudgetExceeded) as error:
+        if not _planning_budget_error(error):
+            raise
+        logger.info("report planning signal: outcome=dispatch_budget_exhausted")
+        return 0
+
+
 def _defer_failed_plan(
-    database_engine: Any, key: tuple[UUID, str], now: datetime
+    database_engine: Any, key: tuple[UUID, str], now: datetime, *, stop=None
 ) -> None:
-    with Session(database_engine) as session, session.begin():
-        plan = session.exec(
-            select(AdSyncBc)
-            .where(AdSyncBc.tenant_id == key[0], AdSyncBc.bc_id == key[1])
-            .with_for_update(skip_locked=True)
-        ).one_or_none()
-        if plan is None:
-            return
-        plan.disabled_reason = "plan_failed"
-        retry_at = now + timedelta(minutes=5)
-        progress = plan.screening_progress.get("planning_steps_v1")
-        if progress:
-            progress = {
-                k: v for k, v in progress.items() if k != "screen_waiting_since"
-            }
-            plan.screening_progress = {
-                **plan.screening_progress,
-                "planning_steps_v1": {
-                    **progress,
-                    "retry_at": retry_at.isoformat(),
-                    "last_turn": datetime.now(UTC).isoformat(),
-                },
-            }
-        _defer_plan(plan, retry_at)
-        plan.next_material_at = max(plan.next_material_at, retry_at)
+    stop = time.monotonic() + 1 if stop is None else stop
+    if stop - time.monotonic() < 0.2:
+        return
+    try:
+        with (
+            Session(database_engine) as session,
+            session.begin(),
+            query_budget(session, seconds=max(0, stop - time.monotonic())),
+        ):
+            plan = session.exec(
+                select(AdSyncBc)
+                .where(AdSyncBc.tenant_id == key[0], AdSyncBc.bc_id == key[1])
+                .with_for_update(skip_locked=True)
+            ).one_or_none()
+            if plan is None:
+                return
+            plan.disabled_reason = "plan_failed"
+            retry_at = now + timedelta(minutes=5)
+            progress = plan.screening_progress.get("planning_steps_v1")
+            if progress:
+                progress = {
+                    k: v for k, v in progress.items() if k != "screen_waiting_since"
+                }
+                plan.screening_progress = {
+                    **plan.screening_progress,
+                    "planning_steps_v1": {
+                        **progress,
+                        "retry_at": retry_at.isoformat(),
+                        "last_turn": datetime.now(UTC).isoformat(),
+                    },
+                }
+            _defer_plan(plan, retry_at)
+            plan.next_material_at = max(plan.next_material_at, retry_at)
+
+            session.flush()
+    except (DBAPIError, QueryBudgetExceeded) as error:
+        if not _planning_budget_error(error):
+            raise
+        logger.info("report planning signal: outcome=failure_state_budget_exhausted")
 
 
 def _defer_plan(plan, retry_at):
@@ -631,8 +884,9 @@ def _plan_one(
     allow_backfill=True,
     one_step=False,
     time_budget=None,
-    screen_budget=None,
     metrics=None,
+    realtime_only=False,
+    prefer_facts=False,
 ):
     # 每一阶段/批次自行提交；后续SQL或软超时不撤销已完成的筛查与入队。
     from app.modules.reporting.planning_steps import run_plan
@@ -647,8 +901,9 @@ def _plan_one(
         allow_backfill=allow_backfill,
         one_step=one_step,
         time_budget=time_budget,
-        screen_budget=screen_budget,
         metrics=metrics,
+        realtime_only=realtime_only,
+        prefer_facts=prefer_facts,
     )
 
 
@@ -781,12 +1036,30 @@ def _report_refill_after(database_engine, redis_client, job):
 
 
 def _dispatch_pending(
-    database_engine, now, *, allow_backfill=True, include_directories=True
+    database_engine,
+    now,
+    *,
+    allow_backfill=True,
+    include_directories=True,
+    budget_seconds=None,
 ):
-    with Session(database_engine) as session, session.begin():
-        return _dispatch_report_jobs(session, now, allow_backfill=allow_backfill) + (
+    from contextlib import nullcontext
+
+    with (
+        Session(database_engine) as session,
+        session.begin(),
+        (
+            query_budget(session, seconds=budget_seconds)
+            if budget_seconds is not None
+            else nullcontext()
+        ),
+    ):
+        count = _dispatch_report_jobs(session, now, allow_backfill=allow_backfill) + (
             _dispatch_directories(session, now) if include_directories else 0
         )
+
+        session.flush()
+        return count
 
 
 def _failed(session, job, code):
@@ -1223,8 +1496,31 @@ def plan_due(*, tenant_id=None, actor_id=None, payload=None):
             # 空补位不扫描 outbox，失败消息仍由原持久记录与 broker 退避恢复。
             drain_dispatch()
         return count
-    with Redis.from_url(settings.REDIS_URL) as redis:
+    with Redis.from_url(
+        settings.REDIS_URL,
+        socket_connect_timeout=0.5,
+        socket_timeout=0.5,
+        retry=Retry(NoBackoff(), 0),
+        retry_on_error=[],
+    ) as redis:
         return plan_due_runs(database_engine=engine, redis_client=redis)
+
+
+@celery_app.task(name="reporting.plan_continue", time_limit=30, soft_time_limit=25)
+def plan_continue(*, tenant_id, actor_id, payload):
+    # tenant/actor仅是outbox信号归属；逐BC仍读取自身冻结route和当前owned范围。
+    del tenant_id, actor_id
+    _continuation_contract(payload)
+    with Redis.from_url(
+        settings.REDIS_URL,
+        socket_connect_timeout=0.5,
+        socket_timeout=0.5,
+        retry=Retry(NoBackoff(), 0),
+        retry_on_error=[],
+    ) as redis:
+        return plan_due_runs(
+            database_engine=engine, redis_client=redis, continuation=payload
+        )
 
 
 @celery_app.task(
