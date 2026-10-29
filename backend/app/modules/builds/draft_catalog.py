@@ -67,7 +67,7 @@ WITH page AS MATERIALIZED (
  AND (CAST(:at AS timestamptz) IS NULL OR (d.updated_at,d.id)<(:at,CAST(:identity AS uuid)))
  ORDER BY d.updated_at DESC,d.id DESC LIMIT :size
 )
-SELECT d.id draft_id,d.bc_id,d.revision,d.status,d.updated_at,
+SELECT d.id draft_id,d.media_kind,d.bc_id,d.revision,d.status,d.updated_at,
  st.name || ' v' || sv.number::text strategy_label,
  ARRAY(SELECT i.raw_text FROM draft_input i
    WHERE i.tenant_id=d.tenant_id AND i.draft_id=d.id AND i.kind='drama'

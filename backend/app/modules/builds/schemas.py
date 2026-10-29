@@ -6,6 +6,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from app.modules.builds.image_composition_schemas import MediaKind
 from app.modules.builds.targeting_schemas import AudienceTargeting
 from app.modules.providers.schemas import DramaCandidate
 
@@ -62,6 +63,7 @@ class ManualLinkPatch(BaseModel):
 
 class CreateDraftRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
+    media_kind: MediaKind = "VIDEO"
     request_id: UUID
     bc_id: str = Field(min_length=1, max_length=128)
     strategy_version_id: UUID
@@ -122,6 +124,7 @@ class DraftGroupEditRequest(BaseModel):
 
 
 class DraftSummary(BaseModel):
+    media_kind: MediaKind = "VIDEO"
     targeting: AudienceTargeting = Field(default_factory=AudienceTargeting)
     targeting_override: AudienceTargeting | None = None
     draft_id: UUID
@@ -150,6 +153,7 @@ class DraftSummary(BaseModel):
 
 
 class DraftListItem(BaseModel):
+    media_kind: MediaKind = "VIDEO"
     draft_id: UUID
     bc_id: str
     revision: int

@@ -27,6 +27,7 @@ from app.modules.accounts.models import TenantBC
 from app.modules.accounts.resolver import resolve_lines
 from app.modules.accounts.routing import freeze_route, verify_route
 from app.modules.accounts.schemas import InputLine
+from app.modules.builds.image_composition_schemas import MediaKind
 from app.modules.builds.models import (
     BuildDraft,
     DraftAccount,
@@ -238,7 +239,10 @@ def create_draft(
     manual_links: list[dict[str, Any]] | None = None,
     request_id: UUID | None = None,
     execution_connection_id: UUID | None = None,
+    media_kind: MediaKind = "VIDEO",
 ) -> UUID:
+    if media_kind not in {"VIDEO", "CAROUSEL"}:
+        raise DomainError("draft_media_kind_invalid", "草稿素材类型无效")
     provider_connection_id, application_id = resolve_provider(
         session, context, provider_connection_id, application_id, custom_provider_name
     )
@@ -261,6 +265,9 @@ def create_draft(
     # 未指定连接的既有请求摘要保持原文，便于原 request_id 幂等回读。
     if execution_connection_id is not None:
         intent["execution_connection_id"] = execution_connection_id
+    # VIDEO 与历史省略值语义一致；新 CAROUSEL 明确进入幂等摘要。
+    if media_kind != "VIDEO":
+        intent["media_kind"] = media_kind
     request_id = request_id or uuid4()
     digest = hashlib.sha256(
         json.dumps(
@@ -292,6 +299,7 @@ def create_draft(
             session, context=context, bc_id=bc_id, connection_id=execution_connection_id
         )
     draft = BuildDraft(
+        media_kind=media_kind,
         tenant_id=context.tenant_id,
         bc_id=bc_id,
         strategy_version_id=strategy_version_id,
@@ -1070,6 +1078,8 @@ def _links_page(
 def _materials_page(
     session: Session, context: TenantContext, draft: BuildDraft, prep: DraftPreparation
 ) -> None:
+    if draft.media_kind != "VIDEO":
+        raise DomainError("draft_media_kind_mismatch", "图片草稿须使用图片候选与创意编排")
     drama = session.exec(
         select(DraftDrama)
         .where(
@@ -1192,6 +1202,8 @@ def edit_material_groups(
     groups: list[list[UUID]],
 ) -> int:
     draft = get_draft(session, context=context, draft_id=draft_id, lock=True)
+    if draft.media_kind != "VIDEO":
+        raise DomainError("draft_media_kind_mismatch", "图片草稿须使用创意单元编辑")
     if draft.revision != expected_revision:
         raise DomainError(
             "draft_revision_conflict", "草稿已更新，请保留当前编辑并读取最新版本"

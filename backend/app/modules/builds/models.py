@@ -10,10 +10,14 @@ from sqlalchemy import (
     DateTime,
     ForeignKeyConstraint,
     Index,
+    Integer,
+    String,
     UniqueConstraint,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlmodel import Field, SQLModel
+
+from app.modules.builds.image_composition_schemas import MediaKind
 
 
 def draft_reference() -> ForeignKeyConstraint:
@@ -52,6 +56,20 @@ class BuildDraft(SQLModel, table=True):
                 "provider_application.external_id",
             ],
         ),
+        UniqueConstraint(
+            "tenant_id", "id", "bc_id", "media_kind", name="uq_build_draft_media_kind"
+        ),
+        CheckConstraint(
+            "media_kind IN ('VIDEO','CAROUSEL')", name="ck_build_draft_media_kind"
+        ),
+        CheckConstraint(
+            "active_image_generation >= 0 AND (applied_image_rule_revision IS NULL OR applied_image_rule_revision > 0)",
+            name="ck_build_draft_image_versions",
+        ),
+        CheckConstraint(
+            "structure_override IS NULL OR jsonb_typeof(structure_override) = 'object'",
+            name="ck_build_draft_structure_object",
+        ),
         CheckConstraint("revision > 0", name="ck_build_draft_revision"),
         CheckConstraint(
             "targeting_override IS NULL OR jsonb_typeof(targeting_override) = 'object'",
@@ -73,6 +91,18 @@ class BuildDraft(SQLModel, table=True):
     id: UUID = Field(default_factory=uuid4, primary_key=True)
     tenant_id: UUID
     bc_id: str = Field(max_length=128)
+    # P2 图片直接使用创意单元；旧视频素材表由 P3 与规划器一起切换。
+    media_kind: MediaKind = Field(
+        default="VIDEO",
+        sa_column=Column(String(16), nullable=False, server_default="VIDEO"),
+    )
+    active_image_generation: int = Field(
+        default=0, sa_column=Column(Integer, nullable=False, server_default="0")
+    )
+    applied_image_rule_revision: int | None = None
+    structure_override: dict[str, Any] | None = Field(
+        default=None, sa_column=Column(JSONB(none_as_null=True), nullable=True)
+    )
     revision: int = 1
     status: str = "DRAFT"
     strategy_version_id: UUID

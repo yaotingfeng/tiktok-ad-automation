@@ -78,6 +78,7 @@ def draft_summary(
     ).one()
     provider = session.get(ProviderConnection, row.provider_connection_id)
     return DraftSummary(
+        media_kind=row.media_kind,
         targeting=row.targeting_override
         or get_version(
             session, context=context, version_id=row.strategy_version_id
