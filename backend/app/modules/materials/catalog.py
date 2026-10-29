@@ -100,7 +100,7 @@ def remote_preview(
         source_id = source.id
         bc_id = source.bc_id
         if material.media_type == "IMAGE":
-            from app.modules.accounts.routing import freeze_route
+            from app.modules.accounts.routing import freeze_route, verify_route
 
             from .image_distribution import image_ready
 
@@ -112,6 +112,26 @@ def remote_preview(
                     "image_source_unavailable", "图片授权代数已改变，请重新核实"
                 )
             image_id, account = source.image_id, source.advertiser_id
+            content_identity = (
+                material.tenant_id,
+                material.bc_id,
+                material.media_type,
+                material.sha256,
+                material.video_md5,
+                material.byte_size,
+                material.width,
+                material.height,
+            )
+            source_identity = (
+                source.tenant_id,
+                source.bc_id,
+                source.material_id,
+                source.advertiser_id,
+                source.image_id,
+                source.connection_id,
+                source.mid,
+                source.verified_at,
+            )
         else:
             image_id = None
     if image_id:
@@ -136,6 +156,54 @@ def remote_preview(
                         "materials.get_images", channel=route.channel
                     ).lease_ms,
                 ),
+            )
+        with bounded_session(database_engine, task_deadline=deadline) as db:
+            # 签名 URL 是临时读取能力；返回前拒绝请求期间撤销的授权或替换的来源。
+            verify_route(
+                db,
+                context=context,
+                route=route,
+                advertiser_id=account,
+                capability="read",
+            )
+            current = db.get(AccountMaterial, source_id)
+            if (
+                not image_ready(current, route)
+                or current is None
+                or (
+                    current.tenant_id,
+                    current.bc_id,
+                    current.material_id,
+                    current.advertiser_id,
+                    current.image_id,
+                    current.connection_id,
+                    current.mid,
+                    current.verified_at,
+                )
+                != source_identity
+            ):
+                raise DomainError("image_source_unavailable", "图片来源证据已变化")
+            material = db.get(MaterialFile, material_id)
+            if (
+                material is None
+                or (
+                    material.tenant_id,
+                    material.bc_id,
+                    material.media_type,
+                    material.sha256,
+                    material.video_md5,
+                    material.byte_size,
+                    material.width,
+                    material.height,
+                )
+                != content_identity
+            ):
+                raise DomainError("image_preview_unavailable", "图片内容身份已变化")
+        if (image.advertiser_id, image.image_id) != (account, image_id) or datetime.now(
+            UTC
+        ) >= deadline:
+            raise DomainError(
+                "image_preview_unavailable", "图片预览身份或读取期限无法核实"
             )
         return RemoteMaterialPreview(
             bc_id=bc_id,

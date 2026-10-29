@@ -64,14 +64,14 @@ def image_env(source_env, monkeypatch):
     return source_env
 
 
-def seed_image(env):
+def seed_image(env, advertiser_id="actual-account"):
     with Session(engine) as db, db.begin():
         db.add(
             AccountMaterial(
                 tenant_id=env["context"].tenant_id,
                 bc_id=env["bc_id"],
                 material_id=env["material_id"],
-                advertiser_id="actual-account",
+                advertiser_id=advertiser_id,
                 connection_id=env["connection_id"],
                 media_type="IMAGE",
                 video_id=None,
@@ -190,6 +190,58 @@ def test_late_result_after_binding_revision_change_is_not_published(
     wire[1].append(image_info())
     run(image_env, redis_client, task)
     assert state(task)[0].status != "ready" and state(task)[2] is None
+
+
+def revoke_build(env):
+    from app.modules.accounts.models import BCAccountAccess
+
+    with Session(engine) as db, db.begin():
+        grant = db.get(
+            BCAccountAccess,
+            (
+                env["context"].tenant_id,
+                env["bc_id"],
+                "target-account",
+                env["connection_id"],
+            ),
+        )
+        assert grant.authorized and grant.can_upload
+        grant.can_build = False
+
+
+@pytest.mark.parametrize("path", ["share", "original"])
+def test_target_build_revoked_after_queue_never_sends(
+    image_url_env, wire, redis_client, path
+):
+    env = image_url_env
+    if path == "share":
+        seed_image(env)
+        wire[1].extend([image_info(), {}])
+    else:
+        wire[1].append({"image_id": "target-image", "material_id": "target-mid"})
+    task = queue_images(env).items[0].task_id
+    revoke_build(env)
+    run(env, redis_client, task, kind="prepare", s3=env["s3"])
+    assert not wire[0]
+    assert state(task)[0].status == "blocked" and state(task)[2] is None
+
+
+def test_target_build_revoked_during_readback_never_publishes(
+    image_env, wire, redis_client
+):
+    seed_image(image_env)
+    task = queue_images(image_env).items[0].task_id
+    wire[1].extend([image_info(), {}])
+    run(image_env, redis_client, task, kind="prepare")
+
+    def revoked():
+        revoke_build(image_env)
+        return image_info()
+
+    wire[1].append(revoked)
+    run(image_env, redis_client, task)
+    assert state(task)[2] is None
+    assert state(task)[0].status == "result_unknown"
 
 
 @pytest.fixture
@@ -687,6 +739,84 @@ def test_remote_image_preview_after_cleanup_and_current_binding(
             material_id=image_env["material_id"],
         )
     assert len(wire[0]) == 1
+
+
+@pytest.mark.parametrize("change", ["binding", "access", "mapping"])
+def test_image_preview_rechecks_authority_after_response(
+    image_env, wire, redis_client, change
+):
+    from app.core.errors import DomainError
+    from app.modules.accounts.connection_models import BCConnectionBinding
+    from app.modules.accounts.models import BCAccountAccess
+    from app.modules.materials.catalog import remote_preview
+
+    env = image_env
+    seed_image(env)
+
+    def changed():
+        with Session(engine) as db, db.begin():
+            if change == "binding":
+                binding = db.exec(
+                    select(BCConnectionBinding).where(
+                        BCConnectionBinding.connection_id == env["connection_id"]
+                    )
+                ).one()
+                binding.revision += 1
+            elif change == "access":
+                db.get(
+                    BCAccountAccess,
+                    (
+                        env["context"].tenant_id,
+                        env["bc_id"],
+                        "actual-account",
+                        env["connection_id"],
+                    ),
+                ).authorized = False
+            else:
+                asset = db.exec(
+                    select(AccountMaterial).where(
+                        AccountMaterial.material_id == env["material_id"]
+                    )
+                ).one()
+                asset.image_id = "replacement-image"
+        data = image_info()
+        data["list"][0]["image_url"] = (
+            "https://image.example.invalid/fresh?signature=secret"
+        )
+        return data
+
+    wire[1].append(changed)
+    with pytest.raises(DomainError):
+        remote_preview(
+            database_engine=engine,
+            redis_client=redis_client,
+            context=env["context"],
+            material_id=env["material_id"],
+        )
+    assert len(wire[0]) == 1
+
+
+def test_readiness_skips_revoked_source_for_another_legal_source(image_env):
+    from app.modules.accounts.models import BCAccountAccess
+    from tests.modules.materials.test_readiness import read
+
+    env = image_env
+    seed_image(env)
+    seed_image(env, "target-two")
+    with Session(engine) as db, db.begin():
+        db.get(
+            BCAccountAccess,
+            (
+                env["context"].tenant_id,
+                env["bc_id"],
+                "actual-account",
+                env["connection_id"],
+            ),
+        ).authorized = False
+    result = read(env, "target-account")
+    assert result.state == "preparable" and result.path == "share_source"
+    task = queue_images(env).items[0].task_id
+    assert state(task)[1].remote_response["source_advertiser_id"] == "target-two"
 
 
 def test_cross_bc_original_is_blocked_before_any_dispatch(image_env):

@@ -381,6 +381,9 @@ def _authority(db, context, dist, op, *, writing=False):
     require_same_route(
         load_material_route(op.frozen_route, context=context, bc_id=dist.bc_id), route
     )
+    if not op.remote_response.get("source_ingest"):
+        # 搭建目标的权限贯穿执行和回读发布，read/upload 不能代替 build。
+        _authorize(db, context, route, dist.advertiser_id, capability="build")
     _authorize(
         db,
         context,
@@ -967,7 +970,13 @@ def image_readiness(
                 and source.mid
                 and source.connection_id == route.connection_id
             ):
-                _authorize(db, context, route, source.advertiser_id, capability="read")
+                try:
+                    _authorize(
+                        db, context, route, source.advertiser_id, capability="read"
+                    )
+                except DomainError:
+                    # 单个失效来源不能遮蔽后续合法副本或同 BC 可用原件。
+                    continue
                 return MaterialReadiness(state="preparable", path="share_source")
         if material.bc_id == route.bc_id and material.original_available:
             return MaterialReadiness(state="preparable", path="upload_original")
