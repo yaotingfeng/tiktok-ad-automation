@@ -20,18 +20,57 @@ from app.modules.reporting.store_models import ReportSyncJob
 ACTIVE = ("QUEUED", "WAITING")
 logger = logging.getLogger(__name__)
 
-# 先收窄到现有部分索引覆盖的活动关联，再检查 JSON 游标；维护归并只是
-# 尽力而为，不需要按全历史 created_at 排序。排序会把大租户所有活动关联
-# 拉入一次排序，反而和健康覆盖争抢 I/O；下一轮继续取有限候选即可。
+# 先对活动索引键分页，再读取本页 progress；已标记的大 JSON 不能每轮全部
+# 解 TOAST。id 补齐唯一顺序，同一账户跨页不会遗漏；Redis 保存跨轮位置。
 RECONCILE_CANDIDATES_SQL = """
 WITH active_links AS MATERIALIZED (
-    SELECT id, created_at, progress ? 'coalesced_v1' AS coalesced
+    SELECT id, tenant_id, bc_id, actor_id, advertiser_ids
     FROM report_sync_job
     WHERE kind='material_links' AND status IN ('QUEUED','WAITING')
+      {after}
+    ORDER BY tenant_id, bc_id, actor_id, advertiser_ids, id
+    LIMIT :limit
 )
-SELECT id FROM active_links WHERE NOT coalesced
-LIMIT :limit
+SELECT page.id, page.tenant_id, page.bc_id, page.actor_id, page.advertiser_ids,
+       (SELECT job.progress ? 'coalesced_v1' FROM report_sync_job job
+        WHERE job.id=page.id) AS coalesced
+FROM active_links page
+ORDER BY tenant_id, bc_id, actor_id, advertiser_ids, id
 """
+
+
+def reconciliation_page(session, *, cursor, limit):
+    after = ""
+    params = {"limit": limit}
+    if cursor is not None:
+        tenant, bc, actor, advertisers, job_id = cursor
+        after = """AND (tenant_id,bc_id,actor_id,advertiser_ids,id) >
+          (CAST(:tenant AS uuid),:bc,CAST(:actor AS uuid),
+           CAST(:advertisers AS jsonb),CAST(:job_id AS uuid))"""
+        params.update(
+            tenant=tenant,
+            bc=bc,
+            actor=actor,
+            advertisers=json.dumps(advertisers),
+            job_id=job_id,
+        )
+    return (
+        session.connection()
+        .execute(text(RECONCILE_CANDIDATES_SQL.format(after=after)), params)
+        .mappings()
+        .all()
+    )
+
+
+def _scan_position(row):
+    return [
+        str(row["tenant_id"]),
+        row["bc_id"],
+        str(row["actor_id"]),
+        row["advertiser_ids"],
+        str(row["id"]),
+    ]
+
 
 WAKE_CANDIDATES_SQL = """
 WITH active_links AS MATERIALIZED (
@@ -217,65 +256,93 @@ def enqueue_link_jobs(
     return created
 
 
-def reconcile_link_work(session, *, now, limit=50, deadline=None):
-    """旧任务有界归并；原记录保留承接关系，不把归并计为数据已经补齐。"""
-    session.flush()
-    candidates = (
-        session.connection()
-        .execute(text(RECONCILE_CANDIDATES_SQL), {"limit": limit})
-        .scalars()
-        .all()
-    )
+def _reconcile_candidate(session, candidate_id, *, now):
     merged = 0
-    for candidate_id in candidates:
+    candidate = session.get(ReportSyncJob, candidate_id)
+    if candidate is None:
+        return 0
+    if len(candidate.advertiser_ids) != 1:
+        return 0
+    advertiser = candidate.advertiser_ids[0]
+    scope = _scope(
+        candidate.tenant_id,
+        candidate.bc_id,
+        candidate.actor_id,
+        candidate.frozen_route,
+        advertiser,
+        candidate.campaign_ids,
+    )
+    if (
+        not session.connection()
+        .execute(
+            text("SELECT pg_try_advisory_xact_lock(hashtextextended(:scope, 0))"),
+            {"scope": f"report-links:{scope}"},
+        )
+        .scalar_one()
+    ):
+        return 0
+    rows = _pending(
+        session,
+        tenant_id=candidate.tenant_id,
+        bc_id=candidate.bc_id,
+        actor_id=candidate.actor_id,
+        frozen_route=candidate.frozen_route,
+        advertiser=advertiser,
+        campaign_ids=candidate.campaign_ids,
+        now=now,
+    )
+    for current in (True, False):
+        group = [
+            r
+            for r in rows
+            if _current(session, r.tenant_id, advertiser, r.start_date, r.end_date, now)
+            == current
+        ]
+        if group:
+            _merge(group[0], group[1:], now)
+            merged += len(group) - 1
+    session.flush()
+    return merged
+
+
+def reconcile_link_work(session, *, now, limit=50, deadline=None, scan=None):
+    """逐页归并；scan 仅记录审查位置，调用方在 PG 提交后持久保存。"""
+    scan = {} if scan is None else scan
+    session.flush()
+    page = reconciliation_page(session, cursor=scan.get("cursor"), limit=limit)
+    if not page:
+        scan["cursor"] = None
+        return 0
+    merged = 0
+    for row in page:
         if deadline is not None and datetime.now(UTC) >= deadline:
             break
-        candidate = session.get(ReportSyncJob, candidate_id)
-        if candidate is None:
-            continue
-        if len(candidate.advertiser_ids) != 1:
-            continue
-        advertiser = candidate.advertiser_ids[0]
-        scope = _scope(
-            candidate.tenant_id,
-            candidate.bc_id,
-            candidate.actor_id,
-            candidate.frozen_route,
-            advertiser,
-            candidate.campaign_ids,
-        )
-        if (
-            not session.connection()
-            .execute(
-                text("SELECT pg_try_advisory_xact_lock(hashtextextended(:scope, 0))"),
-                {"scope": f"report-links:{scope}"},
+        if not row["coalesced"]:
+            remaining = (
+                1.0
+                if deadline is None
+                else (deadline - datetime.now(UTC)).total_seconds()
             )
-            .scalar_one()
-        ):
-            continue
-        rows = _pending(
-            session,
-            tenant_id=candidate.tenant_id,
-            bc_id=candidate.bc_id,
-            actor_id=candidate.actor_id,
-            frozen_route=candidate.frozen_route,
-            advertiser=advertiser,
-            campaign_ids=candidate.campaign_ids,
-            now=now,
-        )
-        for current in (True, False):
-            group = [
-                r
-                for r in rows
-                if _current(
-                    session, r.tenant_id, advertiser, r.start_date, r.end_date, now
+            if remaining <= 0:
+                break
+            try:
+                # 单个慢账户回滚自己的归并；轮转只是尝试位置，不是成功标记，
+                # 回绕后仍会重试，且不撤销此前账户已完成的工作。
+                with (
+                    session.begin_nested(),
+                    query_budget(session, seconds=min(1.0, remaining)),
+                ):
+                    merged += _reconcile_candidate(session, row["id"], now=now)
+            except (DBAPIError, QueryBudgetExceeded) as error:
+                if (
+                    isinstance(error, DBAPIError)
+                    and getattr(error.orig, "sqlstate", None) != "57014"
+                ):
+                    raise
+                logger.info(
+                    "report link reconciliation probe deferred: job=%s", row["id"]
                 )
-                == current
-            ]
-            if group:
-                _merge(group[0], group[1:], now)
-                merged += len(group) - 1
-        session.flush()
+        scan["cursor"] = _scan_position(row)
     return merged
 
 
