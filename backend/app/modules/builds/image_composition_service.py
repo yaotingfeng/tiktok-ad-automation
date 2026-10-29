@@ -655,8 +655,7 @@ def preview_composition(
             {"drama_id": str(drama.drama_id), "drama_title": drama.title, **details}
         )
         conflicts.extend(
-            describe(c.model_dump(mode="json"), drama.drama_id)
-            for c in diff.conflicts
+            describe(c.model_dump(mode="json"), drama.drama_id) for c in diff.conflicts
         )
         removed_count += len(diff.removed_ids)
         retained_count += len(diff.retained_ids)
@@ -1162,7 +1161,9 @@ def list_plan_units(session, scope, plan_id, *, cursor=None, limit=50):
     )
 
 
-def list_candidates(session, scope, snapshot_id=None, *, cursor=None, limit=50, drama_id=None):
+def list_candidates(
+    session, scope, snapshot_id=None, *, cursor=None, limit=50, drama_id=None
+):
     draft = _draft(session, scope, verify=False)
     state = session.get(ImageCompositionState, (scope.tenant_id, scope.draft_id))
     identity = (
@@ -1574,7 +1575,18 @@ def composition_state(session, scope):
     candidate_build = session.exec(
         candidate_query.order_by(col(ImageCandidateSnapshot.created_at).desc()).limit(1)
     ).first()
+    from .creative_units import require_freeze_ready
+
+    preview_reasons = []
+    try:
+        require_freeze_ready(session, draft, context=scope.context, route=scope.route)
+        if not statuses or any(status != "READY" for status, _ in statuses):
+            preview_reasons.append("music_not_ready")
+    except DomainError as error:
+        preview_reasons.append(error.code)
     return {
+        "preview_ready": not preview_reasons,
+        "preview_reason_codes": preview_reasons,
         "candidate_build": snapshot_progress(candidate_build)
         if candidate_build
         else None,

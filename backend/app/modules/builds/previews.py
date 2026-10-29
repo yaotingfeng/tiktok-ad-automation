@@ -6,7 +6,7 @@ from time import monotonic
 from typing import Any, Literal, cast
 from uuid import UUID
 
-from sqlalchemy import and_, func
+from sqlalchemy import and_, func, text
 from sqlalchemy.orm import aliased
 from sqlmodel import Session, col, select
 
@@ -842,10 +842,34 @@ def _expand_unit(
     if group is None:
         if unit.group_count == 0:
             _block(unit, ["materials_missing"])
+        from .ad_readiness import included_group_sql
+
+        if not session.execute(
+            text(
+                "SELECT EXISTS(SELECT 1 FROM planned_group g WHERE g.tenant_id=:tenant AND g.unit_id=:unit AND "
+                + included_group_sql()
+                + ")"
+            ),
+            {"tenant": preview.tenant_id, "unit": unit.id},
+        ).scalar_one():
+            _block(
+                unit,
+                ["carousel_ads_unavailable"]
+                if preview_contract(
+                    session, tenant_id=preview.tenant_id, preview_id=preview.id
+                ).media_kind
+                == "CAROUSEL"
+                else ["materials_missing"],
+            )
         unit.complete = True
         session.add(unit)
         p.update(unit_id=None, group_after=0)
         return
+    contract = preview_contract(
+        session, tenant_id=preview.tenant_id, preview_id=preview.id
+    )
+    carousel = contract.media_kind == "CAROUSEL"
+    ad_failures = {}
     maximum = unit.scene_snapshot["creative_limit"]
     # 广告级素材集合才是平台单广告上限；共享组展示行可以大于 50，不能
     # 用组级总数错误阻断每个基础广告均在上限内的策略。
@@ -866,25 +890,34 @@ def _expand_unit(
             )
             .order_by(col(PreviewGroupMaterial.position))
         ).all()
+        from .carousel_readiness import image_preview_readiness
+
         readiness = (
-            get_material_readiness_batch(
+            image_preview_readiness(
                 session,
                 context=context,
-                bc_id=preview.bc_id,
-                material_ids=list(materials),
-                advertiser_id=unit.advertiser_id,
                 route=route,
+                advertiser_id=unit.advertiser_id,
+                material_ids=list(materials),
             )
-            if materials
-            else {}
+            if carousel and materials
+            else (
+                get_material_readiness_batch(
+                    session,
+                    context=context,
+                    bc_id=preview.bc_id,
+                    material_ids=list(materials),
+                    advertiser_id=unit.advertiser_id,
+                    route=route,
+                )
+                if materials
+                else {}
+            )
         )
         skipped_ids = [
             identity
             for identity, result in readiness.items()
-            if preview_contract(
-                session, tenant_id=preview.tenant_id, preview_id=preview.id
-            ).media_kind
-            == "VIDEO"
+            if not carousel
             and result.state == "blocked"
             and result.reason_code in SKIPPABLE_MATERIAL_REASONS
         ]
@@ -920,7 +953,7 @@ def _expand_unit(
                     _record(preview, skipped.model_dump(mode="json"))
         for identity, result in readiness.items():
             if result.state == "blocked":
-                if identity not in skipped_ids:
+                if identity not in skipped_ids and not carousel:
                     _block(unit, [result.reason_code or "material_unavailable"])
             elif result.state == "preparable" and unit.readiness != "BLOCKED":
                 unit.readiness = "PREPARING"
@@ -945,19 +978,41 @@ def _expand_unit(
         ).all()
         from .preview_models import PreviewCreativeUnitItem
 
+        # 一次读取整组映射成员，不能按映射逐个查库（共享组可含数千单元）。
+        member_rows = session.exec(
+            select(
+                PreviewCreativeUnitItem.creative_unit_id,
+                PreviewCreativeUnitItem.material_id,
+            ).where(
+                PreviewCreativeUnitItem.tenant_id == preview.tenant_id,
+                PreviewCreativeUnitItem.preview_id == preview.id,
+                col(PreviewCreativeUnitItem.creative_unit_id).in_(
+                    [m.creative_unit_id for m in mappings]
+                ),
+            )
+        ).all()
+        members_by_unit = {}
+        for identity, member in member_rows:
+            members_by_unit.setdefault(identity, []).append(member)
+        skipped_set = set(skipped_ids)
         for mapping in mappings:
-            members = session.exec(
-                select(PreviewCreativeUnitItem.material_id).where(
-                    PreviewCreativeUnitItem.tenant_id == preview.tenant_id,
-                    PreviewCreativeUnitItem.preview_id == preview.id,
-                    PreviewCreativeUnitItem.creative_unit_id
-                    == mapping.creative_unit_id,
-                )
-            ).all()
-            if members and not all(member in skipped_ids for member in members):
+            members = members_by_unit.get(mapping.creative_unit_id, [])
+            if members and not all(member in skipped_set for member in members):
                 ad_material_counts[mapping.base_ad_no] = (
                     ad_material_counts.get(mapping.base_ad_no, 0) + 1
                 )
+            if carousel:
+                reasons = ad_failures.setdefault(mapping.base_ad_no, set())
+                if not members:
+                    reasons.add("materials_missing")
+                for member in members:
+                    result = readiness.get(member)
+                    if result is None or result.state == "blocked":
+                        reasons.add(
+                            result.reason_code
+                            if result and result.reason_code
+                            else "image_source_unavailable"
+                        )
         if material_limit_exceeded(list(ad_material_counts.values()), maximum):
             _block(unit, ["material_group_limit_exceeded"])
     names = _names(preview, drama, config, group.group_no, 1)
@@ -990,6 +1045,7 @@ def _expand_unit(
         maximum=maximum_ads,
     ):
         _block(unit, ["creative_count_exceeded"])
+    readiness_facts = []
     for copy in copies:
         ad_name = _names(
             preview, drama, config, group.group_no, copy.creative_no, copy.base_ad_no
@@ -1017,7 +1073,29 @@ def _expand_unit(
             cta_option_ids=options,
         )
         session.add(ad)
+        if carousel:
+            from .preview_models import PreviewAdReadiness
+
+            reasons = sorted(ad_failures.get(copy.base_ad_no, set()))
+            fact = PreviewAdReadiness(
+                **_scope(preview),
+                ad_id=ad.id,
+                included=not reasons,
+                reason_codes=reasons,
+            )
+            readiness_facts.append(fact)
+            _record(preview, fact.model_dump(mode="json"))
         _record(preview, ad.model_dump(mode="json"))
+    if readiness_facts:
+        # 一组一次批量刷广告，再批量写事实；避免每条文案复制都独占一次 SQL 往返。
+        session.flush()
+        session.add_all(readiness_facts)
+        if unit.readiness != "BLOCKED" and any(f.included for f in readiness_facts):
+            # 目标曲目只在实际 attempt 的事务外核验；本地图就绪不能声称配乐已验证。
+            unit.readiness = "PREPARING"
+            unit.reason_codes = sorted(
+                set(unit.reason_codes) | {"carousel_music_unverified"}
+            )
     unit.group_count += 1
     unit.ad_count += len(copies)
     session.add(unit)
@@ -1193,6 +1271,18 @@ def get_preview_summary(
     counts = {state: (int(n), int(g or 0), int(a or 0)) for state, n, g, a in rows}
     eligible = [counts.get(state, (0, 0, 0)) for state in ("READY", "PREPARING")]
     n, g, a = (sum(x[i] for x in eligible) for i in range(3))
+    from .ad_readiness import included_ad_sql
+
+    n, g, a = session.execute(
+        text(
+            """SELECT count(DISTINCT u.id),count(DISTINCT g.id),count(a.id)
+      FROM build_unit u JOIN planned_group g ON g.tenant_id=u.tenant_id AND g.unit_id=u.id
+      JOIN planned_ad a ON a.tenant_id=g.tenant_id AND a.group_id=g.id
+      WHERE u.tenant_id=:tenant AND u.preview_id=:preview AND u.complete AND u.readiness IN ('READY','PREPARING') AND """
+            + included_ad_sql()
+        ),
+        {"tenant": context.tenant_id, "preview": preview_id},
+    ).one()
     unique_material_count = session.exec(
         select(func.count(func.distinct(PreviewGroupMaterial.material_id))).where(
             PreviewGroupMaterial.tenant_id == context.tenant_id,

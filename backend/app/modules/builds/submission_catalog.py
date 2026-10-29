@@ -35,6 +35,8 @@ from app.modules.builds.submissions import (
     submission_row,
 )
 
+from .ad_readiness import included_ad_sql, included_group_sql
+
 StatusGroup = Literal["all", "active", "attention", "completed"]
 
 
@@ -74,6 +76,7 @@ def metadata(
 
 # Page-level equivalent of the authoritative summary's frozen object partition.
 # MATERIAL/CTA/READBACK are dependency facts, never additional advertising objects.
+
 COUNTS = (
     """
 , scope_basis AS (
@@ -88,7 +91,11 @@ COUNTS = (
 ), totals AS (
  SELECT submission_id,count(DISTINCT drama_id) drama_count,count(DISTINCT advertiser_id) account_count,
  count(*) FILTER(WHERE NOT included) excluded_unit_count,count(*) FILTER(WHERE included) submitted_c,
- coalesce(sum(group_count) FILTER(WHERE included),0) submitted_g,coalesce(sum(ad_count) FILTER(WHERE included),0) submitted_a
+ coalesce(sum((SELECT count(*) FROM planned_group g WHERE g.tenant_id=scope.tenant_id AND g.unit_id=scope.id AND """
+    + included_group_sql()
+    + """)) FILTER(WHERE included),0) submitted_g,coalesce(sum((SELECT count(*) FROM planned_group g JOIN planned_ad a ON a.tenant_id=g.tenant_id AND a.group_id=g.id WHERE g.tenant_id=scope.tenant_id AND g.unit_id=scope.id AND """
+    + included_ad_sql()
+    + """)) FILTER(WHERE included),0) submitted_a
  FROM scope GROUP BY submission_id
 ), failed_ancestors AS MATERIALIZED (
  SELECT p.id submission_id,s.unit_id,bool_or(s.kind='CTA') cta_failed,bool_or(s.kind='CAMPAIGN') campaign_failed
@@ -106,7 +113,7 @@ COUNTS = (
  AND m.drama_id=g.drama_id AND m.group_no=g.group_no AND m.material_id=ms.material_id
  AND NOT EXISTS (SELECT 1 FROM preview_skipped_material skipped
  WHERE skipped.tenant_id=m.tenant_id AND skipped.unit_id=g.unit_id AND skipped.material_id=m.material_id)
- WHERE ms.kind='MATERIAL' AND ms.status='FAILED'
+ WHERE ms.kind='MATERIAL' AND ms.status='FAILED' AND NOT EXISTS (SELECT 1 FROM preview_contract pc WHERE pc.tenant_id=ms.tenant_id AND pc.preview_id=p.preview_id AND pc.media_kind='CAROUSEL')
 ), material_failed_units AS MATERIALIZED (
  SELECT mg.submission_id,mg.unit_id FROM material_failed_groups mg
  GROUP BY mg.submission_id,mg.preview_id,mg.unit_id
@@ -114,8 +121,12 @@ COUNTS = (
  WHERE g.tenant_id=:tenant AND g.preview_id=mg.preview_id AND g.unit_id=mg.unit_id)
 ), objects AS (
  SELECT u.submission_id,u.id unit_id,'CAMPAIGN' kind,NULL::uuid group_id,NULL::uuid ad_id FROM scope u WHERE included
- UNION ALL SELECT u.submission_id,u.id,'ADGROUP',g.id,NULL FROM scope u JOIN planned_group g ON g.tenant_id=u.tenant_id AND g.preview_id=u.preview_id AND g.unit_id=u.id WHERE included
- UNION ALL SELECT u.submission_id,u.id,'AD',g.id,a.id FROM scope u JOIN planned_group g ON g.tenant_id=u.tenant_id AND g.preview_id=u.preview_id AND g.unit_id=u.id JOIN planned_ad a ON a.tenant_id=g.tenant_id AND a.preview_id=g.preview_id AND a.group_id=g.id WHERE included
+ UNION ALL SELECT u.submission_id,u.id,'ADGROUP',g.id,NULL FROM scope u JOIN planned_group g ON g.tenant_id=u.tenant_id AND g.preview_id=u.preview_id AND g.unit_id=u.id WHERE included AND """
+    + included_group_sql()
+    + """
+ UNION ALL SELECT u.submission_id,u.id,'AD',g.id,a.id FROM scope u JOIN planned_group g ON g.tenant_id=u.tenant_id AND g.preview_id=u.preview_id AND g.unit_id=u.id JOIN planned_ad a ON a.tenant_id=g.tenant_id AND a.preview_id=g.preview_id AND a.group_id=g.id WHERE included AND """
+    + included_ad_sql()
+    + """
 ), results AS (
  SELECT o.submission_id,o.kind, CASE
  WHEN """
@@ -495,10 +506,11 @@ def get_submission_ads(
         .execute(
             text(
                 """WITH page AS (SELECT a.* FROM planned_ad a WHERE a.tenant_id=:tenant AND a.preview_id=:preview AND a.group_id=:group AND (CAST(:after AS uuid) IS NULL OR a.id>:after) ORDER BY a.id LIMIT :size)
- SELECT a.id planned_ad_id,a.group_id,a.creative_no,a.name,a.text,a.cta_option_ids,"""
+ SELECT a.id planned_ad_id,a.group_id,a.creative_no,a.name,a.text,a.cta_option_ids,
+ coalesce(ar.included,true) included,coalesce(ar.reason_codes,'[]'::jsonb) reason_codes,"""
                 + STEP_JSON
                 + """ step
- FROM page a LEFT JOIN execution_step e ON e.tenant_id=:tenant AND e.submission_id=:submission AND e.unit_id=:unit AND e.planned_ad_id=a.id AND e.kind='AD' ORDER BY a.id"""
+ FROM page a LEFT JOIN preview_ad_readiness ar ON ar.tenant_id=a.tenant_id AND ar.preview_id=a.preview_id AND ar.ad_id=a.id LEFT JOIN execution_step e ON e.tenant_id=:tenant AND e.submission_id=:submission AND e.unit_id=:unit AND e.planned_ad_id=a.id AND e.kind='AD' ORDER BY a.id"""
             ),
             params,
         )
@@ -511,6 +523,8 @@ def get_submission_ads(
                 k: r[k]
                 for k in [
                     "planned_ad_id",
+                    "included",
+                    "reason_codes",
                     "group_id",
                     "creative_no",
                     "name",
@@ -881,7 +895,7 @@ AND g.unit_id=:unit AND g.id=:group""",
  SELECT m.* FROM planned_group g JOIN frozen_group_material m ON m.tenant_id=g.tenant_id AND m.preview_id=g.preview_id AND m.drama_id=g.drama_id AND m.group_no=g.group_no
  AND NOT EXISTS (SELECT 1 FROM preview_skipped_material skipped WHERE skipped.tenant_id=m.tenant_id AND skipped.unit_id=g.unit_id AND skipped.material_id=m.material_id)
  WHERE g.tenant_id=:tenant AND g.preview_id=:preview AND g.unit_id=:unit AND g.id=:group AND m.position>:after ORDER BY m.position LIMIT :size)
- SELECT m.material_id,m.position,f.file_name,f.storage_state='stored' preview_available,
+ SELECT m.material_id,m.position,f.file_name,f.media_type,f.storage_state='stored' preview_available,
  CASE WHEN e.status='SUCCEEDED' THEN e.resolved->'mapping'->>'video_id' ELSE NULL END video_id,
  CASE WHEN e.status='SUCCEEDED' THEN e.resolved->'mapping'->>'image_id' ELSE NULL END image_id,
  """
@@ -903,6 +917,7 @@ AND g.unit_id=:unit AND g.id=:group""",
                     "position",
                     "file_name",
                     "preview_available",
+                    "media_type",
                     "video_id",
                     "image_id",
                 ]

@@ -436,6 +436,10 @@ function SubmissionAds({
                 <p className="font-medium">
                   SP{r.creative_no} · {r.name}
                 </p>
+                {r.included === false && (
+                  <p className="text-sm text-destructive">已排除本条广告</p>
+                )}
+                <Reasons codes={r.reason_codes || []} />
                 <p className="whitespace-pre-wrap break-words">{r.text}</p>
                 <p className="break-all text-xs">
                   CTA ID：{r.cta_option_ids.join("、") || "未记录"}
@@ -534,9 +538,15 @@ function SubmissionMaterials({
                     <Identifier value={r.material_id} />
                     {r.step && <SubmissionBadge status={r.step.status} />}
                     <p className="break-all text-xs">
-                      目标 VID：{r.video_id || "暂未确认"}
-                      <br />
-                      封面 ID：{r.image_id || "暂未确认"}
+                      {r.media_type === "IMAGE" ? (
+                        <>目标图片 ID：{r.image_id || "暂未确认"}</>
+                      ) : (
+                        <>
+                          目标视频 ID：{r.video_id || "暂未确认"}
+                          <br />
+                          封面 ID：{r.image_id || "暂未确认"}
+                        </>
+                      )}
                     </p>
                     <Button
                       variant="outline"

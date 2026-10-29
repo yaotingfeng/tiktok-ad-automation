@@ -3,8 +3,8 @@ import { Link, useNavigate, useRouterState } from "@tanstack/react-router"
 import { useState } from "react"
 import {
   BuildsService,
-  type FrozenGroup,
   type FrozenAd,
+  type FrozenGroup,
   type PreviewSummary,
   type PreviewUnit,
 } from "@/client"
@@ -473,7 +473,7 @@ export function PreviewSummaryBar({
                 `排除 ${preview.blocked_count} 个阻断组合。`}
               {!readOnly &&
                 preview.preparing_count > 0 &&
-                `${preview.preparing_count} 个组合将在提交后分发素材。`}
+                `${preview.preparing_count} 个组合可提交，将在提交后准备目标素材${preview.media_kind === "CAROUSEL" ? "并核验所选配乐" : ""}。`}
             </p>
           </div>
           {write && !readOnly && !preview.submission_id && (
@@ -588,7 +588,7 @@ export function PreviewUnitTable({
             cell: ({ row }) => (
               <>
                 {row.original.readiness === "PREPARING" ? (
-                  <span>提交后分发</span>
+                  <span>可提交 · 提交后准备</span>
                 ) : (
                   <BuildStatus value={row.original.readiness} />
                 )}
@@ -940,6 +940,14 @@ function AdDetail({ ad }: { ad: FrozenAd }) {
       <h4 className="text-sm font-semibold">
         基础广告 {ad.base_ad_no} · 文案版本 {ad.creative_no}
       </h4>
+      {ad.included === false && (
+        <div className="text-sm text-destructive">
+          已排除本条广告
+          {ad.reason_codes?.map((code) => (
+            <BuildReason key={code} code={code} />
+          ))}
+        </div>
+      )}
       <CopyField label="Ad 名称" value={ad.name} expanded />
       <p className="whitespace-pre-wrap text-sm">{ad.text}</p>
       <p className="break-all text-xs">

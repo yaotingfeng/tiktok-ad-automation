@@ -500,6 +500,9 @@ def _ensure_target_asset(
             return AssetPreparation(state="ready", mapping=asset_public(image_mapping))
         return AssetPreparation(
             state="blocked" if result.state == "blocked" else "queued",
+            reason_code="image_target_unavailable"
+            if result.state == "blocked"
+            else None,
             task_id=result.task_id,
         )
     # 两个入口均已在当前事务核验权限并锁定素材；后续选源/去重/seed只有一份。

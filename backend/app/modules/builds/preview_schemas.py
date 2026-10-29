@@ -208,6 +208,8 @@ class FrozenUnit(BaseModel):
 
 
 class FrozenAd(BaseModel):
+    included: bool = True
+    reason_codes: tuple[str, ...] = ()
     creative_units: tuple[FrozenCreativeUnit, ...] = ()
     model_config = ConfigDict(frozen=True)
     ad_id: UUID

@@ -208,6 +208,8 @@ class SubmissionGroupPublic(BaseModel):
 
 
 class SubmissionAdPublic(BaseModel):
+    included: bool = True
+    reason_codes: list[str] = Field(default_factory=list)
     planned_ad_id: UUID
     group_id: UUID
     creative_no: int
@@ -226,6 +228,7 @@ class SubmissionEventPublic(EvidencePublic):
 
 
 class SubmissionMaterialPublic(BaseModel):
+    media_type: Literal["VIDEO", "IMAGE"] = "VIDEO"
     material_id: UUID
     position: int
     file_name: str

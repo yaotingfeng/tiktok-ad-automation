@@ -359,45 +359,62 @@ def prepare_request(
         ).one_or_none()
         if ad is None:
             raise DomainError("resource_not_found", "冻结创意不存在")
-        material_ids = frozen_ad_material_ids(
-            session,
-            tenant_id=step.tenant_id,
-            preview_id=step.preview_id,
-            drama_id=frozen.drama_id,
-            group_no=group.group_no,
-            base_ad_no=ad.base_ad_no,
-            unit_id=step.unit_id,
-        )[:51]
-        if not 1 <= len(material_ids) <= 50:
-            raise DomainError("invalid_material_group", "冻结素材组无效")
-        mappings = _ready_ad_mappings(
-            session, context=context, claim=claim, material_ids=material_ids
-        )
-        if mappings is None:
-            mappings = _prepare_ad_mappings(
-                session, context=context, claim=claim, material_ids=material_ids
-            )
         identity = {
             key: value
             for key, value in snapshot["creative_fields"]["creative_info"].items()
             if key != "ad_format"
         }
-        from app.integrations.tiktok.contracts.builds import VideoCreative
+        if frozen.media_kind == "CAROUSEL":
+            from .carousel_readiness import resolve_carousel_assets
+            from .creative_units import frozen_ad_creative_units
 
-        resolved = ad_assets(
-            [
+            units = frozen_ad_creative_units(
+                session,
+                tenant_id=step.tenant_id,
+                preview_id=step.preview_id,
+                drama_id=frozen.drama_id,
+                group_no=group.group_no,
+                base_ad_no=ad.base_ad_no,
+            )
+            assets = resolve_carousel_assets(
+                session,
+                context=context,
+                route=claim.route,
+                advertiser_id=claim.advertiser_id,
+                units=units,
+                prepare_missing=True,
+                attempt_id=claim.attempt_id,
+            )
+        else:
+            from app.integrations.tiktok.contracts.builds import VideoCreative
+
+            material_ids = frozen_ad_material_ids(
+                session,
+                tenant_id=step.tenant_id,
+                preview_id=step.preview_id,
+                drama_id=frozen.drama_id,
+                group_no=group.group_no,
+                base_ad_no=ad.base_ad_no,
+                unit_id=step.unit_id,
+            )[:51]
+            if not 1 <= len(material_ids) <= 50:
+                raise DomainError("invalid_material_group", "冻结素材组无效")
+            mappings = _ready_ad_mappings(
+                session, context=context, claim=claim, material_ids=material_ids
+            )
+            if mappings is None:
+                mappings = _prepare_ad_mappings(
+                    session, context=context, claim=claim, material_ids=material_ids
+                )
+            assets = [
                 VideoCreative(
-                    kind="VIDEO",
                     video_id=item["video_id"],
                     cover_image_id=item.get("image_id"),
                     file_name=item.get("file_name"),
                 )
                 for item in mappings
-            ],
-            text=ad.text,
-            url=frozen.url,
-            identity=identity,
-        )
+            ]
+        resolved = ad_assets(assets, text=ad.text, url=frozen.url, identity=identity)
         cta = session.exec(
             select(ExecutionStep).where(
                 ExecutionStep.tenant_id == step.tenant_id,
@@ -696,6 +713,8 @@ def _local_result(
         ).one()
         if not active_attempt(step, claim, phase="CLAIMED"):
             return step.status
+        if hasattr(error, "issues"):
+            step.resolved = {**step.resolved, "carousel_issues": error.issues}
         retryable, delay, resolved = transient_retry(
             step.resolved,
             error=error,
@@ -891,7 +910,7 @@ def process_step(
                     task_key=f"build:{claim.step_id}",
                     route=claim.route,
                 )
-                if ready.state == "ready":
+                if ready.state == "ready" and frozen.media_kind == "VIDEO":
                     from app.modules.materials.covers import ensure_cover
 
                     # 视频确认后才准备独立封面，不重新上传视频；未知图片结果沿原任务核查。
@@ -996,6 +1015,9 @@ def process_step(
                     )
             except DomainError as error:
                 # 素材依赖与等待结果同事务提交，保持已经冻结的目标连接。
+                if hasattr(error, "issues"):
+                    step.resolved = {**step.resolved, "carousel_issues": error.issues}
+                    session.flush()
                 return finish_local(
                     session,
                     claim=claim,
@@ -1047,6 +1069,28 @@ def process_step(
                 task_deadline=task_deadline,
                 before_request=before_request,
             ) as gateway:
+                carousel_proof = None
+                if claim.kind == "AD" and frozen.media_kind == "CAROUSEL":
+                    from .carousel_music import _budget
+                    from .carousel_readiness import (
+                        CarouselNotReady,
+                        body_assets,
+                        music_proof,
+                        verify_carousel_ad,
+                    )
+
+                    assets = body_assets(body)
+                    ready = verify_carousel_ad(
+                        claim.route,
+                        claim.advertiser_id,
+                        assets,
+                        claim.attempt_id,
+                        gateway=gateway,
+                        budget=_budget(task_deadline, claim.route, "music.get"),
+                    )
+                    if not ready.ready:
+                        raise CarouselNotReady(ready)
+                    carousel_proof = music_proof(claim, assets)
                 with (
                     bounded_session(
                         database_engine, task_deadline=task_deadline
@@ -1054,6 +1098,15 @@ def process_step(
                     session.begin(),
                 ):
                     frozen = _frozen(session, context, claim)
+                    if carousel_proof is not None:
+                        step = session.get(ExecutionStep, claim.step_id)
+                        if not active_attempt(step, claim, phase="CLAIMED"):
+                            raise DomainError("execution_lease_lost", "执行租约已变化")
+                        step.resolved = {
+                            **step.resolved,
+                            "carousel_music": carousel_proof,
+                        }
+                        session.flush()
                     _current_scene(session, context, frozen)
                     arm_request(session, context=context, claim=claim, body=body)
                 armed = True

@@ -44,6 +44,8 @@ from app.modules.builds.routes import (
 )
 from app.modules.tenants.permissions import require_tenant
 
+from .ad_readiness import included_ad_sql, included_group_sql
+
 
 def authorize(session: Session, context: TenantContext, action: str = "read") -> None:
     require_tenant(
@@ -215,32 +217,39 @@ def submit_preview(
 # Without these optimizer boundaries PostgreSQL can repeatedly join every ad to
 # every group in the preview, or materialize all steps in a large submission.
 # 所有素材依赖均按账户的冻结排除证据展开；不能因素材后来恢复而重新加入。
-BLUEPRINTS = """
+
+BLUEPRINTS = (
+    """
 WITH unit_groups AS MATERIALIZED (
- SELECT id FROM planned_group WHERE tenant_id=:tenant AND preview_id=:preview AND unit_id=:unit
+ SELECT g.* FROM planned_group g WHERE g.tenant_id=:tenant AND g.preview_id=:preview AND g.unit_id=:unit AND """
+    + included_group_sql()
+    + """
 ), material_candidates AS MATERIALIZED (
  SELECT DISTINCT m.material_id
- FROM frozen_group_material m
- WHERE m.tenant_id=:tenant AND m.preview_id=:preview AND m.drama_id=:drama
+ FROM unit_groups g JOIN planned_ad a ON a.tenant_id=g.tenant_id AND a.preview_id=g.preview_id AND a.group_id=g.id
+ JOIN frozen_ad_material m ON m.tenant_id=g.tenant_id AND m.preview_id=g.preview_id AND m.drama_id=g.drama_id AND m.group_no=g.group_no AND m.base_ad_no=a.base_ad_no
+ WHERE """
+    + included_ad_sql()
+    + """
  AND NOT EXISTS (SELECT 1 FROM preview_skipped_material skipped
  WHERE skipped.tenant_id=m.tenant_id AND skipped.unit_id=:unit AND skipped.material_id=m.material_id)
 ), candidates AS (
  SELECT 0 priority, 'MATERIAL:'||m.material_id k, NULL::text parent,
- 'MATERIAL' kind, NULL::uuid group_id, NULL::uuid ad_id, m.material_id
- FROM material_candidates m
- UNION ALL SELECT 1,'CTA',NULL,'CTA',NULL,NULL,NULL
- UNION ALL SELECT 2,'CAMPAIGN',NULL,'CAMPAIGN',NULL,NULL,NULL
- UNION ALL SELECT 4,'ADGROUP:'||g.id,'CAMPAIGN','ADGROUP',g.id,NULL,NULL
- FROM unit_groups g
+ 'MATERIAL' kind, NULL::uuid group_id, NULL::uuid ad_id, m.material_id FROM material_candidates m
+ UNION ALL SELECT 1,'CTA',NULL,'CTA',NULL,NULL,NULL WHERE EXISTS (SELECT 1 FROM unit_groups)
+ UNION ALL SELECT 2,'CAMPAIGN',NULL,'CAMPAIGN',NULL,NULL,NULL WHERE EXISTS (SELECT 1 FROM unit_groups)
+ UNION ALL SELECT 4,'ADGROUP:'||g.id,'CAMPAIGN','ADGROUP',g.id,NULL,NULL FROM unit_groups g
  UNION ALL SELECT 6,'AD:'||a.id,'ADGROUP:'||g.id,'AD',g.id,a.id,NULL
- FROM unit_groups g JOIN LATERAL (
- SELECT id FROM planned_ad WHERE tenant_id=:tenant AND preview_id=:preview AND group_id=g.id OFFSET 0
- ) a ON true)
+ FROM unit_groups g JOIN planned_ad a ON a.tenant_id=:tenant AND a.preview_id=:preview AND a.group_id=g.id
+ WHERE """
+    + included_ad_sql()
+    + """)
 SELECT * FROM candidates c WHERE NOT EXISTS (
  SELECT 1 FROM execution_step s WHERE s.tenant_id=:tenant AND s.submission_id=:submission
  AND s.unit_id=:unit AND s.step_key=CAST(:unit AS text)||':'||c.k OFFSET 0)
 ORDER BY priority,k LIMIT :limit
 """
+)
 
 
 def expand_submission(
@@ -602,7 +611,11 @@ def get_submission(
             text(
                 SCOPE_CTE
                 + """SELECT count(*) planned_c,coalesce(sum(group_count),0) planned_g,coalesce(sum(ad_count),0) planned_a,
- count(*) FILTER(WHERE included) submitted_c,coalesce(sum(group_count) FILTER(WHERE included),0) submitted_g,coalesce(sum(ad_count) FILTER(WHERE included),0) submitted_a,
+ count(*) FILTER(WHERE included) submitted_c,coalesce(sum((SELECT count(*) FROM planned_group g WHERE g.tenant_id=scope.tenant_id AND g.unit_id=scope.id AND """
+                + included_group_sql()
+                + """)) FILTER(WHERE included),0) submitted_g,coalesce(sum((SELECT count(*) FROM planned_group g JOIN planned_ad a ON a.tenant_id=g.tenant_id AND a.group_id=g.id WHERE g.tenant_id=scope.tenant_id AND g.unit_id=scope.id AND """
+                + included_ad_sql()
+                + """)) FILTER(WHERE included),0) submitted_a,
  count(*) FILTER(WHERE NOT included) excluded_units,count(DISTINCT drama_id) dramas,count(DISTINCT advertiser_id) accounts
  FROM scope"""
             ),
@@ -632,15 +645,19 @@ def get_submission(
  AND m.drama_id=g.drama_id AND m.group_no=g.group_no AND m.material_id=ms.material_id
  AND NOT EXISTS (SELECT 1 FROM preview_skipped_material skipped
  WHERE skipped.tenant_id=m.tenant_id AND skipped.unit_id=g.unit_id AND skipped.material_id=m.material_id)
- WHERE ms.tenant_id=:tenant AND ms.submission_id=:submission AND ms.kind='MATERIAL' AND ms.status='FAILED'),
+ WHERE ms.tenant_id=:tenant AND ms.submission_id=:submission AND ms.kind='MATERIAL' AND ms.status='FAILED' AND NOT EXISTS (SELECT 1 FROM preview_contract pc WHERE pc.tenant_id=ms.tenant_id AND pc.preview_id=:preview AND pc.media_kind='CAROUSEL')),
  material_failed_units AS MATERIALIZED (
  SELECT mg.unit_id FROM material_failed_groups mg GROUP BY mg.unit_id
  HAVING count(*)=(SELECT count(*) FROM planned_group g
  WHERE g.tenant_id=:tenant AND g.preview_id=:preview AND g.unit_id=mg.unit_id)),
  objects AS (
  SELECT u.id unit_id,'CAMPAIGN' kind,NULL::uuid group_id,NULL::uuid ad_id FROM scope u WHERE included
- UNION ALL SELECT u.id,'ADGROUP',g.id,NULL FROM scope u JOIN planned_group g ON g.tenant_id=u.tenant_id AND g.preview_id=u.preview_id AND g.unit_id=u.id WHERE included
- UNION ALL SELECT u.id,'AD',g.id,a.id FROM scope u JOIN planned_group g ON g.tenant_id=u.tenant_id AND g.preview_id=u.preview_id AND g.unit_id=u.id JOIN planned_ad a ON a.tenant_id=g.tenant_id AND a.preview_id=g.preview_id AND a.group_id=g.id WHERE included),
+ UNION ALL SELECT u.id,'ADGROUP',g.id,NULL FROM scope u JOIN planned_group g ON g.tenant_id=u.tenant_id AND g.preview_id=u.preview_id AND g.unit_id=u.id WHERE included AND """
+                + included_group_sql()
+                + """
+ UNION ALL SELECT u.id,'AD',g.id,a.id FROM scope u JOIN planned_group g ON g.tenant_id=u.tenant_id AND g.preview_id=u.preview_id AND g.unit_id=u.id JOIN planned_ad a ON a.tenant_id=g.tenant_id AND a.preview_id=g.preview_id AND a.group_id=g.id WHERE included AND """
+                + included_ad_sql()
+                + """),
  results AS (
  SELECT o.kind, CASE
  WHEN """
@@ -1083,6 +1100,24 @@ def group_material_state(
     """One group: all materials ready; whole unit: any complete group ready."""
     authorize(session, context)
     row = submission_row(session, context, submission_id)
+    from .creative_units import preview_contract
+
+    if (
+        preview_contract(
+            session, tenant_id=context.tenant_id, preview_id=row.preview_id
+        ).media_kind
+        == "CAROUSEL"
+    ):
+        from .ad_readiness import carousel_material_state
+
+        return carousel_material_state(
+            session,
+            tenant_id=context.tenant_id,
+            preview_id=row.preview_id,
+            submission_id=submission_id,
+            unit_id=unit_id,
+            group_id=group_id,
+        )
     value = (
         SQLAlchemySession.execute(
             session,

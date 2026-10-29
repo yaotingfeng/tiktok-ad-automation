@@ -922,3 +922,119 @@ def test_image_distribution_errors_are_actionable(code):
 
     assert public_error(code) == code
     assert ERROR_HTTP_STATUS[code] in {409, 422}
+
+
+def test_unsent_source_retry_reacquires_exact_slot_once(
+    image_url_env, redis_client, wire
+):
+    from app.modules.materials.image_distribution import (
+        _close_unsent,
+        request_image_retry,
+    )
+    from app.modules.materials.ingest_models import SourceAccountLoad
+    from app.modules.materials.models import MaterialDistribution
+
+    env = image_url_env
+    task = queue_original(env)
+    with Session(engine) as db, db.begin():
+        dist = db.get(MaterialDistribution, task)
+        op = db.get(MaterialAssetOperation, dist.operation_id)
+        op.status, dist.status = "failed", "blocked"
+        db.flush()
+        _close_unsent(
+            db,
+            env["context"],
+            db.get(MaterialFile, env["material_id"]),
+            op,
+            "synthetic_unsent",
+        )
+    with Session(engine) as db, db.begin():
+        assert (
+            db.exec(
+                select(SourceAccountLoad).where(
+                    SourceAccountLoad.tenant_id == env["context"].tenant_id
+                )
+            )
+            .one()
+            .in_flight
+            == 0
+        )
+        first = request_image_retry(
+            db, context=env["context"], material_id=env["material_id"]
+        )
+        assert (
+            request_image_retry(
+                db, context=env["context"], material_id=env["material_id"]
+            )
+            == first
+        )
+        db.flush()
+        assert (
+            db.exec(
+                select(SourceAccountLoad).where(
+                    SourceAccountLoad.tenant_id == env["context"].tenant_id
+                )
+            )
+            .one()
+            .in_flight
+            == 1
+        )
+        op = db.get(
+            MaterialAssetOperation, db.get(MaterialDistribution, task).operation_id
+        )
+        assert op.remote_response["source_slot_held"] is True
+    wire[1].extend(
+        [
+            {"image_id": "retry-image", "material_id": "retry-mid"},
+            image_info("retry-image"),
+        ]
+    )
+    run(env, redis_client, task, kind="prepare", s3=env["s3"])
+    run(env, redis_client, task)
+    run(env, redis_client, task)
+    assert state(task)[0].status == "ready"
+    with Session(engine) as db:
+        assert (
+            db.exec(
+                select(SourceAccountLoad).where(
+                    SourceAccountLoad.tenant_id == env["context"].tenant_id
+                )
+            )
+            .one()
+            .in_flight
+            == 0
+        )
+        assert state(task)[1].remote_response["source_slot_held"] is False
+
+
+def test_target_unsent_retry_keeps_exact_operation_and_unknown_never_retries(
+    image_env, wire
+):
+    from app.core.errors import DomainError
+    from app.modules.materials.image_distribution import (
+        _records,
+        retry_unsent_image_target,
+    )
+
+    env = image_env
+    seed_image(env)
+    task = queue_images(env).items[0].task_id
+    with Session(engine) as db, db.begin():
+        _, dist, op = _records(db, env["context"], task)
+        dist.status, op.status = "blocked", "failed"
+        original = op.id
+        op.remote_response = {**op.remote_response, "send_armed": False}
+    with Session(engine) as db, db.begin():
+        assert retry_unsent_image_target(
+            db, context=env["context"], distribution_id=task
+        )
+        assert not retry_unsent_image_target(
+            db, context=env["context"], distribution_id=task
+        )
+        _, dist, op = _records(db, env["context"], task)
+        assert op.id == original and op.remote_response["revision"] == 1
+        op.status, dist.status = "result_unknown", "result_unknown"
+        op.remote_response = {**op.remote_response, "send_armed": True}
+    with Session(engine) as db, db.begin(), pytest.raises(DomainError) as error:
+        retry_unsent_image_target(db, context=env["context"], distribution_id=task)
+    assert error.value.code == "material_retry_not_allowed" and wire[0] == []

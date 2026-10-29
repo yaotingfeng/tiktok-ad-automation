@@ -188,6 +188,25 @@ def _dependency(session: Session, context: TenantContext, step: ExecutionStep) -
             return cta.status
         if cta.status != "SUCCEEDED" or not cta.remote_id:
             return "PENDING"
+    if step.kind == "AD":
+        from .creative_units import preview_contract
+
+        if (
+            preview_contract(
+                session, tenant_id=step.tenant_id, preview_id=step.preview_id
+            ).media_kind
+            == "CAROUSEL"
+        ):
+            from .ad_readiness import carousel_material_state
+
+            return carousel_material_state(
+                session,
+                tenant_id=step.tenant_id,
+                preview_id=step.preview_id,
+                submission_id=step.submission_id,
+                unit_id=step.unit_id,
+                ad_id=step.planned_ad_id,
+            )
     if step.kind in {"CAMPAIGN", "ADGROUP"}:
         return group_material_state(
             session,

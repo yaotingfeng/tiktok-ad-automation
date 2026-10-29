@@ -147,6 +147,20 @@ def validate_ad_assets(
     ).one_or_none()
     if ad is None or group is None:
         raise DomainError("resource_not_found", "冻结创意不存在")
+    from .creative_units import preview_contract
+
+    if (
+        preview_contract(
+            session, tenant_id=step.tenant_id, preview_id=step.preview_id
+        ).media_kind
+        == "CAROUSEL"
+    ):
+        from .carousel_readiness import validate_carousel_assets
+
+        validate_carousel_assets(
+            session, step=step, unit=unit, body=body, ad=ad, group=group
+        )
+        return
     material_ids = frozen_ad_material_ids(
         session,
         tenant_id=step.tenant_id,

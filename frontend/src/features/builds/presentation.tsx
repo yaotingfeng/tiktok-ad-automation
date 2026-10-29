@@ -147,6 +147,26 @@ export function BuildSteps({ step }: { step: 1 | 2 | 3 }) {
 }
 
 export const reasonLabels: Record<string, string> = {
+  image_refresh_required:
+    "图片：目标账户图片未全部就绪，请等待原分发任务核验。",
+  image_source_unavailable:
+    "图片：没有可分发的来源，请补充当前 BC 的图片来源。",
+  image_target_unavailable: "图片：目标图片准备失败，请查看原素材任务。",
+  image_content_changed: "图片：原始内容已变化，请重新生成预览。",
+  carousel_music_missing: "音乐：请为图片创意选择音乐。",
+  carousel_music_unavailable:
+    "音乐：目标账户无法使用已选曲目，请调整草稿后重新预览。",
+  carousel_music_unverified:
+    "音乐：可提交；将在提交后、发送前核验目标账户的原选曲目。",
+  carousel_music_read_failed: "音乐：读取暂时失败，重试将继续核验原曲目。",
+  carousel_ads_unavailable: "图片：此账户的所有图片广告均已排除。",
+  carousel_format_unverified:
+    "账户：当前场景的图片轮播资格尚未核验，不能提交。",
+  identity_unavailable: "身份：请检查当前账户可用身份并重新准备。",
+  image_rules_not_applied: "图片：请应用当前组合规则。",
+  image_composition_pending: "图片：组合仍在准备中。",
+  music_preparation_pending: "音乐：配乐任务仍在准备中。",
+  music_not_ready: "音乐：请完成所有图片创意的配乐。",
   bc_default_connection_required:
     "请先到“账户与授权 → 授权管理”为当前 BC 设置使用授权。",
   connection_unavailable:

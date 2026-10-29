@@ -188,8 +188,13 @@ def ad_page(session, *, context, preview, unit, group_id: UUID, cursor, limit):
             if c.kind == "CAROUSEL" or c.members[0].material_id not in skipped
         )
         material_ids = [m.material_id for c in creatives for m in c.members]
+        from .ad_readiness import ad_reasons
+
+        reasons = ad_reasons(session, ad)
         items.append(
             FrozenAd(
+                included=not reasons,
+                reason_codes=tuple(reasons),
                 ad_id=ad.id,
                 base_ad_no=ad.base_ad_no,
                 creative_no=ad.creative_no,

@@ -413,7 +413,6 @@ class PreviewContract(PreviewRow, table=True):
     legacy_material_layout: str | None = Field(default=None, max_length=16)
 
 
-
 class PreviewCreativeUnit(PreviewRow, table=True):
     __tablename__ = "preview_creative_unit"
     __table_args__ = (
@@ -574,3 +573,25 @@ class PreviewImageExclusion(PreviewRow, table=True):
     material_id: UUID = Field(primary_key=True)
     file_name: str = Field(max_length=1000)
     reason: str = Field(max_length=16)
+
+
+class PreviewAdReadiness(PreviewRow, table=True):
+    """广告级排除事实单独冻结；不改写历史广告正文。"""
+
+    __tablename__ = "preview_ad_readiness"
+    __table_args__ = (
+        preview_fk(),
+        ForeignKeyConstraint(
+            ["tenant_id", "preview_id", "ad_id"],
+            ["planned_ad.tenant_id", "planned_ad.preview_id", "planned_ad.id"],
+        ),
+        CheckConstraint(
+            "included = (jsonb_array_length(reason_codes) = 0)",
+            name="ck_preview_ad_readiness",
+        ),
+    )
+    ad_id: UUID = Field(primary_key=True)
+    included: bool
+    reason_codes: list[str] = Field(
+        default_factory=list, sa_column=Column(JSONB, nullable=False)
+    )

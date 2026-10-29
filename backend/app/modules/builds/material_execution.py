@@ -271,6 +271,16 @@ def _start_build_cover(
     """
     from app.modules.materials.covers import ensure_cover
 
+    from .creative_units import preview_contract
+
+    if (
+        preview_contract(
+            session, tenant_id=step.tenant_id, preview_id=step.preview_id
+        ).media_kind
+        == "CAROUSEL"
+    ):
+        return
+
     if step.material_id is None:
         return
     unit = session.get(BuildUnit, step.unit_id)
@@ -468,7 +478,14 @@ def recover_material_results(*, database_engine: Any, limit: int = 100) -> int:
                     or not readiness.mapping
                     or readiness.mapping.material_id != step.material_id
                     or readiness.mapping.advertiser_id != frozen.advertiser_id
-                    or not (readiness.mapping.video_id or "").strip()
+                    or not (
+                        (
+                            readiness.mapping.image_id
+                            if readiness.mapping.media_type == "IMAGE"
+                            else readiness.mapping.video_id
+                        )
+                        or ""
+                    ).strip()
                 ):
                     # A historic distribution receipt is not proof of a current
                     # target mapping. Keep uncertainty; never call an upload-capable

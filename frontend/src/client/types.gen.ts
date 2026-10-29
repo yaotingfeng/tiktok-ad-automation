@@ -1238,6 +1238,14 @@ export type CompositionStatePublic = {
      */
     revision: number;
     /**
+     * Preview Ready
+     */
+    preview_ready?: boolean;
+    /**
+     * Preview Reason Codes
+     */
+    preview_reason_codes?: Array<string>;
+    /**
      * Active Generation
      */
     active_generation: number;
@@ -2518,6 +2526,14 @@ export type Frequency = {
  * FrozenAd
  */
 export type FrozenAd = {
+    /**
+     * Included
+     */
+    included?: boolean;
+    /**
+     * Reason Codes
+     */
+    reason_codes?: Array<string>;
     /**
      * Creative Units
      */
@@ -8576,6 +8592,14 @@ export type StructureOverride = {
  */
 export type SubmissionAdPublic = {
     /**
+     * Included
+     */
+    included?: boolean;
+    /**
+     * Reason Codes
+     */
+    reason_codes?: Array<string>;
+    /**
      * Planned Ad Id
      */
     planned_ad_id: string;
@@ -8753,6 +8777,10 @@ export type SubmissionListItem = {
  * SubmissionMaterialPublic
  */
 export type SubmissionMaterialPublic = {
+    /**
+     * Media Type
+     */
+    media_type?: 'VIDEO' | 'IMAGE';
     /**
      * Material Id
      */

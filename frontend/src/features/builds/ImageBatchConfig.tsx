@@ -1,5 +1,5 @@
-import { useState, useEffect } from "react"
 import { useQuery } from "@tanstack/react-query"
+import { useEffect, useState } from "react"
 import type {
   CompositionPlanPublic,
   CompositionRunPublic,
@@ -8,31 +8,31 @@ import type {
   ImageRule,
   ImageRulePatch,
 } from "@/client"
+import { Alert, AlertDescription } from "@/components/ui/alert"
+import { Button } from "@/components/ui/button"
 import {
   Card,
   CardContent,
-  CardHeader,
-  CardTitle,
   CardDescription,
   CardFooter,
+  CardHeader,
+  CardTitle,
 } from "@/components/ui/card"
-import { Alert, AlertDescription } from "@/components/ui/alert"
-import { Button } from "@/components/ui/button"
-import { BuildGuard } from "./presentation"
 import { RequestError } from "@/features/tenants/shared"
-import {
-  imageApi,
-  imagePath,
-  imageKey,
-  imageRuleDefault,
-  change,
-} from "./imageCompositionApi"
+import { CarouselCreativeSheet } from "./CarouselCreativeSheet"
+import { ImageCandidateRefresh } from "./ImageCandidateRefresh"
+import { ImageCompositionDiff } from "./ImageCompositionDiff"
+import { ImageDramaBatchActions } from "./ImageDramaBatchActions"
 import { ImageRuleFields } from "./ImageRuleFields"
 import { ImageStructureOverride } from "./ImageStructureOverride"
-import { ImageCompositionDiff } from "./ImageCompositionDiff"
-import { ImageCandidateRefresh } from "./ImageCandidateRefresh"
-import { CarouselCreativeSheet } from "./CarouselCreativeSheet"
-import { ImageDramaBatchActions } from "./ImageDramaBatchActions"
+import {
+  change,
+  imageApi,
+  imageKey,
+  imagePath,
+  imageRuleDefault,
+} from "./imageCompositionApi"
+import { BuildGuard } from "./presentation"
 export function ImageBatchConfig({
   tenantId,
   summary,
@@ -235,7 +235,7 @@ export function ImageBatchConfig({
             · 配乐失败 {current?.music_counts.FAILED ?? 0}
           </p>
           <p className="text-sm text-muted-foreground">
-            请从下方剧目行「查看与调整轮播」处理待选音乐与手动调整。图片投放预览尚待完整规划与目标资格核验。
+            请从下方剧目行「查看与调整轮播」处理待选音乐与手动调整。组合和配乐完成后可生成搭建预览，查看逐账户资格及广告排除原因。
           </p>
         </CardContent>
         <CardFooter>

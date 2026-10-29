@@ -1013,10 +1013,29 @@ def request_image_retry(
             _, dist, op = _records(
                 db, context, UUID(message.payload["distribution_id"])
             )
-            _authority(db, context, dist, op)
+            route = _authority(db, context, dist, op)
             if op.attempt_token is not None:
                 return row.dispatch_id
             if op.status == "failed" and not op.remote_response.get("send_armed"):
+                # 确定未发送的来源失败已释放占用；同一账户重新领取恰好一次。
+                if op.remote_response.get(
+                    "source_ingest"
+                ) and not op.remote_response.get("source_slot_held"):
+                    from .source_selection import claim_source_account
+
+                    claim_source_account(
+                        db,
+                        context=context,
+                        bc_id=op.bc_id,
+                        material_id=op.material_id,
+                        route=route,
+                        advertiser_id=op.advertiser_id,
+                        reselect=True,
+                    )
+                    op.remote_response = {
+                        **op.remote_response,
+                        "source_slot_held": True,
+                    }
                 op.status, dist.status = "pending", "queued"
                 op.remote_response = {
                     **op.remote_response,
@@ -1031,3 +1050,37 @@ def request_image_retry(
     return enqueue_image_original(
         db, context=context, material=material, obj=material.current_object, row=row
     )
+
+
+def retry_unsent_image_target(
+    db: Session, *, context: TenantContext, distribution_id: UUID
+) -> bool:
+    """显式重试确定未发送的目标图片，沿用原身份；未知结果仍只能核查。"""
+    from .distribution import queue_distribution
+
+    material, dist, op = _records(db, context, distribution_id)
+    _authority(db, context, dist, op, writing=True)
+    if material.media_type != "IMAGE" or op.remote_response.get("source_ingest"):
+        raise DomainError("material_retry_not_allowed", "不是目标图片准备任务")
+    if op.status == "pending" and dist.status == "queued":
+        return False
+    if (
+        dist.superseded_by_id
+        or op.superseded_by_id
+        or dist.status != "blocked"
+        or op.status != "failed"
+        or op.attempt_token
+        or op.claimed_until
+        or op.remote_response.get("send_armed") is not False
+        or op.remote_response.get("image_id")
+        or op.remote_response.get("candidates")
+        or op.remote_response.get("share_acknowledged")
+    ):
+        raise DomainError("material_retry_not_allowed", "原图片结果尚未证实未发送")
+    op.status, dist.status, dist.reason_code = "pending", "queued", None
+    op.remote_response = {
+        **op.remote_response,
+        "revision": op.remote_response.get("revision", 0) + 1,
+    }
+    queue_distribution(db, dist, op, kind="prepare")
+    return True

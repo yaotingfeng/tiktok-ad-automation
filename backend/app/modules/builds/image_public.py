@@ -74,6 +74,8 @@ class CompositionRunPublic(BaseModel):
 
 
 class CompositionStatePublic(ImageRevisionPublic):
+    preview_ready: bool = False
+    preview_reason_codes: list[str] = Field(default_factory=list)
     active_generation: int
     applied_rule_revision: int | None
     snapshot_id: UUID | None

@@ -41,6 +41,8 @@ from app.modules.builds.recovery_models import (
 from app.modules.builds.routes import load_preview_route, verify_unit_route
 from app.modules.tenants.permissions import require_tenant
 
+from .ad_readiness import included_ad_sql
+
 TASK_NAME = "builds.recover_submission"
 register_dispatch_task(TASK_NAME, "control")
 PAGE_SIZE = 100
@@ -90,6 +92,21 @@ GROUP_READY = """EXISTS (SELECT 1 FROM planned_group g
  AND NOT EXISTS (SELECT 1 FROM preview_skipped_material skipped WHERE skipped.tenant_id=gm.tenant_id AND skipped.unit_id=g.unit_id AND skipped.material_id=gm.material_id)
  AND NOT EXISTS (SELECT 1 FROM execution_step ms WHERE ms.tenant_id=s.tenant_id AND ms.submission_id=s.submission_id AND ms.unit_id=s.unit_id AND ms.kind='MATERIAL' AND ms.material_id=gm.material_id AND ms.status='SUCCEEDED')))
 """
+# CAROUSEL 的共享父对象只等一条完整广告；原 VIDEO 组屏障保持。
+
+CAROUSEL_READY = (
+    """EXISTS (SELECT 1 FROM planned_group g JOIN planned_ad a ON a.tenant_id=g.tenant_id AND a.preview_id=g.preview_id AND a.group_id=g.id
+ WHERE g.tenant_id=s.tenant_id AND g.preview_id=s.preview_id AND g.unit_id=s.unit_id
+ AND (s.kind='CAMPAIGN' OR g.id=s.group_id) AND (s.kind<>'AD' OR a.id=s.planned_ad_id)
+ AND """
+    + included_ad_sql()
+    + """
+ AND EXISTS (SELECT 1 FROM frozen_ad_material m WHERE m.tenant_id=a.tenant_id AND m.preview_id=a.preview_id AND m.drama_id=g.drama_id AND m.group_no=g.group_no AND m.base_ad_no=a.base_ad_no)
+ AND NOT EXISTS (SELECT 1 FROM frozen_ad_material m WHERE m.tenant_id=a.tenant_id AND m.preview_id=a.preview_id AND m.drama_id=g.drama_id AND m.group_no=g.group_no AND m.base_ad_no=a.base_ad_no
+ AND NOT EXISTS (SELECT 1 FROM execution_step ms WHERE ms.tenant_id=s.tenant_id AND ms.submission_id=s.submission_id AND ms.unit_id=s.unit_id AND ms.kind='MATERIAL' AND ms.material_id=m.material_id AND ms.status='SUCCEEDED')))"""
+)
+IS_CAROUSEL = "EXISTS (SELECT 1 FROM preview_contract pc WHERE pc.tenant_id=s.tenant_id AND pc.preview_id=s.preview_id AND pc.media_kind='CAROUSEL')"
+GROUP_READY = f"(CASE WHEN {IS_CAROUSEL} THEN {CAROUSEL_READY} ELSE {GROUP_READY} END)"
 READ_ACCOUNT = """
 AND EXISTS (SELECT 1 FROM bc_account_access a
  JOIN tiktok_connection c ON c.tenant_id=a.tenant_id AND c.id=a.connection_id
@@ -110,6 +127,7 @@ DEPENDENCIES_READY = f"""
 AND (s.parent_step_id IS NULL OR EXISTS (SELECT 1 FROM execution_step p WHERE p.tenant_id=s.tenant_id AND p.submission_id=s.submission_id AND p.id=s.parent_step_id AND p.status='SUCCEEDED' AND p.remote_id IS NOT NULL))
 AND (s.kind<>'CAMPAIGN' OR EXISTS (SELECT 1 FROM execution_step cta WHERE cta.tenant_id=s.tenant_id AND cta.submission_id=s.submission_id AND cta.unit_id=s.unit_id AND cta.kind='CTA' AND cta.status='SUCCEEDED' AND cta.remote_id IS NOT NULL))
 AND (s.kind NOT IN ('CAMPAIGN','ADGROUP') OR {GROUP_READY})
+AND (s.kind<>'AD' OR NOT {IS_CAROUSEL} OR {CAROUSEL_READY})
 """
 UNARMED_RETRY = """s.request_body IS NULL
 AND NOT EXISTS (SELECT 1 FROM step_evidence e WHERE e.tenant_id=s.tenant_id AND e.submission_id=s.submission_id AND e.step_id=s.id
@@ -160,6 +178,22 @@ MATERIAL_RETRY = """(s.cover_job_id IS NULL AND NOT s.resolved ? 'mapping' AND E
  AND NOT EXISTS (SELECT 1 FROM pending_dispatch pd WHERE pd.tenant_id=d.tenant_id AND pd.published_at IS NULL
   AND (pd.payload->>'distribution_id'=d.id::text OR pd.payload->>'operation_id'=o.id::text))
 ))"""
+IMAGE_MATERIAL_RETRY = """(s.cover_job_id IS NULL AND NOT s.resolved ? 'mapping' AND EXISTS (
+ SELECT 1 FROM material_distribution d JOIN material_asset_operation o ON o.id=d.operation_id AND o.tenant_id=d.tenant_id
+ JOIN material_file f ON f.id=d.material_id AND f.tenant_id=d.tenant_id AND f.media_type='IMAGE'
+ WHERE d.id=s.distribution_id AND d.tenant_id=s.tenant_id AND d.bc_id=s.bc_id AND d.material_id=s.material_id
+ AND d.advertiser_id=u.advertiser_id AND d.target_route=o.frozen_route AND d.target_route->>'connection_id'=u.connection_id::text
+ AND d.superseded_by_id IS NULL AND o.superseded_by_id IS NULL
+ AND d.status='blocked' AND o.status='failed' AND d.path=o.path
+ AND o.attempt_token IS NULL AND o.claimed_until IS NULL
+ AND o.remote_response->'send_armed'='false'::jsonb
+ AND o.remote_response->'source_ingest' IS DISTINCT FROM 'true'::jsonb
+ AND NOT o.remote_response ? 'image_id' AND coalesce(o.remote_response->'candidates','[]'::jsonb)='[]'::jsonb
+ AND o.remote_response->'share_acknowledged' IS DISTINCT FROM 'true'::jsonb
+ AND NOT EXISTS (SELECT 1 FROM pending_dispatch pd WHERE pd.tenant_id=d.tenant_id AND pd.published_at IS NULL
+ AND (pd.payload->>'distribution_id'=d.id::text OR pd.payload->>'operation_id'=o.id::text))))"""
+MATERIAL_RETRY = f"({MATERIAL_RETRY} OR {IMAGE_MATERIAL_RETRY})"
+
 RETRY = f"""
 AND ((s.status IN ('FAILED','RETRYABLE') OR (
  s.status='PENDING' AND s.kind='MATERIAL'
@@ -608,6 +642,18 @@ def _retry_material(
     require_tenant(
         session, actor_id=old.actor_id, tenant_id=step.tenant_id, action="build"
     )
+    from app.modules.materials.models import MaterialFile
+
+    material = session.get(MaterialFile, step.material_id)
+    if material is not None and material.media_type == "IMAGE":
+        from app.modules.materials.image_distribution import retry_unsent_image_target
+
+        retry_unsent_image_target(session, context=context, distribution_id=old.id)
+        return {
+            "distribution_id": str(old.id),
+            "operation_id": str(old.operation_id),
+            "retry_kind": "IMAGE_UNSENT",
+        }
     if old.source_route is not None:
         from app.modules.materials.models import AccountMaterial
 
@@ -789,7 +835,15 @@ def _schedule(
         if step.kind == "AD" and not frozen_retry:
             from app.modules.builds.cover_execution import retry_ad_covers
 
-            retry_ad_covers(session, context=original, step=step, unit=unit)
+            from .creative_units import preview_contract
+
+            if (
+                preview_contract(
+                    session, tenant_id=step.tenant_id, preview_id=step.preview_id
+                ).media_kind
+                == "VIDEO"
+            ):
+                retry_ad_covers(session, context=original, step=step, unit=unit)
         if step.kind == "MATERIAL" and step.cover_job_id:
             from app.modules.materials.covers import request_cover_retry
 
