@@ -49,6 +49,9 @@ def test_recent_probe_stops_before_old_history(session, sync_seed, monkeypatch):
     """),
         {"id": run.id, "now": now},
     )
+    # 成本用例使用当前2001行夹具的真实统计，不依赖前序测试或自动分析时机；
+    # 不关闭扫描方式或强制指定索引，仍验证实际查询能先排除旧历史。
+    session.connection().execute(text("ANALYZE ad_directory_run"))
     captured = []
     connection = session.connection()
 

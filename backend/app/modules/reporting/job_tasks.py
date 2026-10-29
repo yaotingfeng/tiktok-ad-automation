@@ -11,7 +11,7 @@ from uuid import UUID
 
 from billiard.exceptions import SoftTimeLimitExceeded
 from redis import Redis
-from sqlalchemy import case, delete, func, text, tuple_, update
+from sqlalchemy import delete, func, text, tuple_, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.orm import aliased
@@ -33,11 +33,9 @@ from app.modules.accounts.routing import verify_route
 from app.modules.ads.directory_calibration import calibration_interval
 from app.modules.ads.directory_dispatch import (
     PUBLISH_TASK_NAME,
-    TARGETED_TASK_NAME,
     directory_step_key,
     enqueue_directory_step,
     is_live_directory,
-    targeted_capacity,
 )
 from app.modules.ads.directory_requests import (
     directory_ad_types,
@@ -49,8 +47,6 @@ from app.modules.ads.sync_models import AdDirectoryPage, AdDirectoryRun
 from app.modules.reporting import planner, publish
 from app.modules.reporting.jobs import (
     LEASE,
-    _CountingReader,
-    _read_all,
     claim_jobs,
     execute_job,
     request_time,
@@ -129,7 +125,7 @@ def _reader_for(*, database_engine, redis_client, plan, deadline, workload="live
         yield gateway.report_reader
 
 
-def _active(session, reader, plan, accounts, now, *, days):
+def _active(session, reader, plan, accounts, now, *, days, single_step=False):
     # BC/账户筛选也按各账户本地日期分组，不能把 UTC 日期误作所有账户的今天。
     timezones = dict(
         session.exec(
@@ -184,6 +180,12 @@ def _active(session, reader, plan, accounts, now, *, days):
                     },
                 }
                 session.flush()
+                if single_step and (
+                    result.next_page is not None or index + 1 < len(requests)
+                ):
+                    from app.modules.reporting.planning_steps import ScreenYield
+
+                    raise ScreenYield()
                 if result.next_page is None:
                     break
                 page = result.next_page
@@ -210,25 +212,35 @@ def _active(session, reader, plan, accounts, now, *, days):
     active.update(progress["active"])
     for index in range(progress["offset"], len(requests)):
         batch, start, end = requests[index]
-        rows = _read_all(
-            lambda p, batch=batch, start=start, end=end: reader.account_day(
-                advertiser_ids=batch, start=start, end=end, page=p
+        page = progress.get("page", 1) if index == progress["offset"] else 1
+        while True:
+            result = reader.account_day(
+                advertiser_ids=batch, start=start, end=end, page=page
             )
-        )
-        for row in rows:
-            account = str(row.get("dimensions", {}).get("advertiser_id", ""))
-            spend = parse_decimal(row.get("metrics", {}).get("spend"))
-            if account in batch and spend is not None and spend > 0:
-                active.add(account)
-        plan.screening_progress = {
-            **plan.screening_progress,
-            key: {
-                "fingerprint": fingerprint,
-                "offset": index + 1,
-                "active": sorted(active),
-            },
-        }
-        session.flush()
+            for row in result.rows:
+                account = str(row.get("dimensions", {}).get("advertiser_id", ""))
+                spend = parse_decimal(row.get("metrics", {}).get("spend"))
+                if account in batch and spend is not None and spend > 0:
+                    active.add(account)
+            plan.screening_progress = {
+                **plan.screening_progress,
+                key: {
+                    "fingerprint": fingerprint,
+                    "offset": index if result.next_page else index + 1,
+                    "page": result.next_page or 1,
+                    "active": sorted(active),
+                },
+            }
+            session.flush()
+            if single_step and (
+                result.next_page is not None or index + 1 < len(requests)
+            ):
+                from app.modules.reporting.planning_steps import ScreenYield
+
+                raise ScreenYield()
+            if result.next_page is None:
+                break
+            page = result.next_page
     plan.screening_progress = {
         k: v for k, v in plan.screening_progress.items() if k != key
     }
@@ -262,52 +274,10 @@ def _message_lost(session: Session, row: AdDirectoryRun, now: datetime) -> bool:
 
 
 def _dispatch_directories(session, now):
-    # 本代数、本页的投递记录已存在（无论是否已发布）就不再重复入队：积压时
-    # 若每轮重写全部运行，规划会长时间占住 control 唯一并发，使投递发布被饿死。
-    has_filters = (
-        func.coalesce(func.jsonb_array_length(AdDirectoryRun.query["ids"]), 0) > 0
-    ) | (
-        func.coalesce(func.jsonb_array_length(AdDirectoryRun.query["parent_ids"]), 0)
-        > 0
-    )
-    targeted = (col(AdDirectoryRun.workload) == "live") & has_filters
-    dependency = ~targeted & has_filters
-    current_key = func.concat(
-        case((targeted, TARGETED_TASK_NAME + ":"), else_="ads.sync_step:"),
-        col(AdDirectoryRun.id),
-        ":",
-        col(AdDirectoryRun.claim_generation),
-        ":page:",
-        col(AdDirectoryRun.next_page),
-    )
-    enqueued = (
-        select(col(PendingDispatch.id))
-        .where(
-            PendingDispatch.tenant_id == col(AdDirectoryRun.tenant_id),
-            PendingDispatch.task_key == current_key,
-        )
-        .exists()
-    )
-    # 消息发布后长时间仍未被领取，视为在领取前丢失（如任务在加锁前失败）：
-    # 换新代数重新入队。若旧消息其实仍在队列中，执行时代数不符会直接结束。
-    lost = (
-        select(col(PendingDispatch.id))
-        .where(
-            PendingDispatch.tenant_id == col(AdDirectoryRun.tenant_id),
-            PendingDispatch.task_key == current_key,
-            col(PendingDispatch.published_at)
-            < case(
-                (
-                    col(PendingDispatch.task_name) == PUBLISH_TASK_NAME,
-                    now - PUBLISH_MESSAGE_LOST_AFTER,
-                ),
-                (targeted, now - TARGETED_MESSAGE_LOST_AFTER),
-                else_=now - DIRECTORY_MESSAGE_LOST_AFTER,
-            ),
-        )
-        .exists()
-    )
-    # 并发唤醒须原子核对窗口；旧队列自然消费，不清队列或伪造完成。
+    from app.modules.ads import directory_dispatch
+    from app.modules.ads.directory_candidates import directory_candidates
+
+    # 与显式定向入口共享窗口锁；一次活动快照同时计算两池容量和公平候选。
     locked = (
         session.connection()
         .execute(
@@ -319,179 +289,29 @@ def _dispatch_directories(session, now):
     )
     if not locked:
         return 0
-    inflight, dependency_inflight = session.exec(
-        select(func.count(), func.count().filter(dependency))
-        .select_from(AdDirectoryRun)
-        .where(
-            col(AdDirectoryRun.status).in_(["QUEUED", "RUNNING", "WAITING_REMOTE"]),
-            AdDirectoryRun.channel == "OFFICIAL_API",
-            ~targeted,
-            # 已有领取记录说明本代数消息已被消费；租约过期后不再算在途，否则未判丢失的
-            # 消息判丢失前窗口被永久占满。与下方候选条件一致，过期运行会换代重新入队。
-            (enqueued & ~lost & col(AdDirectoryRun.claimed_until).is_(None))
-            | (col(AdDirectoryRun.claimed_until) > now),
-        )
-    ).one()
-    available = max(0, DIRECTORY_DISPATCH_WINDOW - inflight)
-    targeted_available = targeted_capacity(session, now)
-    if not available and not targeted_available:
+    candidates = directory_candidates(
+        session,
+        now,
+        background_window=DIRECTORY_DISPATCH_WINDOW,
+        live_window=directory_dispatch.TARGETED_DISPATCH_WINDOW,
+        batch_limit=DIRECTORY_DISPATCH_BATCH,
+        directory_lost_after=DIRECTORY_MESSAGE_LOST_AFTER,
+        publish_lost_after=PUBLISH_MESSAGE_LOST_AFTER,
+        targeted_lost_after=TARGETED_MESSAGE_LOST_AFTER,
+    )
+    available = candidates[0]["background_available"]
+    targeted_available = candidates[0]["live_available"]
+    ids = [row["id"] for row in candidates if row["id"] is not None]
+    if not ids:
         return 0
-    # 原背景总窗口内，定向依赖和全量各保底一半；空闲份额可借用。
-    # 不能把后台依赖改成 live 绕过服务分类，也不能让更早全量永久占满窗口。
-    dependency_share = DIRECTORY_DISPATCH_WINDOW // 2
-    full_share = DIRECTORY_DISPATCH_WINDOW - dependency_share
-    dependency_reserved = max(0, dependency_share - dependency_inflight)
-    full_reserved = max(0, full_share - (inflight - dependency_inflight))
-    # 旧全账户创意扫描仍降后；主目录派生的素材子页沿原请求年龄续跑，
-    # 否则会永远排在对象队尾，并在执行前被下一轮主观察淘汰。
-    legacy_creative = (col(AdDirectoryRun.kind) == "creative") & ~col(
-        AdDirectoryRun.query
-    ).op("?")(MATERIAL_CHILD_KEY)
-    creative_last = case((legacy_creative, 1), else_=0)
-    newer_scan = aliased(AdDirectoryRun)
-    # 历史素材全量扫描曾重复堆积。同一冻结授权和完整查询仅先推进最新一轮，
-    # 它成功发布后再由原 superseded 机制淘汰旧轮；不合并分页、不把旧轮记为成功。
-    newer_creative_pending = (
-        select(newer_scan.id)
-        .where(
-            newer_scan.tenant_id == AdDirectoryRun.tenant_id,
-            newer_scan.advertiser_id == AdDirectoryRun.advertiser_id,
-            newer_scan.bc_id == AdDirectoryRun.bc_id,
-            newer_scan.actor_id == AdDirectoryRun.actor_id,
-            newer_scan.frozen_route == AdDirectoryRun.frozen_route,
-            newer_scan.partition_key == AdDirectoryRun.partition_key,
-            col(newer_scan.request_sequence) > col(AdDirectoryRun.request_sequence),
-            col(newer_scan.status).in_(["QUEUED", "RUNNING", "WAITING_REMOTE"]),
-        )
-        .exists()
-    )
-    lane_ranked = (
-        select(
-            AdDirectoryRun.id,
-            func.row_number()
-            .over(
-                partition_by=(targeted, dependency, col(AdDirectoryRun.tenant_id)),
-                order_by=(
-                    targeted.desc(),
-                    creative_last,
-                    col(AdDirectoryRun.created_at),
-                    col(AdDirectoryRun.id),
-                ),
-            )
-            .label("lane_rn"),
-        ).where(
-            (targeted & (targeted_available > 0)) | (~targeted & (available > 0)),
-            col(AdDirectoryRun.status).in_(["QUEUED", "RUNNING", "WAITING_REMOTE"]),
-            AdDirectoryRun.channel == "OFFICIAL_API",
-            ~(~targeted & legacy_creative & newer_creative_pending),
-            col(AdDirectoryRun.next_attempt_at).is_(None)
-            | (col(AdDirectoryRun.next_attempt_at) <= now),
-            # 租约过期的运行会进入新代数、生成新投递标识，仍需入队。
-            col(AdDirectoryRun.claimed_until).is_(None) & (~enqueued | lost)
-            | (col(AdDirectoryRun.claimed_until) <= now),
-        )
-    ).subquery()
-    # 各lane先按真实空槽裁剪，再恢复原租户逐轮次序；小批量也不会先取同租户两类。
-    ranked = (
-        select(
-            AdDirectoryRun.id,
-            func.row_number()
-            .over(
-                partition_by=col(AdDirectoryRun.tenant_id),
-                order_by=(
-                    targeted.desc(),
-                    creative_last,
-                    col(AdDirectoryRun.created_at),
-                    col(AdDirectoryRun.id),
-                ),
-            )
-            .label("rn"),
-        )
-        .join(lane_ranked, lane_ranked.c.id == AdDirectoryRun.id)
-        .where(
-            lane_ranked.c.lane_rn
-            <= case((targeted, targeted_available), else_=available)
-        )
-    ).subquery()
-    # 先在每个服务类中沿原租户轮次排序，再裁剪到真实空槽。整个候选集合
-    # 只扫描一次；仅窗口大小的结果进入 ORM，不能把数万积压搬回 Python。
-    service_ranked = (
-        select(
-            AdDirectoryRun.id,
-            ranked.c.rn,
-            func.row_number()
-            .over(
-                partition_by=(targeted, dependency),
-                order_by=(
-                    ranked.c.rn,
-                    col(DirectoryDispatchCursor.last_dispatched_at).asc().nulls_first(),
-                    creative_last,
-                    col(AdDirectoryRun.created_at),
-                    col(AdDirectoryRun.id),
-                ),
-            )
-            .label("service_rn"),
-        )
-        .join(ranked, ranked.c.id == AdDirectoryRun.id)
-        .outerjoin(
-            DirectoryDispatchCursor,
-            col(DirectoryDispatchCursor.tenant_id) == col(AdDirectoryRun.tenant_id),
-        )
-    ).subquery()
-    reserved = (
-        targeted
-        | (
-            service_ranked.c.service_rn
-            <= case((dependency, dependency_reserved), else_=full_reserved)
-        )
-        | (DIRECTORY_DISPATCH_WINDOW < 2)
-    )
-    pool_ranked = (
-        select(
-            AdDirectoryRun.id,
-            service_ranked.c.rn,
-            func.row_number()
-            .over(
-                partition_by=(targeted,),
-                order_by=(
-                    reserved.desc(),
-                    service_ranked.c.rn,
-                    col(DirectoryDispatchCursor.last_dispatched_at).asc().nulls_first(),
-                    creative_last,
-                    col(AdDirectoryRun.created_at),
-                    col(AdDirectoryRun.id),
-                ),
-            )
-            .label("pool_rn"),
-        )
-        .join(service_ranked, service_ranked.c.id == AdDirectoryRun.id)
-        .outerjoin(
-            DirectoryDispatchCursor,
-            col(DirectoryDispatchCursor.tenant_id) == col(AdDirectoryRun.tenant_id),
-        )
-    ).subquery()
-    rows = session.exec(
+    # 候选 SQL 已按原行锁跳过竞争队首；这里只加载实际窗口内的业务对象。
+    loaded = session.exec(
         select(AdDirectoryRun)
-        .join(pool_ranked, pool_ranked.c.id == AdDirectoryRun.id)
-        .outerjoin(
-            DirectoryDispatchCursor,
-            col(DirectoryDispatchCursor.tenant_id) == col(AdDirectoryRun.tenant_id),
-        )
-        .where(
-            pool_ranked.c.pool_rn
-            <= case((targeted, targeted_available), else_=available)
-        )
-        .order_by(
-            pool_ranked.c.rn,
-            col(DirectoryDispatchCursor.last_dispatched_at).asc().nulls_first(),
-            targeted.desc(),
-            creative_last,
-            col(AdDirectoryRun.created_at),
-            col(AdDirectoryRun.id),
-        )
-        .limit(DIRECTORY_DISPATCH_BATCH)
-        .with_for_update(skip_locked=True, of=AdDirectoryRun)
+        .where(col(AdDirectoryRun.id).in_(ids))
+        .execution_options(populate_existing=True)
     ).all()
+    by_id = {row.id: row for row in loaded}
+    rows = [by_id[identity] for identity in ids]
     # 批量识别末页；全量发布保留独立队列，定向抓取/发布使用实时目录队列。
     terminal_runs = (
         set(
@@ -550,6 +370,7 @@ def plan_due_runs(*, database_engine, redis_client, now=None):
     now = now or datetime.now(UTC)
     allow_backfill = planner.backfill_allowed(redis_client, now)
     deadline = datetime.now(UTC) + timedelta(seconds=10)
+    stop = time.monotonic() + 10
     # 额度紧张优先让出历史补数，不静默把止损数据降成小时级。
     hot, material = planner.HOT_INTERVAL, planner.MATERIAL_INTERVAL
     with Session(database_engine) as session, session.begin():
@@ -579,31 +400,36 @@ def plan_due_runs(*, database_engine, redis_client, now=None):
         )
     except Exception:
         logger.exception("report link maintenance deferred phase=reconcile_link_work")
-    for key in keys:
-        if datetime.now(UTC) >= deadline:
-            break
-        try:
-            _plan_one(
-                database_engine,
-                redis_client,
-                key,
-                now,
-                deadline,
-                hot,
-                material,
-                allow_backfill=allow_backfill,
-            )
-        except SoftTimeLimitExceeded:
-            # 已提交计划和派发不随后续慢请求回滚，下一轮从未完成计划继续。
-            break
-        except Exception:
-            # 单个 BC 的意外错误（如数据约束失败）只推迟该 BC 并记录原因；
-            # 否则它会回滚、到期时间不前进，每轮都排在最前面拖垮所有租户。
-            logger.exception("report plan failed: tenant=%s bc=%s", *key)
-            _defer_failed_plan(database_engine, key, now)
-        dispatched += _dispatch_pending(
-            database_engine, now, allow_backfill=allow_backfill
-        )
+    # 每轮每BC只推进一个阶段，预算有余继续下一轮；不以账户数量人为限速。
+    remaining = list(keys)
+    while remaining and time.monotonic() < stop:
+        next_round = []
+        for key in remaining:
+            if time.monotonic() >= stop:
+                break
+            try:
+                worked = _plan_one(
+                    database_engine,
+                    redis_client,
+                    key,
+                    now,
+                    deadline,
+                    hot,
+                    material,
+                    allow_backfill=allow_backfill,
+                    one_step=True,
+                    time_budget=max(0, stop - time.monotonic()),
+                )
+            except SoftTimeLimitExceeded:
+                return dispatched
+            except Exception:
+                logger.exception("report plan failed: tenant=%s bc=%s", *key)
+                _defer_failed_plan(database_engine, key, now)
+                continue
+            if worked:
+                next_round.append(key)
+        remaining = next_round
+    dispatched += _dispatch_pending(database_engine, now, allow_backfill=allow_backfill)
     return dispatched
 
 
@@ -620,6 +446,16 @@ def _defer_failed_plan(
             return
         plan.disabled_reason = "plan_failed"
         retry_at = now + timedelta(minutes=5)
+        progress = plan.screening_progress.get("planning_steps_v1")
+        if progress:
+            plan.screening_progress = {
+                **plan.screening_progress,
+                "planning_steps_v1": {
+                    **progress,
+                    "retry_at": retry_at.isoformat(),
+                    "last_turn": datetime.now(UTC).isoformat(),
+                },
+            }
         _defer_plan(plan, retry_at)
         plan.next_material_at = max(plan.next_material_at, retry_at)
 
@@ -765,157 +601,23 @@ def _plan_one(
     material,
     *,
     allow_backfill=True,
+    one_step=False,
+    time_budget=None,
 ):
+    # 每一阶段/批次自行提交；后续SQL或软超时不撤销已完成的筛查与入队。
+    from app.modules.reporting.planning_steps import run_plan
+
     assert hot == material, "双实时事实必须使用相同周期"
-    with Session(database_engine) as session, session.begin():
-        plan = session.exec(
-            select(AdSyncBc)
-            .where(AdSyncBc.tenant_id == key[0], AdSyncBc.bc_id == key[1])
-            .with_for_update(skip_locked=True)
-        ).one_or_none()
-        if plan is None or not plan.enabled:
-            return
-        accounts = planner.owned_accounts(session, plan)
-        if not accounts:
-            return
-        # 到期状态必须在外部筛选和退避前冻结；素材时钟单独到期不代表热报漏投。
-        hot_due_at = plan.next_hot_at if plan.next_hot_at <= now else None
-        material_due_at = (
-            plan.next_material_at if plan.next_material_at <= now else None
-        )
-        counted = None
-        hot_planned = False
-        try:
-            if plan.next_hot_at <= now or (
-                allow_backfill and plan.next_daily_at <= now
-            ):
-                with _reader_for(
-                    database_engine=database_engine,
-                    redis_client=redis_client,
-                    plan=plan,
-                    # 控制面不等待整 BC 数百次外部请求；账户筛选游标逐批持久化，
-                    # 8 秒到期后下一轮继续，让 outbox、监控和止损调度仍有执行机会。
-                    deadline=min(deadline, datetime.now(UTC) + timedelta(seconds=8)),
-                ) as reader:
-                    if reader is None:
-                        plan.enabled, plan.disabled_reason = (
-                            False,
-                            "api_binding_required",
-                        )
-                        return
-                    counted = _CountingReader(reader)
-                    if plan.next_hot_at <= now:
-                        active = sorted(
-                            set(_active(session, counted, plan, accounts, now, days=1))
-                            | planner.known_reporting_accounts(
-                                session, plan, accounts=accounts, now=now
-                            )
-                        )
-                        planner.plan_hot(session, plan, active=active, now=now)
-                        hot_planned = True
-                        planner.mark_confirmed_empty(
-                            session,
-                            plan,
-                            inactive=sorted(set(accounts) - set(active)),
-                            window_fn=lambda tz: planner._hot_window(tz, now),
-                            now=now,
-                        )
-                        plan.last_active_advertiser_ids = active
-                        plan.next_hot_at = _advance(plan.next_hot_at, now, hot)
-                    if allow_backfill and plan.next_daily_at <= now:
-                        active = _active(session, counted, plan, accounts, now, days=32)
-                        planner.plan_daily(session, plan, active_32d=active, now=now)
-                        planner.mark_confirmed_empty(
-                            session,
-                            plan,
-                            inactive=sorted(set(accounts) - set(active)),
-                            window_fn=planner.daily_window(now),
-                            now=now,
-                        )
-                        plan.next_daily_at = planner._next_daily(now)
-            # 授权后的历史回补立即规划一次，不等到每日回刷；未知开户时间稍后重查。
-            if allow_backfill:
-                planner.plan_history(session, plan, now=now)
-            if plan.next_directory_at <= now:
-                # 目录扫描独立回滚：数据库超时不能撤销前面已经规划的实时任务。
-                try:
-                    with session.begin_nested():
-                        previous_timeout = (
-                            session.connection()
-                            .execute(text("SHOW statement_timeout"))
-                            .scalar_one()
-                        )
-                        session.connection().execute(
-                            text("SELECT set_config('statement_timeout', '8s', true)")
-                        )
-                        # 完整目录作为低频校准，活跃对象由热报和操作后的定向回读维护；
-                        # 分区按每日/每周到期，未知类型只探测系列；账户游标与超时缩批进度跨轮保留。
-                        _plan_directory_step(session, plan, accounts=accounts, now=now)
-                        session.connection().execute(
-                            text(
-                                "SELECT set_config('statement_timeout', :value, true)"
-                            ),
-                            {"value": previous_timeout},
-                        )
-                except DBAPIError as error:
-                    if getattr(error.orig, "sqlstate", None) != "57014":
-                        raise
-                    # SAVEPOINT 已恢复事务和原 timeout；只让全量目录稍后再规划。
-                    plan.next_directory_at = now + timedelta(minutes=5)
-                    logger.warning(
-                        "directory planning query cancelled: tenant=%s bc=%s",
-                        plan.tenant_id,
-                        plan.bc_id,
-                    )
-        except AccountAdmissionDeferred as error:
-            _defer_plan(
-                plan, now + timedelta(milliseconds=max(1000, error.retry_after_ms))
-            )
-        except DomainError as error:
-            if error.code in {
-                "read_deadline_exceeded",
-                "tiktok_call_deadline_exceeded",
-            }:
-                _defer_plan(plan, now + timedelta(seconds=5))
-            elif (
-                error.code == "report_permission_denied"
-                or error.code == "tiktok_response_error"
-                and any(v in error.message.lower() for v in ("permission", "权限"))
-            ):
-                plan.bc_report_supported = False
-                _defer_plan(plan, now + timedelta(minutes=1))
-            else:
-                plan.disabled_reason = error.code
-                _defer_plan(plan, now + timedelta(minutes=5))
-        finally:
-            if counted is not None:
-                planner.record_calls(redis_client, now, counted.count)
-        # 已知活跃账户的两类实时事实共用 15 分钟周期；筛选退避时仍刷新
-        # 当地今日已有事实，规则不额外扩展到无消耗账户，避免为无数据判断空转。
-        if plan.enabled and (hot_due_at is not None or material_due_at is not None):
-            refresh_accounts = set(
-                plan.last_active_advertiser_ids
-            ) | planner.known_reporting_accounts(
-                session, plan, accounts=accounts, now=now
-            )
-            if hot_due_at is not None and not hot_planned:
-                planner.plan_hot(
-                    session, plan, active=sorted(refresh_accounts), now=now
-                )
-            planner.plan_material(
-                session, plan, active=sorted(refresh_accounts), now=now
-            )
-            if hot_due_at is not None:
-                # 切日后今天可能尚无消耗；昨日收尾按 owned 昨日事实独立选账户。
-                planner.plan_day_closeout(session, plan, now=now)
-            # 热报是双时钟相位基准：错相旧计划在下一轮自动归一；筛选失败也已
-            # 为已知账户补投本轮事实，不再把退避时间当成新的热报相位。
-            next_live = (
-                _advance(hot_due_at, now, hot)
-                if hot_due_at is not None
-                else plan.next_hot_at
-            )
-            plan.next_hot_at = plan.next_material_at = next_live
+    return run_plan(
+        database_engine,
+        redis_client,
+        key,
+        now=now,
+        deadline=deadline,
+        allow_backfill=allow_backfill,
+        one_step=one_step,
+        time_budget=time_budget,
+    )
 
 
 def _dispatch_report_jobs(

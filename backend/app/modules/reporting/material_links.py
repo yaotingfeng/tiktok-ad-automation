@@ -330,8 +330,16 @@ def wait_for_dependencies(session, job, *, now):
     )
     if unlinked and scan is not None and scan.scanned_at + NEGATIVE_SCAN_TTL > now:
         job.due_at = min(job.due_at, scan.scanned_at + NEGATIVE_SCAN_TTL)
-    if unlinked and scan is not None and scan.evidence_signature is None:
-        # 扫描过程中已有新证据到达；下一步立即重选范围，不能把新证据纳入长退避。
+    if unlinked and (
+        job.progress.get("scan_evidence_valid") is False
+        or scan is not None
+        and (
+            scan.evidence_signature is None
+            or scan.scanned_at + NEGATIVE_SCAN_TTL <= now
+        )
+    ):
+        # 新证据到达、原证据已过期或旧续点没有观察起点时立即复核。
+        # 不能因本轮刚结束而把旧负证据重新延长到下一轮依赖退避。
         job.due_at = now
     # 到期重读时重新确定查询范围；此前验证的映射已经持久化，不回滚。
     job.progress = {
@@ -670,6 +678,16 @@ def _scan_signature(
     )
 
 
+def _scan_evidence_started_at(
+    progress: dict[str, Any], now: datetime
+) -> datetime | None:
+    try:
+        started_at = datetime.fromisoformat(progress["scan_evidence_at"])
+    except KeyError, TypeError, ValueError:
+        return None
+    return started_at if started_at.tzinfo is not None and started_at <= now else None
+
+
 def refresh_material_links(
     session: Session,
     *,
@@ -723,6 +741,7 @@ def refresh_material_links(
             progress["scan_evidence_signature"] = _scan_signature(
                 session, tenant_id, advertiser_id, unlinked, start, end, overview_ad_ids
             )
+            progress["scan_evidence_at"] = now.isoformat()
     # owner 已知不代表帖子桥接已知；每轮等待到期可重新读一次概览补迟到 ID。
     # 沿用冻结范围和单页断点；无 owner 的负缓存仍只约束旧帖子定位。
     if (
@@ -878,36 +897,51 @@ def refresh_material_links(
         unresolved = set(
             _unlinked(session, tenant_id, advertiser_id, start=start, end=end)
         )
-        if scan is None:
-            scan = MaterialLinkScan(
-                tenant_id=tenant_id,
-                advertiser_id=advertiser_id,
-                scanned_at=now,
-                query_scope=scope,
+        started_at = _scan_evidence_started_at(progress, now)
+        if started_at is None:
+            # 旧在途续点没有观察起点：保留正向映射与分页，不补造时间或覆盖
+            # 其他轮次的负证据；调用方立即开新观察，既有等待进度重置会清除此标记。
+            progress["scan_evidence_valid"] = False
+        else:
+            if scan is None:
+                scan = MaterialLinkScan(
+                    tenant_id=tenant_id,
+                    advertiser_id=advertiser_id,
+                    scanned_at=started_at,
+                    query_scope=scope,
+                )
+            # 长排队不能把旧否定集合签为刚观察的新结果；有效期始终沿扫描起点。
+            scan.unresolved_ids = sorted(unresolved)
+            scan.scanned_at = started_at
+            evidence_ids = progress.get("scan_evidence_ids", [])
+            unchanged = (
+                started_at > now - NEGATIVE_SCAN_TTL
+                and unresolved <= set(evidence_ids)
+                and progress.get("scan_evidence_signature")
+                == _scan_signature(
+                    session,
+                    tenant_id,
+                    advertiser_id,
+                    evidence_ids,
+                    start,
+                    end,
+                    overview_ad_ids,
+                )
             )
-        # 时间戳只属于本次已完整扫描的集合；不可用新窗口给旧窗口负证据无限续期。
-        scan.unresolved_ids = sorted(unresolved)
-        scan.scanned_at = now
-        evidence_ids = progress.get("scan_evidence_ids", [])
-        unchanged = unresolved <= set(evidence_ids) and progress.get(
-            "scan_evidence_signature"
-        ) == _scan_signature(
-            session, tenant_id, advertiser_id, evidence_ids, start, end, overview_ad_ids
-        )
-        scan.evidence_signature = (
-            _scan_signature(
-                session,
-                tenant_id,
-                advertiser_id,
-                unresolved,
-                start,
-                end,
-                overview_ad_ids,
+            scan.evidence_signature = (
+                _scan_signature(
+                    session,
+                    tenant_id,
+                    advertiser_id,
+                    unresolved,
+                    start,
+                    end,
+                    overview_ad_ids,
+                )
+                if unchanged
+                else None
             )
-            if unchanged
-            else None
-        )
-        session.add(scan)
+            session.add(scan)
         # 各查询范围独立缓存；仅回收已经失效的负证据，不触碰事实或缺失记录。
         session.connection().execute(
             text(

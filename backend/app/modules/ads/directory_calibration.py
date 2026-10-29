@@ -70,7 +70,8 @@ def recent_calibration(
     cutoff,
 ):
     # 严格使用同一查询分区、冻结授权的已发布成功，定向/其他层级不能充当全量。
-    # 现有索引按账户/分区/请求序号定位，不扫描该账户完整对象或进度 JSON。
+    # 周期全量请求必含已删除对象；显式保留此谓词，近期成功部分索引才可
+    # 按账户与截止时间先排除旧历史，再核对精确冻结分区，避免历史扫描后排序。
     return (
         session.connection()
         .execute(
@@ -80,6 +81,7 @@ def recent_calibration(
           AND partition_key=:partition AND bc_id=:bc AND actor_id=:actor
           AND frozen_route=CAST(:route AS jsonb)
           AND status='COMPLETE' AND published_version IS NOT NULL
+          AND CAST(query->>'include_deleted' AS boolean) IS TRUE
           AND completed_at>:cutoff
         ORDER BY request_sequence DESC LIMIT 1
     """),
