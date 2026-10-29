@@ -70,6 +70,7 @@ def test_committed_dispatch_and_deduplication(outbox_db, context, sent):
     with Session(outbox_db) as session:
         first = enqueue(session, context, item_id=str(uuid4()))
         payload = session.get(PendingDispatch, first).payload
+        due_at = session.get(PendingDispatch, first).available_at.timestamp()
         assert enqueue(session, context, **payload) == first
         session.commit()
     assert flush_dispatch() == 1
@@ -84,6 +85,7 @@ def test_committed_dispatch_and_deduplication(outbox_db, context, sent):
             },
             "task_id": str(first),
             "queue": "control",
+            "headers": {"diagnostic_due_at": due_at},
         },
     )
     with Session(outbox_db) as session:

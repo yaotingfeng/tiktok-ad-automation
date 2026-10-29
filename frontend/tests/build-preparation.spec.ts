@@ -2470,3 +2470,29 @@ test("准备期间不轮询空国家目录，就绪后只读取一次共享目�
     ),
   ).toHaveLength(1)
 })
+
+test("手动刷新小程序先过期缓存再重新准备", async ({ page }) => {
+  const api = await buildsBoundary(page)
+  const order: string[] = []
+  await page.route(`**/build-drafts/${D}/minis/refresh`, async (route) => {
+    expect(route.request().method()).toBe("POST")
+    order.push("expired")
+    await route.fulfill({ json: { expired: 1 } })
+  })
+  page.on("request", (request) => {
+    if (
+      request.method() === "POST" &&
+      request.url().endsWith(`/build-drafts/${D}/prepare`)
+    ) {
+      order.push("prepare")
+    }
+  })
+  await page.goto(`/tenants/${tenant}/build-drafts/${D}?bc_id=${bc}`)
+  await page
+    .getByRole("button", { name: "刷新可用小程序列表", exact: true })
+    .click()
+  await expect.poll(() => order).toEqual(["expired", "prepare"])
+  expect(
+    api.requests.some((request) => request.path.endsWith("/prepare")),
+  ).toBeTruthy()
+})
