@@ -229,7 +229,9 @@ def _execute(
 
     if phase == "directory":
         before = plan.screening_progress.get("directory_cycle_v1", {}).get("after", "")
-        job_tasks._plan_directory_step(session, plan, accounts=accounts, now=now)
+        job_tasks._plan_directory_step(
+            session, plan, accounts=accounts, now=now, budget=budget
+        )
         cursor = plan.screening_progress.get("directory_cycle_v1")
         if cursor and cursor["after"] == before:
             state["directory_retry"] = plan.next_directory_at.isoformat()

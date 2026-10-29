@@ -74,7 +74,7 @@ def test_same_offset_timeouts_shrink_and_publish_distinct_immediate_retries(
             assert health.run_bc_health(**args, cycle=cycle) == "FAILED"
             progress = json.loads(redis_client.get(key))
             assert progress["offset"] == 0 and progress["metrics"] == {}
-            assert progress["batch_size"] == expected_batch
+            assert progress["stages"]["directory"]["batch_size"] == expected_batch
             original_at = original_at or progress["at"]
             assert progress["at"] == original_at
             cycle = progress["cycle"]
@@ -110,7 +110,7 @@ def test_same_offset_timeouts_shrink_and_publish_distinct_immediate_retries(
                 break
             assert result == "CONTINUE"
             progress = json.loads(redis_client.get(key))
-            sizes.append(progress["batch_size"])
+            sizes.append(progress["stages"]["directory"]["batch_size"])
         assert result == "COMPLETE" and 32 in sizes
         with factory() as session:
             row = session.get(ReportSyncHealth, (seed.tenant_id, "bc-a"))
@@ -144,7 +144,10 @@ def test_single_account_timeout_cools_down_without_skipping_or_retry_storm(
         cycle = json.loads(redis_client.get(key))["cycle"]
         assert health.run_bc_health(**args, cycle=cycle) == "FAILED"
         progress = json.loads(redis_client.get(key))
-        assert progress["offset"] == 0 and progress["batch_size"] == 1
+        assert (
+            progress["offset"] == 0
+            and progress["stages"]["directory"]["batch_size"] == 1
+        )
         assert datetime.fromisoformat(progress["retry_not_before"]) > datetime.now(
             UTC
         ) + timedelta(seconds=50)
@@ -198,13 +201,14 @@ def test_timeout_restores_savepoint_and_original_statement_timeout(
         redis_client.delete(key)
 
 
-def test_v1_progress_is_not_read_and_old_continuation_does_not_start_new_cycle(
-    committed_sync_seed, redis_client, monkeypatch
+@pytest.mark.parametrize("version", ["v1", "v2"])
+def test_legacy_progress_is_not_read_and_old_continuation_does_not_start_new_cycle(
+    committed_sync_seed, redis_client, monkeypatch, version
 ):
     seed, factory = committed_sync_seed
     args = _case(seed, factory, monkeypatch) | {"redis_client": redis_client}
     key = health._health_progress_key(seed.tenant_id, "bc-a")
-    legacy = key.replace(":v2:", ":v1:")
+    legacy = key.replace(":v3:", f":{version}:")
     try:
         redis_client.set(
             legacy, json.dumps({"cycle": "old", "metrics": {"partial": 999}}), ex=180
@@ -256,7 +260,10 @@ def test_scope_change_during_failed_batch_does_not_enqueue_old_scope_retry(
         assert health.run_bc_health(**args) == "CONTINUE"
         current = json.loads(redis_client.get(key))
         assert current["cycle"] != previous["cycle"]
-        assert current["batch_size"] == 64 and current["offset"] == 0
+        assert (
+            current["stages"]["directory"]["batch_size"] == 64
+            and current["offset"] == 0
+        )
         assert health.run_bc_health(**args, cycle=previous["cycle"]) == "IGNORED"
     finally:
         redis_client.delete(key)

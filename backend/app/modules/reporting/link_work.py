@@ -475,69 +475,92 @@ def wake_link_dependencies(session, *, now, limit=50, deadline=None):
     )
     count = 0
     for job_id in rows:
-        if deadline is not None and datetime.now(UTC) >= deadline:
-            break
-        # 候选只取ID；逐条锁定并重验当前状态，不能预锁整批阻挡正常领取。
-        job = session.exec(
-            select(ReportSyncJob)
-            .where(
-                ReportSyncJob.id == job_id,
-                ReportSyncJob.kind == "material_links",
-                ReportSyncJob.status == "WAITING",
-                col(ReportSyncJob.error_code).in_(DEPENDENCY_ERRORS),
-                ReportSyncJob.due_at > now,
-                col(ReportSyncJob.claim_token).is_(None),
-                col(ReportSyncJob.claimed_until).is_(None)
-                | (col(ReportSyncJob.claimed_until) <= now),
-            )
-            .with_for_update(skip_locked=True)
-            .execution_options(populate_existing=True)
-        ).one_or_none()
-        if job is None:
-            continue
         remaining = (
-            1.0 if deadline is None else (deadline - datetime.now(UTC)).total_seconds()
+            1.3 if deadline is None else (deadline - datetime.now(UTC)).total_seconds()
         )
-        if remaining <= 0:
+        # 外层一秒片包括SQL、保存点回滚与轮转写入；最后0.2秒不再开新探针。
+        # 单项选择/写入也置于保存点，不能在尾部取消时撤销此前已完成的项。
+        if remaining <= 0.2:
             break
-        changed = False
-        recovery_sequence = None
+        woke = False
         try:
-            # 冷读可能超过一秒；只取消本条提前复核。原任务到期读取继续兜底，
-            # 不假定证据已变化，也不因一个慢账户回滚此前成功的唤醒。
-            with (
-                session.begin_nested(),
-                query_budget(session, seconds=min(1.0, remaining)),
-            ):
-                recovery_sequence = _orphaned_directory_sequence(session, job, now=now)
-                if recovery_sequence is None:
-                    changed = dependency_changed(session, job)
-        except (DBAPIError, QueryBudgetExceeded) as error:
-            if (
-                isinstance(error, DBAPIError)
-                and getattr(error.orig, "sqlstate", None) != "57014"
-            ):
-                raise
-            changed, recovery_sequence = False, None
-            logger.info("report link dependency probe deferred: job=%s", job_id)
-        if recovery_sequence is not None:
-            # 只提前原任务；其正常执行重新校验授权/付费缺口并经唯一入口建目录。
-            # 记录实际触发集合而非最大序号：较早的暂时覆盖失败后仍能被恢复。
-            job.due_at = now
-            job.progress = job.progress | {
-                "dependency_recovery_sequences": sorted(
-                    {
-                        *job.progress.get("dependency_recovery_sequences", []),
-                        recovery_sequence,
-                    }
+            with session.begin_nested(), query_budget(session, seconds=remaining - 0.1):
+                # 逐条锁定并重验当前状态，已锁候选不阻挡后续；无授权推断。
+                job = session.exec(
+                    select(ReportSyncJob)
+                    .where(
+                        ReportSyncJob.id == job_id,
+                        ReportSyncJob.kind == "material_links",
+                        ReportSyncJob.status == "WAITING",
+                        col(ReportSyncJob.error_code).in_(DEPENDENCY_ERRORS),
+                        ReportSyncJob.due_at > now,
+                        col(ReportSyncJob.claim_token).is_(None),
+                        col(ReportSyncJob.claimed_until).is_(None)
+                        | (col(ReportSyncJob.claimed_until) <= now),
+                    )
+                    .with_for_update(skip_locked=True)
+                    .execution_options(populate_existing=True)
+                ).one_or_none()
+                if job is None:
+                    continue
+                probe_seconds = (
+                    1.0
+                    if deadline is None
+                    else (deadline - datetime.now(UTC)).total_seconds() - 0.2
                 )
-            }
-            count += 1
-        elif changed:
-            job.due_at, job.error_code = now, None
-            job.progress = job.progress | {"dependency_attempts": -1}
-            count += 1
-        # 超时也持久记录轮转位置；只能表示尝试过，不能更新真实证据签名。
-        job.progress = job.progress | {"dependency_probed_at": now.isoformat()}
-        session.flush()
+                if probe_seconds <= 0:
+                    break
+                changed = False
+                recovery_sequence = None
+                try:
+                    # 探针失败只撤销本条证据读取；预留时间写入尝试位置，
+                    # 不能用尽外层期限后再flush而反复重读相同队首。
+                    with (
+                        session.begin_nested(),
+                        query_budget(session, seconds=min(1.0, probe_seconds)),
+                    ):
+                        recovery_sequence = _orphaned_directory_sequence(
+                            session, job, now=now
+                        )
+                        if recovery_sequence is None:
+                            changed = dependency_changed(session, job)
+                except (DBAPIError, QueryBudgetExceeded) as error:
+                    if not _wake_retryable(error):
+                        raise
+                    changed, recovery_sequence = False, None
+                    logger.info("report link dependency probe deferred: job=%s", job_id)
+                if recovery_sequence is not None:
+                    # 只提前原任务，正常执行仍重验授权及缺口；不改变恢复签名。
+                    job.due_at = now
+                    job.progress = job.progress | {
+                        "dependency_recovery_sequences": sorted(
+                            {
+                                *job.progress.get("dependency_recovery_sequences", []),
+                                recovery_sequence,
+                            }
+                        )
+                    }
+                    woke = True
+                elif changed:
+                    job.due_at, job.error_code = now, None
+                    job.progress = job.progress | {"dependency_attempts": -1}
+                    woke = True
+                # 超时只标记尝试过，不更新真实证据签名或伪造依赖已经变化。
+                job.progress = job.progress | {"dependency_probed_at": now.isoformat()}
+                session.flush()
+        except (DBAPIError, QueryBudgetExceeded) as error:
+            if not _wake_retryable(error):
+                raise
+            # 行选择/标记写入失败已回滚本项；此前项仍由调用方正常提交。
+            # 不继续以快耗尽的预算探测下一项，也不计本项为成功唤醒。
+            logger.info("report link dependency item deferred: job=%s", job_id)
+            break
+        count += int(woke)
     return count
+
+
+def _wake_retryable(error):
+    return isinstance(error, QueryBudgetExceeded) or (
+        isinstance(error, DBAPIError)
+        and getattr(error.orig, "sqlstate", None) in {"57014", "55P03", "40P01"}
+    )

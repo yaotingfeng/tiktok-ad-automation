@@ -1,4 +1,4 @@
-"""周期目录以账户身份推进，失败缩批且不丢失未完成账户。"""
+"""周期目录以账户身份推进，失败隔离且不丢失未完成账户。"""
 
 from datetime import UTC, datetime, timedelta
 
@@ -140,25 +140,29 @@ def test_slow_account_is_retained_and_does_not_block_other_accounts(
 ):
     now, plan = _case(session, sync_seed, monkeypatch)
     monkeypatch.setattr(job_tasks, "DIRECTORY_PLAN_ACCOUNTS", 2)
-    monkeypatch.setattr(job_tasks, "DIRECTORY_PLAN_SECONDS", 0.05)
+    monkeypatch.setattr(job_tasks, "DIRECTORY_PLAN_SECONDS", 0.5)
     original = job_tasks.directory_ad_types
 
     def slow(session, **kwargs):
         if "acc-1" in kwargs["advertiser_ids"]:
-            session.execute(text("SELECT pg_sleep(0.2)"))
+            session.execute(text("SELECT pg_sleep(1)"))
         return original(session, **kwargs)
 
     monkeypatch.setattr(job_tasks, "directory_ad_types", slow)
     job_tasks._plan_directory_step(session, plan, accounts=["acc-1", "acc-2"], now=now)
     state = plan.screening_progress[job_tasks.DIRECTORY_PLAN_PROGRESS]
     assert (
-        state["batch_size"] == 1
+        state["batch_size"] == 2
         and state["after"] == ""
         and not _advertisers(session, plan)
+    )
+    assert datetime.fromisoformat(state["deferred"]["acc-1"]) == now + timedelta(
+        minutes=5
     )
     job_tasks._plan_directory_step(
         session, plan, accounts=["acc-1", "acc-2"], now=now + timedelta(seconds=5)
     )
+    assert _advertisers(session, plan) == {"acc-2"}
     assert (
         "acc-1"
         in plan.screening_progress[job_tasks.DIRECTORY_PLAN_PROGRESS]["deferred"]

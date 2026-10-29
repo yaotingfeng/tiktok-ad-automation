@@ -6,6 +6,11 @@ import pytest
 
 from app.core import diagnostics
 from app.integrations.tiktok.request_diagnostics import trace_sdk_request
+from tests.integrations.tiktok.gateway_support import database_engine as database_engine
+from tests.integrations.tiktok.gateway_support import gateway_case as gateway_case
+from tests.integrations.tiktok.gateway_support import gateway_wire as gateway_wire
+from tests.modules.accounts.conftest import app_config as app_config
+from tests.modules.accounts.conftest import policy as policy
 
 
 def events(caplog):
@@ -109,3 +114,68 @@ def test_task_queue_timing_and_context_do_not_leak_to_next_task(caplog, monkeypa
     assert finished["duration_ms"] >= 0
     assert diagnostics.trace_context.get() is before
     assert "private-url" not in caplog.text
+
+
+@pytest.mark.parametrize("gateway_case", ["OFFICIAL_API"], indirect=True)
+@pytest.mark.parametrize(
+    "operation", ["ads.get_ads", "ads.get_campaigns", "reports.integrated"]
+)
+def test_directory_and_report_reads_trace_one_original_request_without_payload(
+    database_engine,
+    redis_client,
+    gateway_case,
+    gateway_wire,
+    caplog,
+    monkeypatch,
+    operation,
+):
+    from datetime import date
+
+    from app.integrations.tiktok.contracts.ads import DirectoryQuery
+    from tests.integrations.tiktok.gateway_support import gateway
+
+    monkeypatch.setattr(diagnostics.logger, "disabled", False)
+    caplog.set_level(logging.INFO, logger=diagnostics.logger.name)
+    gateway_wire["sdk_data"]["data"] = {
+        "list": [],
+        "page_info": {"page": 1, "page_size": 1000, "total_page": 1, "total_number": 0},
+        "private_extra": "do-not-log-response-body",
+    }
+    with gateway(database_engine, redis_client, gateway_case) as client:
+        official = client.ads._requests.client
+        original = official.request
+        original_override = "request" in official.__dict__
+        if operation.startswith("ads."):
+            client.ads.read_page(
+                DirectoryQuery(
+                    gateway_case[2],
+                    "ad" if operation == "ads.get_ads" else "campaign",
+                    "REGULAR",
+                    1,
+                    1000,
+                    (),
+                    (),
+                    False,
+                )
+            )
+        else:
+            client.report_reader.ad_day(
+                advertiser_ids=(gateway_case[2],),
+                start=date(2026, 10, 5),
+                end=date(2026, 10, 5),
+                page=1,
+            )
+        assert official.request == original
+        assert ("request" in official.__dict__) == original_override
+    assert len(gateway_wire["sdk_calls"]) == 1
+    records = [row for row in events(caplog) if row.get("operation") == operation]
+    assert [row["event"] for row in records] == [
+        "request_scope_started",
+        "sdk_http_started",
+        "sdk_http_response",
+        "request_scope_finished",
+    ]
+    body = json.dumps(records)
+    assert "do-not-log-response-body" not in body
+    assert "synthetic-original-token" not in body
+    assert "Access-Token" not in body

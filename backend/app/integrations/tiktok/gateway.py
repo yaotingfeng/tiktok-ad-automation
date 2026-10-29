@@ -477,7 +477,8 @@ def open_tiktok_gateway(
     ) -> Iterator[None]:
         if deadline != task_deadline:
             raise DomainError("read_deadline_invalid", "调用期限与任务不一致")
-        diagnostic = operation.startswith(("materials.", "build."))
+        # 普通目录/素材子页与报表同样发送真实HTTP，不能因缺埋点误归为纯本地耗时。
+        diagnostic = operation.startswith(("materials.", "build.", "ads.", "reports."))
         fields = {
             "tenant_id": str(context.tenant_id),
             "bc_id": route.bc_id,
