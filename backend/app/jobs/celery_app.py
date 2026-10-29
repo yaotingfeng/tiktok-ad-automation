@@ -64,7 +64,7 @@ celery_app.conf.update(
     task_routes={
         "material_production.provision": {"queue": "control"},
         "material_production.recover": {"queue": "control"},
-        "jobs.flush_dispatch": {"queue": "control"},
+        "jobs.flush_dispatch": {"queue": "builds", "priority": 0},
         "jobs.compact_dispatches": {"queue": "control"},
         "reporting.plan_due": {"queue": "control"},
         "reporting.check_health": {"queue": "control"},
@@ -196,10 +196,11 @@ celery_app.conf.update(
             "schedule": 15.0,
             "options": {"queue": "control"},
         },
+        # 短投递借用现有搭建槽；不等待控制面的慢规划/修复，不增加Worker或平台额度。
         "flush-dispatch": {
             "task": "jobs.flush_dispatch",
             "schedule": 1.0,
-            "options": {"queue": "control"},
+            "options": {"queue": "builds", "priority": 0},
         },
         # Beat only wakes the local durable-plan scanner.  The task checks the
         # explicit feature flag before touching plans or the provider gateway.

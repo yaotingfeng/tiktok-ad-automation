@@ -355,8 +355,10 @@ def open_tiktok_gateway(
         advertiser_id: str | None,
         operation: str,
         entity_kind: str | None = None,
+        *,
+        check_workflow: bool = True,
     ) -> None:
-        if before_request is not None:
+        if check_workflow and before_request is not None:
             before_request()
         capability = _capability(advertiser_id, operation)
         management_operation = (
@@ -465,6 +467,8 @@ def open_tiktok_gateway(
             ):
                 yield
 
+    # share_arguments逐账户核验当前授权；完整业务围栏由物理请求入口在准入前后
+    # 各执行一次，不随共享目标数反复扫描整个批次，也不跨请求缓存授权。
     @contextmanager
     def request_scope(
         advertiser_id: str | None, operation: str, deadline: datetime
@@ -588,7 +592,7 @@ def open_tiktok_gateway(
                     materials=MCPMaterialOperations(
                         client,
                         share_authorize=lambda account: authorize(
-                            account, "materials.share_assets"
+                            account, "materials.share_assets", check_workflow=False
                         ),
                         preview_allowed_hosts=settings.MATERIAL_REMOTE_MEDIA_HOSTS,
                         upload_policy=material_upload_policy(
@@ -647,7 +651,7 @@ def open_tiktok_gateway(
                     materials=SDKMaterialOperations(
                         official,
                         share_authorize=lambda account: authorize(
-                            account, "materials.share_assets"
+                            account, "materials.share_assets", check_workflow=False
                         ),
                         request_scope=request_scope,
                         deadline=task_deadline,

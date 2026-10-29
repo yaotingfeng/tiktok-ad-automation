@@ -1,11 +1,13 @@
 """源封面到目标账户的 IMAGE 独立批次；发送后只能读回实际目标图片。"""
 
 import json
+import logging
 import re
 from collections import defaultdict
 from collections.abc import Callable, Sequence
 from datetime import datetime, timedelta
 from hashlib import sha256
+from time import monotonic
 from typing import Any
 from typing import cast as type_cast
 from uuid import UUID, uuid4
@@ -33,6 +35,8 @@ from .content_identity import content_key, material_content_key_expression
 from .cover_models import MaterialCoverJob, MaterialCoverShareBatch
 from .models import AccountMaterial, MaterialAssetOperation, MaterialFile
 from .routes import load_material_route, require_material_route
+
+logger = logging.getLogger(__name__)
 
 SCAN_PAGES_PER_SLICE = 4
 
@@ -1069,6 +1073,10 @@ def _publish(
     claims: dict[UUID, UUID],
     found: dict[UUID, dict[str, str]],
 ) -> None:
+    # 空探测只保存分页游标；没有结果可发布，不锁素材或重复整批鉴权。
+    # 请求前的_check以及后续_continue的批次/成员租约围栏仍分别执行。
+    if not found:
+        return
     db.exec(
         select(MaterialFile)
         .where(
@@ -1168,6 +1176,10 @@ def run_shared_cover(
     current: MaterialCoverShareBatch | None
     claims: dict[UUID, UUID] = {first.id: nonce}
     armed_this_turn = False
+    started = monotonic()
+    phase, outcome, error_code = "claim", "no_work", None
+    check_count, check_seconds, found_count = 0, 0.0, 0
+    batch_id = None
     try:
         with bounded_session(database_engine, task_deadline=deadline) as db, db.begin():
             prepared = (
@@ -1193,13 +1205,21 @@ def run_shared_cover(
         if prepared is None:
             return
         batch, claims = prepared
+        batch_id = str(batch.id)
+        phase, outcome = "open_gateway", "in_progress"
 
         def check() -> None:
-            with (
-                bounded_session(database_engine, task_deadline=deadline) as db,
-                db.begin(),
-            ):
-                _check(db, context, batch, claims)
+            nonlocal check_count, check_seconds
+            check_started = monotonic()
+            check_count += 1
+            try:
+                with (
+                    bounded_session(database_engine, task_deadline=deadline) as db,
+                    db.begin(),
+                ):
+                    _check(db, context, batch, claims)
+            finally:
+                check_seconds += monotonic() - check_started
 
         def budget(operation: str) -> types.RemoteCallBudget:
             return types.RemoteCallBudget(
@@ -1220,6 +1240,7 @@ def run_shared_cover(
             if batch.armed_at is None and not all(
                 member.get("source_mid") for member in batch.members
             ):
+                phase = "source_lookup"
                 # 真正的图片 MID 只能来自源账户详情，不能把 image_id 或本地请求当证据。
                 records = gateway.materials.read_images(
                     advertiser_id=batch.source_advertiser_id,
@@ -1268,6 +1289,7 @@ def run_shared_cover(
                             db, MaterialCoverJob, UUID(member["source_job_id"])
                         ).image_mid = member["source_mid"]
                 batch.members = members
+            phase = "scan"
             found, done = _scan_slice(
                 gateway.materials,
                 batch,
@@ -1276,6 +1298,8 @@ def run_shared_cover(
                 deadline=deadline,
                 read_only_ids=read_only_ids,
             )
+            found_count = len(found)
+            phase = "publish"
             # 完整读完但预算不足时，持久保存证据后下一次正式任务再发送。
             yield_for_write = (
                 done
@@ -1297,9 +1321,12 @@ def run_shared_cover(
                 # 发布与恢复身份必须同一提交：任何崩溃点都保留一个可修复的 wake。
                 if not claims:
                     current.status, current.scan_state = "READY", {}
+                    outcome = "ready"
                 elif not done or yield_for_write:
+                    outcome = "continued"
                     _continue(db, context, batch, claims)
                 elif batch.armed_at is not None:
+                    outcome = "unresolved"
                     rejected = {
                         UUID(member["job_id"])
                         for member in batch.members
@@ -1321,6 +1348,7 @@ def run_shared_cover(
                         {},
                     )
                 elif read_only_ids.intersection(claims):
+                    outcome = "unresolved"
                     # 先前复用成功的图片即使批次没有POST也只能核查。
                     # 缺失者保持UNKNOWN，其余真正未发送成员另行正式续跑。
                     for identity in read_only_ids.intersection(claims):
@@ -1352,6 +1380,7 @@ def run_shared_cover(
                     )
             if not claims or not done or yield_for_write or batch.armed_at is not None:
                 return
+            phase = "arm"
             # 已存在目标会使原矩形变稀疏；只发送剩余授权组合中的一个矩形。
             pending = [
                 member for member in batch.members if UUID(member["job_id"]) in claims
@@ -1430,6 +1459,7 @@ def run_shared_cover(
                 for member in selected
             }
             armed_this_turn = True
+            phase = "share"
             receipt = gateway.materials.share_assets(
                 request, budget=budget("materials.share_assets")
             )
@@ -1440,8 +1470,13 @@ def run_shared_cover(
                 }
                 current.request_id = receipt.evidence.request_id
                 current.status = "VERIFYING"
+                outcome = "verification_queued"
                 _continue(db, context, batch, claims)
     except Exception as error:
+        outcome = "error"
+        error_code = (
+            error.code if isinstance(error, DomainError) else type(error).__name__
+        )
         # 即使清理客户端失败也不能重发已 armed 的批次；先保存读回调度。
         with Session(database_engine) as db, db.begin():
             current = _locked_batch(db, context, batch) if batch else None
@@ -1504,3 +1539,31 @@ def run_shared_cover(
                     covers._queue(db, job, read=False, delay=delay)
                 else:
                     covers._stop(job, code, unknown=unknown)
+
+    finally:
+        # 关联真实业务身份和阶段；不记录请求正文、凭据、图片URL或原始异常。
+        logger.info(
+            "cover_share_slice %s",
+            json.dumps(
+                {
+                    "tenant_id": str(context.tenant_id),
+                    "bc_id": first.bc_id,
+                    "job_id": str(first.id),
+                    "dispatch_id": str(first.dispatch_id)
+                    if first.dispatch_id
+                    else None,
+                    "revision": first.revision,
+                    "batch_id": batch_id,
+                    "phase": phase,
+                    "outcome": outcome,
+                    "error_code": error_code,
+                    "members": len(claims),
+                    "found": found_count,
+                    "armed_this_turn": armed_this_turn,
+                    "check_count": check_count,
+                    "check_seconds": round(check_seconds, 3),
+                    "elapsed_seconds": round(monotonic() - started, 3),
+                },
+                sort_keys=True,
+            ),
+        )
