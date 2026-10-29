@@ -1,5 +1,7 @@
 # 图片轮播批量搭建实施计划
 
+> 实施修订（2026-10-29）：用户已授权在新 worktree 开始实施。核对实施进度中的 2026-10-15 明确决策后，本功能以官方 API/SDK 为交付通道；不扩展已退役中的 MCP，不重新开放其授权入口。下文旧双通道条目按此修订执行：P1-T1 记录历史 MCP 证据但只扩展当前 SDK 能力，P1-T4 不新建 mcp_music.py，新增音乐能力对退役连接明确不支持；集成门禁遵循当前 `not mcp` 范围。既有公共解析器仍保持严格数据合同。完整拆除 MCP 属于独立任务。
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking. 项目 AGENTS.md 的按需流程与用户后续指定的执行方式优先。
 
 **Goal:** 在现有 TK-ADA 批量搭建流程中，一次配置图片规则，按剧生成轮播和配乐，再按原策略分配广告。
@@ -8,7 +10,7 @@
 
 **Tech Stack:** FastAPI、SQLModel/PostgreSQL、Celery/Redis、官方 TikTok SDK/MCP、React/TypeScript、shadcn/ui、Bun、pytest、Playwright。
 
-**Spec:** [批量设计](../specs/2026-10-28-image-carousel-ads-design.md)。本计划取代旧的逐个配置主流程，用户授权的是设计和计划，所有实施项仍未执行。
+**Spec:** [批量设计](../specs/2026-10-28-image-carousel-ads-design.md)。本计划取代旧的逐个配置主流程，用户现已授权实施；完成项以阶段记录与测试证据为准。
 
 ## Global Constraints
 
