@@ -32,8 +32,10 @@ def needs_full_backup(old_sha, sha, *, force=False):
 def recent_backup(pod, folder, current_heads, now=None):
     """普通发布前核验备份盘中的证据，不以 Jenkins 的历史成功状态代替。"""
     latest = BACKUP_ROOT + "/latest"
-    manifest_bytes = pod("app", "cat", latest + "/manifest.json")
-    proof = json.loads(pod("app", "cat", latest + "/restore-verified.json"))
+    manifest_bytes = pod("app", "cat", latest + "/manifest.json", idempotent=True)
+    proof = json.loads(
+        pod("app", "cat", latest + "/restore-verified.json", idempotent=True)
+    )
     manifest = json.loads(manifest_bytes)
     write(folder / "recent-backup-manifest.json", manifest_bytes)
     require(
@@ -88,7 +90,9 @@ def recent_backup(pod, folder, current_heads, now=None):
     # 各文件核验互不依赖；保留完整字节校验，压缩跨区域 kubectl 的串行等待。
     with ThreadPoolExecutor(max_workers=4) as pool:
         list(pool.map(verify_file, manifest["files"].items()))
-    source = json.loads(pod("app", "cat", latest + "/source-fingerprint.json"))
+    source = json.loads(
+        pod("app", "cat", latest + "/source-fingerprint.json", idempotent=True)
+    )
     require(
         source["migration_heads"] == current_heads,
         "Recent backup schema differs from production",

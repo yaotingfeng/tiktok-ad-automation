@@ -76,16 +76,27 @@ class PodExec:
     def __init__(self, cluster, pod):
         self.cluster, self.pod = cluster, pod
 
-    def __call__(self, container, *args, data=None):
+    def __call__(self, container, *args, data=None, idempotent=False):
+        # idempotent：重复执行结果相同（只读或覆盖写同一内容），连接中断时可安全重试。
         stdin = ["-i"] if data is not None else []
         return self.cluster.k(
-            "exec", *stdin, self.pod, "-c", container, "--", *args, data=data
+            "exec",
+            *stdin,
+            self.pod,
+            "-c",
+            container,
+            "--",
+            *args,
+            data=data,
+            idempotent=idempotent,
         )
 
 
-def sh(pod, container, script, *args, data=None):
+def sh(pod, container, script, *args, data=None, idempotent=False):
     # 路径经位置参数传入，不拼进脚本文本，避免被 shell 解释。
-    return pod(container, "sh", "-c", script, "sh", *args, data=data)
+    return pod(
+        container, "sh", "-c", script, "sh", *args, data=data, idempotent=idempotent
+    )
 
 
 # 后台任务：脚本经 stdin 写入容器私有临时目录，setsid 脱离 exec 会话运行，结束时原子写退出码。
@@ -120,7 +131,11 @@ def detached(pod, container, script, *args):
     while True:
         time.sleep(DETACHED_POLL_SECONDS)
         try:
-            status = pod(container, "sh", "-c", _POLL, "sh", job).decode().strip()
+            status = (
+                pod(container, "sh", "-c", _POLL, "sh", job, idempotent=True)
+                .decode()
+                .strip()
+            )
         except RuntimeError:
             failures += 1
             require(
@@ -163,12 +178,20 @@ def tree_digest(path):
 
 def remote_digest(pod, path, directory=False):
     if directory:
-        return sh(pod, "app", TREE_DIGEST, path).decode().split()[0]
-    return pod("app", "sha256sum", path).decode().split()[0]
+        return sh(pod, "app", TREE_DIGEST, path, idempotent=True).decode().split()[0]
+    return pod("app", "sha256sum", path, idempotent=True).decode().split()[0]
 
 
 def upload(pod, local, remote):
-    sh(pod, "app", 'umask 077 && cat > "$1"', remote, data=Path(local).read_bytes())
+    # 覆盖写入同一内容，随后按校验和核对，重放安全。
+    sh(
+        pod,
+        "app",
+        'umask 077 && cat > "$1"',
+        remote,
+        data=Path(local).read_bytes(),
+        idempotent=True,
+    )
     require(
         remote_digest(pod, remote) == digest(local), "Backup upload checksum mismatch"
     )
@@ -198,6 +221,7 @@ def check_space(pod, database_bytes):
         'cd "$1" && rm -rf .pending-* .previous && df -B1 --output=avail . | tail -1'
         " && { if [ -e latest ]; then du -sb latest | cut -f1; else echo 0; fi; }",
         BACKUP_ROOT,
+        idempotent=True,
     ).split()
     available, last = int(output[0]), int(output[1])
     # available 已扣除盘上的 latest；新备份写入 .pending-* 并验证完成前两份并存，
@@ -327,7 +351,14 @@ def verify_archives(pod, folder, directory):
         "Backup manifest checksum mismatch",
     )
     result = json.loads(
-        pod("app", "python", "-", directory, data=ARCHIVE_CHECK.read_bytes())
+        pod(
+            "app",
+            "python",
+            "-",
+            directory,
+            data=ARCHIVE_CHECK.read_bytes(),
+            idempotent=True,
+        )
     )
     require(result["ok"], "Backup verification failed: " + str(result["error"]))
 

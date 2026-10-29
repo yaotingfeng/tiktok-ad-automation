@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 import subprocess
+import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -47,8 +48,55 @@ def require(ok, message):
         raise RuntimeError(message)
 
 
-def run(args, *, data=None, env=None):
-    result = subprocess.run(args, input=data, capture_output=True, env=env, check=False)
+# 国内发布机（公司 Jenkins）到新加坡集群 API 的连接会间歇断开，2026-10-29 实测短 exec
+# 约 5–10% 失败，单次失败即中止整轮备份/发布。请求尚未送达集群的错误一律重试；
+# 已送达与否不明确的断开只重试只读命令和调用方声明可重复执行的命令，有副作用的操作不重放。
+KUBECTL_ATTEMPTS = 4
+KUBECTL_RETRY_SECONDS = 5
+KUBECTL_UNSENT = (
+    "TLS handshake timeout",
+    "couldn't get current server API group list",
+    "error sending request",
+    "dial tcp",
+)
+KUBECTL_INTERRUPTED = (
+    "EOF",
+    "connection reset by peer",
+    "broken pipe",
+    "i/o timeout",
+    "http2: client connection lost",
+)
+KUBECTL_READ_ONLY = frozenset({"get", "wait", "version"})
+
+
+def kubectl_retryable(args, stderr, *, idempotent=False):
+    """判断 kubectl 失败是否属于可重试的连接中断；容器内命令自身失败绝不重试。"""
+    if "command terminated with exit code" in stderr:
+        return False
+    if any(marker in stderr for marker in KUBECTL_UNSENT):
+        return True
+    read_only = (
+        idempotent
+        or "--dry-run=client" in args
+        or next((a for a in args if not a.startswith("-")), "") in KUBECTL_READ_ONLY
+    )
+    return read_only and any(marker in stderr for marker in KUBECTL_INTERRUPTED)
+
+
+def run(args, *, data=None, env=None, retryable=None):
+    """retryable(stderr) 为真时按固定间隔重试，用于跨境 kubectl 的连接中断。"""
+    for attempt in range(1, KUBECTL_ATTEMPTS + 1):
+        result = subprocess.run(
+            args, input=data, capture_output=True, env=env, check=False
+        )
+        if (
+            not result.returncode
+            or retryable is None
+            or attempt == KUBECTL_ATTEMPTS
+            or not retryable(result.stderr.decode(errors="replace"))
+        ):
+            break
+        time.sleep(KUBECTL_RETRY_SECONDS * attempt)
     # 错误正文可能含私密连接配置，仅保存到调用方指定的私有诊断文件。
     if result.returncode and os.environ.get("RELEASE_DIAGNOSTIC_LOG"):
         write(
@@ -98,8 +146,14 @@ class Cluster:
         require(os.environ.get("K8S_NAMESPACE") == "test", "K8S_NAMESPACE must be test")
         self.base = ["kubectl", "--context", CONTEXT, "-n", "test"]
 
-    def k(self, *args, data=None):
-        return run(self.base + ["--request-timeout=20m", *args], data=data)
+    def k(self, *args, data=None, idempotent=False):
+        return run(
+            self.base + ["--request-timeout=20m", *args],
+            data=data,
+            retryable=lambda stderr: kubectl_retryable(
+                args, stderr, idempotent=idempotent
+            ),
+        )
 
     def get(self, kind, name=None):
         args = ["get", kind]

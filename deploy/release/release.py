@@ -424,7 +424,15 @@ class Release:
             " print(c.execute(text('SELECT pg_database_size(current_database())')).scalar_one())"
         )
         value = int(
-            self.cluster.k("exec", api["metadata"]["name"], "--", "python", "-c", code)
+            self.cluster.k(
+                "exec",
+                api["metadata"]["name"],
+                "--",
+                "python",
+                "-c",
+                code,
+                idempotent=True,
+            )
         )
         require(value > 0, "Database size unavailable")
         return value
@@ -627,7 +635,17 @@ class Release:
         ]
         if expected is not None:
             args.append(json.dumps(expected))
-        return json.loads(self.cluster.k(*args, data=PROBE.read_bytes()))
+        # 只读探测可在连接中断后重放；redis 导出覆盖写同一文件；迁移与取消消费者不重放。
+        idempotent = action in {
+            "fingerprint",
+            "schema",
+            "credentials",
+            "broker",
+            "inspect",
+        }
+        return json.loads(
+            self.cluster.k(*args, data=PROBE.read_bytes(), idempotent=idempotent)
+        )
 
     def pause(self):
         self.assert_lock()

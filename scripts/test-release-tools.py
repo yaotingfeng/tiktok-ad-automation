@@ -5,6 +5,7 @@ import importlib.util
 import json
 import os
 import re
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -624,6 +625,59 @@ class ReleaseTests(unittest.TestCase):
             self.release.wait_drained(["one"])
             self.assertEqual(probe.call_count, 4)
             self.assertEqual(sleep.call_count, 3)
+
+    def test_kubectl_retries_only_safe_connection_failures(self):
+        from common import kubectl_retryable
+
+        unsent = 'error: error sending request: Post "https://x/exec": EOF'
+        self.assertTrue(kubectl_retryable(("create", "-f", "-"), unsent))
+        self.assertTrue(
+            kubectl_retryable(("exec", "p"), "net/http: TLS handshake timeout")
+        )
+        # 送达与否不明确：只读命令或声明可重放的 exec 才重试。
+        self.assertTrue(kubectl_retryable(("get", "pods"), "error: EOF"))
+        self.assertTrue(
+            kubectl_retryable(("create", "--dry-run=client", "-f", "x"), "error: EOF")
+        )
+        self.assertFalse(kubectl_retryable(("exec", "p", "--", "mv"), "error: EOF"))
+        self.assertTrue(kubectl_retryable(("exec", "p"), "error: EOF", idempotent=True))
+        # 容器内命令自身失败，即使输出含连接字样也不重试。
+        self.assertFalse(
+            kubectl_retryable(
+                ("exec", "p"),
+                "dial tcp: refused\ncommand terminated with exit code 2",
+                idempotent=True,
+            )
+        )
+
+    def test_kubectl_retry_is_bounded_and_returns_success(self):
+        import common
+
+        flaky = [
+            subprocess.CompletedProcess([], 1, b"", b"error: EOF"),
+            subprocess.CompletedProcess([], 0, b"ok", b""),
+        ]
+        with (
+            patch("common.subprocess.run", side_effect=flaky) as command,
+            patch("common.time.sleep"),
+        ):
+            self.assertEqual(Cluster().k("get", "pods"), b"ok")
+            self.assertEqual(command.call_count, 2)
+        failing = subprocess.CompletedProcess([], 1, b"", b"error: EOF")
+        with (
+            patch("common.subprocess.run", return_value=failing) as command,
+            patch("common.time.sleep"),
+        ):
+            with self.assertRaises(RuntimeError):
+                Cluster().k("get", "pods")
+            self.assertEqual(command.call_count, common.KUBECTL_ATTEMPTS)
+        with (
+            patch("common.subprocess.run", return_value=failing) as command,
+            patch("common.time.sleep"),
+        ):
+            with self.assertRaises(RuntimeError):
+                Cluster().k("exec", "p", "--", "mv", "a", "b")
+            self.assertEqual(command.call_count, 1)
 
     def test_other_target_rejected_before_commands(self):
         with (
