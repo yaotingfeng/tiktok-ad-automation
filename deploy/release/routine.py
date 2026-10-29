@@ -45,8 +45,8 @@ def recent_backup(pod, folder, current_heads, now=None):
     now = time.time() if now is None else now
     captured = manifest.get("captured_at", 0)
     require(
-        0 <= now - captured <= 259200,
-        "Verified database backup is older than 72 hours; run backup-online first",
+        0 <= now - captured <= 86400,
+        "Verified database backup is older than 24 hours; run backup-online first",
     )
     require(
         captured <= proof.get("verified_at", 0) <= now,

@@ -311,7 +311,20 @@ def main():
         action="store_true",
         help="端到端验收按满规模运行（ACCEPTANCE_SCALE=full）；默认精简规模",
     )
+    parser.add_argument(
+        "--skip-backup-reason",
+        help="用户明确豁免本次备份的理由；仅限无数据/部署合同变化的发布",
+    )
     args = parser.parse_args()
+    require(
+        args.skip_backup_reason is None
+        or (
+            args.action == "deploy"
+            and not args.full_backup
+            and args.skip_backup_reason.strip()
+        ),
+        "--skip-backup-reason requires deploy, a nonempty reason, and no --full-backup",
+    )
     config = json.loads(args.config.read_text())
     base = args.config.resolve().parent
     env = environment(config)
@@ -476,6 +489,8 @@ def main():
                 command += ["--sha", sha]
                 if args.full_backup:
                     command.append("--full-backup")
+                if args.skip_backup_reason:
+                    command += ["--skip-backup-reason", args.skip_backup_reason]
             try:
                 stage(command, checkout, env, log)
             finally:
@@ -483,7 +498,11 @@ def main():
         mark("complete")
         cleanup_checkout(folder)
         print("完成：" + args.action + "；批次：" + run_name, flush=True)
-        if args.action != "check":
+        if args.skip_backup_reason:
+            print(
+                "本次按用户授权未创建备份、未做恢复验证；记录见私有批次 backup-waiver.json。"
+            )
+        elif args.action != "check":
             print(
                 "数据库备份：/backup/latest；普通发布回退材料：/backup/latest-release（不含同一时点数据库）"
             )

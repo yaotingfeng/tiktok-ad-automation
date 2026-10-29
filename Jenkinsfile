@@ -17,6 +17,8 @@ pipeline {
             description: 'deploy=检查并发布（推送自动触发时使用）；check=只检查；status/recover/finish=处理中断的发布')
         booleanParam(name: 'FULL', defaultValue: false,
             description: '仅 deploy/check：全量检查（默认只检查受改动影响的部分）')
+        string(name: 'SKIP_BACKUP_REASON', defaultValue: '', trim: true,
+            description: '仅已获用户授权的无数据/部署合同变化修复：填写本次不备份理由；留空走正常备份门禁')
         booleanParam(name: 'FULL_BACKUP', defaultValue: false,
             description: '仅 deploy：数据格式/任务合同变化时选择；迁移和部署清单等变化自动执行完整备份')
     }
@@ -88,6 +90,9 @@ pipeline {
                             fi
                             if [ "${FULL_BACKUP:-false}" = true ] && [ "$SCHEDULED_BACKUP" != true ] && [ "$ACTION" = deploy ]; then
                                 set -- "$@" --full-backup
+                            fi
+                            if [ -n "${SKIP_BACKUP_REASON:-}" ] && [ "$SCHEDULED_BACKUP" != true ]; then
+                                set -- "$@" --skip-backup-reason "$SKIP_BACKUP_REASON"
                             fi
                             bash deploy/ci/jenkins-run.sh "$@"
                         ''')

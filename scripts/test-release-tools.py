@@ -547,9 +547,9 @@ class ReleaseTests(unittest.TestCase):
         # 盘上的 latest 已不在空闲里，只需新的一份加一份余量。
         last = 18898 * 2**20
         self.assertEqual(
-            check_space(
-                lambda *_a, **_k: b"%d\n%d\n" % (81 * 2**30, last), 56 * 2**30
-            )["required"],
+            check_space(lambda *_a, **_k: b"%d\n%d\n" % (81 * 2**30, last), 56 * 2**30)[
+                "required"
+            ],
             2 * last,
         )
 
@@ -931,6 +931,169 @@ class ReleaseTests(unittest.TestCase):
             snapshot.assert_not_called()
             restore.assert_not_called()
             migrate.assert_not_called()
+
+    def test_authorized_no_backup_release_skips_all_backup_steps(self):
+        events = []
+        with (
+            patch.object(self.release, "begin"),
+            patch.object(self.release, "prepare_tools"),
+            patch.object(self.release, "check_remote"),
+            patch("release.needs_full_backup", return_value=False),
+            patch.object(self.release, "helper"),
+            patch.object(
+                self.release, "probe", return_value={"migration_heads": ["v1"]}
+            ),
+            patch(
+                "release.recent_backup",
+                side_effect=AssertionError("backup gate called"),
+            ),
+            patch(
+                "release.snapshot_release", side_effect=AssertionError("archive called")
+            ),
+            patch("release.snapshot", side_effect=AssertionError("backup called")),
+            patch(
+                "release.restore_verify", side_effect=AssertionError("restore called")
+            ),
+            patch.object(
+                self.release, "pause", side_effect=lambda: events.append("freeze")
+            ),
+            patch.object(
+                self.release,
+                "apply_images",
+                side_effect=lambda: events.append("images"),
+            ),
+            patch.object(
+                self.release, "resume", side_effect=lambda *a: events.append("resume")
+            ),
+        ):
+            self.release.execute(
+                "deploy", "b" * 40, skip_backup_reason="User explicitly waived backup"
+            )
+        self.assertEqual(events, ["freeze", "images", "resume"])
+        proof = json.loads((self.release.folder / "backup-waiver.json").read_text())
+        self.assertEqual(proof["candidate_sha"], "b" * 40)
+        self.assertEqual(proof["backup"], "not-created")
+        self.assertEqual(proof["restore_verification"], "not-performed")
+        self.assertEqual(proof["migration_heads"], ["v1"])
+
+    def test_no_backup_rejects_data_contract_changes_before_preparing_tools(self):
+        with (
+            patch.object(self.release, "begin"),
+            patch.object(
+                self.release,
+                "prepare_tools",
+                side_effect=AssertionError("prepared unsafe release"),
+            ),
+            patch("release.needs_full_backup", return_value=True),
+            self.assertRaisesRegex(RuntimeError, "unchanged data/deployment"),
+        ):
+            self.release.execute("deploy", "b" * 40, skip_backup_reason="User waiver")
+
+    def test_no_backup_image_switch_requires_matching_release_waiver(self):
+        release = self.release
+        release.state.update(
+            mode="routine", candidate_sha="b" * 40, skip_backup_reason="User waiver"
+        )
+        for name, deployment in self.deployments.items():
+            deployment["spec"]["replicas"] = 0
+            deployment["spec"]["template"]["spec"]["containers"][0]["name"] = name
+        waiver = {
+            "token": "fixture",
+            "old_sha": "a" * 40,
+            "candidate_sha": "c" * 40,
+            "reason": "User waiver",
+        }
+        write(release.folder / "backup-waiver.json", waiver)
+
+        def switch(*args):
+            self.assertEqual(args[:2], ("set", "image"))
+            name = args[2].removeprefix("deployment/")
+            self.deployments[name]["spec"]["template"]["spec"]["containers"][0][
+                "image"
+            ] = args[3].split("=", 1)[1]
+
+        with (
+            patch.object(release, "assert_lock"),
+            patch.object(release, "config_unchanged"),
+            patch.object(
+                release, "validate_deployments", return_value=self.deployments
+            ),
+            patch.object(release.cluster, "app_pods", return_value=[]),
+            patch("release.needs_full_backup", return_value=False),
+            patch.object(release.cluster, "k", side_effect=switch),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "waiver does not match"):
+                release.apply_images()
+            self.assertEqual(
+                {
+                    d["spec"]["template"]["spec"]["containers"][0]["image"]
+                    for d in self.deployments.values()
+                },
+                {VPC + "a" * 40},
+            )
+            waiver["candidate_sha"] = "b" * 40
+            write(release.folder / "backup-waiver.json", waiver)
+            release.apply_images()
+        self.assertEqual(
+            {
+                d["spec"]["template"]["spec"]["containers"][0]["image"]
+                for d in self.deployments.values()
+            },
+            {VPC + "b" * 40},
+        )
+        self.assertTrue(release.state["candidate_applied"])
+        self.assertEqual(release.state["phase"], "candidate-held")
+
+    def test_no_backup_invalid_cli_combination_fails_before_environment_access(self):
+        for args in (
+            ["check", "--skip-backup-reason", "User waiver"],
+            ["deploy", "--full-backup", "--skip-backup-reason", "User waiver"],
+            ["deploy", "--skip-backup-reason", "   "],
+        ):
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(ROOT / "deploy/local.py"),
+                    *args,
+                    "--config",
+                    "/missing/config.json",
+                ],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("--skip-backup-reason requires", result.stderr)
+            self.assertNotIn("No such file", result.stderr)
+
+    def test_no_backup_helper_needs_no_backup_disk_or_restore_services(self):
+        self.release.state.update(mode="routine", skip_backup_reason="User waiver")
+        created = {}
+
+        def create(obj):
+            created.update(obj)
+            return {"metadata": {"uid": "helper"}}
+
+        with (
+            patch.object(self.release.cluster, "create", side_effect=create),
+            patch.object(self.release.cluster, "k"),
+            patch(
+                "release.check_space",
+                side_effect=AssertionError("backup disk accessed"),
+            ),
+        ):
+            self.release.helper()
+        spec = created["spec"]
+        self.assertEqual([c["name"] for c in spec["containers"]], ["app"])
+        self.assertFalse(
+            any(
+                "persistentVolumeClaim" in v or "ephemeral" in v
+                for v in spec["volumes"]
+            )
+        )
+        self.assertNotIn(
+            "backup", {v["name"] for v in spec["containers"][0]["volumeMounts"]}
+        )
 
     def test_online_backup_never_pauses_or_restarts_application(self):
         with (

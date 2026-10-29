@@ -133,8 +133,8 @@ class ClusterBackupTests(unittest.TestCase):
         write(pending / "restore-verified.json", proof)
         publish(self.pod, self.state, BACKUP_ROOT + "/.pending-one")
         recent_backup(self.pod, self.state, ["v1"], now=100200)
-        with self.assertRaisesRegex(RuntimeError, "72 hours"):
-            recent_backup(self.pod, self.state, ["v1"], now=360000)
+        with self.assertRaisesRegex(RuntimeError, "24 hours"):
+            recent_backup(self.pod, self.state, ["v1"], now=186401)
         with self.assertRaisesRegex(RuntimeError, "schema"):
             recent_backup(self.pod, self.state, ["v2"], now=100200)
         (self.disk / "latest" / PG_DUMP / "3001.dat.lz4").write_bytes(b"damaged")
