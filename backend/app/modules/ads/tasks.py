@@ -6,6 +6,7 @@ import hashlib
 import logging
 from collections.abc import Iterator
 from contextlib import contextmanager
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import UUID, uuid4
@@ -20,9 +21,6 @@ from app.core.config import settings
 from app.core.context import TenantContext
 from app.core.db import engine
 from app.core.errors import DomainError
-
-# 最大重试次数限制，防止死循环（数据库错误导致的重试）
-MAX_CLAIM_GENERATION = 100
 from app.integrations.tiktok.contracts.ads import DirectoryQuery
 from app.integrations.tiktok.gateway import open_tiktok_gateway
 from app.integrations.tiktok.sdk import AccountAdmissionDeferred
@@ -33,7 +31,6 @@ from app.modules.ads.directory_dispatch import (
     PUBLISH_TASK_NAME,
     TARGETED_TASK_NAME,
     TASK_NAME,
-    enqueue_directory_refill,
     enqueue_directory_step,
     is_live_directory,
 )
@@ -48,6 +45,8 @@ from app.modules.ads.sync import (
 )
 from app.modules.ads.sync_models import AdDirectoryPage, AdDirectoryRun
 
+# 最大重试次数限制，防止死循环（数据库错误导致的重试）。
+MAX_CLAIM_GENERATION = 100
 _LEASE_SECONDS = 90
 _PUBLISH_LEASE_SECONDS = 210
 _LOCK_TIMEOUT = "20s"
@@ -110,13 +109,53 @@ def _payload(payload: dict[str, Any]) -> tuple[UUID, int]:
     return run_id, generation
 
 
-def _finish_superseded_directory(session: Session, run: AdDirectoryRun) -> str:
+@dataclass
+class _CommittedDirectoryWork:
+    """只记录已提交的本地工作；失败/重复消息不能触发额外派发。"""
+
+    refill: bool = False
+    deliver: bool = False
+
+
+def _deliver_committed_work(database_engine, work: _CommittedDirectoryWork) -> None:
+    if not settings.ADS_SYNC_ENABLED:
+        return
+    deliver = work.deliver
+    if work.refill:
+        try:
+            from app.modules.reporting.job_tasks import _dispatch_directories
+
+            # 仅在释放目录槽后补位；分页续步复用原槽，不能每页扫描积压。
+            # 同时考虑两池：全量主目录可能生成实时素材子运行。复用原窗口锁、
+            # 租户轮转和背景保底；慢查询回滚本次领取，Beat 后续仍可恢复。
+            with Session(database_engine) as session, session.begin():
+                session.connection().execute(text("SET LOCAL statement_timeout='2s'"))
+                session.connection().execute(text("SET LOCAL lock_timeout='100ms'"))
+                session.connection().execute(text("SET LOCAL transaction_timeout='3s'"))
+                claimed = _dispatch_directories(session, datetime.now(UTC))
+            deliver = deliver or claimed > 0
+        except Exception:
+            logger.exception("directory direct refill deferred")
+    if deliver:
+        try:
+            from app.jobs.tasks import drain_dispatch
+
+            # 业务和领取事务均已提交，再公平、有界发送原 outbox。发送失败保留
+            # 同一消息身份及原退避，不得把已发布目录改成失败。
+            drain_dispatch()
+        except Exception:
+            logger.exception("directory continuation delivery deferred")
+
+
+def _finish_superseded_directory(
+    session: Session, run: AdDirectoryRun, work: _CommittedDirectoryWork
+) -> str:
     # 这是不可再发布的明确终态，不删除已暂存页或把旧数据伪装成成功发布。
     run.status, run.error_code = "STALE", "directory_run_stale"
     run.completed_at = datetime.now(UTC)
     run.claim_token = run.claimed_until = None
-    enqueue_directory_refill(session, run)
     session.commit()
+    work.refill = True
     return "READY"
 
 
@@ -129,6 +168,31 @@ def run_directory_step(
     claim_generation: int,
     publish_only: bool = False,
 ) -> str:
+    work = _CommittedDirectoryWork()
+    try:
+        return _execute_directory_step(
+            database_engine=database_engine,
+            redis_client=redis_client,
+            context=context,
+            run_id=run_id,
+            claim_generation=claim_generation,
+            publish_only=publish_only,
+            work=work,
+        )
+    finally:
+        _deliver_committed_work(database_engine, work)
+
+
+def _execute_directory_step(
+    *,
+    database_engine: Any,
+    redis_client: Redis,
+    context: TenantContext,
+    run_id: UUID,
+    claim_generation: int,
+    publish_only: bool,
+    work: _CommittedDirectoryWork,
+) -> str:
     try:
         return _run_directory_step(
             database_engine=database_engine,
@@ -137,6 +201,7 @@ def run_directory_step(
             run_id=run_id,
             claim_generation=claim_generation,
             publish_only=publish_only,
+            work=work,
         )
     except (DBAPIError, SoftTimeLimitExceeded) as error:
         retryable = isinstance(error, SoftTimeLimitExceeded) or (
@@ -177,8 +242,8 @@ def run_directory_step(
                 run.status, run.error_code = "FAILED", "max_retries_exceeded"
                 run.completed_at = now
                 run.claim_token = run.claimed_until = None
-                enqueue_directory_refill(session, run)
                 session.commit()
+                work.refill = True
                 logger.error(
                     "directory publish failed: run=%s generation=%s reason=max_retries_exceeded",
                     run_id,
@@ -191,8 +256,8 @@ def run_directory_step(
             run.status, run.error_code = "WAITING_REMOTE", "directory_publish_retry"
             run.next_attempt_at = now + timedelta(minutes=2)
             # 退避期间不预占目录窗口；scanner到期只发本地发布，其他账户可先执行。
-            enqueue_directory_refill(session, run)
             session.commit()
+            work.refill = True
         logger.warning(
             "directory publish deferred: run=%s generation=%s error=%s "
             "sqlstate=%s statement_sha256=%s",
@@ -218,6 +283,7 @@ def _run_directory_step(
     run_id: UUID,
     claim_generation: int,
     publish_only: bool = False,
+    work: _CommittedDirectoryWork,
 ) -> str:
     # 实例总开关同时拦截已经排队的目录任务；重新开启后由扫描器恢复。
     if not settings.ADS_SYNC_ENABLED:
@@ -262,7 +328,7 @@ def _run_directory_step(
             capability="read",
         )
         if directory_run_superseded(session, run):
-            return _finish_superseded_directory(session, run)
+            return _finish_superseded_directory(session, run, work)
         terminal = session.exec(
             select(AdDirectoryPage.page)
             .where(
@@ -281,9 +347,10 @@ def _run_directory_step(
                 if error.code != "directory_run_stale":
                     raise
                 # 等账户发布锁期间也可能被新运行取代，独立保存终态并补位。
-                return _finish_superseded_directory(session, run)
+                return _finish_superseded_directory(session, run, work)
             run.claim_token = run.claimed_until = None
             session.commit()
+            work.refill = True
             return "READY"
         if publish_only:
             raise DomainError("directory_incomplete", "目录发布缺少已暂存末页")
@@ -344,6 +411,7 @@ def _run_directory_step(
                 session, current, available_at=current.next_attempt_at
             )
             session.commit()
+            work.deliver = True
         return "WAIT"
     with _directory_session(database_engine) as session:
         stage_directory_page(
@@ -369,6 +437,7 @@ def _run_directory_step(
         # 续步与页同事务提交，统一扫描器的幂等键，消息丢失仍可换代恢复。
         enqueue_directory_step(session, current, publish_only=page.complete)
         session.commit()
+        work.deliver = True
         return "CONTINUE"
 
 

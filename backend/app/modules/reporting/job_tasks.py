@@ -331,6 +331,8 @@ def _dispatch_directories(session, now):
     ).one()
     available = max(0, DIRECTORY_DISPATCH_WINDOW - inflight)
     targeted_available = targeted_capacity(session, now)
+    if not available and not targeted_available:
+        return 0
     # 原背景总窗口内，定向依赖和全量各保底一半；空闲份额可借用。
     # 不能把后台依赖改成 live 绕过服务分类，也不能让更早全量永久占满窗口。
     dependency_share = DIRECTORY_DISPATCH_WINDOW // 2
@@ -550,22 +552,26 @@ def plan_due_runs(*, database_engine, redis_client, now=None):
     dispatched = _dispatch_pending(database_engine, now, allow_backfill=allow_backfill)
     # 两类维护各自提交：旧任务归并读慢时，不能回滚/挡住目录依赖的复核游标。
     # 先唤醒再归并，各一秒预算；正常事实派发已提交，不受维护失败影响。
-    from app.modules.reporting.link_work import (
-        reconcile_link_work,
-        wake_link_dependencies,
-    )
+    from app.modules.reporting.link_reconciliation import reconcile_link_work_batch
+    from app.modules.reporting.link_work import wake_link_dependencies
 
-    for action in (wake_link_dependencies, reconcile_link_work):
-        try:
-            with Session(database_engine) as session, session.begin():
-                session.connection().execute(text("SET LOCAL statement_timeout='1s'"))
-                session.connection().execute(text("SET LOCAL lock_timeout='100ms'"))
-                maintenance_deadline = datetime.now(UTC) + timedelta(seconds=1)
-                action(session, now=now, deadline=maintenance_deadline)
-        except Exception:
-            logger.exception(
-                "report link maintenance deferred phase=%s", action.__name__
-            )
+    try:
+        with Session(database_engine) as session, session.begin():
+            session.connection().execute(text("SET LOCAL statement_timeout='1s'"))
+            session.connection().execute(text("SET LOCAL lock_timeout='100ms'"))
+            maintenance_deadline = datetime.now(UTC) + timedelta(seconds=1)
+            wake_link_dependencies(session, now=now, deadline=maintenance_deadline)
+    except Exception:
+        logger.exception(
+            "report link maintenance deferred phase=wake_link_dependencies"
+        )
+    try:
+        # runner 独立提交后才保存轮转位置，超时或 Redis 故障只会安全重扫。
+        reconcile_link_work_batch(
+            database_engine=database_engine, redis_client=redis_client, now=now
+        )
+    except Exception:
+        logger.exception("report link maintenance deferred phase=reconcile_link_work")
     for key in keys:
         if datetime.now(UTC) >= deadline:
             break

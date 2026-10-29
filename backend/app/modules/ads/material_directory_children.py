@@ -15,7 +15,6 @@ from app.integrations.tiktok.contracts.ads import (
     EntityRef,
     MaterialUseRef,
 )
-from app.modules.ads.directory_dispatch import enqueue_directory_refill
 from app.modules.ads.directory_requests import _partition_key
 from app.modules.ads.models import AdObject
 from app.modules.ads.sync_models import AdDirectoryPage, AdDirectoryRun
@@ -297,9 +296,6 @@ def ensure_material_directory_children(
         session.flush()
         material_child_scope(session, child)
         created.append(child)
-    if created:
-        session.flush()
-        enqueue_directory_refill(session, source)
     return len(created)
 
 

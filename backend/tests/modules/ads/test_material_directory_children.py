@@ -125,7 +125,7 @@ def test_primary_publish_creates_deduplicated_child_without_retaining_source_pag
                 PendingDispatch.task_name == "reporting.plan_due",
             )
         ).first()
-        is not None
+        is None
     )
     session.connection().execute(
         delete(AdDirectoryPage).where(col(AdDirectoryPage.run_id) == source.id)

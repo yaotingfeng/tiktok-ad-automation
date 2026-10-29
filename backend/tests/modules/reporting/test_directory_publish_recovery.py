@@ -176,8 +176,7 @@ def test_publish_transaction_timeout_rolls_back_then_defers_new_generation(
                 ),
             )
         ).all()
-        assert len(wakeups) == 1
-        assert wakeups[0].payload == {"dispatch_only": True}
+        assert not wakeups
     monkeypatch.setattr(tasks, "_PUBLISH_TRANSACTION_TIMEOUT", "75s")
     monkeypatch.setattr(tasks, "publish_directory", original)
     assert (
