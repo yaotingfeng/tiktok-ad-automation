@@ -76,3 +76,10 @@ TEST_REDIS_URL=redis://127.0.0.1:6379/14 uv run --directory backend pytest tests
 TEST_REDIS_URL=redis://127.0.0.1:6379/14 uv run --directory backend pytest tests/integrations/tiktok/test_music_adapters.py tests/integrations/tiktok/test_material_contracts.py tests/integrations/tiktok/test_material_adapters.py -m 'not mcp' -k 'not MCP' -q
 TEST_REDIS_URL=redis://127.0.0.1:6379/14 uv run --directory backend pytest tests/integrations/tiktok/test_sdk_report_reader.py -m 'not mcp' -k 'gateway or service_class or physical_report_aliases or content_identity_reads' -q
 ```
+
+
+### P1-T4 独立复审修复：非 2xx 正文上限
+
+固定 SDK 在非 2xx 时构造 `ApiException(http_resp=...)`，其中 `.data` 会在适配器取得响应前无界读取正文。音乐调用现于任务独占 SDK 客户端的既有 PoolManager 响应返回边界增加临时守卫：官方 SDK 仍负责传输；非 2xx 不读取任何正文，关闭并释放连接，仅保留 HTTP 状态及有界 Retry-After，再交既有错误/429 退避分支。成功正文保留 2 MiB+1 的读取界限；成功读取异常也关闭并释放连接。正常返回或异常后恢复客户端原方法。
+
+新增真实 SDK 异常链的传输边界用例覆盖 429/503、小/超过 2 MiB 正文、200/503 读取异常及方法恢复。RED 为 **5 failed, 1 passed, 46 deselected**；修复后音乐全套 **52 passed**。Ruff、format、ty、compileall 与 diff 检查通过。无真实平台调用，接口、配额操作及部署配置不变。

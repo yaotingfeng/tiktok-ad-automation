@@ -5,6 +5,8 @@ import hmac
 import json
 import math
 import re
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import datetime
 from typing import Any, cast
 from urllib.parse import urlsplit
@@ -113,6 +115,41 @@ def _item(row: object) -> MusicItem:
     return MusicItem(
         identity, name or file_name or identity, author, duration, _url(row.get("url"))
     )
+
+
+@contextmanager
+def _bounded_error_responses(client: Any) -> Iterator[None]:
+    """在 SDK 创建 ApiException 前丢弃非成功正文，避免其 .data 无界读取。"""
+    # 客户端属于本次冻结 gateway；只包装它已有的 PoolManager，不另建 HTTP
+    # 客户端、不改变 SDK 的 URL/请求/重试。包装持续到 SDK 线程完成后恢复。
+    manager = client.rest_client.pool_manager
+    original = manager.request
+    missing = object()
+    previous = manager.__dict__.get("request", missing)
+
+    def request(*args: Any, **kwargs: Any) -> Any:
+        response = original(*args, **kwargs)
+        if 200 <= response.status <= 299:
+            return response
+        # HTTP 错误正文不能提供成功音乐事实，读取零字节即可；仅保留退避所需头。
+        error = ApiException(status=response.status)
+        retry_after = response.headers.get("Retry-After")
+        if isinstance(retry_after, str) and len(retry_after) <= 128:
+            error.headers = {"Retry-After": retry_after}
+        try:
+            response.close()
+        finally:
+            response.release_conn()
+        raise error
+
+    manager.request = request
+    try:
+        yield
+    finally:
+        if previous is missing:
+            del manager.request
+        else:
+            manager.request = previous
 
 
 class SDKMusicOperations:
@@ -287,30 +324,38 @@ class SDKMusicOperations:
             try:
                 # 固定 SDK 无生成音乐方法；官方 ApiClient 支持原始回执模式。
                 # 端点来自官方目录，详细字段来自历史接受回执；不是本轮实时联调证明。
-                response = self._client.call_api(
-                    MUSIC_ENDPOINT,
-                    "GET",
-                    {},
-                    [
-                        (key, json.dumps(value) if isinstance(value, dict) else value)
-                        for key, value in query.items()
-                    ],
-                    {
-                        "Access-Token": self._client.default_headers["Access-Token"],
-                        "Accept": "application/json",
-                    },
-                    auth_settings=[],
-                    async_req=True,
-                    _return_http_data_only=True,
-                    _preload_content=False,
-                    _request_timeout=budget.timeout(upload=False),
-                ).get()
+                with _bounded_error_responses(self._client):
+                    response = self._client.call_api(
+                        MUSIC_ENDPOINT,
+                        "GET",
+                        {},
+                        [
+                            (
+                                key,
+                                json.dumps(value) if isinstance(value, dict) else value,
+                            )
+                            for key, value in query.items()
+                        ],
+                        {
+                            "Access-Token": self._client.default_headers[
+                                "Access-Token"
+                            ],
+                            "Accept": "application/json",
+                        },
+                        auth_settings=[],
+                        async_req=True,
+                        _return_http_data_only=True,
+                        _preload_content=False,
+                        _request_timeout=budget.timeout(upload=False),
+                    ).get()
                 try:
                     raw = response.read(_MAX_BODY + 1)
                     headers = response.headers
                 finally:
-                    response.close()
-                    response.release_conn()
+                    try:
+                        response.close()
+                    finally:
+                        response.release_conn()
             except ApiException as error:
                 if error.status == 429:
                     raise AccountAdmissionDeferred(

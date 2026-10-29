@@ -62,6 +62,8 @@ def music_wire(monkeypatch):
         value = replies.popleft()
         if isinstance(value, Exception):
             raise value
+        if isinstance(value, HTTPResponse):
+            return value
         body = value if isinstance(value, bytes) else json.dumps(value).encode()
         return HTTPResponse(body=BytesIO(body), status=200, preload_content=False)
 
@@ -571,3 +573,76 @@ def test_music_preview_and_credentials_never_reach_logs(music_sdk, caplog):
     for secret in ("private-image", "secret-preview", "synthetic-music-token"):
         assert secret not in caplog.text
         assert secret not in repr(result)
+
+
+class ObservedMusicResponse(HTTPResponse):
+    """只在传输边界观察正文读取及连接回收，不替换 SDK 异常构造。"""
+
+    def __init__(self, *, status, body, read_error=None, headers=None):
+        self.read_sizes = []
+        self.was_closed = False
+        self.was_released = False
+        self.read_error = read_error
+        super().__init__(
+            body=BytesIO(body), status=status, headers=headers, preload_content=False
+        )
+
+    def read(self, amt=None, **kwargs):
+        self.read_sizes.append(amt)
+        if self.read_error is not None:
+            raise self.read_error
+        return super().read(amt, **kwargs)
+
+    def close(self):
+        self.was_closed = True
+        return super().close()
+
+    def release_conn(self):
+        self.was_released = True
+        return super().release_conn()
+
+
+@pytest.mark.parametrize("status", [429, 503])
+@pytest.mark.parametrize("size", [128, 2 * 1024 * 1024 + 1024])
+def test_non_success_music_body_never_reaches_sdk_exception(music_sdk, status, size):
+    from app.integrations.tiktok.sdk import AccountAdmissionDeferred
+
+    opened, replies, calls, budget, _, _ = music_sdk
+    response = ObservedMusicResponse(
+        status=status, body=b"private-body" + b"x" * size, headers={"Retry-After": "7"}
+    )
+    replies.append(response)
+    adapter = opened()
+    manager = adapter._client.rest_client.pool_manager
+    original_request = manager.request
+    with pytest.raises(DomainError) as error:
+        adapter.search(advertiser_id="123", keyword="k", cursor=None, budget=budget)
+    if status == 429:
+        assert isinstance(error.value, AccountAdmissionDeferred)
+        assert error.value.retry_after_ms == 7000
+    else:
+        assert error.value.code == "music_request_failed"
+    # 非成功正文不是音乐证据；应在 SDK ApiException 的 .data 全量读取前直接丢弃。
+    assert manager.request == original_request
+    assert response.read_sizes == []
+    assert response.was_closed and response.was_released
+    assert len(calls) == 1 and "private-body" not in repr(error.value)
+
+
+@pytest.mark.parametrize("status", [200, 503])
+def test_music_response_read_failure_closes_transport(music_sdk, status):
+    opened, replies, _, budget, _, _ = music_sdk
+    response = ObservedMusicResponse(
+        status=status,
+        body=b"",
+        read_error=ReadTimeoutError(None, "private-url", "private-body"),
+    )
+    replies.append(response)
+    with pytest.raises(DomainError) as error:
+        opened().search(advertiser_id="123", keyword="k", cursor=None, budget=budget)
+    assert error.value.code == (
+        "music_timeout" if status == 200 else "music_request_failed"
+    )
+    assert response.read_sizes == ([2 * 1024 * 1024 + 1] if status == 200 else [])
+    assert response.was_closed and response.was_released
+    assert "private" not in repr(error.value)
