@@ -161,8 +161,12 @@ def test_bc_permission_failure_falls_back_next_round(
         redis_client=redis_client,
         now=now + timedelta(minutes=15),
     )
-    # 已兜底的热报到下一周期再筛选；回退为账户报表筛选：热刷 1 个请求，32 天回刷按 30 天切成 2 个请求。
-    assert calls == ["bc", *[("acc-1", "acc-2")] * 3]
+    # 回退为账户报表：先完成旧热刷，再立即补当前15分钟观察；32天回刷仍为2片。
+    assert calls == ["bc", *[("acc-1", "acc-2")] * 4]
+    with factory() as session:
+        assert session.get(
+            AdSyncBc, (seed.tenant_id, "bc-a")
+        ).active_screened_at == now + timedelta(minutes=15)
 
 
 def test_disabled_worker_never_opens_gateway(

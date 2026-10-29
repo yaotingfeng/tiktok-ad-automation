@@ -2,8 +2,7 @@
 
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import func, text
-from sqlmodel import col, select
+from sqlalchemy import text
 
 from app.core.context import TenantContext
 from app.jobs.outbox import enqueue_after_commit
@@ -22,10 +21,14 @@ register_dispatch_task("reporting.plan_due", "control")
 TARGETED_DISPATCH_WINDOW = 32
 
 
-def targeted_capacity(session, now=None) -> int:
-    """生产者和恢复扫描共用同一事务锁；未领取的 ID 请求留在数据库。"""
-    from app.jobs.models import PendingDispatch
-    from app.modules.ads.sync_models import AdDirectoryRun
+def targeted_capacity(session, now=None, *, run=None) -> int:
+    """生产者与扫描器共用窗口锁；按真实可领取的对方需求保留半窗、其余互借。"""
+    from app.modules.ads.directory_services import (
+        SERVICE_KEY,
+        STATUS_SERVICE,
+        directory_service,
+    )
+    from app.modules.ads.material_directory_children import MATERIAL_CHILD_KEY
 
     now = now or datetime.now(UTC)
     locked = (
@@ -39,41 +42,64 @@ def targeted_capacity(session, now=None) -> int:
     )
     if not locked:
         return 0
-    key = func.concat(
-        TARGETED_TASK_NAME + ":",
-        col(AdDirectoryRun.id),
-        ":",
-        col(AdDirectoryRun.claim_generation),
-        ":page:",
-        col(AdDirectoryRun.next_page),
-    )
-    enqueued = (
-        select(PendingDispatch.id)
-        .where(
-            PendingDispatch.tenant_id == AdDirectoryRun.tenant_id,
-            PendingDispatch.task_key == key,
-            col(PendingDispatch.published_at).is_(None)
-            | (col(PendingDispatch.published_at) > now - timedelta(minutes=2)),
+    own_status = run is not None and directory_service(run) == STATUS_SERVICE
+    # 一次活动快照同时计算在途和可借用份额；不能为每个服务再扫积压及历史消息。
+    counts = (
+        session.connection()
+        .execute(
+            text("""
+        WITH active AS MATERIALIZED (
+          SELECT r.id,r.tenant_id,r.claim_generation,r.next_page,r.claimed_until,
+            r.next_attempt_at,r.channel,
+            (NOT r.query ? :child AND coalesce(r.query->>:service='status',false)) AS status_service
+          FROM ad_directory_run r
+          WHERE r.workload='live' AND r.status IN ('QUEUED','RUNNING','WAITING_REMOTE')
+            AND (coalesce(jsonb_array_length(r.query->'ids'),0)>0
+              OR coalesce(jsonb_array_length(r.query->'parent_ids'),0)>0)
+        ), delivery AS MATERIALIZED (
+          SELECT a.*,p.id IS NOT NULL AS enqueued,p.published_at
+          FROM active a LEFT JOIN LATERAL (
+            SELECT p.id,p.published_at FROM pending_dispatch p
+            WHERE p.tenant_id=a.tenant_id AND p.task_key=(
+              'ads.targeted_step:'||a.id::text||':'||a.claim_generation::text||':page:'||a.next_page::text)
+            LIMIT 1
+          ) p ON true
+        ), classified AS (
+          SELECT *,coalesce((enqueued AND (published_at IS NULL OR published_at>:cutoff))
+            OR claimed_until>:now,false) AS inflight,
+            channel='OFFICIAL_API' AND (next_attempt_at IS NULL OR next_attempt_at<=:now)
+              AND ((claimed_until IS NULL AND (NOT enqueued OR published_at<:cutoff))
+                OR claimed_until<=:now) AS eligible
+          FROM delivery
         )
-        .exists()
-    )
-    targeted = (
-        func.coalesce(func.jsonb_array_length(AdDirectoryRun.query["ids"]), 0) > 0
-    ) | (
-        func.coalesce(func.jsonb_array_length(AdDirectoryRun.query["parent_ids"]), 0)
-        > 0
-    )
-    inflight = session.exec(
-        select(func.count())
-        .select_from(AdDirectoryRun)
-        .where(
-            targeted,
-            AdDirectoryRun.workload == "live",
-            col(AdDirectoryRun.status).in_(["QUEUED", "RUNNING", "WAITING_REMOTE"]),
-            enqueued | (col(AdDirectoryRun.claimed_until) > now),
+        SELECT count(*) FILTER (WHERE inflight) AS total,
+          count(*) FILTER (WHERE inflight AND status_service<>:own_status) AS opposite_inflight,
+          count(*) FILTER (WHERE eligible AND status_service<>:own_status) AS opposite_pending
+        FROM classified
+    """),
+            {
+                "now": now,
+                "cutoff": now - timedelta(minutes=2),
+                "child": MATERIAL_CHILD_KEY,
+                "service": SERVICE_KEY,
+                "own_status": own_status,
+            },
         )
-    ).one()
-    return max(0, TARGETED_DISPATCH_WINDOW - inflight)
+        .mappings()
+        .one()
+    )
+    available = max(0, TARGETED_DISPATCH_WINDOW - counts["total"])
+    if run is None or TARGETED_DISPATCH_WINDOW < 2:
+        return available
+    opposite_share = (
+        TARGETED_DISPATCH_WINDOW - TARGETED_DISPATCH_WINDOW // 2
+        if own_status
+        else TARGETED_DISPATCH_WINDOW // 2
+    )
+    reserved = min(
+        counts["opposite_pending"], max(0, opposite_share - counts["opposite_inflight"])
+    )
+    return max(0, available - reserved)
 
 
 def is_targeted(run) -> bool:
@@ -92,7 +118,9 @@ def directory_step_key(run) -> str:
 def enqueue_directory_step(
     session, run, *, publish_only=False, initial=False, available_at=None
 ) -> None:
-    if initial and (not is_live_directory(run) or not targeted_capacity(session)):
+    if initial and (
+        not is_live_directory(run) or not targeted_capacity(session, run=run)
+    ):
         return
     dispatch_id = enqueue_after_commit(
         session,

@@ -402,10 +402,11 @@ def plan_due_runs(*, database_engine, redis_client, now=None):
         logger.exception("report link maintenance deferred phase=reconcile_link_work")
     # 每轮每BC只推进一个阶段，预算有余继续下一轮；不以账户数量人为限速。
     remaining = list(keys)
-    while remaining and time.monotonic() < stop:
+    screen_budget = min(8, max(2, stop - time.monotonic() - 0.1))
+    while remaining and stop - time.monotonic() >= 2:
         next_round = []
         for key in remaining:
-            if time.monotonic() >= stop:
+            if stop - time.monotonic() < 2:
                 break
             try:
                 worked = _plan_one(
@@ -419,6 +420,7 @@ def plan_due_runs(*, database_engine, redis_client, now=None):
                     allow_backfill=allow_backfill,
                     one_step=True,
                     time_budget=max(0, stop - time.monotonic()),
+                    screen_budget=screen_budget,
                 )
             except SoftTimeLimitExceeded:
                 return dispatched
@@ -448,6 +450,9 @@ def _defer_failed_plan(
         retry_at = now + timedelta(minutes=5)
         progress = plan.screening_progress.get("planning_steps_v1")
         if progress:
+            progress = {
+                k: v for k, v in progress.items() if k != "screen_waiting_since"
+            }
             plan.screening_progress = {
                 **plan.screening_progress,
                 "planning_steps_v1": {
@@ -603,6 +608,7 @@ def _plan_one(
     allow_backfill=True,
     one_step=False,
     time_budget=None,
+    screen_budget=None,
 ):
     # 每一阶段/批次自行提交；后续SQL或软超时不撤销已完成的筛查与入队。
     from app.modules.reporting.planning_steps import run_plan
@@ -617,6 +623,7 @@ def _plan_one(
         allow_backfill=allow_backfill,
         one_step=one_step,
         time_budget=time_budget,
+        screen_budget=screen_budget,
     )
 
 
