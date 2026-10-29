@@ -45,7 +45,9 @@ DAILY_AT = time(12, 30)  # 平台 UTC 12:00 修正数据之后
 ROWS_PER_BATCH_TARGET = 15_000  # 预估行数超过即减少合并账户（平台上限 2 万）
 
 
-def local_today(timezone: str, now: datetime) -> date:
+def local_today(timezone: str | None, now: datetime) -> date:
+    if timezone is None:
+        raise ValueError("account timezone is missing")
     return now.astimezone(ZoneInfo(timezone)).date()
 
 
@@ -219,15 +221,23 @@ def align_rule_sync_phase(session: Session, plan: AdSyncBc, *, now: datetime) ->
 
 
 def _refresh_owners(session, *, tenant_id=None) -> None:
+    # 先排除稳定归属，避免每轮锁住全池；ON CONFLICT的WHERE仍用于并发变化防线。
     session.connection().execute(
         text("""
+        WITH desired AS (
+          SELECT a.tenant_id, a.advertiser_id, MIN(a.bc_id) AS owner_bc_id
+          FROM bc_account_access a JOIN ad_sync_bc p ON p.tenant_id=a.tenant_id AND p.bc_id=a.bc_id AND p.enabled
+            AND a.connection_id::text = p.frozen_route->>'connection_id'
+          WHERE (CAST(:tenant AS uuid) IS NULL OR a.tenant_id=CAST(:tenant AS uuid)) AND a.in_bc AND a.authorized AND a.active
+          GROUP BY a.tenant_id, a.advertiser_id
+        )
         INSERT INTO ad_sync_account (tenant_id, advertiser_id, owner_bc_id)
-        SELECT a.tenant_id, a.advertiser_id, MIN(a.bc_id)
-        FROM bc_account_access a JOIN ad_sync_bc p ON p.tenant_id=a.tenant_id AND p.bc_id=a.bc_id AND p.enabled
-          AND a.connection_id::text = p.frozen_route->>'connection_id'
-        WHERE (CAST(:tenant AS uuid) IS NULL OR a.tenant_id=CAST(:tenant AS uuid)) AND a.in_bc AND a.authorized AND a.active
-        GROUP BY a.tenant_id, a.advertiser_id
-        ON CONFLICT (tenant_id, advertiser_id) DO UPDATE SET owner_bc_id = EXCLUDED.owner_bc_id"""),
+        SELECT d.tenant_id,d.advertiser_id,d.owner_bc_id FROM desired d
+        LEFT JOIN ad_sync_account current ON current.tenant_id=d.tenant_id
+          AND current.advertiser_id=d.advertiser_id
+        WHERE current.owner_bc_id IS DISTINCT FROM d.owner_bc_id
+        ON CONFLICT (tenant_id, advertiser_id) DO UPDATE SET owner_bc_id = EXCLUDED.owner_bc_id
+        WHERE ad_sync_account.owner_bc_id IS DISTINCT FROM EXCLUDED.owner_bc_id"""),
         {"tenant": tenant_id},
     )
     session.connection().execute(
@@ -259,6 +269,35 @@ def owned_accounts(session, plan: AdSyncBc) -> list[str]:
             )
         ).all()
     )
+
+
+def owned_account_timezones(session, plan: AdSyncBc) -> dict[str, str | None]:
+    """阶段事务内一次读取归属与时区；缺失元数据仍保留账户，交由规划隔离。"""
+    # 普通LEFT JOIN误估大池为一行时会反复扫租户前缀；LATERAL固定精确主键单点读取。
+    values = dict(
+        session.execute(
+            text("""
+            WITH planning_owned AS MATERIALIZED (
+              SELECT advertiser_id FROM ad_sync_account
+              WHERE tenant_id=:tenant AND owner_bc_id=:bc
+            )
+            SELECT o.advertiser_id,a.timezone FROM planning_owned o
+            LEFT JOIN LATERAL (
+              SELECT timezone FROM advertiser_account a
+              WHERE a.tenant_id=:tenant AND a.advertiser_id=o.advertiser_id
+              LIMIT 1
+            ) a ON true
+            """),
+            {"tenant": plan.tenant_id, "bc": plan.bc_id},
+        ).all()
+    )
+    # 只供本阶段事务内的子查询复用，提交/回滚后的新事务必须重新读取授权范围。
+    session.info["reporting_phase_timezones"] = (
+        session.get_transaction(),
+        plan.tenant_id,
+        values,
+    )
+    return values
 
 
 def due_plans(session, *, now: datetime, limit: int = 50) -> list[AdSyncBc]:
@@ -351,7 +390,15 @@ def batch_accounts(
     return batches
 
 
-def _timezones(session, tenant_id, advertiser_ids) -> dict[str, str]:
+def _timezones(session, tenant_id, advertiser_ids) -> dict[str, str | None]:
+    cached = session.info.get("reporting_phase_timezones")
+    if (
+        cached is not None
+        and cached[0] is session.get_transaction()
+        and cached[1] == tenant_id
+        and all(a in cached[2] for a in advertiser_ids)
+    ):
+        return {a: cached[2][a] for a in advertiser_ids}
     return dict(
         session.exec(
             select(AdvertiserAccount.advertiser_id, AdvertiserAccount.timezone).where(

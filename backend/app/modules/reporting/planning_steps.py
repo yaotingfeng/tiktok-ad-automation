@@ -349,6 +349,53 @@ def _execute(
         state[phase] = _new(datetime.fromisoformat(state["live"]["at"]))
 
 
+def _finish_phase(plan, state, now, timezones, valid_accounts):
+    """成功批与游标一次保存；失败批回滚后用同一收尾规则保存重试。"""
+    from app.modules.reporting import job_tasks
+
+    # 时钟只在广告和素材都完整规划后推进；相位锚点不使用失败重试时刻。
+    if (
+        state.get("live")
+        and not state["live"].get("done")
+        and all(state.get(p, {}).get("done") for p in ("hot", "material"))
+    ):
+        if not state["live"].get("clock_advanced"):
+            # 规则相位可能在批次之间被调整，不能用旧冻结anchor覆盖当前配置。
+            anchor = plan.next_hot_at
+            plan.next_hot_at = plan.next_material_at = (
+                job_tasks._advance(anchor, now, planner.HOT_INTERVAL)
+                if state["live"]["hot_due"] and anchor <= now
+                else anchor
+            )
+            state["live"]["clock_advanced"] = True
+        at = datetime.fromisoformat(state["live"]["at"])
+        if now - at >= planner.HOT_INTERVAL or (
+            at != now
+            and any(
+                planner.local_today(tz, at) != planner.local_today(tz, now)
+                for tz in {timezones[a] for a in valid_accounts}
+            )
+        ):
+            # 旧轮已跨周期/当地午夜，完成后立即追赶；不能再等未来格点使早批超过SLO。
+            # force_live只请求当前工作，保留已配置的下一规则相位。
+            state["force_live"] = True
+        state["live"]["done"] = True
+    if "daily" in state and all(
+        state.get(p, {}).get("done") for p in ("daily", "empty_daily")
+    ):
+        daily_at = datetime.fromisoformat(state["daily"]["at"])
+        crossed_day = any(
+            planner.local_today(tz, daily_at) != planner.local_today(tz, now)
+            for tz in {timezones[a] for a in valid_accounts}
+        )
+        # 冻结窗口跨日完成时还有刚结束的一天未发现，先追赶再恢复每日时钟。
+        plan.next_daily_at = now if crossed_day else planner._next_daily(now)
+        del state["daily"]
+        del state["empty_daily"]
+    state["last_turn"] = datetime.now(UTC).isoformat()
+    _save(plan, state)
+
+
 def plan_step(
     database_engine,
     redis_client,
@@ -358,10 +405,9 @@ def plan_step(
     allow_backfill,
     budget=8,
     screen_budget=8,
+    metrics=None,
 ):
     """最多一个阶段事务；返回是否前进，空转阶段不会消耗后续BC的时间预算。"""
-    from app.modules.reporting import job_tasks
-
     started = monotonic()
     with Session(database_engine) as session, session.begin():
         plan = session.exec(
@@ -378,15 +424,18 @@ def plan_step(
         ):
             _save(plan, {**previous, "last_turn": datetime.now(UTC).isoformat()})
             return False
-        accounts = planner.owned_accounts(session, plan)
+        timezones = planner.owned_account_timezones(session, plan)
+        accounts = sorted(timezones)
         if not accounts:
             return False
-        timezones = planner._timezones(session, plan.tenant_id, accounts)
         state = _prepare(plan, accounts, now, timezones)
         missing = []
         for account in accounts:
             try:
-                ZoneInfo(timezones.get(account, ""))
+                timezone = timezones.get(account)
+                if timezone is None:
+                    raise ValueError("account timezone is missing")
+                ZoneInfo(timezone)
             except ZoneInfoNotFoundError, ValueError, TypeError:
                 missing.append(account)
         state["metadata_missing"] = missing
@@ -394,6 +443,7 @@ def plan_step(
             plan.active_screened_at = None
         missing_set = set(missing)
         valid_accounts = [a for a in accounts if a not in missing_set]
+        metadata_done = monotonic()
         phase = None
         phase_cursor = state["phase"]
         available = max(0, budget - (monotonic() - started))
@@ -436,6 +486,8 @@ def plan_step(
         before = copy.deepcopy(state)
         full_budget = 8 if phase.startswith("screen_") else SECONDS
         budget = min(available, full_budget)
+        work_started = monotonic()
+        completed = True
         try:
             with session.begin_nested(), query_budget(session, seconds=budget):
                 _execute(
@@ -449,7 +501,8 @@ def plan_step(
                     redis_client,
                     budget,
                 )
-                _save(plan, state)
+                work_seconds = monotonic() - work_started
+                _finish_phase(plan, state, now, timezones, valid_accounts)
                 session.flush()
         except (
             DBAPIError,
@@ -458,6 +511,8 @@ def plan_step(
             AccountAdmissionDeferred,
         ) as error:
             # 只有当前批次回滚；保存缩批/重试与阶段轮转，慢阶段不会挡住其他工作。
+            completed = False
+            work_seconds = monotonic() - work_started
             state = before
             delay = timedelta(seconds=5)
             if isinstance(error, DBAPIError) and getattr(
@@ -528,48 +583,30 @@ def plan_step(
                 or getattr(getattr(error, "orig", None), "sqlstate", None),
                 budget,
             )
-        # 时钟只在广告和素材都完整规划后推进；相位锚点不使用失败重试时刻。
-        if (
-            state.get("live")
-            and not state["live"].get("done")
-            and all(state.get(p, {}).get("done") for p in ("hot", "material"))
+            _finish_phase(plan, state, now, timezones, valid_accounts)
+    total_seconds = monotonic() - started
+    metadata_seconds = metadata_done - started
+    if metrics is not None:
+        outcome = "completed" if completed else "deferred"
+        metrics[outcome] = metrics.get(outcome, 0) + 1
+        for name, value in (
+            ("metadata_s", metadata_seconds),
+            ("work_s", work_seconds),
+            ("stage_s", total_seconds),
         ):
-            if not state["live"].get("clock_advanced"):
-                # 规则相位可能在批次之间被调整，不能用旧冻结anchor覆盖当前配置。
-                anchor = plan.next_hot_at
-                plan.next_hot_at = plan.next_material_at = (
-                    job_tasks._advance(anchor, now, planner.HOT_INTERVAL)
-                    if state["live"]["hot_due"] and anchor <= now
-                    else anchor
-                )
-                state["live"]["clock_advanced"] = True
-            at = datetime.fromisoformat(state["live"]["at"])
-            if now - at >= planner.HOT_INTERVAL or (
-                at != now
-                and any(
-                    planner.local_today(tz, at) != planner.local_today(tz, now)
-                    for tz in {timezones[a] for a in valid_accounts}
-                )
-            ):
-                # 旧轮已跨周期/当地午夜，完成后立即追赶；不能再等未来格点使早批超过SLO。
-                # force_live只请求当前工作，保留已配置的下一规则相位。
-                state["force_live"] = True
-            state["live"]["done"] = True
-        if "daily" in state and all(
-            state.get(p, {}).get("done") for p in ("daily", "empty_daily")
-        ):
-            daily_at = datetime.fromisoformat(state["daily"]["at"])
-            crossed_day = any(
-                planner.local_today(tz, daily_at) != planner.local_today(tz, now)
-                for tz in {timezones[a] for a in valid_accounts}
-            )
-            # 冻结窗口跨日完成时还有刚结束的一天未发现，先追赶再恢复每日时钟。
-            plan.next_daily_at = now if crossed_day else planner._next_daily(now)
-            del state["daily"]
-            del state["empty_daily"]
-        state["last_turn"] = datetime.now(UTC).isoformat()
-        _save(plan, state)
-        return True
+            metrics[name] = metrics.get(name, 0) + value
+    logger.info(
+        "report planning phase finished: bc=%s phase=%s completed=%s owned=%d metadata_ms=%.1f work_ms=%.1f total_ms=%.1f budget=%.3f",
+        key[1],
+        phase,
+        completed,
+        len(accounts),
+        metadata_seconds * 1000,
+        work_seconds * 1000,
+        total_seconds * 1000,
+        budget,
+    )
+    return True
 
 
 def run_plan(
@@ -583,6 +620,7 @@ def run_plan(
     one_step=False,
     time_budget=None,
     screen_budget=None,
+    metrics=None,
 ):
     # 测试/恢复可传历史逻辑时钟；运行预算始终使用单调时钟而非业务日期。
     remaining = (deadline - now).total_seconds() if time_budget is None else time_budget
@@ -601,6 +639,7 @@ def run_plan(
                 allow_backfill=allow_backfill,
                 budget=max(0, stop - monotonic()),
                 screen_budget=screen_budget,
+                metrics=metrics,
             )
         except SoftTimeLimitExceeded:
             # 当前事务已退出并回滚；之前各批次仍已提交，下轮继续持久游标。

@@ -28,7 +28,6 @@ from app.jobs.celery_app import celery_app
 from app.jobs.models import PendingDispatch
 from app.jobs.outbox import enqueue_after_commit, validate_dispatch_payload
 from app.jobs.tasks import register_dispatch_task
-from app.modules.accounts.models import AdvertiserAccount
 from app.modules.accounts.routing import verify_route
 from app.modules.ads.directory_calibration import calibration_interval
 from app.modules.ads.directory_dispatch import (
@@ -127,14 +126,7 @@ def _reader_for(*, database_engine, redis_client, plan, deadline, workload="live
 
 def _active(session, reader, plan, accounts, now, *, days, single_step=False):
     # BC/账户筛选也按各账户本地日期分组，不能把 UTC 日期误作所有账户的今天。
-    timezones = dict(
-        session.exec(
-            select(AdvertiserAccount.advertiser_id, AdvertiserAccount.timezone).where(
-                AdvertiserAccount.tenant_id == plan.tenant_id,
-                col(AdvertiserAccount.advertiser_id).in_(accounts),
-            )
-        ).all()
-    )
+    timezones = planner._timezones(session, plan.tenant_id, accounts)
     windows = {}
     for account, timezone in timezones.items():
         end = planner.local_today(timezone, now)
@@ -179,7 +171,8 @@ def _active(session, reader, plan, accounts, now, *, days, single_step=False):
                         "active": sorted(active),
                     },
                 }
-                session.flush()
+                if not single_step:
+                    session.flush()
                 if single_step and (
                     result.next_page is not None or index + 1 < len(requests)
                 ):
@@ -231,7 +224,8 @@ def _active(session, reader, plan, accounts, now, *, days, single_step=False):
                     "active": sorted(active),
                 },
             }
-            session.flush()
+            if not single_step:
+                session.flush()
             if single_step and (
                 result.next_page is not None or index + 1 < len(requests)
             ):
@@ -370,19 +364,24 @@ def plan_due_runs(*, database_engine, redis_client, now=None):
     now = now or datetime.now(UTC)
     allow_backfill = planner.backfill_allowed(redis_client, now)
     deadline = datetime.now(UTC) + timedelta(seconds=10)
-    stop = time.monotonic() + 10
+    started = time.monotonic()
+    stop = started + 10
     # 额度紧张优先让出历史补数，不静默把止损数据降成小时级。
     hot, material = planner.HOT_INTERVAL, planner.MATERIAL_INTERVAL
     with Session(database_engine) as session, session.begin():
         ensure_month_partitions(session, today=now.date())
         planner.ensure_bc_plans(session, now=now)
         keys = [(p.tenant_id, p.bc_id) for p in planner.due_plans(session, now=now)]
+    prepare_seconds = time.monotonic() - started
+    dispatch_started = time.monotonic()
     dispatched = _dispatch_pending(database_engine, now, allow_backfill=allow_backfill)
+    dispatch_seconds = time.monotonic() - dispatch_started
     # 两类维护各自提交：旧任务归并读慢时，不能回滚/挡住目录依赖的复核游标。
     # 先唤醒再归并，各一秒预算；正常事实派发已提交，不受维护失败影响。
     from app.modules.reporting.link_reconciliation import reconcile_link_work_batch
     from app.modules.reporting.link_work import wake_link_dependencies
 
+    maintenance_started = time.monotonic()
     try:
         with Session(database_engine) as session, session.begin():
             session.connection().execute(text("SET LOCAL statement_timeout='1s'"))
@@ -402,6 +401,10 @@ def plan_due_runs(*, database_engine, redis_client, now=None):
         logger.exception("report link maintenance deferred phase=reconcile_link_work")
     # 每轮每BC只推进一个阶段，预算有余继续下一轮；不以账户数量人为限速。
     remaining = list(keys)
+    metrics = {"completed": 0, "deferred": 0}
+    maintenance_seconds = time.monotonic() - maintenance_started
+    steps_started = time.monotonic()
+    step_budget = max(0, stop - steps_started)
     screen_budget = min(8, max(2, stop - time.monotonic() - 0.1))
     while remaining and stop - time.monotonic() >= 2:
         next_round = []
@@ -421,6 +424,7 @@ def plan_due_runs(*, database_engine, redis_client, now=None):
                     one_step=True,
                     time_budget=max(0, stop - time.monotonic()),
                     screen_budget=screen_budget,
+                    metrics=metrics,
                 )
             except SoftTimeLimitExceeded:
                 return dispatched
@@ -431,7 +435,26 @@ def plan_due_runs(*, database_engine, redis_client, now=None):
             if worked:
                 next_round.append(key)
         remaining = next_round
+    steps_seconds = time.monotonic() - steps_started
+    dispatch_started = time.monotonic()
     dispatched += _dispatch_pending(database_engine, now, allow_backfill=allow_backfill)
+    dispatch_seconds += time.monotonic() - dispatch_started
+    logger.info(
+        "report planning entry finished: plans=%d completed=%d deferred=%d prepare_ms=%.1f maintenance_ms=%.1f dispatch_ms=%.1f steps_ms=%.1f metadata_ms=%.1f work_ms=%.1f stage_ms=%.1f total_ms=%.1f step_budget=%.3f screen_budget=%.3f",
+        len(keys),
+        metrics["completed"],
+        metrics["deferred"],
+        prepare_seconds * 1000,
+        maintenance_seconds * 1000,
+        dispatch_seconds * 1000,
+        steps_seconds * 1000,
+        metrics.get("metadata_s", 0) * 1000,
+        metrics.get("work_s", 0) * 1000,
+        metrics.get("stage_s", 0) * 1000,
+        (time.monotonic() - started) * 1000,
+        step_budget,
+        screen_budget,
+    )
     return dispatched
 
 
@@ -609,6 +632,7 @@ def _plan_one(
     one_step=False,
     time_budget=None,
     screen_budget=None,
+    metrics=None,
 ):
     # 每一阶段/批次自行提交；后续SQL或软超时不撤销已完成的筛查与入队。
     from app.modules.reporting.planning_steps import run_plan
@@ -624,6 +648,7 @@ def _plan_one(
         one_step=one_step,
         time_budget=time_budget,
         screen_budget=screen_budget,
+        metrics=metrics,
     )
 
 
