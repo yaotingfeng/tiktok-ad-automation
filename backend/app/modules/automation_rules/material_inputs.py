@@ -21,11 +21,12 @@ from app.modules.automation_rules.inputs import (
 )
 from app.modules.automation_rules.schemas import RuleDefinition
 from app.modules.automation_rules.statuses import known_status
-from app.modules.reporting.material_value import material_window_values
+from app.modules.reporting.material_value import (
+    VIDEO_REPORT_TYPES,
+    material_window_values,
+)
 from app.modules.reporting.metric_catalog import DERIVED_RATIOS, STORED_KEYS
 from app.modules.reporting.store_models import MaterialPostLink
-
-VIDEO_REPORT_TYPES = ("VIDEO_SPARK_ADS", "VIDEO_NON_SPARK_ADS")
 
 
 def material_use_id(ad_id: str, video_id: str, material_type: str) -> str:

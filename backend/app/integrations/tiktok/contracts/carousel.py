@@ -56,7 +56,11 @@ def decode_carousels(
         info = entry.get("creative_info", {}) if smart else entry
         if type(info) is not dict:
             raise ValueError("invalid creative info")
-        carousel = info.get("ad_format") == "CAROUSEL_ADS"
+        # 顶层已明确轮播时，条目缺字段不能被当成其他格式跳过。
+        carousel = (
+            row.get("ad_format") == "CAROUSEL_ADS"
+            or info.get("ad_format") == "CAROUSEL_ADS"
+        )
         images = info.get("image_info") if smart else info.get("image_ids")
         # 视频封面与 Spark 帖子不是轮播主素材；不能污染原视频/帖子身份命名空间。
         has_video = (

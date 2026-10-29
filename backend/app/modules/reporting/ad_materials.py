@@ -42,6 +42,7 @@ from app.modules.reporting.dimension_query import (
     merge_metric_buckets,
     metric_vector,
 )
+from app.modules.reporting.material_value import VIDEO_REPORT_TYPES
 from app.modules.reporting.query_models import FrozenSelectionRecord
 from app.modules.reporting.row_set import MATERIAL_UNSUPPORTED
 from app.modules.reporting.schemas import (
@@ -123,7 +124,7 @@ def list_ad_materials(
     uses = [use for use in current_uses if use.material_type != "IMAGE"]
     links = session.connection().execute(
         text("""
-        SELECT l.platform_material_id AS vid, l.main_material_id,
+        SELECT l.platform_material_id AS vid, l.main_material_id, l.main_material_type,
             (SELECT count(*) FROM material_post_link o
               WHERE o.tenant_id = l.tenant_id AND o.advertiser_id = l.advertiser_id
                 AND o.main_material_id = l.main_material_id) > 1 AS shared
@@ -136,8 +137,10 @@ def list_ad_materials(
     # 按视频归集本广告的帖子：素材重建后同一视频在本广告可能有新旧多条帖子。
     posts: dict[str | None, list[str]] = defaultdict(list)
     shared: set[str] = set()
+    post_types: set[tuple[str, str]] = set()
     for row in links:
         posts[row.vid].append(row.main_material_id)
+        post_types.add((row.main_material_id, row.main_material_type))
         if row.shared:
             shared.add(row.main_material_id)
     post_ids = sorted({mid for mids in posts.values() for mid in mids})
@@ -152,8 +155,10 @@ def list_ad_materials(
             start=start,
             end=end,
             ids=post_ids,
+            material_types=VIDEO_REPORT_TYPES,
         ):
-            facts[item["main_material_id"]].append(item)
+            if (item["main_material_id"], item["main_material_type"]) in post_types:
+                facts[item["main_material_id"]].append(item)
     filters = ReportingFilter(dimension="material", start_date=start, end_date=end)
     states = session.exec(
         select(ReportSyncState).where(

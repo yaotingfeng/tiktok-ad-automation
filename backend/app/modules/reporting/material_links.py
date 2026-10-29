@@ -42,13 +42,13 @@ from app.modules.reporting.store_models import MaterialLinkScan
 # 主素材（帖子）→ 视频；同一主素材对应多条广告（非 Spark 共用）时取最小视频 ID，
 # 保证每笔金额只归入一个视频。依赖参数 :tenant、:advs。
 POST_VIDEO_SQL = """
-    SELECT DISTINCT ON (l.advertiser_id, l.main_material_id)
-        l.advertiser_id AS adv, l.main_material_id AS mid, l.platform_material_id AS vid
+    SELECT DISTINCT ON (l.advertiser_id, l.main_material_id, l.main_material_type)
+        l.advertiser_id AS adv, l.main_material_id AS mid, l.main_material_type AS mtype, l.platform_material_id AS vid
     FROM material_post_link l
     WHERE l.tenant_id = :tenant AND l.advertiser_id = ANY(:advs)
       AND l.platform_material_id IS NOT NULL
       AND l.main_material_type IN ('VIDEO_SPARK_ADS','VIDEO_NON_SPARK_ADS')
-    ORDER BY l.advertiser_id, l.main_material_id, l.platform_material_id COLLATE "C"
+    ORDER BY l.advertiser_id, l.main_material_id, l.main_material_type, l.platform_material_id COLLATE "C"
 """
 
 
@@ -64,7 +64,7 @@ def post_video_map(
     advertisers: Sequence[str],
     start: date,
     end: date,
-) -> dict[tuple[str, str], str]:
+) -> dict[tuple[str, str, str], str]:
     """所选日期有素材日报事实的帖子 → 视频（取法同 POST_VIDEO_SQL）。
 
     没有事实的帖子不贡献金额，也不计入快照的行账户（row_set fk 只取有事实的帖子）。
@@ -73,9 +73,9 @@ def post_video_map(
     rows = session.connection().execute(
         text(
             """
-            SELECT f.adv, f.mid, v.vid
+            SELECT f.adv, f.mid, f.mtype, v.vid
             FROM (
-                SELECT DISTINCT advertiser_id AS adv, main_material_id AS mid
+                SELECT DISTINCT advertiser_id AS adv, main_material_id AS mid, main_material_type AS mtype
                 FROM material_report_day
                 WHERE tenant_id = :tenant AND advertiser_id = ANY(:advs)
                   AND stat_date BETWEEN :start AND :end
@@ -83,7 +83,8 @@ def post_video_map(
             CROSS JOIN LATERAL (
                 SELECT l.platform_material_id AS vid FROM material_post_link l
                 WHERE l.tenant_id = :tenant AND l.advertiser_id = f.adv
-                  AND l.main_material_id = f.mid AND l.platform_material_id IS NOT NULL
+                  AND l.main_material_id = f.mid AND l.main_material_type = f.mtype
+                  AND l.platform_material_id IS NOT NULL
                   AND l.main_material_type IN ('VIDEO_SPARK_ADS','VIDEO_NON_SPARK_ADS')
                 ORDER BY l.platform_material_id COLLATE "C" LIMIT 1
             ) v
@@ -91,7 +92,7 @@ def post_video_map(
         ),
         {"tenant": tenant_id, "advs": sorted(advertisers), "start": start, "end": end},
     )
-    return {(r.adv, r.mid): r.vid for r in rows}
+    return {(r.adv, r.mid, r.mtype): r.vid for r in rows}
 
 
 def needs_material_links(

@@ -70,15 +70,12 @@ def materialize_material_rows(
     )
     keys = {member.row_key: json.loads(member.row_key) for member in members}
     videos = {key[1] for key in keys.values() if key[0] == "material"}
-    # 每行包含的帖子事实身份 (账户, 帖子)。
-    posts_by_row: dict[str, set[tuple[str, str]]] = defaultdict(set)
-    for (adv, mid), vid in video_of.items():
-        if vid in videos:
-            posts_by_row[material_row_key(adv, mid, vid)].add((adv, mid))
-    for row_key, key in keys.items():
-        if key[0] == "post":
-            posts_by_row[row_key].add((key[1], key[2]))
-    post_ids = sorted({mid for posts in posts_by_row.values() for _, mid in posts})
+    # 归属必须带事实类型；同 MID 的未知类型仍保留原始帖子行。
+    posts_by_row: dict[str, set[tuple[str, str, str]]] = defaultdict(set)
+    post_ids = sorted(
+        {mid for (adv, mid, mtype), vid in video_of.items() if vid in videos}
+        | {key[2] for key in keys.values() if key[0] == "post"}
+    )
     usages = (
         session.exec(
             select(AdMaterialReference).where(
@@ -87,6 +84,7 @@ def materialize_material_rows(
                 # 必须写成布尔列本身才能命中部分索引 ix_ad_material_video（WHERE complete）；
                 # 写成 IS true 规划器不认，会退回逐账户扫描全部使用记录。
                 col(AdMaterialReference.complete),
+                AdMaterialReference.material_type == "VIDEO",
                 any_of(col(AdMaterialReference.platform_material_id), videos),
             )
         ).all()
@@ -110,9 +108,17 @@ def materialize_material_rows(
         if post_ids
         else []
     )
-    facts: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
+    facts: dict[tuple[str, str, str], list[dict[str, Any]]] = defaultdict(list)
     for item in data:
-        facts[(item["advertiser_id"], item["main_material_id"])].append(item)
+        identity = (
+            item["advertiser_id"],
+            item["main_material_id"],
+            item["main_material_type"],
+        )
+        row_key = material_row_key(identity[0], identity[1], video_of.get(identity))
+        if row_key in keys:
+            posts_by_row[row_key].add(identity)
+            facts[identity].append(item)
     accounts = {
         a.advertiser_id: a
         for a in scoped_rows(
@@ -149,7 +155,7 @@ def materialize_material_rows(
         row_usages = usage_by_video.get(key[1], []) if key[0] == "material" else []
         # 行涉及的账户与快照 row_advs 一致：有事实的账户 ∪ 使用位置所在账户。
         row_advs = sorted(
-            {adv for adv, _ in posts}
+            {adv for adv, _, _ in posts}
             | {u.advertiser_id for u in row_usages}
             | {use.ad_ref.advertiser_id for use in map(_use, member.material_uses)}
         )

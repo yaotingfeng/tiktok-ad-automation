@@ -781,7 +781,7 @@ _USE_COLUMNS = """u.id, u.advertiser_id AS adv, u.ad_remote_id, u.platform_mater
                 u.ad_material_id, u.material_type, NULLIF(u.name, '') AS name"""
 # 目录对同一广告同一视频可能另有一条不带广告内素材 ID 的记录：
 # 有带 ID 的记录时只保留它，只有它能单独启停。
-_USE_DEDUP = """u.complete AND NOT (u.ad_material_id IS NULL AND EXISTS (
+_USE_DEDUP = """u.complete AND u.material_type='VIDEO' AND NOT (u.ad_material_id IS NULL AND EXISTS (
                 SELECT 1 FROM ad_material_reference o
                 WHERE o.tenant_id = u.tenant_id AND o.advertiser_id = u.advertiser_id
                   AND o.ad_remote_id = u.ad_remote_id
@@ -814,7 +814,7 @@ def _material_identity_ctes(
         )""",
             f"""pv AS ({POST_VIDEO_SQL})""",
             f"""{fk_head}
-            LEFT JOIN pv v ON v.adv = f.adv AND v.mid = f.rid
+            LEFT JOIN pv v ON v.adv = f.adv AND v.mid = f.rid AND v.mtype = f.main_material_type
         )""",
         ]
     # 与 POST_VIDEO_SQL 相同的取法：同一帖子对照多个视频时取 ID 最小者。
@@ -823,7 +823,9 @@ def _material_identity_ctes(
             LEFT JOIN LATERAL (
                 SELECT l.platform_material_id AS vid FROM material_post_link l
                 WHERE l.tenant_id = :tenant AND l.advertiser_id = f.adv
-                  AND l.main_material_id = f.rid AND l.platform_material_id IS NOT NULL
+                  AND l.main_material_id = f.rid AND l.main_material_type = f.main_material_type
+                  AND l.main_material_type IN ('VIDEO_SPARK_ADS','VIDEO_NON_SPARK_ADS')
+                  AND l.platform_material_id IS NOT NULL
                 ORDER BY l.platform_material_id COLLATE "C" LIMIT 1
             ) v ON TRUE
         )""",
@@ -835,9 +837,9 @@ def _material_identity_ctes(
             WHERE {_USE_DEDUP}
             UNION
             SELECT {_USE_COLUMNS}
-            FROM (SELECT DISTINCT adv, rid FROM fk WHERE vid IS NULL) k
+            FROM (SELECT DISTINCT adv, rid, mtype FROM fk WHERE vid IS NULL) k
             JOIN material_post_link l ON l.tenant_id = :tenant AND l.advertiser_id = k.adv
-                AND l.main_material_id = k.rid
+                AND l.main_material_id = k.rid AND l.main_material_type = k.mtype
             JOIN ad_material_reference u ON u.tenant_id = :tenant
                 AND u.advertiser_id = l.advertiser_id AND u.ad_remote_id = l.ad_remote_id
                 AND u.ad_material_id = l.ad_material_id
@@ -921,7 +923,7 @@ def _material_rows(filters: ReportingFilter, params: _Params) -> tuple[str, str]
             SELECT k.row_key, u.*
             FROM fk k
             JOIN material_post_link l ON l.tenant_id = :tenant AND l.advertiser_id = k.adv
-                AND l.main_material_id = k.rid
+                AND l.main_material_id = k.rid AND l.main_material_type = k.mtype
             JOIN uses u ON u.adv = l.advertiser_id AND u.ad_remote_id = l.ad_remote_id
                 AND u.ad_material_id = l.ad_material_id
             WHERE k.row_key LIKE '["post"%'

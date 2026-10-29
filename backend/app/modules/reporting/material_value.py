@@ -8,6 +8,8 @@ from uuid import UUID
 from sqlalchemy import text
 from sqlmodel import Session
 
+VIDEO_REPORT_TYPES = ("VIDEO_SPARK_ADS", "VIDEO_NON_SPARK_ADS")
+
 # 先按每个窗口、账户、帖子合计，再判正值；不能逐日筛正数后相加，也不能用
 # 重叠窗口重复累计金额。规则包含多个窗口时，任一窗口有价值就必须保护身份缺口。
 MATERIAL_WINDOW_VALUES_SQL = """

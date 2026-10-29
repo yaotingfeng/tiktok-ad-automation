@@ -161,7 +161,16 @@ def scoped_rows(session, model, *, tenant_id, advertisers):
 
 
 def _aggregate(
-    session, *, model, group_cols, tenant_id, advertisers, start, end, ids=None
+    session,
+    *,
+    model,
+    group_cols,
+    tenant_id,
+    advertisers,
+    start,
+    end,
+    ids=None,
+    material_types=None,
 ):
     # 同一对象跨日按部分合计规则（设计 7.3）：只合计有值的日期，另带
     # "<列>_has_null" 标记该列是否有日期为空，由 fact_vector 标成 PARTIAL。
@@ -210,6 +219,12 @@ def _aggregate(
             col(model.advertiser_id).in_(advertisers),
             model.stat_date >= start,
             model.stat_date <= end,
+            # 只有明确的素材消费者传类型；广告/系列与一般事实聚合维持原口径。
+            *(
+                []
+                if material_types is None
+                else [col(model.main_material_type).in_(material_types)]
+            ),
             # 分页补全只读页面对象的事实。
             *([] if ids is None else [any_of(col(getattr(model, group_cols[1])), ids)]),
         )

@@ -20,6 +20,7 @@ from app.modules.automation_rules.statuses import hierarchy_statuses
 from app.modules.reporting.freshness import fresh_report_success
 from app.modules.reporting.material_value import (
     MATERIAL_WINDOW_VALUES_SQL,
+    VIDEO_REPORT_TYPES,
     material_value_parameters,
     valuable_material_condition,
 )
@@ -419,7 +420,13 @@ def _facts(
     value_cte = (
         f"WITH material_values AS ({MATERIAL_WINDOW_VALUES_SQL}) " if material else ""
     )
-    value_filter = f" AND {valuable_material_condition('f')}" if material else ""
+    # 窗口价值与实际求和必须同时限制事实类型；同 MID 的跨日类型不能借旧链接混入。
+    value_filter = (
+        f" AND {valuable_material_condition('f')}"
+        " AND f.main_material_type=ANY(CAST(:value_material_types AS text[]))"
+        if material
+        else ""
+    )
     rows = (
         session.connection()
         .execute(
@@ -434,6 +441,7 @@ def _facts(
                     material_value_parameters(
                         tenant_id,
                         [(adv, *w) for adv, w in zip(accounts, windows, strict=True)],
+                        material_types=VIDEO_REPORT_TYPES,
                     )
                     if material
                     else {}

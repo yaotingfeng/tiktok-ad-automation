@@ -13,7 +13,7 @@ from typing import Any, Literal, cast
 from zoneinfo import ZoneInfo
 
 from fastapi import HTTPException
-from sqlalchemy import false, func, or_, tuple_
+from sqlalchemy import and_, false, func, or_, tuple_
 from sqlalchemy import select as sql_select
 from sqlmodel import Session, col, select
 
@@ -141,28 +141,25 @@ def build_trend(
     if ids and level == "material":
         # 素材行以视频为身份：视频 ID 展开为它在各账户、各广告的帖子；
         # 对不上视频的帖子行直接以帖子 ID 查询。
-        posts = [
-            key
-            for key, vid in post_video_map(
-                session,
-                tenant_id=context.tenant_id,
-                advertisers=sorted(scope),
-                start=start,
-                end=end,
-            ).items()
-            if vid in ids
-        ]
-        stmt = stmt.where(
-            or_(
-                col(MaterialReportDay.main_material_id).in_(ids),
-                tuple_(
-                    col(MaterialReportDay.advertiser_id),
-                    col(MaterialReportDay.main_material_id),
-                ).in_(posts)
-                if posts
-                else false(),
-            )
+        video_of = post_video_map(
+            session,
+            tenant_id=context.tenant_id,
+            advertisers=sorted(scope),
+            start=start,
+            end=end,
         )
+        posts = [key for key, vid in video_of.items() if vid in ids]
+        mapped_direct = [key for key in video_of if key[1] in ids]
+        identity = tuple_(
+            col(MaterialReportDay.advertiser_id),
+            col(MaterialReportDay.main_material_id),
+            col(MaterialReportDay.main_material_type),
+        )
+        # 与列表同一归属：视频趋势只含精确类型；原始帖子趋势只含未归到视频的事实。
+        raw_post = col(MaterialReportDay.main_material_id).in_(ids)
+        if mapped_direct:
+            raw_post = and_(raw_post, ~identity.in_(mapped_direct))
+        stmt = stmt.where(or_(raw_post, identity.in_(posts) if posts else false()))
     elif ids:
         stmt = stmt.where(col(getattr(model, id_col)).in_(ids))
     rows = session.connection().execute(stmt).mappings().all()

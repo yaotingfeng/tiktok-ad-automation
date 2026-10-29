@@ -374,3 +374,157 @@ def test_flat_image_directory_stays_incomplete_without_unit_money(session, sync_
     )
     assert result.metric_scope == "AD" and not result.carousel_linkage_complete
     assert result.items == () and result.carousel_creatives == ()
+
+
+@pytest.fixture
+def mixed_mid_case(session, sync_seed):
+    from datetime import timedelta
+
+    from app.modules.reporting.store_models import MaterialReportDay
+    from tests.modules.automation_rules.test_inputs import NOW, TODAY
+    from tests.modules.automation_rules.test_material_inputs import post, setup, use
+
+    def seed(other_type, video_spend="10"):
+        setup(session, sync_seed)
+        use(session, sync_seed, "a1")
+        post(session, sync_seed, "a1", "same-mid", spend=video_spend, revenue="0")
+        start = TODAY - timedelta(days=1)
+        session.add(
+            MaterialReportDay(
+                tenant_id=sync_seed.tenant_id,
+                advertiser_id="acc-1",
+                stat_date=start,
+                main_material_id="same-mid",
+                main_material_type=other_type,
+                currency="USD",
+                timezone="Asia/Hong_Kong",
+                fetched_at=NOW,
+                sync_job_id=uuid4(),
+                spend=Decimal(100),
+                revenue_total=Decimal(200),
+            )
+        )
+        session.flush()
+        return start, TODAY
+
+    return seed
+
+
+@pytest.mark.parametrize("other_type", ["IMAGE", "UNKNOWN_FUTURE"])
+def test_mixed_mid_rules_exclude_nonvideo_facts(
+    session, sync_seed, mixed_mid_case, other_type
+):
+    from tests.modules.automation_rules.test_material_inputs import result
+
+    mixed_mid_case(other_type)
+    loaded, _ = result(session, sync_seed)
+    video = next(e for e in loaded.entities.values() if e.kind == "material")
+    assert loaded.facts["LIFETIME"][video.key]["spend"] == Decimal(10)
+    assert loaded.facts["LIFETIME"][video.key]["revenue_total"] == Decimal(0)
+
+
+@pytest.mark.parametrize("other_type", ["IMAGE", "UNKNOWN_FUTURE"])
+def test_mixed_mid_rule_value_window_ignores_nonvideo_money(
+    session, sync_seed, mixed_mid_case, other_type
+):
+    from app.modules.automation_rules.inputs import AccountInfo, _facts
+    from tests.modules.automation_rules.test_inputs import NOW
+
+    mixed_mid_case(other_type, video_spend="0")
+    assert (
+        _facts(
+            session,
+            sync_seed.tenant_id,
+            {"acc-1": AccountInfo("acc-1", "bc-a", "Asia/Hong_Kong", "USD", "A")},
+            "LIFETIME",
+            material=True,
+            now=NOW,
+        )
+        == {}
+    )
+
+
+@pytest.mark.parametrize("other_type", ["IMAGE", "UNKNOWN_FUTURE"])
+def test_mixed_mid_ad_materials_exclude_nonvideo_facts(
+    session, sync_seed, mixed_mid_case, other_type
+):
+    start, end = mixed_mid_case(other_type)
+    result = list_ad_materials(
+        session,
+        context=sync_seed.context,
+        bc_id="bc-a",
+        advertiser_id="acc-1",
+        ad_id="a1",
+        start=start,
+        end=end,
+    )
+    assert len(result.items) == 1
+    assert result.items[0].metric_buckets[0].values["spend"] == Decimal(10)
+    assert result.items[0].metric_buckets[0].values["revenue_total"] == Decimal(0)
+
+
+@pytest.mark.parametrize("other_type", ["IMAGE", "UNKNOWN_FUTURE"])
+@pytest.mark.parametrize("include_empty", [False, True])
+def test_mixed_mid_material_report_splits_typed_money(
+    session, sync_seed, mixed_mid_case, other_type, include_empty
+):
+    import json
+
+    from app.modules.reporting.trend import build_trend
+
+    start, end = mixed_mid_case(other_type)
+    filters = ReportingFilter(
+        dimension="material",
+        advertiser_ids=("acc-1",),
+        start_date=start,
+        end_date=end,
+        include_empty=include_empty,
+        sort_by="spend",
+        sort_direction="desc",
+    )
+    rows = build_rows(session, context=sync_seed.context, bc_id="bc-a", filters=filters)
+    assert [json.loads(r.row_key)[0] for r in rows] == ["post", "material"]
+    assert [r.metric_buckets[0].values["spend"] for r in rows] == [
+        Decimal(100),
+        Decimal(10),
+    ]
+    assert sum(r.metric_buckets[0].values["revenue_total"] for r in rows) == Decimal(
+        200
+    )
+    filtered = build_rows(
+        session,
+        context=sync_seed.context,
+        bc_id="bc-a",
+        filters=filters.model_copy(update={"min_spend": Decimal(50)}),
+    )
+    assert len(filtered) == 1 and json.loads(filtered[0].row_key)[0] == "post"
+    for identity, expected in (("v1", Decimal(10)), ("same-mid", Decimal(100))):
+        trend = build_trend(
+            session,
+            context=sync_seed.context,
+            bc_id="bc-a",
+            level="material",
+            advertiser_ids=("acc-1",),
+            ids=(identity,),
+            start=start,
+            end=end,
+            granularity="day",
+        )
+        assert (
+            sum(v.values["spend"] or 0 for p in trend.points for v in p.buckets)
+            == expected
+        )
+
+
+@pytest.mark.parametrize(
+    "info",
+    [{}, {"image_info": []}, {"image_info": [], "music_info": {"music_id": "song"}}],
+)
+def test_top_level_carousel_empty_entry_stays_incomplete(info):
+    result = decode_carousels(
+        {"ad_format": "CAROUSEL_ADS", "creative_list": [{"creative_info": info}]},
+        advertiser_id="acc",
+        ad_id="ad",
+        smart=True,
+    )
+    assert result.is_carousel and not result.complete and result.identities == ()
