@@ -33,7 +33,7 @@ class LocalPod:
     def __init__(self, root):
         self.root = str(root)
 
-    def __call__(self, _container, *args, data=None):
+    def __call__(self, _container, *args, data=None, idempotent=False):
         args = [a.replace(BACKUP_ROOT, self.root) for a in args]
         if args[0] == "python":
             args[0] = sys.executable
@@ -133,8 +133,8 @@ class ClusterBackupTests(unittest.TestCase):
         write(pending / "restore-verified.json", proof)
         publish(self.pod, self.state, BACKUP_ROOT + "/.pending-one")
         recent_backup(self.pod, self.state, ["v1"], now=100200)
-        with self.assertRaisesRegex(RuntimeError, "24 hours"):
-            recent_backup(self.pod, self.state, ["v1"], now=200000)
+        with self.assertRaisesRegex(RuntimeError, "72 hours"):
+            recent_backup(self.pod, self.state, ["v1"], now=360000)
         with self.assertRaisesRegex(RuntimeError, "schema"):
             recent_backup(self.pod, self.state, ["v2"], now=100200)
         (self.disk / "latest" / PG_DUMP / "3001.dat.lz4").write_bytes(b"damaged")
