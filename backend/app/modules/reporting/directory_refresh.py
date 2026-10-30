@@ -238,7 +238,18 @@ def request_link_directory(
         session.connection()
         .execute(
             text(f"""
-        WITH material_values AS ({MATERIAL_WINDOW_VALUES_SQL})
+        WITH material_values AS ({MATERIAL_WINDOW_VALUES_SQL}),
+        blocking_runs AS MATERIALIZED (
+          -- 同冻结范围只读一次可遮挡任务，避免每个帖子反复扫描宽终态历史。
+          -- 保留 ids 的原 JSONB 类型及 ? 成员语义，不扩大父级或全量范围。
+          SELECT r.ad_type, r.query->'ids' AS ids FROM ad_directory_run r
+          WHERE r.tenant_id=:t AND r.bc_id=:bc AND r.actor_id=:actor
+            AND r.frozen_route=CAST(:route AS jsonb) AND r.advertiser_id=:adv
+            AND (:workload='background' OR r.workload='live')
+            AND r.kind='ad' AND r.query->>'include_deleted'='true'
+            AND (r.status IN ('QUEUED','RUNNING','ADMISSION_WAIT','WAITING_REMOTE')
+              OR r.created_at>=:cutoff)
+        )
         SELECT DISTINCT l.ad_remote_id, COALESCE(a.ad_type, 'SMART_PLUS') AS ad_type
         FROM material_report_day d
         JOIN material_post_link l ON l.tenant_id=d.tenant_id AND l.advertiser_id=d.advertiser_id
@@ -259,13 +270,9 @@ def request_link_directory(
           AND NOT EXISTS (SELECT 1 FROM material_post_link done
             WHERE done.tenant_id=d.tenant_id AND done.advertiser_id=d.advertiser_id
               AND done.main_material_id=d.main_material_id AND NULLIF(done.platform_material_id, '') IS NOT NULL)
-          AND NOT EXISTS (SELECT 1 FROM ad_directory_run r
-            WHERE r.tenant_id=:t AND r.bc_id=:bc AND r.actor_id=:actor
-              AND r.frozen_route=CAST(:route AS jsonb) AND r.advertiser_id=:adv
-              AND (:workload='background' OR r.workload='live')
-              AND r.kind='ad' AND r.ad_type=COALESCE(a.ad_type, 'SMART_PLUS')
-              AND r.query->'ids' ? l.ad_remote_id AND r.query->>'include_deleted'='true'
-              AND (r.status IN ('QUEUED','RUNNING','ADMISSION_WAIT','WAITING_REMOTE') OR r.created_at>=:cutoff))
+          AND NOT EXISTS (SELECT 1 FROM blocking_runs r
+            WHERE r.ad_type=COALESCE(a.ad_type, 'SMART_PLUS')
+              AND r.ids ? l.ad_remote_id)
         ORDER BY l.ad_remote_id, ad_type LIMIT :limit
     """),
             {
