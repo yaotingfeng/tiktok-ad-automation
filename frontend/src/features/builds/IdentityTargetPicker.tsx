@@ -100,13 +100,15 @@ export function IdentityTargetPicker({
             <p className="text-sm text-muted-foreground">
               {data?.selected
                 ? `${identityName(data.selected)}${data.selected.username ? ` · @${data.selected.username}` : ""}`
-                : query.isPending || data?.state === "pending"
-                  ? "正在读取可用投放身份…"
-                  : data?.state === "unavailable"
-                    ? "参考账户暂无可用投放身份"
-                    : data?.state === "stale"
-                      ? "原投放身份已不可用，请重新选择"
-                      : "请选择本批次统一使用的投放身份"}
+                : query.isError
+                  ? "可用投放身份读取失败，请更新后重试"
+                  : query.isPending || data?.state === "pending"
+                    ? "正在读取可用投放身份…"
+                    : data?.state === "unavailable"
+                      ? "参考账户暂无可用投放身份"
+                      : data?.state === "stale"
+                        ? "原投放身份已不可用，请重新选择"
+                        : "请选择本批次统一使用的投放身份"}
             </p>
           </div>
           {write && (
@@ -124,15 +126,17 @@ export function IdentityTargetPicker({
           )}
         </div>
         {query.error ? <BuildError error={query.error} /> : null}
-        {data?.state === "pending" && summary.status === "READY" && write && (
-          <Button
-            className="self-start"
-            variant="outline"
-            onClick={() => void onPrepare()}
-          >
-            更新可用投放身份
-          </Button>
-        )}
+        {(query.isError || data?.state === "pending") &&
+          summary.status === "READY" &&
+          write && (
+            <Button
+              className="self-start"
+              variant="outline"
+              onClick={() => void onPrepare()}
+            >
+              更新可用投放身份
+            </Button>
+          )}
         <p className="text-xs text-muted-foreground">
           目录来自排序后的第一个广告账户；选择后会逐个广告账户验证同一身份，不会自动换成其他身份。
         </p>
