@@ -1,0 +1,306 @@
+commit,author_date,subject
+0642ad3d7d57115df1a61464b0aec2c1452c9fdb,2026-10-31,sync: 为历史事实收回后台借用容量
+1e99743fee14b20051a2e3db85750bb7a269bab6,2026-10-30,reporting: 按素材类型完成补链并校验历史归属
+0e098873dc4ff890b53dd0c06042c44c205c1bdc,2026-10-30,release: 修复整批门禁与演示报表引导
+cd15fd33d1e8f9202e0a51f3530453db582690a7,2026-10-30,fix(sync): give missing directories persistent fair dispatch turns
+b95fcccd4ee4e4262fdb18713432526803134ebe,2026-10-30,fix(sync): repair directory coverage without refetching reports
+e0b85952ecf1154c0aeb748e96d5d923250d9ba4,2026-10-30,"Revert ""fix(worker): ads-directory worker 监听正确的队列并增加处理能力"""
+c17bb5312765b663cc8fa2f88b5299ca61c86c3a,2026-10-30,fix(worker): ads-directory worker 监听正确的队列并增加处理能力
+449375ddf59d84871495a90be0f857db7df1aa54,2026-10-30,sync: index closeout history by frozen scope and day
+48123e1cc42082f7b2911efe80fb1afb71fbdf66,2026-10-30,deploy: give background sync four reviewed execution slots
+3b38fda4bdaf15be2ef74b89866063535e62aad0,2026-10-30,reporting: derive link candidates from one material value scan
+650745f9e32190a9012bd9cbdc3b982a84463215,2026-10-30,reporting: bound material value scans to requested dates
+efc2e94e9032bbe7bdc189971e6361b809ddf6f2,2026-10-30,reporting: read link directory blockers once per request
+ee7ba6bf73f218be2b10a0dfaf3ab393b49132fe,2026-10-30,deploy: add a control slot within verified capacity
+bbd5afa13a611742cfa352a977dc2d866e1f0311,2026-10-30,reporting: measure link and directory request stages
+e918a46c7b15e2f0f825ae9b467790a764032874,2026-10-30,reporting: damp repeated coverage batch timeouts
+099fe34ac4eeccb93c66680b03be64fc4f354c74,2026-10-30,sync: retain pending-run index in generic query plans
+e10ca50fb6604e14103259ab1af1d33e48ed6e0b,2026-10-30,sync: measure report publication and directory planning stages
+21407eaef595eda0b78115030269dfad2c6d73a5,2026-10-30,sync: use remaining health coverage budget without losing progress
+26f911b4065833e4b0e187935e9abebb4657bab2,2026-10-30,reporting: 保留超时前的子项进度并分阶段完成覆盖检查
+4101d13e8c36567447e0b54c3ed0c1cc7bb54c01,2026-10-30,reporting: bound planner entries and persist realtime continuation
+6d6294ff4076d4940b527cc23ed318755dcf4df3,2026-10-30,ads-directory: bound pending probes to active account index
+0c96e6bf1e4f3a0b5514fbd197840b5d3679d202,2026-10-30,reporting: isolate fact publication partition locks
+d5cd4050a0998c25987088a974ba39cbabb19485,2026-10-30,reporting: remove redundant planner writes and metadata reads
+548c2f543ec78cd5d304e777678f5444b0a17483,2026-10-30,ads: preserve tenant turns across reserved service pools
+3e09fc56669e8f40888778941e8dfb2f28be3bde,2026-10-30,reporting: preserve completed account progress after late screening
+cbc8d8401e3113a3bc65cb4b85156331ade72518,2026-10-30,ads: reserve live directory capacity for current status
+5c91a838777eaa1bbdf639e7c4be9f06af035ae9,2026-10-30,reporting: limit health state reads to usable local dates
+1b2f4b2f86e7c8b410cb6bdb7b38ca7f492e9353,2026-10-30,reporting: give unfinished screens fair budget and catch up late live cycles
+cfc7baff2020ca96ebc888508d63af410cd04bf0,2026-10-30,reporting: limit health state reads to usable local dates
+8674bbd46442d33ee6912bfea22ca843dd549c8d,2026-10-30,reporting: preserve nested query budgets during savepoint recovery
+1747ad4f9f4ae98dd96293ae5132e0cd810a6c8e,2026-10-30,builds: guard V1 cutover and validate carousel delivery locally
+eb7b160649763c953fb791c9b3b97868b13b60e3,2026-10-30,reporting: preserve queued link pages without renewing negative evidence
+d4df18afe450909f7cf8e1173d8802325514c37f,2026-10-30,sync: use recent full-scan evidence index for calibration
+d22bf688e8945589d541b0a831bd862210e3c7dc,2026-10-30,reporting: fence material facts by report type
+ce585f036aae397ba8205f981d3aa3f49f3fbfea,2026-10-30,reporting: persist bounded planning phases and preserve live progress
+57922d02e9190290493cae8a9f54220d4e121dde,2026-10-30,reporting: support carousel identity and ad-level metrics
+811da3f101ca3422adf20b083968b3b0738a50f1,2026-10-30,sync: reduce directory candidate scans and preserve fair refills
+afe47cb5deb95b6cc37c8ed89aedbfb82692bc58,2026-10-29,builds: refresh minis and unify safe maintenance diagnostics
+67bb63a62f2ffaa2f680f29b6407240561143e7b,2026-10-29,builds: add scoped resumable carousel music preparation
+772460a57c1e4995280411d1026fb09edff8af1a,2026-10-29,builds: preserve unsent shares and trace stalled execution
+fca74dd39a013d3afe3c3e0a980fd9cba563fd3d,2026-10-29,builds: fence image workers and checkpoint candidate scans
+adf3da9dc31f4b4c2bf2cb121b5e3c784b8bea6a,2026-10-29,sync: remove fixed directory planning throttle
+5018a931ecec189374e199485ce0e89c35c8b072,2026-10-29,builds: persist image composition plans and atomic draft edits
+3cda02cc2ac9217c57bd1f1fca036a7a4a8045c2,2026-10-29,sync: reduce directory calibration and recheck queued scans
+7612c33840f3f9a6ff50e1a476aadc081b1a43c4,2026-10-29,reporting: refresh only due directory objects
+33354ae41e440d6639b2673e8554ef81a61d0346,2026-10-29,sync: deliver directory continuations and bound link maintenance
+70aa7a1a0684ac2ec6564d7182bd734832a02c30,2026-10-29,reporting: paginate link reconciliation across committed rounds
+78b5aefddd2c8eb290670ae80b42ae0ac5d61156,2026-10-29,music: add scoped SDK reads with strict pagination and budgets
+0985f89623f43b6e83524460672d9536917bc6e5,2026-10-29,builds: reduce cover checks and unblock dispatch scheduling
+e8a1c9d685382d9aaac0e287971718dbc295a878,2026-10-28,fix(ads): 添加 skip_locked 避免锁等待，新增历史数据清理脚本
+7f424a1d53824bee8b464c9328032800dce51e63,2026-10-28,fix(ads): 添加目录同步任务重试次数上限，防止死循环
+a3a450bf96670474514e83642b20ce5d2f620e59,2026-10-28,reporting: recycle material link snapshot retries
+b62b380b997a3d590b74ab40ab8512c4f07299bc,2026-10-28,sync: bound legacy link reconciliation scan
+75b91877006be549754d2e5f8283ceb26788e3f1,2026-10-28,sync: resume queued Spark evidence and decouple health failures
+9576233a665dc2e9ed41722876fa1d865d6b7d3f,2026-10-28,sync: preserve directory dependencies and isolate health coverage
+e2b49f5ff0ee5977d575b8df406c983dc0f9b40a,2026-10-27,sync: shorten live snapshot retries and bound control query work
+408374933a0ca2147a6fac06765afae3450a87e9,2026-10-27,ads-sync: reuse published objects for material freshness checks
+7fb7293b791b2274d311ff9c0120aaacc867ffc4,2026-10-27,sync: persist material subpages and coalesce directory refills
+77226c4de797630bea58c389e36b21acb3e63a4a,2026-10-27,sync: allow bounded large publishes and prioritize uncovered repairs
+c756c5471418e366d83bd8efc6f0cd8f646529e2,2026-10-27,sync: 完善大目录预算与健康观测超时续接
+99c0885d1d5cf0fbf25a2d864bb436ddbe5e70ae,2026-10-27,sync: 优先发送业务消息并减少目录配置回读
+4966a8aca1c26f0dc3c37a15be025f378f4a92d0,2026-10-27,sync: 恢复目录发布并加速历史素材与暂存清理
+c68f9a060fb84e053ad3ef3ffe5308c71a657f5f,2026-10-27,sync: avoid repeated directory history scans
+8c636d9d76fd1612883d1d9d376521479dd1fd13,2026-10-27,reporting: bound sync planning and unblock historical work
+092cce490285a32846cf41f1e2b844704804aad3,2026-10-27,sync: resolve scheduling starvation and bound backlog queries
+2c72f767a991dcdf175a20e4deaa3e8b17c97b6a,2026-10-26,jobs: 修正批量 outbox 写入的类型标注，恢复发布检查
+c1a40a70cc620c262e468b5b75e09e0860d2ab14,2026-10-26,materials: 批量共享领取从 1036 条 SQL 降到 20 条，不再本地超时；共享前读取临时失败自动重试
+8583cd6ce95422adecbd6702c6a1b6049547d03f,2026-10-24,builds: 广告不再因封面本地拥塞失败需人工重试，素材与封面并行推进，整批搭建更快
+22d609170942ce8653d046427b6185d17407532d,2026-10-24,accounts: 账户发现任务丢消息或本地资源反复失败时不再永久停在“正在发现”
+b4b31b4ff0dfd8689a1d997f6901cbf8bf80e5de,2026-10-21,reporting: 素材报表翻页命中视频索引，只为当天有数据的帖子查视频
+a7f77afebd01bf043a2d1637926295cdf94ec8bb,2026-10-21,reporting: 素材报表只读当天有数据的视频，新增按视频的使用位置索引
+c05627d2f92ca00f8d3e42982de6eb16e09c8156,2026-10-21,reporting: 报表首屏只按报表数据排序，搜索可找到当天无数据的对象
+41bc8c2083e2f9e68571f10e8c0f738a7b4720ce,2026-10-21,reporting: 广告报表默认只列有数据的对象，首屏查询不再整租户扫描目录
+d195f70e50eab561ac2f3be2e827b72e46587e3b,2026-10-21,reporting: 大租户报表查询不再超出数据库参数上限
+db997831bffcfb625da4382acba4278e61df8e4b,2026-10-21,reporting: 共用跨日新鲜度避免零点误补拉
+f2d50b61b071b9cbdffabe44a405c07bf3418b08,2026-10-21,reporting: 按半个热报周期提前刷新目录
+340108c711ec375c5acccea88dc207ff84e4c016,2026-10-21,reporting: 零金额帖子不再阻断素材止损或重复补链
+d2d7839874503e30920751dbd2e1f49e9ddbfa0c,2026-10-21,reporting: 当地零点后补齐昨日尾数并保留今日同步容量
+23abca2d685ace57ffda72898b1e0f9d180ac165,2026-10-21,reporting: 在规则执行前三分钟同步并恢复无规则相位
+53a5888f3e06941b989498f47fa3c67ac7d7ad8f,2026-10-21,reporting: 消除素材错相造成的广告日报重复同步
+95c34bf20e1bb165b96bb7c428f925035447e18a,2026-10-20,reporting: 避免目录正常刷新触发额外报表补拉
+cf560a3282ab398b5084d5fc73a4376de53e7b5d,2026-10-20,ads: 删除广告目录无来源的主素材字段
+bb92ac5e1d647b3a5f6a49b6fe5bde5fa09e16e2,2026-10-20,reporting: 按账户整轮刷新有消耗广告目录
+fac300659e0784fb6cfa2ba237a4fb86385ca388,2026-10-20,automation-rules: 将实时刷新和暂停规则统一为15分钟
+b6e3d7bb000bec3d59b9b869ead08d0129123c99,2026-10-20,material-production: provision tenant accounts and add one-time login
+bb4a971599c0707e91c79c989ad81bdc8571b281,2026-10-20,sync: keep recurring database reads on parameter-aware plans
+e78f282d310fe3998d5705c3315ce0aa8aa6db6a,2026-10-20,reporting: wake identity dependencies on the same scoped evidence
+7cc48f6ce9b49e24989a351c8a6cfc0da951b817,2026-10-20,reporting: recheck Spark identity when directory evidence changes
+0e0b5a0c31908909f259449a0f7b5c347ab3eb7b,2026-10-20,reporting: continue newly located identity work before dependency backoff
+64fef5df641e7fcfebc447f686cbad297e2deeb6,2026-10-20,reporting: restrict identity refresh to known missing owners
+bfc64cbc257c6f8d4d72849958d5ad929ce326bf,2026-10-20,reporting: resolve missing identities before broad account scans
+fafac8b7220891c4e57cdffeb2e877368dabc0df,2026-10-20,reporting: preserve fair turns for historical link continuations
+874e10f1f90bfa67cc5c3eddb29391ba965b7c83,2026-10-20,reporting: keep bounded backfill work ready between dispatch rounds
+d7ed0a5efd164d961524d266654385b0edf496c0,2026-10-20,reporting: route historical material links through backfill workers
+2ce6412d5f0bc9fe37f653426139fe955551fa06,2026-10-20,reporting: recover historical Spark video identity from exact content evidence
+c553c99bbeb3c794a78d6190a49c6dadab5b099e,2026-10-20,reporting: resolve exact non-Spark material identity and refresh Spark bridges
+2f8595e12f201664214cf2ceff008e4da7f8a310,2026-10-20,reports: retry unknown throttles without a five-minute stall
+1e4446023640fe2504ca0b1c841adb17f13129c0,2026-10-20,sync: require exact video identity and avoid unresolved row rewrites
+a4fdc9aed0e6d5f5c075b247633a6a2f803502c4,2026-10-20,sync: reuse complete post searches and bound drifting snapshots
+4378049c9779c3fd3928fdbdda84093f0da510db,2026-10-19,sync: rebuild drifting report pages without discarding facts
+0b993341ea95b7427db7a105da19be86613a5079,2026-10-19,sync: recheck legacy incomplete negative searches on upgrade
+0699e42b2ea34c78d8d0011b19ef49d5cd33bd38,2026-10-19,sync: locate missing posts from same-period ad facts
+ddf92efd51fcf2c7162d920f3d60fd53533e8cd9,2026-10-19,sync: fill available historical dispatch capacity
+ec42de03d2758aec96a11857df0eb9593c7e7303,2026-10-19,sync: correct endpoint quotas and make backlog recovery resumable
+be6a602aa42544230be497fc2e33e24ea66da78a,2026-10-19,reporting: repair known directory dependencies after every saved page
+0a00e5876d9f02733b4dd2d2c3d1534db6be7d97,2026-10-19,reporting: resolve verified video identities without full metadata scans
+44c7e1984461a56652d869487db679f841bbe8a0,2026-10-19,ads: constrain and coalesce missing parent directory reads
+8def1d9f175deef501896e4b27d30fd729b6c360,2026-10-19,reporting: unblock historical directory repairs before freshness expires
+adc495956b750f302243961fb6f8f0acee8edeab,2026-10-19,reporting: bound health coverage reads to current local dates
+99ff9a5ae9d60fa962d5e30ce857cd8a711b1861,2026-10-19,reporting: coalesce link work and prevent historical backlog starvation
+e589fd626c880f54b624a9c2472430948b4b120f,2026-10-19,reporting: reduce rule input memory and skip empty action recovery
+22865c3096ab7dec8c4caa6dff2b88b83b645675,2026-10-19,ads-sync: avoid conflicting parent filters for explicit objects
+5022c1ad17c588f94bc1a95abe3a4d754f838171,2026-10-19,sync: batch report job planning under the existing scope lock
+ef1886a0231b296868ed2b2a87cd1dcdaa0f4af5,2026-10-19,sync: scope material overview to report ads
+9e168b852ab4214f879dbd34a73e6ce5f6557a42,2026-10-19,sync: refresh only expired directory layers
+5720b54dbf1aff456e0f6039f7512aeac650d765,2026-10-19,reporting: reuse recent empty screening across staggered refresh cycles
+8580e3fa8ffffa97a3066a535ee08da4d40e38bd,2026-10-19,reporting: skip redundant material reads after successful empty screening
+b406415b8f6b81007bc162bcbdc3f24395ec8b17,2026-10-19,reporting: batch confirmed empty report states to avoid plan timeouts
+c7ccbb9ae5f1e618db274def17ddd512050eae24,2026-10-19,reporting: refresh rule accounts and prioritize current material links
+306d5ace3fd4ebe29a1939d3c0371dfe94b7b83a,2026-10-19,reporting: keep known active ad reports refreshing during screening backoff
+fa6c0a954c79d3457dea5127556b73cf3b789f99,2026-10-19,sync: stop duplicate periodic creative scans and retain worker prefetch
+7bf2f06fa2c364920b59d9a71291d3f894abbbeb,2026-10-19,reporting: keep material dispatch independent of screening deferrals
+83db211fe2d9ce8226eebd6668cd62c62bf08995,2026-10-18,sync: reduce admission churn and preserve material page progress
+1e62413fe7e5cee06766cccf1742c017871bfdbf,2026-10-18,reporting: resume directory admission waits and prioritize latest creative scans
+82d71142e7a8741e3ecad733fa6a1dcfa03f71ec,2026-10-18,reporting: dispatch object directories before creative scans and widen the window
+4986cefe2ebc8059d0ed62a2c0ef15b7ee204f4f,2026-10-18,k8s: keep reporting worker out of the Beat disk zone so releases can schedule
+6ec4d02c79d964b15ae527614604170d037ccb3f,2026-10-18,reporting: free directory window slots held by expired claims
+0a0e7138c9e536707cc7abdd6d3818a330bc87b5,2026-10-18,reporting: let live directory worker share full directory fetches
+9d311ec53a50cddd395a9ee5e13055377e427d51,2026-10-18,reporting: balance fact dispatch by account coverage
+009574993e18de87154bb0975312f2a56d3f50d2,2026-10-18,reporting: remove directory work from fact refill and bound candidate loading
+4e569986c6dde076dc0df43c5d7cad0f1a03088a,2026-10-18,reporting: increase execution capacity and preserve actual observation time
+251244a542e6ce4ea634c5a3da7e0497f4ee885f,2026-10-18,reporting: balance fact kinds within live dispatch capacity
+8bd35045d4dcecebf21e5dad6ff42d434ae76e18,2026-10-18,reporting: shorten fact sync service time and isolate link work
+1ce67f22116223da7fa77e2f997f92dbe5acd8d6,2026-10-18,control: persist two slots and record emergency production validation
+731f95942571698c6a2b00339623b0f14f2b2acd,2026-10-18,reporting: isolate slow planning and retire superseded directory work
+10ece3f8356beecdf053a4d12457ebf2b51f6803,2026-10-18,reporting: refill directory slots immediately after publication
+c80421c37a63d071ac373a8b34cceb4d7297981b,2026-10-18,reporting: isolate realtime sync and recover persistent data gaps
+b152d6ee3bc0569ce776aac8800cbcc0593e4ef1,2026-10-18,reporting: 优先补齐在投目录并限制全量派发
+28f07ede74a9a02a34e60ce8dd94be77c281e1a6,2026-10-17,automation-rules: evaluate and pause each ad material independently
+fc5ac6279eba3afb9753f3a26421eaa754c7511d,2026-10-17,reporting: close superseded directory runs so their pages are cleaned
+138fced52a0645a692cfa0116209ba67eb61254d,2026-10-17,reporting: keep directory staging pages for one hour instead of a day
+fb851952802d17ef383d4bf0b610d60056a40160,2026-10-17,reporting: clean up directory staging pages after publish
+ffc17f8aa346a6ee4bdf8c1d8f2b89237b04eb46,2026-10-17,reporting: 同广告同视频合并展示并绑定当前素材身份
+63975325c5e0f8292b4a9f5c23abfe783a987520,2026-10-17,ad-management: 修复素材启停查询与未发送任务收尾
+3466b1189d9632ab341931f21ce601e0705de162,2026-10-17,workspace: 修复素材启停、定向回读与重复校验
+fdad1f435d831e28d489ff36c26209c6b8226fd5,2026-10-17,reporting: 操作回读后原位更新报表状态
+715349e1ca1739d261d17528f66221e2295aba05,2026-10-16,reporting: fence expired broker claims before execution
+75dcc8d99ea830b0ff501f566649dddc01db81ed,2026-10-16,ads-sync: keep local publication moving during read backlog
+1f62c9d1eac8bed77b79ebfc4ee984d18141a626,2026-10-16,reporting: 按执行窗口派发并跨轮公平补位
+c909ac567314e61b992acc39492d54095c7ea99f,2026-10-16,ads: 批量发布目录并固化数据库事务与并发保护
+008c63d25e0c11e85d214d9acad8647277a499ee,2026-10-16,ads: 防止目录发布软超时泄漏数据库连接和行锁
+ef979d95c3520aa298c02c3080f943118681fcf9,2026-10-15,ad-management: 按表格粘贴的推广系列 ID 生成改名选择
+b35ccf565b4adf8ad5145b2bb64a1232524f4277,2026-10-15,deploy: 目录 Worker 并发 4、报表 Worker 并发 2
+289125dd91bff5724ee69af3feccd9bafe8ded8e,2026-10-15,ads-directory: 周期目录同步减量约九成，积压不再叠加
+90b379f864fe8ae857dddad5bddaf7c918ebd55c,2026-10-15,reporting: 目录同步积压时不再阻塞所有任务投递
+f67db93b79a694b5d43e5066f77c60700174da9b,2026-10-15,reporting: 平台管理员代管租户后后台同步不再中断
+3bee8357414b2b490794c5426a6704dec2d4cf64,2026-10-14,reporting: 素材报表按视频跨广告合计，广告详情显示本广告素材数据并可单独启停
+017643e731b450e30067cb858f5e8548f07b61ff,2026-10-14,ads-directory: 周期目录只同步账户实际在用的广告类型，空类型每天复查一次
+6e88b91d806ff4e49a173b3f94b19e683f2f3142,2026-10-14,automation-rules: 固定时间汇总发送
+c84a9839e7b1d50fe8687552e13b0e3769629b89,2026-10-14,automation-rules: 规则按排期运行并推送飞书预警，新增 AUTOMATED_RULES_ENABLED 开关
+d14bba240b228a39eb5ab40daab950f33e9b31b0,2026-10-14,automation-rules: 规则定义模型与指标目录
+0eb719bfa59a3b7de51e504031f45c6ffb1b6401,2026-10-13,reporting: 报表快照改在数据库内一次生成，切换素材维度从约 17 秒降到约 3 秒
+2900cee1358ec947fe2c98351a7a20ed3a331570,2026-10-13,reporting: 停拉 UTC 系列日，系列小时报改为打开小时趋势时按需拉取
+dc7ef92112c5a75ffcc1a72857464bbb3414714e,2026-10-13,reporting: 状态栏显示完整数据起始日，表头与数值左对齐
+aa1032eded63d197682d3f5dbed9d56b719a55c3,2026-10-13,reporting: 切换维度不再残留上一维度的行，无消耗时同步时间照常前进
+fd6ba982be233b571b3bfdbe9826a899a87feb57,2026-10-13,reporting: 剧按剧名归组，状态按成员汇总并提速剧维度查询
+d39c896c73f561a2e3a8e0c5f0617e9588ed6c31,2026-10-13,reporting: 跨日聚合统一部分合计规则并收紧素材导出与小时趋势范围
+9b87f923f8ac59c2434ec5a1836829d224560cf8,2026-10-12,reporting: 操作记录按对象类型匹配并补充越界用例
+51dd4b4533bfd3f29c802efdd87e56b30defb556,2026-10-12,reporting: 详情操作记录改读管理任务，并更新前端客户端
+81c67231b3bd5486e62a5f8deb2214c3b9929f93,2026-10-12,reporting: 新增按层级与对象读取本地事实的趋势接口
+9f2b3ec8a62caccd810523de9e7463454ee8c386,2026-10-12,reporting: 账户行裁剪列表引用并补充投放状态与账户状态
+2a289f011d8da8d2d1bd4422fa6d0c277f9f83c3,2026-10-12,reporting: 行内与汇总统一部分合计规则
+d887317d2c8d093b97675fd9a8d010054f7f2ed4,2026-10-12,reporting: 汇总卡片合计已同步部分并标注不完整账户
+5085890c8b8061415a84bcf286f1bc3428e159ce,2026-10-12,reporting: 指标名称统一为 TikTok 官方口径并提供指标字典
+814e2f878eaa3d82d93fd09a3d992cd5ed6f636f,2026-10-12,reporting: 报表新增千次展示成本与平均点击成本
+1c1f1ed2e13e11263ff2efde4dc05442ebbbb12b,2026-10-12,reporting: 平台确认零消耗的账户按已完成 0 行记录，汇总不再整体为空
+49d06bee2eaea9cc96260f4f6335e0dc3b3ac15f,2026-10-12,reporting: 素材维度查询按账户复用覆盖计算，耗时从 37 秒降到 6 秒
+1a46b14bb435293947b937d1a499734d1357124e,2026-10-12,reporting: 素材报表恢复同步，新 BC 授权后立即回刷近 32 天
+dcd06a142e47cc137a39202ee61360d7798ca853,2026-10-12,reporting: type both discovery scope clauses
+0b0c334ff611bcc10dc1edf1cd650951bb402fa0,2026-10-12,reporting: use typed discovery scope predicate
+027d491d3ca4793af04d6094c40a7f84b3f15ca3,2026-10-12,reporting: satisfy nullable discovery scope check
+dd83b6a481dad868192fb980c74bf50347491671,2026-10-12,reporting: accept connection-wide API discovery
+dd7f6f9fb72405fca7d28a398987a87a40be6d0f,2026-10-12,reporting: 删除旧报表路径并修复调度发布与查询边界
+ac7b483c1ea714482ab5d29e3a25f85edfea75d3,2026-10-12,builds: reduce preparation reads and increase worker concurrency
+2cd913831a016f9266edcc4879ee3b343ef79138,2026-10-12,reporting: 素材日汇总关联使用位置且保留未知归属金额
+4dc62689065b7ee855198e83b502b22cbdcae38c,2026-10-12,reporting: 五维按广告日汇总并支持回收排序与数据缺口提示
+53060f552fbfdabbe1868da8169750bdc7e75e16,2026-10-12,reporting: 手动刷新插队热刷并提供按 BC 的同步状态
+f5beeceb678ed1b14a5bea4cad5680bc74a92fa5,2026-10-12,reporting: Beat 派发分档同步任务并在额度紧张时自动放缓
+59acd78b43fa203857487bc166b2737c33b17b32,2026-10-12,ads: 目录同步请求独立于报表调度并在管理操作后定向刷新
+71a9164bc8c0412d2c1991f939fd5d7a25243d93,2026-10-12,reporting: 授权后自动建立 BC 同步计划并按活跃账户分档刷新
+6ec499063ec8113be31395226b835be7d4221b57,2026-10-12,reporting: 截断拆分改为读取完整系列并限制超时重试
+6646ab2240c0b43c45ec30810aafe2c2f50c5f55,2026-10-12,reporting: 报表任务按租户轮转执行并在截断时整份重拉
+40560e588be0745fd5ee685ba250f799ce33d61f,2026-10-12,reporting: 报表按账户日期段整份替换发布并在库内汇总系列
+6cb91bbdd5459b33e203cb0d06c682fa065e8678,2026-10-12,tiktok: 新增只走官方 SDK 的报表读取器
+7738fc81bba08c7853781c84a90bc56044386c4c,2026-10-12,reporting: 统一报表平台字段到存储列的映射与解析
+b05c21f606dc6b51229ca998d98f096d538db9b8,2026-10-12,reporting: 新增按账户存放的分区报表事实表与同步任务表
+8f83cbeb63c9a5d767793b3e02b2b4e5416f1bda,2026-10-11,reporting: 去掉排序键上多余的类型转换，恢复 ty 检查通过
+fd3943843d6e7ce601b1d10b817101d846c2f25b,2026-10-11,reporting: 修正广告报表少算与漏数，所有指标列支持升降序
+b87ffd7d254238abee06281a0e77ebeba16b3a77,2026-10-11,backend: 修正类型契约并让本地检查隔离私密配置
+e01da72902c3d623e1759bb351dd404fc786a4f0,2026-10-10,deploy: 切换阿里云新加坡集群并验证内网认证
+1d3b43bfbf22676ad2a574dad9ef31bfc0428755,2026-10-09,deploy: 按测试服内存压力提高生产资源预算
+e9c836ad0cbc8e4254cf3ddd89c2157ecddeaecb,2026-10-09,deploy: 补齐公司测试部署保护并验证容器运行
+b2194d4652482f3252bc62b53f56e0b97b1b613c,2026-10-08,deploy: add Kubernetes release assets
+c59ad1c2355e570c1c57d1b8813fc68d36a4e1de,2026-10-05,reporting: isolate facts by business center
+e29908155eb0c0eeccd2a64eea95d522f96229ff,2026-10-05,reporting: batch material snapshots by advertiser
+2e64652c58e95bc2ea235004146a517f1c4f1b81,2026-10-05,reporting: scope material directory reads
+6b55b8b28fbcf9d328e990176b45c1b05f6f773c,2026-10-05,reporting: index material references
+223dbd17a55f818a6361992c292b96a872d7d851,2026-10-05,reporting: bound snapshot fact reads
+155c000bdc23b08a3a09c191c77165c76b0a005e,2026-10-05,reporting: use sync history for API connections
+25032089be97e5a91fc160c5cb7b7a1f5053e735,2026-10-05,reporting: validate supported material dimensions
+e3b3b48254b3a90bc34f460b317a450d88608168,2026-10-05,reporting: use supported material dimensions
+645ef5e5d4903efef79d29c7c127e055208df04e,2026-10-05,reporting: pause schedules during backlog
+82705d65fe8583584ac7824428eaaaa34a1b998d,2026-10-05,reporting: bound due schedule scans
+4a7d350d6cb0d8dad376d6afa3503c28836ff742,2026-10-05,reporting: bound due-run scan batches
+e1d6811f7482109d84a75b003cbd6026c3f641b7,2026-10-05,reporting: allow platform admin history requests
+cd2b405a9e9ad14a80dc9db3cbca776c3eecf005,2026-10-05,reporting: connect New Junbo historical ingestion
+fe2d8e6134453c5eb307a475cd5c6a2ac78b61dc,2026-10-05,reporting: merge metrics with matching coordinates
+426ed23169317d3e0acc9c129ae341f3103d1ba5,2026-10-05,reporting: omit creative parent filters
+7e3a763fab063d8f494bf6a8a1ac754ae16a7361,2026-10-05,reporting: chunk directory filters within TikTok limits
+99b1f6d09ad32186aff3e3ae76e6d5212b3003fc,2026-10-05,ads: restore report metric columns
+d3cf2d6fa5c258eb0ba3c13959b1061bec790a66,2026-10-05,ads: optimize report workspace layout and loading
+748f751cbc8f8f2ebfed43f893a5e7a9e7992947,2026-10-02,ads-reporting: seed recurring sync schedules
+7d2857358e6381f11e1ce322ecb6409cd99a7438,2026-10-01,ad-management: execute fenced management items
+1e8e260dee11dc2e7326ab14a2085d914d523c99,2026-10-01,ad-management: fence C4 handoff and preserve task audit
+d414a9cbb34d1480bb60a78ea991415b0f6a067f,2026-10-01,ad-management: fence capability generations and task scope
+5323e8e3576f3592c8d6eb56aa3863652e661120,2026-10-01,ad-management: add scoped preview and task contracts
+f7d0830c3876439fa4e5ac3c7400368a89901558,2026-10-01,reports: reject unknown BC before snapshot creation
+da0067cdbc36d540a1fc0b6672ba37dd3e3c9093,2026-10-01,reporting: enforce write permissions at API boundary
+15f9a9b341f44b37f55f8ae50949784b806cc866,2026-10-01,ads: bind detail snapshots and viewer actions
+1aed8d5dcc9b63f6d1c002354b2cbcbdff549d09,2026-10-01,ads: harden snapshot detail and bucket handling
+688d8695f41cf1a83d36db7b157b1bf42a685b10,2026-10-01,reports: keep cleanup outside outbox contract
+940d53fb4343c3ea89306d53e951a7a4a957d4f0,2026-10-01,reports: clean revoked export objects
+61b20d7cf47af55489936574f36f6b5f24f0f936,2026-10-01,reports: add private views exports and scoped refresh
+79825c0af8557f105ec6a7c3ea18e6a07badf85c,2026-10-01,reports: fix scoped snapshot persistence and detail history
+c7ac4d1cc9ee9234cf57b7c7c77e2d7fd20cd3f5,2026-10-01,reports: add consistent queries and frozen cross-page selections
+268739a6d7930259b8b6398b3eeedba0efb49341,2026-10-01,reports: freeze trend scope and local grouping filters
+98bf21e28a2ad23a212ee77e3f5a1c7f8fe5bcad,2026-10-01,reports: retain partial material facts with explicit coverage
+f7c5dd7582f1ed8368c38cdefe7210955b6e4128,2026-10-01,reports: require complete material and observation scope proofs
+54b15fcfba5c061710ab98ac7c543eb986dcc3a7,2026-09-30,reports: select compatible trend granularity
+d8e356bd4c06390656a69a310a11c5588d95526a,2026-09-30,reports: mark proven material coverage complete
+d3e623cb800a4cb7905c27916135b11cf5a67af3,2026-09-30,reports: close B2 aggregation and observation review gaps
+26fc7e21a079e58dbbec6cefae2eb7a192b64672,2026-09-30,reports: aggregate six dimensions with explicit metric coverage
+f3cc0b81a826c167a83c3de9a3aa1d46c404c60f,2026-09-30,reports: close filter scope contract gaps
+197ba8a02c817159a0febe1b1be67c9c2b50469e,2026-09-30,reports: define scoped filters and query snapshots
+f7d3ac415d9b688395a1faa3e5147234afc0c7c3,2026-09-30,reporting: prove concurrent recovery and queue share
+57ae862f892223c51702e339c221f1222a6ec7b5,2026-09-30,reporting: verify queue fairness and frozen sync recovery
+2629c50e869800b1ed1cc6741e6083481e66f6eb,2026-09-30,reporting: fix typed shard occurrence execution
+bb54b807b17453447119cc1113d5a9b6cc297ca5,2026-09-30,reporting: include smart hierarchy directory scans
+e480a94f0e4f6b0186b1c93faaeaa41828817f09,2026-09-30,reporting: close A7 schedule review gaps
+c66ea51ae42a096abf9c90f34870b1b635208647,2026-09-30,reporting: schedule resumable refresh and attribution backfill
+64db52d0b7d1e0367314e866b4ca2c411b4586fe,2026-09-30,reporting: fence claims and resume report pages
+49386625ecefe78c6599dea3db4fb99071f7f94e,2026-09-30,reporting: collect partitioned sync and asynchronous reports
+33801a45558b96b7a2d57743cad064d29922cec0,2026-09-30,reporting: bind ad type to partition identity
+940412e77a1f19906f564ad723d5ac7231bc93b8,2026-09-30,reporting: close contract and sparse-row gaps
+589e0a7a41de9b062dd9191d6549c7013e7b1ef1,2026-09-30,reporting: enforce complete metric partition publication
+fc12e60cab3c96c7f8d1e8434704e1917635fca7,2026-09-30,reporting: persist metric contracts and atomic fact versions
+be2dd10fa58c4b5db8092967d61394e87d70bfef,2026-09-30,ads: prevent multiple terminal directory pages
+6b1008bc727f00a7680370563d2669c0c647b86b,2026-09-30,ads: recheck stale runs under publication lock
+9252b8ac35c17bef9e86585a09b78e9cd014148e,2026-09-30,ads: enforce exact directory automation types
+4596c97f828b05a3234c6089706b7611ec54ff85,2026-09-30,ads: serialize versions across tenant publications
+3b7d657e6eadb0f4d4d1e7327655d687b5d9bc41,2026-09-30,ads: fence directory claims and serialize publication versions
+8f5d92933f45f264fd3f66e4e259a140df9708b9,2026-09-30,ads: retain material coverage in directory run summary
+348dc042208c6cdb463c50193c4fc8e9d9cd11a5,2026-09-30,ads: publish complete directory snapshots and naming projections
+a14da2c2cbec1b5591938ac95b695f936813dca1,2026-09-30,ads: add scoped API and MCP directory readers
+9640358248a102bc1d6e2599f52eaedaa30b7f42,2026-09-30,ads: persist scoped remote directory and material references
+098cdd5c60e07a370a713ef08813e1135469c475,2026-09-29,materials: 接收按租户名称批量推送的外部 R2 素材
+6f610779d9cb4c6d16e03683b667fcc3c8081013,2026-09-18,materials: bound batch sharing and compact settled dispatches
+120f70e0ad5a8fec2f1c79527e2667bf11c2c054,2026-09-18,jobs: recheck inflight capacity without waiting for lease expiry
+84d578e6daeb8d4688911d6d455dbfc1a27f9c6b,2026-09-18,builds: bound parallel pipeline and reserve material result capacity
+3ff86a3b6c285a03b90e962944aec37d23307c44,2026-09-17,materials: batch queued VID checks and cover deep queue indexing
+218c64f5a650027c596495a08614545860eca8b1,2026-09-17,materials: unblock deep queues and batch individual share verification
+eef056cfa65d9d6bc40722b8d37205a3a89c7749,2026-09-17,jobs: stop duplicate queue redelivery and unblock material results
+fad946473bd31fb10cdce43295fa81488ee1941a,2026-09-16,materials: enqueue source covers and preserve exact share outcomes
+ce2f119e0e0a1810d9007800f8c06052a79346ef,2026-09-15,accounts: keep confirmed permissions usable and allow unlimited originals
+0cd835525345bd799737f31e6478a2570425e9c9,2026-09-15,builds: reuse verified covers and coalesce tenant dispatch
+fd7008ce8cf3eea45c9fb5fe2354bd6a64095171,2026-09-14,builds: reduce redundant asset work and bound unsent failures
+fe8981fc3c1d98fc7df49c43bb97e0902db99120,2026-09-13,accounts: 修复 MCP 搭建权限未知导致账户解析阻塞
+bc538c09232fd218128ab63c6448cf22071e9149,2026-09-13,materials: enable MCP URL uploads with account checks and readback
+f9d74257d7e74d91dfcf2f55f2006fba3b6af5b0,2026-09-12,accounts: share MCP authorization across independent BC bindings
+10da9fda9ee54c615305502f8da10a1ecab8d34a,2026-09-12,tiktok: verify dual-channel integration and pre-send evidence
+fe7a8556ae4fc59934a717ecd438e1b9a55f98a2,2026-09-12,builds: execute and reconcile frozen API and MCP requests
+3bfce1935aa3c3c782ca72da4cf02679c5b1aadd,2026-09-12,tiktok: preserve authorization routes across directory and build work
+6c51b053da01082fcc92cbf9176e2b6f26df37ec,2026-09-12,accounts: refresh MCP credentials without replaying unknown requests
+131b5f7709aa189d624131c5381728a603af69f9,2026-09-11,mcp: add bounded sessions and shared admission
+ce0e12f6f28c04f6b07e684965c1b8d756147589,2026-09-10,feat(materials): schedule bounded abandoned upload cleanup scans
+f52c57b97dbbbf6fbe7e5c7c7183ae008a4f49a4,2026-09-10,materials: route R2 writes through ingestion and retain legacy read access
+8186adc4506eb79d1e6ffe4503feebee1345e048,2026-09-10,feat(materials): schedule receipt-bound cleanup and confirm byte release
+0b2cdc1d6f80938a235317064ba47e5c4b87c1e3,2026-09-10,feat(materials): reserve staged bytes and validate original handoff
+084f79887839e39e67a829318cd792c56393ba8c,2026-09-09,jobs: retain expansion priority indexes in prepared plans
+1e7ebf28a244da18a6277a5ffffea79a71da555d,2026-09-09,jobs: drain bounded fair rounds without waiting between every small batch
+e6274ae39eb8dc29fa3f482679e26fe3b0458d94,2026-09-09,jobs: reserve one fair expansion slot per tenant round
+d6684c1688a245c360d7680e3a13bca6e8d6a7a3,2026-09-09,builds: wait for verified target covers and recover the original dependency
+87bb8a54b959cda75c55f7a430c3f53796961754,2026-09-09,builds: register recovery and shared Scene workers with typed APIs
+7dddbe4932a25af222914241ca24c305f4a77925,2026-09-09,builds: execute durable deliveries and preserve recovery continuations
+13d980d90d5066b0118c75a703dd2388d812af90,2026-09-09,builds: expose submission APIs and recover lost submit responses
+6b549d108a56cb55b53decf5a13258a4e7a341a5,2026-09-09,accounts: register capability refresh and durable repair tasks
+576d32570aa42db23aeee19074bce19b8ffc334b,2026-09-09,builds: freeze paginated full-account advertising previews
+415a87802249d35010eff23f5987164633878ddd,2026-09-09,builds: prepare versioned drafts from paged pasted inputs
+755f7f46fefb128536410d050d6b7a420b113890,2026-09-09,materials: resume safe source retries through durable workers
+16322ebd462b2ae24cfb565d5c1749f5e7607fc3,2026-09-09,providers: expose resumable batch link preparation
+aa8ada20af84913a4539ef4cbb34cc8c6559e414,2026-09-09,accounts: persist resumable full account discovery
+34e151c5f2aca6918d3610c651ccd0de595f4d8b,2026-09-09,jobs: share API admission across workers
+a01b13a750964b03f9b1e50be3403fb97709c49a,2026-09-09,jobs: persist dispatch before publishing
+1f7563304fcef427c2a053b46c5081f5b1822bb6,2026-09-09,workspace: add login and connection entry points
+6a66c245c0af130b383fef05614a072ad9243042,2026-09-09,foundation: configure database and worker processes
