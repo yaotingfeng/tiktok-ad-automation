@@ -399,6 +399,24 @@ export function AdsTable({
               </TableRow>
             </TableHeader>
             <TableBody>
+              {/* 空状态属于列表内容，紧跟表头；不能放在有最小高度的滚动区外。 */}
+              {!rows.length && (
+                <TableRow className="hover:bg-transparent">
+                  <TableCell
+                    colSpan={
+                      3 +
+                      (dimension === "account" ? 1 : 0) +
+                      config.length +
+                      columns.length
+                    }
+                    className="h-32 px-8 text-muted-foreground"
+                  >
+                    <span role="status">
+                      {loading ? "正在加载当前报表…" : "没有匹配的广告"}
+                    </span>
+                  </TableCell>
+                </TableRow>
+              )}
               {rows.map((row) => {
                 const checked = selected.has(row.row_key)
                 const status = statusLabel(row.display ?? {})
@@ -462,12 +480,6 @@ export function AdsTable({
             </TableBody>
           </table>
         </div>
-        {/* 首屏未返回前没有行，不能提前显示"没有匹配"误导用户。 */}
-        {!rows.length && (
-          <p className="p-8 text-center text-sm text-muted-foreground">
-            {loading ? "正在加载当前报表…" : "没有匹配的广告"}
-          </p>
-        )}
         <div className="border-t px-4 py-3">
           <Pager
             paging={{

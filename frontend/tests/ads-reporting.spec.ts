@@ -654,3 +654,37 @@ test("慢查询显示加载状态、保留结果提示并在完成后恢复", as
     page.getByText("查询耗时较长，仍在加载，请稍候…", { exact: true }),
   ).toHaveCount(0)
 })
+
+test("空结果和首次加载提示显示在表头下方的列表内", async ({ page }) => {
+  await adsBoundary(page)
+  let release!: () => void
+  const pending = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  await page.route(`**/api/tenants/${TENANT}/ads?**`, async (route) => {
+    await pending
+    await route.fulfill({
+      json: {
+        snapshot: {
+          snapshot_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          filters: {},
+          publication_versions: {},
+        },
+        items: [],
+        total: 0,
+        next_cursor: null,
+      },
+    })
+  })
+  await page.goto(`/tenants/${TENANT}/ads?bc_id=${BC_A}`)
+  const table = page.locator('table[data-slot="table"]')
+  await expect(
+    table.locator("tbody").getByText("正在加载当前报表…"),
+  ).toBeVisible()
+  release()
+  const empty = table.locator("tbody td").filter({ hasText: "没有匹配的广告" })
+  await expect(empty).toBeVisible()
+  const header = await table.locator("thead").boundingBox()
+  const cell = await empty.boundingBox()
+  expect(Math.abs(cell!.y - (header!.y + header!.height))).toBeLessThan(2)
+})
