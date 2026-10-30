@@ -104,8 +104,8 @@ export function ImageDramaBatchActions({
                   ? "草稿已更新，剩余重试已停止"
                   : "批量重试失败"}{" "}
             · {run.drama_ids.length} 部剧 · 已扫描 {run.processed} · 已重试{" "}
-            {run.retried} · 跳过音乐保护 {run.skipped_protected} · 跳过非失败项{" "}
-            {run.skipped_recovered}
+            {run.retried} · 跳过音乐保护 {run.skipped_protected} ·
+            跳过无需重试项 {run.skipped_recovered}
           </AlertDescription>
         </Alert>
       ))}
@@ -142,7 +142,7 @@ export function ImageDramaBatchActions({
               <DialogDescription>
                 {Object.values(selected).join("、")}。
                 {dialog === "retry"
-                  ? "仅处理当前仍失败且未音乐保护的单元；后续用户修改草稿会停止尚未扫描部分。已登记任务继续核验内容与音乐版本。"
+                  ? "重试失败配乐，并恢复准备失败后尚未启动的配乐；保留手工保护和正在处理的任务。后续修改草稿会停止尚未扫描部分。"
                   : "仅改变所选剧的字段覆盖；其他剧、手工保护和候选排除保持原样。"}
               </DialogDescription>
             </DialogHeader>

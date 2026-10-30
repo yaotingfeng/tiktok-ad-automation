@@ -121,6 +121,8 @@ def apply_rule(session, case, rule=None, mode="PRESERVE_MANUAL"):
     )
     run = apply_composition(session, scope, plan["plan_id"], uuid4(), draft.revision)
     progress = advance_composition(session, run["run_id"], run["generation"])
+    while progress["status"] == "PENDING":
+        progress = advance_composition(session, run["run_id"], run["generation"])
     assert progress["status"] == "APPLIED"
     return list_creative_units(session, scope).items
 

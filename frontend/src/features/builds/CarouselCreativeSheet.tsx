@@ -1,4 +1,4 @@
-import { useState } from "react"
+import { useRef, useState } from "react"
 import { useQuery, keepPreviousData } from "@tanstack/react-query"
 import type {
   DraftDramaPublic,
@@ -84,6 +84,7 @@ export function CarouselCreativeSheet({
     [merge, setMerge] = useState(false),
     [reuse, setReuse] = useState(false)
   const addStale = !!add && add.revision !== revision
+  const ownChanges = useRef(new Map<number, string[]>())
   const dirty = Object.keys(editors).length > 0
   function setEditor(id: string, value: ImageEditorState | null) {
     setEditors((current) => {
@@ -93,8 +94,31 @@ export function CarouselCreativeSheet({
       return next
     })
   }
-  function changed(nextRevision?: number) {
-    if (nextRevision) setMutationRevision(nextRevision)
+  function changed(nextRevision?: number, changedContent: string[] = []) {
+    if (nextRevision) {
+      setMutationRevision((current) => Math.max(current, nextRevision))
+      // 只串联本页已成功的单步回执，允许并发请求乱序返回；外部版本缺口不能跨越。
+      ownChanges.current.set(nextRevision, changedContent)
+      const receipts = new Map(ownChanges.current)
+      setEditors((current) =>
+        Object.fromEntries(
+          Object.entries(current).map(([id, editor]) => {
+            let base = editor.draftRevision
+            while (
+              receipts.has(base + 1) &&
+              !receipts.get(base + 1)!.includes(id)
+            )
+              base++
+            return [
+              id,
+              base === editor.draftRevision
+                ? editor
+                : { ...editor, draftRevision: base },
+            ]
+          }),
+        ),
+      )
+    }
     onChanged()
   }
   const path = imagePath(tenantId, draftId)
@@ -184,7 +208,12 @@ export function CarouselCreativeSheet({
         path,
         body: { ...change(expectedRevision), command },
       })
-      changed(result.data.revision)
+      changed(
+        result.data.revision,
+        ["SET_IMAGES", "DELETE", "MERGE", "SPLIT"].includes(command.kind)
+          ? result.data.affected_units
+          : [],
+      )
       return result.data.revision
     } catch (e) {
       setError(e)

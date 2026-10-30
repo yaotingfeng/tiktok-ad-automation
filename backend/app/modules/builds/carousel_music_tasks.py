@@ -190,6 +190,47 @@ def queue_music_preparation(session, scope, draft):
     return run.id
 
 
+def _resume_unqueued_music(session, scope, draft, unit):
+    """用户明确批量重试时补接失败准备遗留的单元，不重启已有音乐意图。"""
+    from .carousel_music import _target, enqueue_music
+    from .carousel_music_models import MusicPreparationRun
+
+    if unit.music_status != "PENDING" or unit.music_protected:
+        return False
+    failed = session.exec(
+        select(MusicPreparationRun.id)
+        .where(
+            MusicPreparationRun.tenant_id == unit.tenant_id,
+            MusicPreparationRun.draft_id == unit.draft_id,
+            MusicPreparationRun.bc_id == scope.bc_id,
+            MusicPreparationRun.active_generation == unit.generation,
+            MusicPreparationRun.action == "PREPARE",
+            MusicPreparationRun.status == "FAILED",
+            (col(MusicPreparationRun.after_id).is_(None))
+            | (MusicPreparationRun.after_id < unit.id),
+        )
+        .limit(1)
+    ).first()
+    if failed is None:
+        return False
+    # 在草稿锁内按完整订阅栅栏检查；已有任务（包括终态）由自己的生命周期负责。
+    existing = session.exec(
+        select(MusicSelectionJob.id)
+        .where(
+            MusicSelectionJob.tenant_id == unit.tenant_id,
+            MusicSelectionJob.draft_id == unit.draft_id,
+            MusicSelectionJob.bc_id == scope.bc_id,
+            MusicSelectionJob.active_generation == unit.generation,
+            col(MusicSelectionJob.targets).contains([_target(unit)]),
+        )
+        .limit(1)
+    ).first()
+    if existing is not None:
+        return False
+    enqueue_music(session, scope, draft, unit_ids=[unit.id])
+    return True
+
+
 def advance_music_preparation(session, run_id, generation):
     from time import monotonic
 
@@ -268,6 +309,8 @@ def advance_music_preparation(session, run_id, generation):
                     )
                     if unit.music_protected:
                         run.skipped_protected += 1
+                    elif _resume_unqueued_music(session, scope, draft, unit):
+                        run.retried += 1
                     elif unit.music_status != "FAILED":
                         run.skipped_recovered += 1
                     else:

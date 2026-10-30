@@ -56,7 +56,8 @@ def test_activation_enqueues_actual_music_jobs(session, image_draft):
 
 
 @pytest.fixture
-def music_case(monkeypatch, policy):
+def music_case(monkeypatch, policy, request):
+    options = getattr(request, "param", {})
     monkeypatch.setattr(settings, "TIKTOK_CALL_POLICIES", {"base": policy.model_dump()})
     with historical_database(monkeypatch, "head") as (engine, _):
         with Session(engine) as session:
@@ -78,7 +79,7 @@ def music_case(monkeypatch, policy):
                 )
             ).one()
             auth.scopes = ["6"]
-            for index in range(7):
+            for index in range(options.get("images", 7)):
                 row = material(session, context, f"Moon_{index}.jpg", bc="bc-draft")
                 row.media_type, row.sha256 = "IMAGE", f"{index:064x}"
                 row.width, row.height = 1080, 1920
@@ -107,7 +108,8 @@ def music_case(monkeypatch, policy):
                 session, scope, uuid4(), draft.revision, progress["snapshot_id"]
             )
             apply_rule(session, (draft, drama, scope))
-            finish_music_preparation(session)
+            if options.get("prepare", True):
+                finish_music_preparation(session)
             session.commit()
         yield engine, scope
 
@@ -1362,3 +1364,137 @@ def test_late_revoked_failure_does_not_overwrite_new_manual_song(
             and unit.music_id == "manual"
             and unit.music_protected
         )
+
+
+@pytest.mark.parametrize(
+    "music_case, partial",
+    [({"prepare": False}, False), ({"prepare": False, "images": 67}, True)],
+    indirect=["music_case"],
+)
+def test_failed_preparation_can_resume_selected_units_without_restarting_active_intents(
+    music_case, partial, wire, redis_client
+):
+    from app.modules.builds.carousel_music_models import MusicPreparationRun
+    from app.modules.builds.carousel_music_tasks import advance_music_preparation
+    from app.modules.builds.image_music_batch import start_music_retry
+    from app.modules.tenants.models import TenantMembership
+
+    engine, scope = music_case
+    with Session(engine) as session, session.begin():
+        run = session.exec(select(MusicPreparationRun)).one()
+        if partial:
+            first = advance_music_preparation(session, run.id, run.generation)
+            assert first == {"status": "PENDING", "processed": 20}
+        session.get(TenantMembership, (scope.tenant_id, scope.actor_id)).role = "viewer"
+        session.flush()
+        assert (
+            advance_music_preparation(session, run.id, run.generation)["status"]
+            == "FAILED"
+        )
+        assert run.error_code == "action_forbidden"
+    with Session(engine) as session, session.begin():
+        session.get(
+            TenantMembership, (scope.tenant_id, scope.actor_id)
+        ).role = "operator"
+        session.flush()
+        draft = session.get(BuildDraft, scope.draft_id)
+        units = session.exec(
+            select(DraftCreativeUnit)
+            .where(DraftCreativeUnit.music_status == "PENDING")
+            .order_by(DraftCreativeUnit.id)
+        ).all()
+        protected = units[0]
+        request_music(
+            session,
+            scope,
+            protected.id,
+            protected.revision,
+            protected.music_revision,
+            uuid4(),
+            "SET_MANUAL",
+            "manual",
+        )
+        # 中途失败后保留另一个单元的新请求，不由批量恢复重启它。
+        if partial:
+            active = units[1]
+            request_music(
+                session,
+                scope,
+                active.id,
+                active.revision,
+                active.music_revision,
+                uuid4(),
+                "RECOMMEND",
+            )
+            active_id, active_request = active.id, active.music_request_generation
+        receipt = start_music_retry(
+            session, scope, uuid4(), draft.revision, [protected.drama_id]
+        )
+        retry_id, protected_id = UUID(receipt["run_id"]), protected.id
+    while True:
+        with Session(engine) as session, session.begin():
+            run = session.get(MusicPreparationRun, retry_id)
+            result = advance_music_preparation(session, run.id, run.generation)
+            if result["status"] != "PENDING":
+                assert result["status"] == "READY"
+                assert run.retried == (2 if partial else 1)
+                assert run.skipped_protected == 1
+                break
+    assert not wire["calls"]
+    for job_id in job_ids(engine):
+        run_job(engine, redis_client, job_id)
+    assert any("/music/" in path for path, _ in wire["calls"])
+    with Session(engine) as session:
+        units = session.exec(select(DraftCreativeUnit)).all()
+        assert all(u.music_status in {"READY", "NEEDS_SELECTION"} for u in units)
+        protected = next(u for u in units if u.id == protected_id)
+        assert protected.music_id == "manual" and protected.music_protected
+        if partial:
+            assert (
+                next(u for u in units if u.id == active_id).music_request_generation
+                == active_request
+            )
+
+
+@pytest.mark.parametrize("music_case", [{"prepare": False}], indirect=True)
+@pytest.mark.parametrize("old_failure", [False, True])
+def test_batch_retry_does_not_take_over_normal_or_new_generation_preparation(
+    music_case, old_failure
+):
+    from app.modules.builds.carousel_music_models import MusicPreparationRun
+    from app.modules.builds.carousel_music_tasks import advance_music_preparation
+    from app.modules.builds.image_music_batch import start_music_retry
+    from app.modules.builds.models import DraftDrama
+    from app.modules.tenants.models import TenantMembership
+
+    engine, scope = music_case
+    with Session(engine) as session, session.begin():
+        draft = session.get(BuildDraft, scope.draft_id)
+        drama = session.exec(
+            select(DraftDrama).where(DraftDrama.draft_id == draft.id)
+        ).one()
+        if old_failure:
+            run = session.exec(select(MusicPreparationRun)).one()
+            member = session.get(TenantMembership, (scope.tenant_id, scope.actor_id))
+            member.role = "viewer"
+            session.flush()
+            assert (
+                advance_music_preparation(session, run.id, run.generation)["status"]
+                == "FAILED"
+            )
+            member.role = "operator"
+            session.flush()
+            apply_rule(session, (draft, drama, scope))
+            assert draft.active_image_generation != run.active_generation
+        receipt = start_music_retry(
+            session, scope, uuid4(), draft.revision, [drama.drama_id]
+        )
+        run = session.get(MusicPreparationRun, UUID(receipt["run_id"]))
+        assert (
+            advance_music_preparation(session, run.id, run.generation)["status"]
+            == "READY"
+        )
+        assert run.retried == 0 and run.skipped_recovered == 3
+        assert not session.exec(select(MusicSelectionJob)).all()
+        finish_music_preparation(session)
+        assert len(session.exec(select(MusicSelectionJob)).all()) == 2
