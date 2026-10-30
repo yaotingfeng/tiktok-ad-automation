@@ -40,6 +40,7 @@ import {
   type DetailEntry,
 } from "./details/AdsDetailSheet"
 import { columnsFor, useMetricCatalog } from "./metricCatalog"
+import { ReportQueryStatus } from "./ReportQueryStatus"
 import { ReportStatusBar } from "./ReportStatusBar"
 import {
   type AdsSearch,
@@ -685,6 +686,7 @@ export function AdsWorkspace() {
       <Card className="py-0 lg:py-0">
         <CardContent className="px-4 py-3">
           <AdsFilters
+            loading={ads.query.isFetching}
             search={search}
             onChange={update}
             onApply={apply}
@@ -713,6 +715,10 @@ export function AdsWorkspace() {
           </Button>
         </div>
       )}
+      <ReportQueryStatus
+        loading={ads.query.isFetching}
+        hasPreviousData={!!ads.query.data}
+      />
       <AdsSummary
         summary={ads.query.data?.summary}
         catalog={catalog.data ?? []}

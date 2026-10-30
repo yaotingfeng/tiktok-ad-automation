@@ -1,3 +1,4 @@
+import { LoaderCircle } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Input } from "@/components/ui/input"
@@ -9,6 +10,7 @@ export function AdsFilters({
   onApply,
   onReset,
   onSaveView,
+  loading,
   savingView,
   disableSaveView,
 }: {
@@ -17,6 +19,7 @@ export function AdsFilters({
   onApply: () => void
   onReset: () => void
   onSaveView: () => void
+  loading?: boolean
   savingView?: boolean
   disableSaveView?: boolean
 }) {
@@ -70,8 +73,11 @@ export function AdsFilters({
           显示无数据对象
         </Label>
       </div>
-      <Button type="submit" aria-label="应用筛选">
-        应用筛选
+      <Button type="submit" aria-label="应用筛选" disabled={loading}>
+        {loading && (
+          <LoaderCircle className="animate-spin" aria-hidden="true" />
+        )}
+        {loading ? "查询中…" : "应用筛选"}
       </Button>
       <Button type="button" variant="outline" onClick={onReset}>
         重置

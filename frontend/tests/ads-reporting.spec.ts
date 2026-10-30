@@ -616,3 +616,41 @@ test("同步健康：独立覆盖观测时间不会随页面时钟续期", async
   ).toBeVisible()
   await expect(observation).toHaveText(original!)
 })
+
+test("慢查询显示加载状态、保留结果提示并在完成后恢复", async ({ page }) => {
+  await adsBoundary(page)
+  await page.goto(`/tenants/${TENANT}/ads?bc_id=${BC_A}`)
+  await expect(page.getByRole("button", { name: "应用筛选" })).toBeEnabled()
+  await expect(page.getByText(/数据更新到 13:00（账户本地）/)).toBeVisible()
+  await expect(
+    page.getByText("正在查询广告报表…", { exact: true }),
+  ).toHaveCount(0)
+  let release!: () => void
+  const pending = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  await page.route(`**/api/tenants/${TENANT}/ads?**`, async (route) => {
+    if (decodeURIComponent(route.request().url()).includes("慢查询"))
+      await pending
+    await route.fallback()
+  })
+  await page.getByRole("textbox", { name: "搜索广告" }).fill("慢查询")
+  await page.getByRole("button", { name: "应用筛选" }).click()
+  await expect(page.getByRole("button", { name: "应用筛选" })).toBeDisabled()
+  await expect(
+    page.getByText("正在查询广告报表…", { exact: true }),
+  ).toBeVisible()
+  await expect(
+    page.getByText("下方暂时显示上一次查询结果，完成后自动更新。", {
+      exact: true,
+    }),
+  ).toBeVisible()
+  await expect(
+    page.getByText("查询耗时较长，仍在加载，请稍候…", { exact: true }),
+  ).toBeVisible({ timeout: 12000 })
+  release()
+  await expect(page.getByRole("button", { name: "应用筛选" })).toBeEnabled()
+  await expect(
+    page.getByText("查询耗时较长，仍在加载，请稍候…", { exact: true }),
+  ).toHaveCount(0)
+})

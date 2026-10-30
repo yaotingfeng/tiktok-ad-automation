@@ -300,7 +300,7 @@ export function AdsTable({
     DIMENSIONS.find((item) => item.value === dimension)?.label ?? "名称"
   return (
     <Card className="gap-0 py-0 lg:gap-0 lg:py-0">
-      <CardContent className="p-0">
+      <CardContent className="p-0" aria-busy={loading}>
         {allMatching && (
           <div className="border-b bg-muted/40 px-4 py-2 text-sm">
             已选择全部 {total} 条匹配结果，可取消单行。
