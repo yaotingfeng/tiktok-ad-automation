@@ -86,7 +86,9 @@ def test_other_namespaces_are_not_searched_as_video_mid(committed_sync_seed, kin
     seed, factory = committed_sync_seed
     job_id = seed_identity(factory, seed, kind=kind)
     reader = Reader()
-    assert step(factory, job_id, reader) == "WAITING"
+    assert step(factory, job_id, reader) == (
+        "COMPLETE" if kind == "CAROUSEL_NON_SPARK_ADS" else "WAITING"
+    )
     assert reader.queries == []
     with factory() as session:
         assert session.exec(select(MaterialPostLink)).one().platform_material_id is None

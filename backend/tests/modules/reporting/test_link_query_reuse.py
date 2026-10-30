@@ -6,6 +6,7 @@ import pytest
 
 from app.core.errors import DomainError
 from app.integrations.tiktok.contracts.report_reader import RawReportPage
+from app.modules.reporting.link_queries import material_identity_key
 from app.modules.reporting.material_links import _locate_post_step
 from tests.modules.reporting.test_material_links import NOW, D
 
@@ -13,6 +14,7 @@ from tests.modules.reporting.test_material_links import NOW, D
 def state(mid, count=32):
     return {
         "mid": mid,
+        "mtype": "VIDEO_SPARK_ADS",
         "candidates": [f"ad{i:02}" for i in range(count)],
         "next_batch": 0,
         "search_stack": [],
@@ -21,7 +23,15 @@ def state(mid, count=32):
 
 def page(posts, number=1, pages=1, total=None):
     return RawReportPage(
-        tuple({"dimensions": {"main_material_id": p}} for p in posts),
+        tuple(
+            {
+                "dimensions": {
+                    "main_material_id": p,
+                    "main_material_type": "VIDEO_SPARK_ADS",
+                }
+            }
+            for p in posts
+        ),
         number,
         pages,
         len(posts) if total is None else total,
@@ -41,7 +51,12 @@ def test_many_posts_reuse_completed_queries_and_verify_last_ad():
     for post in posts:
         cursor = state(post)
         for _ in range(20):
-            reader = QueryMembershipReader(read, cache, targets=posts, now=NOW)
+            reader = QueryMembershipReader(
+                read,
+                cache,
+                targets=[material_identity_key(p, "VIDEO_SPARK_ADS") for p in posts],
+                now=NOW,
+            )
             complete, owner = _locate_post_step(
                 cursor, read_ad_posts=reader, first=D, last=D
             )
@@ -78,7 +93,12 @@ def test_query_cache_requires_complete_pages_exact_dates_targets_and_ttl():
         return page([f"p{number}"], number, 2, 2)
 
     def reader(targets=("p1", "p2"), now=NOW):
-        return QueryMembershipReader(read, cache, targets=targets, now=now)
+        return QueryMembershipReader(
+            read,
+            cache,
+            targets=[material_identity_key(p, "VIDEO_SPARK_ADS") for p in targets],
+            now=now,
+        )
 
     reader()(("a",), D, D, 1)
     reader()(("a",), D, D, 2)
@@ -102,7 +122,12 @@ def test_changed_or_overlapping_pages_cannot_form_negative_cache(overlap):
             return page(["p1"], 1, 2, 2)
         return page(["p1" if overlap else "p2"], 2, 2, 2 if overlap else 3)
 
-    reader = QueryMembershipReader(read, cache, targets=["missing"], now=NOW)
+    reader = QueryMembershipReader(
+        read,
+        cache,
+        targets=[material_identity_key(p, "VIDEO_SPARK_ADS") for p in ["missing"]],
+        now=NOW,
+    )
     reader(("a",), D, D, 1)
     with pytest.raises(DomainError) as caught:
         reader(("a",), D, D, 2)
@@ -121,7 +146,10 @@ def test_negative_membership_is_shared_but_eviction_requires_reading_again(monke
         return page([])
 
     reader = link_queries.QueryMembershipReader(
-        read, cache, targets=["p1", "p2"], now=NOW
+        read,
+        cache,
+        targets=[material_identity_key(p, "VIDEO_SPARK_ADS") for p in ["p1", "p2"]],
+        now=NOW,
     )
     for target in ("p1", "p2"):
         assert _locate_post_step(
@@ -144,7 +172,10 @@ def test_cache_byte_bound_does_not_truncate_membership(monkeypatch):
         return page(["p1", "p2"])
 
     reader = link_queries.QueryMembershipReader(
-        read, cache, targets=["p1", "p2"], now=NOW
+        read,
+        cache,
+        targets=[material_identity_key(p, "VIDEO_SPARK_ADS") for p in ["p1", "p2"]],
+        now=NOW,
     )
     assert len(reader(("a",), D, D, 1).rows) == 2
     assert not cache["entries"]
@@ -163,7 +194,10 @@ def test_too_many_targets_disables_reuse_without_resetting_partial_pages(monkeyp
 
     for number in (1, 2):
         reader = link_queries.QueryMembershipReader(
-            read, cache, targets=["p1", "p2"], now=NOW
+            read,
+            cache,
+            targets=[material_identity_key(p, "VIDEO_SPARK_ADS") for p in ["p1", "p2"]],
+            now=NOW,
         )
         assert reader(("a",), D, D, number).page == number
     assert not cache["entries"] and "pending" not in cache
@@ -175,7 +209,10 @@ def test_pending_evidence_has_hard_byte_bound(monkeypatch):
     monkeypatch.setattr(link_queries, "MAX_STATE_BYTES", 100)
     cache = {}
     reader = link_queries.QueryMembershipReader(
-        lambda *_args: page(["p1"], 1, 2, 2), cache, targets=["p1"], now=NOW
+        lambda *_args: page(["p1"], 1, 2, 2),
+        cache,
+        targets=[material_identity_key(p, "VIDEO_SPARK_ADS") for p in ["p1"]],
+        now=NOW,
     )
     with pytest.raises(DomainError) as caught:
         reader(("a",), D, D, 1)
@@ -205,7 +242,14 @@ def test_continuous_page_drift_recycles_real_job_retry_budget(committed_sync_see
         def material_ad_posts(self, *, advertiser_id, ad_ids, start, end, page):
             self.tick((tuple(ad_ids), page))
             return RawReportPage(
-                ({"dimensions": {"main_material_id": f"noise-{page}"}},),
+                (
+                    {
+                        "dimensions": {
+                            "main_material_id": f"noise-{page}",
+                            "main_material_type": "VIDEO_SPARK_ADS",
+                        }
+                    },
+                ),
                 page,
                 2,
                 2 if page == 1 else 3,
@@ -215,9 +259,10 @@ def test_continuous_page_drift_recycles_real_job_retry_budget(committed_sync_see
     for _ in range(MAX_PROVIDER_RETRIES * 3):
         step(factory, job_id, reader)
         with factory() as session:
-            if (session.get(ReportSyncJob, job_id).progress.get("snapshot_recovery") or {}).get(
-                "count", 0
-            ):
+            if (
+                session.get(ReportSyncJob, job_id).progress.get("snapshot_recovery")
+                or {}
+            ).get("count", 0):
                 break
     with factory() as session:
         job = session.get(ReportSyncJob, job_id)

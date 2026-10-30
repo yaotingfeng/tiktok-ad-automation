@@ -21,7 +21,10 @@ from tests.modules.reporting.test_material_query import D, material_row, publish
 
 
 def seed_bridge(session, seed, *, complete=True, spark=True):
-    publish(session, seed, "acc-1", [material_row("post", "5", "file.mp4")])
+    row = material_row("post", "5", "file.mp4")
+    kind = "VIDEO_SPARK_ADS" if spark else "VIDEO_NON_SPARK_ADS"
+    row["dimensions"]["main_material_type"] = kind
+    publish(session, seed, "acc-1", [row])
     use(session, seed, adv="acc-1", ad="ad", video="vid", ad_material="inner")
     usage = session.exec(
         select(AdMaterialReference).where(
@@ -36,7 +39,7 @@ def seed_bridge(session, seed, *, complete=True, spark=True):
         advertiser_id="acc-1",
         main_material_id="post",
         ad_remote_id="ad",
-        main_material_type="VIDEO_SPARK_ADS" if spark else "VIDEO_NON_SPARK_ADS",
+        main_material_type=kind,
         observed_at=datetime.now(UTC),
     )
     session.add(link)

@@ -29,6 +29,7 @@ from app.modules.reporting.directory_refresh import (
 )
 from app.modules.reporting.freshness import FRESHNESS, fresh_report_success
 from app.modules.reporting.jobs import enqueue_job
+from app.modules.reporting.link_policy import material_link_query
 from app.modules.reporting.planner import (
     REFRESH_MARGIN,
     _common,
@@ -357,19 +358,16 @@ def measure_coverage(session, plan, *, now, accounts=None, stage=None):
     for offset in range(0, len(directory_accounts) if stage != "directory" else 0, 256):
         unlinked.extend(
             session.execute(
-                text("""
+                text(f"""
             WITH posts AS MATERIALIZED (
-              SELECT DISTINCT r.advertiser_id,r.main_material_id FROM material_report_day r
+              SELECT DISTINCT r.advertiser_id,r.main_material_id,r.main_material_type FROM material_report_day r
               WHERE r.tenant_id=:t AND r.advertiser_id=ANY(:ids) AND r.spend>0
                 AND r.stat_date BETWEEN :first_day AND :last_day
                 AND r.stat_date=(CAST(:now AS timestamptz) AT TIME ZONE r.timezone)::date
             )
             SELECT r.advertiser_id,r.main_material_id FROM posts r
             LEFT JOIN LATERAL (
-              SELECT true AS found FROM material_post_link l
-              WHERE l.tenant_id=:t AND l.advertiser_id=r.advertiser_id
-                AND l.main_material_id=r.main_material_id
-                AND l.platform_material_id IS NOT NULL LIMIT 1
+              {material_link_query("r", tenant=":t")} LIMIT 1
             ) linked ON true
             WHERE linked.found IS NULL
         """),

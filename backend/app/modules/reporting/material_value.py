@@ -10,12 +10,17 @@ from sqlmodel import Session
 
 VIDEO_REPORT_TYPES = ("VIDEO_SPARK_ADS", "VIDEO_NON_SPARK_ADS")
 
+
 # 先按每个窗口、账户、帖子合计，再判正值；不能逐日筛正数后相加，也不能用
 # 重叠窗口重复累计金额。规则包含多个窗口时，任一窗口有价值就必须保护身份缺口。
-MATERIAL_WINDOW_VALUES_SQL = """
-    SELECT advertiser_id, main_material_id, bool_or(has_value) AS has_value
+def _window_values_sql(*, typed: bool = False) -> str:
+    # 补链须区分素材命名空间；既有视频规则仍使用原跨日净额合同。
+    type_column = ", main_material_type" if typed else ""
+    fact_type = ", f.main_material_type" if typed else ""
+    return f"""
+    SELECT advertiser_id, main_material_id{type_column}, bool_or(has_value) AS has_value
     FROM (
-      SELECT w.ordinality, f.advertiser_id, f.main_material_id,
+      SELECT w.ordinality, f.advertiser_id, f.main_material_id{fact_type},
         (COALESCE(sum(f.spend), 0)>0 OR COALESCE(sum(f.revenue_total), 0)>0) AS has_value
       FROM unnest(CAST(:value_advertisers AS text[]), CAST(:value_starts AS date[]),
                   CAST(:value_ends AS date[])) WITH ORDINALITY AS w(adv,s,e,ordinality)
@@ -24,9 +29,13 @@ MATERIAL_WINDOW_VALUES_SQL = """
         AND f.stat_date>=COALESCE(CAST(:value_scan_start AS date), '-infinity'::date)
         AND f.stat_date<=COALESCE(CAST(:value_scan_end AS date), 'infinity'::date)
         AND (w.s IS NULL OR f.stat_date>=w.s) AND (w.e IS NULL OR f.stat_date<=w.e)
-      GROUP BY w.ordinality,f.advertiser_id,f.main_material_id
-    ) per_window GROUP BY advertiser_id,main_material_id
+      GROUP BY w.ordinality,f.advertiser_id,f.main_material_id{fact_type}
+    ) per_window GROUP BY advertiser_id,main_material_id{type_column}
 """
+
+
+MATERIAL_WINDOW_VALUES_SQL = _window_values_sql()
+TYPED_MATERIAL_WINDOW_VALUES_SQL = _window_values_sql(typed=True)
 
 
 def material_value_parameters(
@@ -74,10 +83,30 @@ def material_window_values(
     return {(r.advertiser_id, r.main_material_id): r.has_value for r in rows}
 
 
-def valuable_material_condition(alias: str) -> str:
+def valuable_typed_materials(
+    session: Session,
+    tenant_id: UUID,
+    windows: Sequence[tuple[str, date | None, date | None]],
+) -> set[tuple[str, str, str]]:
+    """补链使用有类型的素材键，避免同号帖子/MID/轮播之间抵消或借用证据。"""
+    rows = session.connection().execute(
+        text(TYPED_MATERIAL_WINDOW_VALUES_SQL),
+        material_value_parameters(tenant_id, windows),
+    )
+    return {
+        (r.advertiser_id, r.main_material_id, r.main_material_type)
+        for r in rows
+        if r.has_value
+    }
+
+
+def valuable_material_condition(alias: str, *, typed: bool = False) -> str:
     """内部 SQL 复用同一窗口聚合关系；别名不得来自外部请求。"""
     if alias not in {"d", "f", "l"}:
         raise ValueError("invalid material alias")
+    type_condition = (
+        f"AND v.main_material_type={alias}.main_material_type" if typed else ""
+    )
     return f"""EXISTS (SELECT 1 FROM material_values v
         WHERE v.advertiser_id={alias}.advertiser_id
-          AND v.main_material_id={alias}.main_material_id AND v.has_value)"""
+          AND v.main_material_id={alias}.main_material_id {type_condition} AND v.has_value)"""

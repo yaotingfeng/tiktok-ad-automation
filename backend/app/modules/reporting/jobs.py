@@ -40,8 +40,9 @@ from app.modules.reporting.lanes import (
     lane_predicate,
     report_workload,
 )
+from app.modules.reporting.link_policy import complete_material_link
 from app.modules.reporting.material_value import (
-    MATERIAL_WINDOW_VALUES_SQL,
+    TYPED_MATERIAL_WINDOW_VALUES_SQL,
     material_value_parameters,
     valuable_material_condition,
 )
@@ -819,18 +820,16 @@ def _material_link_overview_ads(session, job):
             session.connection()
             .execute(
                 text(f"""
-                WITH material_values AS ({MATERIAL_WINDOW_VALUES_SQL}), missing AS (
-                  SELECT DISTINCT d.main_material_id FROM material_report_day d
+                WITH material_values AS ({TYPED_MATERIAL_WINDOW_VALUES_SQL}), missing AS (
+                  SELECT DISTINCT d.main_material_id,d.main_material_type FROM material_report_day d
                   WHERE d.tenant_id=:tenant AND d.advertiser_id=:advertiser
                     AND d.stat_date BETWEEN :start AND :end
-                    AND {valuable_material_condition("d")}
-                    AND NOT EXISTS (SELECT 1 FROM material_post_link done
-                      WHERE done.tenant_id=d.tenant_id AND done.advertiser_id=d.advertiser_id
-                        AND done.main_material_id=d.main_material_id
-                        AND NULLIF(done.platform_material_id,'') IS NOT NULL))
+                    AND {valuable_material_condition("d", typed=True)}
+                    AND NOT {complete_material_link("d", tenant=":tenant")})
                 SELECT DISTINCT l.ad_remote_id FROM missing m
                 LEFT JOIN material_post_link l ON l.tenant_id=:tenant
                   AND l.advertiser_id=:advertiser AND l.main_material_id=m.main_material_id
+                  AND l.main_material_type=m.main_material_type AND NULLIF(l.ad_remote_id, '') IS NOT NULL
                 ORDER BY l.ad_remote_id NULLS FIRST LIMIT 201
                 """),
                 {

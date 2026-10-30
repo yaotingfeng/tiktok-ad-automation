@@ -119,7 +119,7 @@ def test_needs_returns_one_row_and_stops_mapping_probe(
     captured.clear()
     event.listen(connection, "before_cursor_execute", capture)
     try:
-        assert material_links.missing_video_ids(
+        assert material_links.missing_material_link_ids(
             session,
             tenant_id=sync_seed.tenant_id,
             advertiser_id="acc-1",
@@ -201,11 +201,11 @@ def test_existence_matches_full_set_and_preserves_scope(
         "end": D,
     }
     expected = {"paid"} if not video else set()
-    assert material_links.missing_video_ids(session, **args) == expected
+    assert material_links.missing_material_link_ids(session, **args) == expected
     assert material_links.needs_material_links(session, **args) is bool(expected)
 
 
-def test_window_and_mapping_identity_remain_per_post_across_types(session, sync_seed):
+def test_window_and_mapping_identity_require_same_material_type(session, sync_seed):
     from datetime import UTC, datetime
 
     from app.modules.reporting.store_models import MaterialPostLink
@@ -221,9 +221,9 @@ def test_window_and_mapping_identity_remain_per_post_across_types(session, sync_
         "start": first,
         "end": D,
     }
-    # 类型变化不拆开同一帖子的净金额，也不阻止任一广告的真实 VID 证据。
-    assert not material_links.needs_material_links(session, **args)
-    assert material_links.missing_video_ids(session, **args) == set()
+    # 官方定义的帖子/MID 命名空间不同，不能相互抵消净额或借用 VID。
+    assert material_links.needs_material_links(session, **args)
+    assert material_links.missing_material_link_ids(session, **args) == {"post"}
     correction.spend = 0
     session.flush()
     assert material_links.needs_material_links(session, **args)
@@ -244,5 +244,5 @@ def test_window_and_mapping_identity_remain_per_post_across_types(session, sync_
             )
         )
     session.flush()
-    assert not material_links.needs_material_links(session, **args)
-    assert material_links.missing_video_ids(session, **args) == set()
+    assert material_links.needs_material_links(session, **args)
+    assert material_links.missing_material_link_ids(session, **args) == {"post"}

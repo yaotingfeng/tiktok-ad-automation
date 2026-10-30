@@ -6,7 +6,10 @@ import pytest
 
 from app.core.config import settings
 from app.core.errors import DomainError
-from app.modules.reporting.link_queries import QueryMembershipReader
+from app.modules.reporting.link_queries import (
+    QueryMembershipReader,
+    material_identity_key,
+)
 from app.modules.reporting.material_links import (
     NEGATIVE_SCAN_TTL,
     _scan_scope,
@@ -30,11 +33,17 @@ def test_partial_page_resumes_after_queue_delay_without_renewing_cache(day):
         calls.append(number)
         return page([f"post-{number}"], number, 2, 2)
 
-    QueryMembershipReader(read, cache, targets=["missing"], now=START)(
-        ("ad",), day, day, 1
-    )
+    QueryMembershipReader(
+        read,
+        cache,
+        targets=[material_identity_key(p, "VIDEO_SPARK_ADS") for p in ["missing"]],
+        now=START,
+    )(("ad",), day, day, 1)
     resumed = QueryMembershipReader(
-        read, cache, targets=["missing"], now=START + timedelta(minutes=15)
+        read,
+        cache,
+        targets=[material_identity_key(p, "VIDEO_SPARK_ADS") for p in ["missing"]],
+        now=START + timedelta(minutes=15),
     )
     assert resumed(("ad",), day, day, 2).page == 2
     assert calls == [1, 2]
@@ -50,7 +59,12 @@ def test_expired_completed_cache_cannot_hit_after_reader_construction():
         calls.append(args)
         return page([])
 
-    reader = QueryMembershipReader(read, cache, targets=["missing"], now=START)
+    reader = QueryMembershipReader(
+        read,
+        cache,
+        targets=[material_identity_key(p, "VIDEO_SPARK_ADS") for p in ["missing"]],
+        now=START,
+    )
     reader(("ad",), D, D, 1)
     # 模拟长分页结束后同一 reader 新增了以原起点计时的完成条目。
     next(iter(cache["entries"].values()))["at"] -= 901
@@ -72,10 +86,18 @@ def test_delayed_partial_pages_still_reject_changed_evidence(change):
             3 if number > 1 and change == "signature" else 2,
         )
 
-    QueryMembershipReader(read, cache, targets=["missing"], now=START)(("ad",), D, D, 1)
+    QueryMembershipReader(
+        read,
+        cache,
+        targets=[material_identity_key(p, "VIDEO_SPARK_ADS") for p in ["missing"]],
+        now=START,
+    )(("ad",), D, D, 1)
     targets = ["missing", "new"] if change == "targets" else ["missing"]
     resumed = QueryMembershipReader(
-        read, cache, targets=targets, now=START + timedelta(minutes=15)
+        read,
+        cache,
+        targets=[material_identity_key(p, "VIDEO_SPARK_ADS") for p in targets],
+        now=START + timedelta(minutes=15),
     )
     with pytest.raises(DomainError) as caught:
         resumed(

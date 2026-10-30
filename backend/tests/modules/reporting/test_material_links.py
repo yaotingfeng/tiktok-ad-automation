@@ -1,3 +1,4 @@
+import json
 from datetime import UTC, date, datetime
 from decimal import Decimal
 
@@ -57,7 +58,15 @@ def refresh(session, seed, pages, ad_posts=None, progress=None):
         calls.append(("ads", ads, first, last))
         posts = [p for ad in ads for p in (ad_posts or {}).get(ad, [])]
         return RawReportPage(
-            tuple({"dimensions": {"main_material_id": p}} for p in posts),
+            tuple(
+                {
+                    "dimensions": {
+                        "main_material_id": p,
+                        "main_material_type": "VIDEO_SPARK_ADS",
+                    }
+                }
+                for p in posts
+            ),
             1,
             1 if posts else 0,
             len(posts),
@@ -244,9 +253,9 @@ def test_current_evidence_continuation_keeps_completed_negative_search(
         progress=progress,
     )
     # 当前版本已完整核查的帖子续步不应被升级清理逻辑重查。
-    progress["checked_ids"] = ["p1"]
+    progress["checked_ids"] = [json.dumps(["p1", "VIDEO_SPARK_ADS"])]
     assert refresh(session, sync_seed, overview(), progress=progress) == []
-    assert progress["checked_ids"] == ["p1"]
+    assert progress["checked_ids"] == [json.dumps(["p1", "VIDEO_SPARK_ADS"])]
 
 
 def test_ad_detail_materials_are_scoped_to_the_ad(session, sync_seed):
@@ -506,7 +515,15 @@ def test_locate_posts_splits_only_batches_with_targets():
         queried.append(ads)
         posts = {p for p, ad in owners.items() if ad in ads} | {"noise"}
         return RawReportPage(
-            tuple({"dimensions": {"main_material_id": p}} for p in posts),
+            tuple(
+                {
+                    "dimensions": {
+                        "main_material_id": p,
+                        "main_material_type": "VIDEO_SPARK_ADS",
+                    }
+                }
+                for p in posts
+            ),
             page,
             1,
             len(posts),
@@ -516,6 +533,7 @@ def test_locate_posts_splits_only_batches_with_targets():
     for mid in owners:
         state = {
             "mid": mid,
+            "mtype": "VIDEO_SPARK_ADS",
             "candidates": [f"ad-{i}" for i in range(8)],
             "next_batch": 0,
             "search_stack": [],
@@ -538,6 +556,7 @@ def test_preferred_candidate_does_not_expand_into_report_candidates():
 
     state = {
         "mid": "p",
+        "mtype": "VIDEO_SPARK_ADS",
         "candidates": ["owner"] + [f"extra-{i}" for i in range(199)],
         "preferred_count": 1,
         "next_batch": 0,
@@ -548,7 +567,19 @@ def test_preferred_candidate_does_not_expand_into_report_candidates():
     def read(ads, _first, _last, page):
         calls.append(ads)
         assert ads == ("owner",)
-        return RawReportPage(({"dimensions": {"main_material_id": "p"}},), page, 1, 1)
+        return RawReportPage(
+            (
+                {
+                    "dimensions": {
+                        "main_material_id": "p",
+                        "main_material_type": "VIDEO_SPARK_ADS",
+                    }
+                },
+            ),
+            page,
+            1,
+            1,
+        )
 
     assert _locate_post_step(state, read_ad_posts=read, first=D, last=D) == (
         True,
@@ -562,6 +593,7 @@ def test_truncated_candidate_batch_splits_and_preserves_unsearched_half():
 
     state = {
         "mid": "p",
+        "mtype": "VIDEO_SPARK_ADS",
         "candidates": ["a", "b", "c", "owner"],
         "preferred_count": 0,
         "next_batch": 0,
@@ -573,7 +605,18 @@ def test_truncated_candidate_batch_splits_and_preserves_unsearched_half():
         calls.append(ads)
         if len(ads) == 4:
             return RawReportPage((), page, 200, 20_000)
-        rows = ({"dimensions": {"main_material_id": "p"}},) if "owner" in ads else ()
+        rows = (
+            (
+                {
+                    "dimensions": {
+                        "main_material_id": "p",
+                        "main_material_type": "VIDEO_SPARK_ADS",
+                    }
+                },
+            )
+            if "owner" in ads
+            else ()
+        )
         return RawReportPage(rows, page, 1 if rows else 0, len(rows))
 
     for _ in range(6):

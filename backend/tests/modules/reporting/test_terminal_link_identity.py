@@ -46,7 +46,17 @@ def test_last_owner_gets_identity_before_dependency_wait(
         def material_ad_posts(self, **kwargs):
             self.history.append(("owner", kwargs))
             return RawReportPage(
-                ({"dimensions": {"main_material_id": "post"}},), 1, 1, 1
+                (
+                    {
+                        "dimensions": {
+                            "main_material_id": "post",
+                            "main_material_type": kind,
+                        }
+                    },
+                ),
+                1,
+                1,
+                1,
             )
 
         def material_videos(self, **kwargs):
@@ -83,7 +93,6 @@ def test_last_owner_gets_identity_before_dependency_wait(
     else:
         raise AssertionError("最后一个已知归属必须立即完成身份续步")
     with factory() as session:
-        assert (
-            session.exec(select(MaterialPostLink)).one().platform_material_id
-            == ("vid" if available else None)
+        assert session.exec(select(MaterialPostLink)).one().platform_material_id == (
+            "vid" if available else None
         )

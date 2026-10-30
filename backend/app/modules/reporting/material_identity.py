@@ -5,7 +5,7 @@ from sqlalchemy import text
 from app.core.errors import DomainError
 from app.modules.reporting import diagnostics
 from app.modules.reporting.material_value import (
-    MATERIAL_WINDOW_VALUES_SQL,
+    TYPED_MATERIAL_WINDOW_VALUES_SQL,
     material_value_parameters,
     valuable_material_condition,
 )
@@ -21,13 +21,13 @@ def pending_asset_ids(session, job):
         session.connection()
         .execute(
             text(f"""
-            WITH material_values AS ({MATERIAL_WINDOW_VALUES_SQL})
+            WITH material_values AS ({TYPED_MATERIAL_WINDOW_VALUES_SQL})
             SELECT DISTINCT l.main_material_id FROM material_post_link l
             JOIN material_report_day d ON d.tenant_id=l.tenant_id
               AND d.advertiser_id=l.advertiser_id AND d.main_material_id=l.main_material_id
             WHERE l.tenant_id=:t AND l.advertiser_id=:a
               AND d.stat_date BETWEEN :start AND :end
-              AND {valuable_material_condition("d")}
+              AND {valuable_material_condition("d", typed=True)}
               AND l.main_material_type='VIDEO_NON_SPARK_ADS'
               AND d.main_material_type='VIDEO_NON_SPARK_ADS'
               AND NULLIF(l.platform_material_id, '') IS NULL

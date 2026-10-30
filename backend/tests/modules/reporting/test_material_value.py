@@ -70,7 +70,7 @@ def test_link_value_uses_window_total_before_threshold(
         "end": D,
     }
     assert material_links.needs_material_links(session, **args) is valuable
-    assert material_links.missing_video_ids(session, **args) == (
+    assert material_links.missing_material_link_ids(session, **args) == (
         {"post"} if valuable else set()
     )
 

@@ -211,7 +211,19 @@ def test_spending_unresolved_post_is_located_before_zero_spend_history(
 
     def read_posts(ads, _start, _end, _page):
         post = "z-spend" if ads == ("paid-ad",) else "a-zero"
-        return RawReportPage(({"dimensions": {"main_material_id": post}},), 1, 1, 1)
+        return RawReportPage(
+            (
+                {
+                    "dimensions": {
+                        "main_material_id": post,
+                        "main_material_type": "VIDEO_SPARK_ADS",
+                    }
+                },
+            ),
+            1,
+            1,
+            1,
+        )
 
     refresh_material_links(
         session,
@@ -312,15 +324,16 @@ def test_incomplete_directory_requires_unique_exact_video_identity(
     from tests.modules.reporting.test_material_query import material_row, publish
 
     # 精确身份回归针对有金额的帖子；无金额帖子不再参与补链。
-    publish(session, sync_seed, "acc-1", [material_row("post", "1")])
+    kind = "VIDEO_NON_SPARK_ADS" if case.startswith("regular_") else "VIDEO_SPARK_ADS"
+    row = material_row("post", "1")
+    row["dimensions"]["main_material_type"] = kind
+    publish(session, sync_seed, "acc-1", [row])
     link = MaterialPostLink(
         tenant_id=sync_seed.tenant_id,
         advertiser_id="acc-1",
         main_material_id="post",
         ad_remote_id="ad",
-        main_material_type="VIDEO"
-        if case.startswith("regular_")
-        else "VIDEO_SPARK_ADS",
+        main_material_type=kind,
         ad_material_id=None if case == "name_only" else "material",
         material_name="file.mp4",
         observed_at=datetime.now(UTC),

@@ -80,7 +80,19 @@ class SlowReader:
         assert advertiser_id == "acc-1" and start == end == D
         self.tick((tuple(ad_ids), page))
         mid = "old-post" if page == 2 and "ad199" in ad_ids else f"unrelated-{page}"
-        return RawReportPage(({"dimensions": {"main_material_id": mid}},), page, 2, 2)
+        return RawReportPage(
+            (
+                {
+                    "dimensions": {
+                        "main_material_id": mid,
+                        "main_material_type": "VIDEO_SPARK_ADS",
+                    }
+                },
+            ),
+            page,
+            2,
+            2,
+        )
 
 
 def test_slow_binary_search_and_pages_commit_across_worker_steps(committed_sync_seed):

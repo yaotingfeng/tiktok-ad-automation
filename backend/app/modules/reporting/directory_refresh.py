@@ -23,8 +23,10 @@ from app.modules.ads.sync_models import AdDirectoryRun
 from app.modules.automation_rules.models import AutomationRule
 from app.modules.reporting import diagnostics
 from app.modules.reporting.lanes import report_workload
+from app.modules.reporting.link_policy import complete_material_link
 from app.modules.reporting.material_value import (
-    MATERIAL_WINDOW_VALUES_SQL,
+    TYPED_MATERIAL_WINDOW_VALUES_SQL,
+    VIDEO_REPORT_TYPES,
     material_value_parameters,
 )
 from app.modules.reporting.store_models import ReportSyncJob
@@ -288,7 +290,7 @@ def request_link_directory(
         .execute(
             text(f"""
         -- 金额窗口只聚合一次，避免相关 EXISTS 在每个映射帖子上重做聚合/去重。
-        WITH material_values AS MATERIALIZED ({MATERIAL_WINDOW_VALUES_SQL}),
+        WITH material_values AS MATERIALIZED ({TYPED_MATERIAL_WINDOW_VALUES_SQL}),
         blocking_runs AS MATERIALIZED (
           -- 同冻结范围只读一次可遮挡任务，避免每个帖子反复扫描宽终态历史。
           -- 保留 ids 的原 JSONB 类型及 ? 成员语义，不扩大父级或全量范围。
@@ -305,11 +307,12 @@ def request_link_directory(
         -- 直接关联唯一金额键，避免再读逐日事实并复制相同帖子候选后 DISTINCT。
         FROM material_values v
         JOIN material_post_link l ON l.tenant_id=:t AND l.advertiser_id=v.advertiser_id
-          AND l.main_material_id=v.main_material_id
+          AND l.main_material_id=v.main_material_id AND l.main_material_type=v.main_material_type
         LEFT JOIN ad_object a ON a.tenant_id=l.tenant_id AND a.advertiser_id=l.advertiser_id
           AND a.kind='ad' AND a.remote_id=l.ad_remote_id
         WHERE v.advertiser_id=:adv AND v.has_value
           AND CAST(:start AS date) IS NOT NULL AND CAST(:end AS date) IS NOT NULL
+          AND l.main_material_type IN ('VIDEO_SPARK_ADS','VIDEO_NON_SPARK_ADS')
           AND NULLIF(l.platform_material_id, '') IS NULL
           AND (a.ad_type IS NULL OR a.ad_type IN ('SMART_PLUS','LEGACY_SMART_PLUS','REGULAR'))
           -- Spark 缺精确桥接且已有完整目录时，重读同一目录不能恢复旧帖身份。
@@ -319,9 +322,7 @@ def request_link_directory(
             AND EXISTS (SELECT 1 FROM ad_material_reference u
               WHERE u.tenant_id=l.tenant_id AND u.advertiser_id=l.advertiser_id
                 AND u.ad_remote_id=l.ad_remote_id AND u.complete))
-          AND NOT EXISTS (SELECT 1 FROM material_post_link done
-            WHERE done.tenant_id=l.tenant_id AND done.advertiser_id=l.advertiser_id
-              AND done.main_material_id=l.main_material_id AND NULLIF(done.platform_material_id, '') IS NOT NULL)
+          AND NOT {complete_material_link("l", tenant=":t")}
           AND NOT EXISTS (SELECT 1 FROM blocking_runs r
             WHERE r.ad_type=COALESCE(a.ad_type, 'SMART_PLUS')
               AND r.ids ? l.ad_remote_id)
@@ -332,6 +333,7 @@ def request_link_directory(
                 **material_value_parameters(
                     job.tenant_id,
                     [(job.advertiser_ids[0], job.start_date, job.end_date)],
+                    material_types=VIDEO_REPORT_TYPES,
                 ),
                 "t": job.tenant_id,
                 "adv": job.advertiser_ids[0],

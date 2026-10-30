@@ -14,10 +14,31 @@ MAX_STATE_BYTES = 2 * 1024 * 1024
 MAX_TARGETS = 10_000
 
 
+def material_identity_key(mid: str, kind: str) -> str:
+    """JSON 字符串可直接保存在现有任务续点中，不混淆同号不同命名空间。"""
+    return json.dumps([mid, kind])
+
+
+def row_identity_key(row: dict[str, Any]) -> str:
+    dimensions = row.get("dimensions") or {}
+    mid, kind = dimensions.get("main_material_id"), dimensions.get("main_material_type")
+    if not isinstance(mid, str) or not mid or not isinstance(kind, str) or not kind:
+        raise DomainError("report_response_invalid", "定位回执缺少主素材 ID 或类型")
+    return material_identity_key(mid, kind)
+
+
+def identity_ids(keys) -> set[str]:
+    return {json.loads(key)[0] for key in keys}
+
+
 class QueryMembershipReader:
     def __init__(self, read, cache, *, targets, now):
         self.read, self.cache = read, cache
         self.now = now.timestamp()
+        # 旧成员只有 ID，既不能证明命中，也不能证明某种类型不存在。
+        if cache.get("typed") is not True:
+            cache.clear()
+            cache["typed"] = True
         targets = set(targets)
         # progress 只属于一个不可变租户/BC/账户/冻结路由任务；新增目标不能借用
         # 此前只记录旧目标的集合，否则会把未收集的帖子误判为不存在。
@@ -29,6 +50,7 @@ class QueryMembershipReader:
             cache["targets"], cache["entries"] = [], {}
         elif not targets <= set(cache.get("targets", [])):
             cache.clear()
+            cache["typed"] = True
             cache["targets"] = sorted(targets)
         self.targets = set(cache.setdefault("targets", []))
         self.entries = cache.setdefault("entries", {})
@@ -47,7 +69,15 @@ class QueryMembershipReader:
         if page == 1 and key in self.entries:
             members = self.entries[key]["members"]
             return RawReportPage(
-                tuple({"dimensions": {"main_material_id": mid}} for mid in members),
+                tuple(
+                    {
+                        "dimensions": {
+                            "main_material_id": mid,
+                            "main_material_type": kind,
+                        }
+                    }
+                    for mid, kind in map(json.loads, members)
+                ),
                 1,
                 1 if members else 0,
                 len(members),
@@ -88,11 +118,7 @@ class QueryMembershipReader:
         pending["seen"].extend(keys)
         pending["members"] = sorted(
             set(pending["members"])
-            | {
-                str((row.get("dimensions") or {}).get("main_material_id") or "")
-                for row in result.rows
-            }
-            & self.targets
+            | {row_identity_key(row) for row in result.rows} & self.targets
         )
         if result.next_page is not None:
             pending["next_page"] = result.next_page

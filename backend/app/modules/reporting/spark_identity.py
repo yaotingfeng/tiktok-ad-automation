@@ -8,7 +8,7 @@ from sqlalchemy import text
 
 from app.modules.reporting import diagnostics
 from app.modules.reporting.material_value import (
-    MATERIAL_WINDOW_VALUES_SQL,
+    TYPED_MATERIAL_WINDOW_VALUES_SQL,
     material_value_parameters,
     valuable_material_condition,
 )
@@ -65,10 +65,10 @@ def pending_spark_links(session, job):
         session.connection()
         .execute(
             text(f"""
-        WITH material_values AS ({MATERIAL_WINDOW_VALUES_SQL}), missing AS MATERIALIZED (
+        WITH material_values AS ({TYPED_MATERIAL_WINDOW_VALUES_SQL}), missing AS MATERIALIZED (
           SELECT l.main_material_id,l.ad_remote_id FROM material_post_link l
           WHERE l.tenant_id=:t AND l.advertiser_id=:a
-            AND {valuable_material_condition("l")}
+            AND {valuable_material_condition("l", typed=True)}
             AND l.main_material_type='VIDEO_SPARK_ADS'
             AND NULLIF(l.ad_material_id,'') IS NULL
             AND NULLIF(l.platform_material_id,'') IS NULL
