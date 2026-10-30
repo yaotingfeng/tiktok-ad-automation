@@ -4063,3 +4063,10 @@ c756c547已完成生产验收，原8个发布阻塞全部进入明确终态，�
 补齐部分回执、UNKNOWN原路由只读核查、事务恢复消息、取消Task-first锁、过期claim核查、活跃claim唤醒及DB/Redis退避；UNKNOWN不自动重发。最终独立复审未发现剩余Critical/Important。后端基线357项通过，最终管理全套196项及前端18项通过；正式/演示构建、空库0069→0067→0069迁移往返、alembic模型一致性检查通过。扩展SDK准入及演示验收的具体结果见[验收记录](validation/2026-10-31-unified-tiktok-throughput.md)。
 
 聚焦提交主题：`ad-management: unify TikTok quotas and background bulk execution`。保持main及其他会话提交、四个原有未追踪前端产物；未推送、未发布、未执行用户原10748选择。新增0068/0069合同需统一审查发布；生产SDK实际档位和资源窗口值尚待核实，线上配置仍未改，不能将本地实现称为生产已提速。发布参数及边界见[运行说明](runbooks/tiktok-throughput.md)。
+
+
+## 2026-10-31 批量管理与Basic配额生产发布完成
+
+用户要求推送并直接生产发布、不运行任何测试，随后确认默认档位。GitHub与公司main已推送12d24fa3；生产部署该精确版本，0067→0069迁移3.287秒，107任务/489成员/437请求attempt及144预览/76172预览成员数量和摘要保持。11角色Ready、唯一Beat、镜像摘要/实际配置/四开关/数据库池及HTTPS200核对通过，状态complete并解锁。
+
+SDK已显式配置Basic物理接口10QPS/600QPM/864000QPD及特殊接口例外；管理共享请求窗口与物理端点在途50，app/tenant/advertiser资源预算50。既有SDK读取覆盖、MCP速率、Worker进程/资源/队列和数据库池保留，本地私有生产准备文件仅同步本次两参数。仓库/集群控制连接EOF后按已完成阶段续接，未重跑DDL或回旧程序。本轮未运行测试、未备份、未恢复演练，未执行原10748条广告选择。具体证据见[生产发布记录](validation/2026-10-31-bulk-production-release.md)。
