@@ -9,6 +9,7 @@ import httpx2
 import pytest
 import urllib3
 
+from app.core.errors import DomainError
 from app.integrations.tiktok.contracts.builds import BuildReadQuery
 from app.integrations.tiktok.contracts.common import RemoteCallError
 from app.integrations.tiktok.mcp.protocol import load_tool_contracts
@@ -50,8 +51,14 @@ def test_remote_raw_numeric_amount_cannot_match_after_float_rounding(
     wire.enqueue_raw_envelope(kind, raw)
     page = adapter.read_page(query=query)
     record = page.rows[0]
-    assert compare_record(query=query, record=record) == "INCOMPLETE"
-    assert record.intent is None and field in record.missing_fields
+    if wire.channel == "OFFICIAL_API":
+        # SDK读取已保留原始十进制文本，真实不同金额应判不匹配而非丢失证据。
+        assert compare_record(query=query, record=record) == "MISMATCH"
+        assert record.intent is not None
+        assert str(getattr(record.intent, field)) == "100.010000000000000001"
+    else:
+        assert compare_record(query=query, record=record) == "INCOMPLETE"
+        assert record.intent is None and field in record.missing_fields
     assert record.operation_status == "ENABLE"
     assert len(wire.business_calls()) == 1
 
@@ -259,7 +266,7 @@ def test_incomplete_or_invalid_pages_never_become_evidence(build_case, problem):
     assert len(wire.business_calls()) == 1
 
 
-def test_missing_cta_scope_is_not_filled_from_request(build_case):
+def test_cta_scope_uses_authorized_query_when_portfolio_does_not_echo_it(build_case):
     adapter, wire, _ = build_case
     body = build_bodies()["CTA"]
     query = BuildReadQuery(intent=decode_intent("CTA", body), remote_id="portfolio-1")
@@ -267,8 +274,13 @@ def test_missing_cta_scope_is_not_filled_from_request(build_case):
     del row["advertiser_id"]
     wire.enqueue_readback("CTA", [row], page=1, total=1)
     record = adapter.read_page(query=query).rows[0]
-    assert record.intent is None and record.missing_fields == ("advertiser_id",)
-    assert compare_record(query=query, record=record) == "INCOMPLETE"
+    assert record.intent is not None and not record.missing_fields
+    assert record.intent.advertiser_id == body["advertiser_id"]
+    assert compare_record(query=query, record=record) == "MATCH"
+    # 实际响应若携带其它账户，不得以查询参数覆盖后误认成功。
+    wire.enqueue_readback("CTA", [{**row, "advertiser_id": "foreign"}], page=1, total=1)
+    record = adapter.read_page(query=query).rows[0]
+    assert compare_record(query=query, record=record) == "MISMATCH"
 
 
 @pytest.mark.parametrize("scope", ["foreign", "missing"])
@@ -290,7 +302,7 @@ def test_status_supplement_never_fills_or_overrides_response_scope(build_case, s
 
 
 @pytest.mark.parametrize("code", [40002, True, "0"])
-def test_structured_error_is_unknown_and_never_retried(build_case, code):
+def test_structured_error_is_classified_and_never_retried(build_case, code):
     adapter, wire, _ = build_case
     wire.enqueue_envelope(
         "CAMPAIGN",
@@ -301,13 +313,17 @@ def test_structured_error_is_unknown_and_never_retried(build_case, code):
             "data": {},
         },
     )
-    with pytest.raises(RemoteCallError) as error:
+    invalid_query = wire.channel == "OFFICIAL_API" and type(code) is int and code == 40002
+    with pytest.raises(DomainError if invalid_query else RemoteCallError) as error:
         adapter.read_page(
             query=BuildReadQuery(
                 intent=decode_intent("CAMPAIGN", build_bodies()["CAMPAIGN"])
             )
         )
-    assert error.value.effect == "UNKNOWN" and not error.value.retryable
+    if invalid_query:
+        assert error.value.code == "report_query_invalid"
+    else:
+        assert error.value.effect == "UNKNOWN" and not error.value.retryable
     assert "synthetic-secret" not in str(error.value)
     assert len(wire.business_calls()) == 1
 

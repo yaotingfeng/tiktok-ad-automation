@@ -260,6 +260,15 @@ class ReportSyncJob(SQLModel, table=True):
             name="ck_report_sync_job_status",
         ),
         Index("ix_report_sync_job_due", "status", "priority", "due_at"),
+        # 与已发布0064迁移保持一致，模型校验不能把收尾去重索引误判为多余。
+        Index(
+            "ix_report_closeout_scope",
+            "tenant_id",
+            "bc_id",
+            "actor_id",
+            "end_date",
+            postgresql_where="priority = 0 AND start_date = end_date",
+        ),
         Index(
             "ix_report_link_pending_scope",
             "tenant_id",

@@ -117,10 +117,12 @@ def test_celery_routes_control_and_has_no_result_backend():
     assert celery_app.conf.accept_content == ["json"]
     job = celery_app.conf.beat_schedule["flush-dispatch"]
     assert job["task"] == "jobs.flush_dispatch"
-    assert job["options"]["queue"] == "control"
+    # 短派发tick已迁到builds最高优先级，避免排在control同步积压之后。
+    assert job["options"]["queue"] == "builds"
+    assert job["options"]["priority"] == 0
     assert (
         celery_app.amqp.router.route({}, "jobs.flush_dispatch")["queue"].name
-        == "control"
+        == "builds"
     )
     assert {queue.name for queue in celery_app.conf.task_queues} == {
         "ad-management",

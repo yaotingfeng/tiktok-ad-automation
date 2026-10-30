@@ -36,7 +36,8 @@ def broker(redis_client, monkeypatch):
         celery_app.conf, "broker_transport_options", {"global_keyprefix": prefix}
     )
 
-    def publish(name, *, kwargs, task_id, queue):
+    def publish(name, *, kwargs, task_id, queue, headers):
+        assert isinstance(headers["diagnostic_due_at"], float)
         redis_client.lpush(prefix + queue, broker_message(name, task_id, kwargs))
 
     monkeypatch.setattr(celery_app, "send_task", publish)

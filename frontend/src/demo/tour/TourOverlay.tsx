@@ -124,8 +124,22 @@ export function TourOverlay({
         window.setTimeout(() => onNextRef.current(), step.settleMs ?? 500)
       }
     }
+    // Radix标签在mousedown就切换；查询提示出现后的布局变化可能让click落在
+    // 其它祖先上。按实际激活事件记录前进，原click仍覆盖键盘激活并由ref去重。
+    const onTabPress = (event: MouseEvent) => {
+      if (
+        element.getAttribute("role") === "tab" &&
+        event.button === 0 &&
+        !event.ctrlKey
+      )
+        onClick(event)
+    }
     document.addEventListener("click", onClick, true)
-    return () => document.removeEventListener("click", onClick, true)
+    document.addEventListener("mousedown", onTabPress, true)
+    return () => {
+      document.removeEventListener("click", onClick, true)
+      document.removeEventListener("mousedown", onTabPress, true)
+    }
   }, [step, element])
 
   // 页面里打开的弹窗会把外部点击视为“点到外面”而关闭，卡片上的按下事件不向外传播。

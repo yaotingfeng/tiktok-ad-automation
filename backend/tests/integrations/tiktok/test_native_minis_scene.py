@@ -114,6 +114,7 @@ def test_iaa_roas_selects_ad_revenue_only_with_actual_qualification(qualified):
     }
     result = _assemble_scene(
         scope={
+            "media_kind": "VIDEO",
             "basis": "synthetic",
             "access": SimpleNamespace(currency="USD"),
             "minis_id": "synthetic-minis",
@@ -139,7 +140,7 @@ def test_historical_budget_fact_remains_readable_without_defining_new_budget_lim
     page = scene_page(data, evidence=CallEvidence(request_id="budget"), resource="budget", page=1, advertiser_id="a", bc_id="b", minis_id=None)
     assert page.facts.dynamic_count == 1
     result = _assemble_scene(
-        scope={"basis": "synthetic", "access": SimpleNamespace(currency="USD"), "minis_id": "synthetic-minis"},
+        scope={"media_kind": "VIDEO", "basis": "synthetic", "access": SimpleNamespace(currency="USD"), "minis_id": "synthetic-minis"},
         facts={"budget": page.facts.model_dump(), "vbo": {"vo_min_roas": "QUALIFIED"}, "minis": {"matches": [{"minis_id":"synthetic-minis","status":"ACTIVE","type":"MINI_SERIES","regions":["US"]}]}, "identity": {"matches": [{"identity_id":"i","identity_type":"BC_AUTH_TT","identity_authorized_bc_id":"b"}]}, "cta": {"asset_ids":["c"],"recommend_assets":[]}, "regions": {"locations": [{"region_code":"US","location_id":"1"}] }},
         reasons=[], evidence_ids=(uuid4(),), capability=SimpleNamespace(scope_verified=True, can_build=True), locally_operable=True,
     )

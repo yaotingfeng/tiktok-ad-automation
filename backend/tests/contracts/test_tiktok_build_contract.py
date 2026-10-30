@@ -267,6 +267,10 @@ def test_readback_requires_all_actual_fields_and_compares_parent_money_assets(
         incomplete = deepcopy(row)
         del incomplete[missing]
         record = read(incomplete).rows[0]
+        if kind == "CTA" and missing == "advertiser_id":
+            # 官方portfolio/get不回显账户；归属由已授权的查询范围限定。
+            assert compare_record(query=query, record=record) == "MATCH"
+            continue
         assert record.intent is None and missing in record.missing_fields
         assert compare_record(query=query, record=record) == "INCOMPLETE"
     altered = deepcopy(row)

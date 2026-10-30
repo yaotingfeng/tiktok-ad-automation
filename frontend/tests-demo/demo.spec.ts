@@ -179,6 +179,21 @@ test("完整引导每一步都能定位并跑通", async ({ page, baseURL }) => 
   expectIsolated(state, new URL(baseURL as string).origin)
 })
 
+test("报表引导在鼠标按下触发维度切换后仍能前进", async ({ page }) => {
+  await enter(page)
+  await go(page, tenantPage("/ads"))
+  await page.getByRole("button", { name: "本页讲解", exact: true }).click()
+  const card = page.locator("[data-demo-tour-card]")
+  await card.getByRole("button", { name: "下一步", exact: true }).click()
+  await expect(card.locator("h2")).toHaveText("按系列查看")
+  await page.locator('[data-demo-tour-target="click"]').click()
+  await expect(page.getByRole("tab", { name: "系列", exact: true })).toHaveAttribute(
+    "data-state",
+    "active",
+  )
+  await expect(card.locator("h2")).toHaveText("系列明细", { timeout: 10_000 })
+})
+
 test("自由体验时搭建页自动填好示例数据，其他输入可一键填写", async ({
   page,
 }) => {

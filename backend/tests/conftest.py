@@ -51,7 +51,14 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         ):
             item.add_marker(pytest.mark.slow)
         # 官方 MCP 通道退役中，发布门禁不再运行；需要时 `pytest -m mcp` 手动运行。
-        if is_mcp_test(nodeid):
+        # gateway_support的缺省通道是MCP；未显式参数化的用例也属于退役通道。
+        # 不能仅按nodeid判断，否则它们会混入生产API门禁并等待已退役协议。
+        gateway_params = getattr(getattr(item, "callspec", None), "params", {})
+        default_mcp_gateway = (
+            "gateway_case" in item.fixturenames
+            and gateway_params.get("gateway_case", "OFFICIAL_MCP") == "OFFICIAL_MCP"
+        )
+        if is_mcp_test(nodeid) or default_mcp_gateway:
             item.add_marker(pytest.mark.mcp)
 
 

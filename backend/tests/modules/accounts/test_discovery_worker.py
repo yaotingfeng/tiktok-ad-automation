@@ -362,6 +362,13 @@ def test_each_call_admission_defer_keeps_same_page_without_send(
     )
     try:
         step(contexts[0], runs[0], redis_client)
+        if target == 0:
+            # SUBJECT只读取已有OAuth授权事实；首个真实HTTP是下一轮AUTHORIZED。
+            with Session(engine) as session:
+                run = session.get(DiscoveryRun, runs[0])
+                assert run.status == "RUNNING" and run.work == work
+                assert run.sent_count == sent and not calls
+            step(contexts[0], runs[0], redis_client)
         with Session(engine) as session, session.begin():
             run = session.get(DiscoveryRun, runs[0])
             assert (
