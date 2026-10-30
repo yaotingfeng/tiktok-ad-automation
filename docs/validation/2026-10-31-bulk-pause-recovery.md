@@ -18,6 +18,17 @@
 
 专用恢复器在原冻结范围内按实际观测筛选仍启用对象，复用现有SDK网关、配额、对象锁、任务/attempt审计和合批执行；旧UNKNOWN不因当前状态匹配而改成受理成功。恢复期间暂停旧管理Worker的新队列消费，保留原队列，避免旧代码同时执行新恢复任务；恢复器使用本轮精确修复源码和有限请求窗口。完成后全量回读原10748项，再切换修复镜像并恢复队列。
 
-生产恢复及最终逐项统计待完成后追加，不能将首轮观测或本地检查写成全部关停。
+### 实际恢复完成
+
+首个恢复Job在导入初始化时退出，未发生业务写入；修正初始化顺序后的`pause-recovery-9801d42b-02`成功。恢复前定向回读仍启用的6423项，其中1项已由有持久attempt的探针暂停，剩余6422项由恢复任务`bb7cf192-ace7-46ac-992d-26c5bb9c41d1`接续：SUCCEEDED，ACCEPTED 6422、PENDING/UNKNOWN/REJECTED/NOT_SENT/待回读均0。专用恢复器窗口6，不改变生产全局窗口50。
+
+最终经原冻结SDK路由重新逐项读取全部10748个系列（末次观测北京时间2026-10-31 02:42:08）：9379已暂停、1369已删除、仍启用0；删除终态单列，不宣称其operation_status均为DISABLE。原任务`9801d42b-96da-4db1-acbc-781fe73e43ff`保留CANCELLED及原UNKNOWN证据，新恢复任务成功；未伪造旧回执或复活原任务。完整私有逐项证据保存在`.runtime/bulk-pause-monitor-20261031/recovery-full.jsonl`及`final-recovery.json`。
 
 针对修复的真实本地PostgreSQL/Redis专项106项通过；补充已删除系列虽显示operation_status=ENABLE、但delivery_status为删除终态的暂停准备跳过规则，独立14项通过。新规则将其记为NO_CHANGE/已删除，不混入暂停请求。未运行全量回归或新的真实广告创建验证。
+
+
+### 永久修复发布
+
+生产已切换到`6677a716dee002b5c277f9c3c719701288ca374e`，镜像摘要`sha256:dc18ab38a0b0ef58a1eec84febe23af5c1b3e9f4715f1701853c43b895da663c`。正常排空后切换镜像，11角色Ready、唯一Beat、精确镜像/配置/四开关/数据库池及HTTPS200核验通过；schema保持0069，SDK Basic与管理窗口50保持，无迁移、扩容、配额调整或新备份/恢复演练。新管理Worker已确认消费`ad-management`队列。发布状态complete，按原有合同解锁。
+
+发布后再次通过原SDK路由读取154页，精确匹配原104账户的10748个系列，无缺失/重复/读取错误；仍为9379暂停、1369删除、启用0。末次观测UTC `2026-10-30T18:51:31.230105+00:00`，证据`post-release.jsonl`及`post-release-summary.json`。
