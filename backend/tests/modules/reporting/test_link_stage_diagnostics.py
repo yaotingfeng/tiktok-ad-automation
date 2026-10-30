@@ -62,7 +62,7 @@ def test_empty_link_queries_keep_results_and_one_statement_each(
     (row,) = records(capture)
     expected = {
         "links_needs": 1,
-        "links_missing_ids": 2,
+        "links_missing_ids": 1,
         "links_asset_resolve": 1,
         "links_asset_candidates": 1,
         "links_spark_resolve": 1,
@@ -97,7 +97,7 @@ def test_link_query_exception_once_and_private_message_not_logged(capture):
         step(job_id=uuid4())
     assert caught.value is error and calls == [1]
     (row,) = records(capture)
-    assert row["stages"]["links_missing_ids"]["failures"] == 1
+    assert "links_missing_ids" not in row["stages"]
     assert row["stages"]["links_needs"]["failures"] == 1
     assert not row["job_commit_confirmed"]
     assert "private-" not in capture.text

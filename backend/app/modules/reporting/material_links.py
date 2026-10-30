@@ -25,6 +25,7 @@ from typing import Any
 from uuid import UUID
 
 from sqlalchemy import text
+from sqlalchemy.sql.elements import TextClause
 from sqlmodel import Session
 
 from app.core.errors import DomainError
@@ -96,6 +97,21 @@ def post_video_map(
     return {(r.adv, r.mid, r.mtype): r.vid for r in rows}
 
 
+def _missing_video_ids_query(*, existence_only: bool = False) -> TextClause:
+    # 共用净金额和有效 VID 条件。仅布尔路径隔离聚合的优化边界，避免 EXISTS
+    # 的低启动成本偏好改选按帖子排序、扫描大量窗口外历史的事实索引计划。
+    materialization = "MATERIALIZED" if existence_only else ""
+    query = f"""
+        WITH material_values AS {materialization} ({MATERIAL_WINDOW_VALUES_SQL})
+        SELECT v.main_material_id FROM material_values v
+        WHERE v.has_value AND NOT EXISTS (
+            SELECT 1 FROM material_post_link l WHERE l.tenant_id=:value_tenant
+              AND l.advertiser_id=v.advertiser_id AND l.main_material_id=v.main_material_id
+              AND NULLIF(l.platform_material_id, '') IS NOT NULL)
+    """
+    return text(f"SELECT EXISTS ({query})" if existence_only else query)
+
+
 @diagnostics.timed("links_needs")
 def needs_material_links(
     session: Session,
@@ -106,14 +122,14 @@ def needs_material_links(
     end: date,
 ) -> bool:
     """零金额帖子不影响付费指标，不因它们补链或阻断规则；真实映射保持不变。"""
+    # 只需一个缺口；数据库可在找到后停止映射探测，不传输/构造整个缺失集合。
     return bool(
-        missing_video_ids(
-            session,
-            tenant_id=tenant_id,
-            advertiser_id=advertiser_id,
-            start=start,
-            end=end,
+        session.connection()
+        .execute(
+            _missing_video_ids_query(existence_only=True),
+            material_value_parameters(tenant_id, [(advertiser_id, start, end)]),
         )
+        .scalar_one()
     )
 
 
@@ -136,14 +152,7 @@ def missing_video_ids(
     return set(
         session.connection()
         .execute(
-            text(f"""
-        WITH material_values AS ({MATERIAL_WINDOW_VALUES_SQL})
-        SELECT v.main_material_id FROM material_values v
-        WHERE v.has_value AND NOT EXISTS (
-            SELECT 1 FROM material_post_link l WHERE l.tenant_id=:value_tenant
-              AND l.advertiser_id=v.advertiser_id AND l.main_material_id=v.main_material_id
-              AND NULLIF(l.platform_material_id, '') IS NOT NULL)
-        """),
+            _missing_video_ids_query(),
             material_value_parameters(tenant_id, [(advertiser_id, start, end)]),
         )
         .scalars()

@@ -25,7 +25,6 @@ from app.modules.reporting.lanes import report_workload
 from app.modules.reporting.material_value import (
     MATERIAL_WINDOW_VALUES_SQL,
     material_value_parameters,
-    valuable_material_condition,
 )
 from app.modules.reporting.store_models import ReportSyncJob
 
@@ -238,15 +237,29 @@ def request_link_directory(
         session.connection()
         .execute(
             text(f"""
-        WITH material_values AS ({MATERIAL_WINDOW_VALUES_SQL})
+        -- 金额窗口只聚合一次，避免相关 EXISTS 在每个映射帖子上重做聚合/去重。
+        WITH material_values AS MATERIALIZED ({MATERIAL_WINDOW_VALUES_SQL}),
+        blocking_runs AS MATERIALIZED (
+          -- 同冻结范围只读一次可遮挡任务，避免每个帖子反复扫描宽终态历史。
+          -- 保留 ids 的原 JSONB 类型及 ? 成员语义，不扩大父级或全量范围。
+          SELECT r.ad_type, r.query->'ids' AS ids FROM ad_directory_run r
+          WHERE r.tenant_id=:t AND r.bc_id=:bc AND r.actor_id=:actor
+            AND r.frozen_route=CAST(:route AS jsonb) AND r.advertiser_id=:adv
+            AND (:workload='background' OR r.workload='live')
+            AND r.kind='ad' AND r.query->>'include_deleted'='true'
+            AND (r.status IN ('QUEUED','RUNNING','ADMISSION_WAIT','WAITING_REMOTE')
+              OR r.created_at>=:cutoff)
+        )
         SELECT DISTINCT l.ad_remote_id, COALESCE(a.ad_type, 'SMART_PLUS') AS ad_type
-        FROM material_report_day d
-        JOIN material_post_link l ON l.tenant_id=d.tenant_id AND l.advertiser_id=d.advertiser_id
-          AND l.main_material_id=d.main_material_id
+        -- 此处恰好一个 job 日期窗：has_value 已证明同租户/账户/MID 在窗内有事实。
+        -- 直接关联唯一金额键，避免再读逐日事实并复制相同帖子候选后 DISTINCT。
+        FROM material_values v
+        JOIN material_post_link l ON l.tenant_id=:t AND l.advertiser_id=v.advertiser_id
+          AND l.main_material_id=v.main_material_id
         LEFT JOIN ad_object a ON a.tenant_id=l.tenant_id AND a.advertiser_id=l.advertiser_id
           AND a.kind='ad' AND a.remote_id=l.ad_remote_id
-        WHERE d.tenant_id=:t AND d.advertiser_id=:adv AND d.stat_date BETWEEN :start AND :end
-          AND {valuable_material_condition("d")}
+        WHERE v.advertiser_id=:adv AND v.has_value
+          AND CAST(:start AS date) IS NOT NULL AND CAST(:end AS date) IS NOT NULL
           AND NULLIF(l.platform_material_id, '') IS NULL
           AND (a.ad_type IS NULL OR a.ad_type IN ('SMART_PLUS','LEGACY_SMART_PLUS','REGULAR'))
           -- Spark 缺精确桥接且已有完整目录时，重读同一目录不能恢复旧帖身份。
@@ -257,15 +270,11 @@ def request_link_directory(
               WHERE u.tenant_id=l.tenant_id AND u.advertiser_id=l.advertiser_id
                 AND u.ad_remote_id=l.ad_remote_id AND u.complete))
           AND NOT EXISTS (SELECT 1 FROM material_post_link done
-            WHERE done.tenant_id=d.tenant_id AND done.advertiser_id=d.advertiser_id
-              AND done.main_material_id=d.main_material_id AND NULLIF(done.platform_material_id, '') IS NOT NULL)
-          AND NOT EXISTS (SELECT 1 FROM ad_directory_run r
-            WHERE r.tenant_id=:t AND r.bc_id=:bc AND r.actor_id=:actor
-              AND r.frozen_route=CAST(:route AS jsonb) AND r.advertiser_id=:adv
-              AND (:workload='background' OR r.workload='live')
-              AND r.kind='ad' AND r.ad_type=COALESCE(a.ad_type, 'SMART_PLUS')
-              AND r.query->'ids' ? l.ad_remote_id AND r.query->>'include_deleted'='true'
-              AND (r.status IN ('QUEUED','RUNNING','ADMISSION_WAIT','WAITING_REMOTE') OR r.created_at>=:cutoff))
+            WHERE done.tenant_id=l.tenant_id AND done.advertiser_id=l.advertiser_id
+              AND done.main_material_id=l.main_material_id AND NULLIF(done.platform_material_id, '') IS NOT NULL)
+          AND NOT EXISTS (SELECT 1 FROM blocking_runs r
+            WHERE r.ad_type=COALESCE(a.ad_type, 'SMART_PLUS')
+              AND r.ids ? l.ad_remote_id)
         ORDER BY l.ad_remote_id, ad_type LIMIT :limit
     """),
             {

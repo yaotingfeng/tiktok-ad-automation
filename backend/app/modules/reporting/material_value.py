@@ -21,6 +21,8 @@ MATERIAL_WINDOW_VALUES_SQL = """
                   CAST(:value_ends AS date[])) WITH ORDINALITY AS w(adv,s,e,ordinality)
       JOIN material_report_day f ON f.tenant_id=:value_tenant AND f.advertiser_id=w.adv
         AND (CAST(:value_material_types AS text[]) IS NULL OR f.main_material_type=ANY(CAST(:value_material_types AS text[])))
+        AND f.stat_date>=COALESCE(CAST(:value_scan_start AS date), '-infinity'::date)
+        AND f.stat_date<=COALESCE(CAST(:value_scan_end AS date), 'infinity'::date)
         AND (w.s IS NULL OR f.stat_date>=w.s) AND (w.e IS NULL OR f.stat_date<=w.e)
       GROUP BY w.ordinality,f.advertiser_id,f.main_material_id
     ) per_window GROUP BY advertiser_id,main_material_id
@@ -33,14 +35,28 @@ def material_value_parameters(
     *,
     material_types: tuple[str, ...] | None = None,
 ) -> dict[str, Any]:
+    starts = [w[1] for w in windows]
+    ends = [w[2] for w in windows]
+    # 总界只帮助分区/日期索引裁剪，不能替代每个窗口的净额判断。任一窗口
+    # 在某侧开放，该侧总界也必须开放；SQL 用无穷日期避免 nullable OR 阻断裁剪。
+    scan_start = (
+        None
+        if None in starts
+        else min((d for d in starts if d is not None), default=None)
+    )
+    scan_end = (
+        None if None in ends else max((d for d in ends if d is not None), default=None)
+    )
     return {
         "value_tenant": tenant_id,
         "value_material_types": list(material_types)
         if material_types is not None
         else None,
         "value_advertisers": [w[0] for w in windows],
-        "value_starts": [w[1] for w in windows],
-        "value_ends": [w[2] for w in windows],
+        "value_starts": starts,
+        "value_ends": ends,
+        "value_scan_start": scan_start,
+        "value_scan_end": scan_end,
     }
 
 
