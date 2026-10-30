@@ -22,7 +22,6 @@ from app.modules.accounts.connection_models import BCConnectionBinding
 from app.modules.accounts.models import AdvertiserAccount, DiscoveryRun
 from app.modules.accounts.routing import freeze_route
 from app.modules.reporting.jobs import enqueue_job, enqueue_jobs
-from app.modules.reporting.lanes import CLOSEOUT_PRIORITY
 from app.modules.reporting.store_models import (
     AdSyncAccount,
     AdSyncBc,
@@ -664,6 +663,8 @@ def plan_day_closeout(
     # 先证明昨天仍有缺口；已完成的BC不再每轮扫描全部收尾历史。
     if not rows:
         return 0
+    # 收尾优先级固定为0，与历史范围部分索引一致；绑定参数会让generic计划
+    # 无法证明索引谓词。保留全部状态和冻结路由过滤，终态旧任务也阻止重复规划。
     planned = set(
         session.connection()
         .execute(
@@ -671,7 +672,7 @@ def plan_day_closeout(
         SELECT ids.advertiser_id,j.end_date,j.kind FROM report_sync_job j
         CROSS JOIN LATERAL jsonb_array_elements_text(j.advertiser_ids) ids(advertiser_id)
         WHERE j.tenant_id=:tenant AND j.bc_id=:bc AND j.actor_id=:actor
-          AND j.frozen_route=CAST(:route AS jsonb) AND j.priority=:closeout
+          AND j.frozen_route=CAST(:route AS jsonb) AND j.priority=0
           AND j.start_date=j.end_date AND j.end_date BETWEEN :first_day AND :last_day
           AND j.advertiser_ids ?| CAST(:accounts AS text[])
           AND ids.advertiser_id=ANY(:accounts)
@@ -681,7 +682,6 @@ def plan_day_closeout(
                 "bc": plan.bc_id,
                 "actor": plan.actor_id,
                 "route": json.dumps(plan.frozen_route),
-                "closeout": CLOSEOUT_PRIORITY,
                 "first_day": min(row.day for row in rows),
                 "last_day": max(row.day for row in rows),
                 "accounts": sorted({row.advertiser_id for row in rows}),
