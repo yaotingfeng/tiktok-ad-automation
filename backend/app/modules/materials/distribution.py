@@ -2065,6 +2065,14 @@ def run_distribution(
             from .batch_distribution import sync_batch_member
 
             sync_batch_member(session, operation, dist)
+            if dist.status == "ready":
+                from .source_cover_service import enqueue_source_cover
+
+                # 与真实目标 VID 同事务登记；封面共享在独立任务内提前执行，
+                # 不等广告搭建、不在视频回执锁内做图片网络请求。
+                enqueue_source_cover(
+                    session, context=context, operation=operation, purpose="BUILD"
+                )
             if dist.status != "ready":
                 queue_distribution(
                     session,
