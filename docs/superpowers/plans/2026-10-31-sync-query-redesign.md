@@ -8,7 +8,7 @@
 
 **Tech Stack:** 项目当前锁定的Python/FastAPI/SQLModel/PostgreSQL/Redis/Celery、React/TanStack Query；不新增平台HTTP客户端或分析数据库。
 
-**Spec:** [总体方案](../specs/2026-10-31-sync-query-redesign.md)（必须与本计划一起读）；[巨量对照证据](../../validation/2026-10-31-oceanengine-comparison.md)。
+**Spec:** [总体方案](../specs/2026-10-31-sync-query-redesign.md)（必须与本计划一起读）；[巨量对照证据](../../validation/2026-10-31-oceanengine-comparison.md)；[连山 RDS 源表设计对照](../../validation/2026-10-31-lianshan-rds-schema-review.md)。
 
 **状态：仅计划，所有实施框均未勾选。** 代码基线12d24fa3，性能取证基线0642ad3d；文档收尾时另一发布记录已确认12d24fa3/0069及BASIC上线，本轮未测新版本性能，执行前重新建立当前基线，沿用已确认档位授权。本轮不执行这些任务。
 
@@ -63,6 +63,8 @@ W2与W4可独立开发，接口/迁移由集成人统一协调。每包聚焦提
 - [ ] 运行上述新测试，确认新计时合同未实现而失败；实现最小观测，重新通过，不改变业务查询/发送行为。
 - [ ] 生成小规模校验集，再生成当前千万目录/引用规模；固定50页身份同时放大无关历史10倍，准备1/7/31/90日、六维度、include_empty和1/5/20会话矩阵；冻结账户数、事实数、匹配行、搜索选择性、冷热及硬件包络，20个不同冷查询与20个相同单飞请求分开验收，明确超界查询完成时间的单独口径。
 - [ ] 隔离环境运行旧版纯读、纯同步、混合负载；记录P50/P95/P99、buffers/temp/WAL、RSS、pool wait、λ/μ和请求产出。生产仅做已有授权范围的限时只读采样。
+- [ ] 交付平台维度/自然身份/数据库唯一键/展示身份矩阵，核实素材类型是否属于唯一身份及类型纠正语义；列出实际DDL、索引与分区大小。对照连山RDS源表而非只看巨量本地模型，不将源游标误作TikTok已有能力。
+- [ ] 在同数据上比较月/日分区、账户/日期前导索引及页内素材反查，记录读写/规划/空间取舍；计算投影回填、索引与WAL峰值。若须改变默认月分区或事实唯一键，先修订spec再进入W1。
 - [ ] 测最大账户日/目录分区的暂存→set-based发布：若无法满足spec的10秒最大桶预算，在W1前把该publisher改为dataset_generation+pointer设计并补规格；不得带“以后再说”的超大桶进入DDL。
 - [ ] 核实真实app额度及例外、其他共享调用者、合法QPS/QPM/QPD与总连接容量；计算现有新鲜度所需最低请求率。需求超额度则在方案评审中明确申请额度或减少哪些冗余刷新，不默默缩覆盖。
 - [ ] 提交 `perf: establish sync and query mixed-load baseline`。验收不是“有日志”，而是可重复运行的基线和最大桶/额度决策已经落地。
@@ -83,6 +85,7 @@ W2与W4可独立开发，接口/迁移由集成人统一协调。每包聚焦提
 
 - [ ] 写身份测试：只改priority/batch产生相同scope；改tenant/BC/绑定代数/actor语义/时区/类型产生不同scope；缺必要字段失败关闭。
 - [ ] 写migration测试：0069之前的真实旧合同样本、运行中页与outbox可读；唯一约束/索引/非空边界正确；空库upgrade不代替旧数据迁移。
+- [ ] 将W0粒度/物理设计矩阵落实为审查后的DDL，分别定义业务日期、可缺失源更新时间、观测时间与发布版本。验证ID/类型纠正不产生重复金额，租户/账户约束完整，未验证的类型/精度缩减不进入迁移。
 - [ ] 实现最小四张控制表及既有执行围栏字段，创建spec§5的投影表/dirty bucket与索引，保证模型一致；不启动新调度。
 - [ ] 运行 `uv run pytest tests/modules/sync_control/test_contracts.py tests/modules/sync_control/test_migration.py -q`（backend目录、显式隔离环境）并执行 `alembic check`。
 - [ ] 提交 `sync: define unified demand and publication contracts`；交付无默认生产行为变化的模型合同。
