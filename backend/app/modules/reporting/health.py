@@ -24,6 +24,7 @@ from app.modules.reporting.directory_refresh import (
     PARENT_INTERVAL,
     STATUS_INTERVAL,
     directory_interval,
+    refresh_account_directory,
     rule_accounts,
 )
 from app.modules.reporting.freshness import FRESHNESS, fresh_report_success
@@ -316,6 +317,7 @@ def measure_freshness(session, plan, *, now, accounts=None):
         "ad": stale["ad_day"],
         "material": stale["material_day"],
         "links": set(),
+        "directory": set(),
     }
     if owned and (
         plan.active_screened_at is None or plan.active_screened_at < now - SLO
@@ -385,9 +387,10 @@ def measure_coverage(session, plan, *, now, accounts=None, stage=None):
         metrics,
         [key for key, value in metrics.items() if value],
         {
-            "ad": {r["advertiser_id"] for r in missing},
+            "ad": set(),
             "material": set(),
             "links": {r["advertiser_id"] for r in unlinked},
+            "directory": {r["advertiser_id"] for r in missing},
         },
     )
 
@@ -577,26 +580,26 @@ def observe_health(
         # 观测先落在外层事务；补任务遇到规划锁时仅回滚补任务，不丢失健康事实。
         session.flush()
         try:
-            with session.begin_nested():
-                previous = (
-                    session.connection().execute(text("SHOW lock_timeout")).scalar_one()
+            previous = (
+                session.connection().execute(text("SHOW lock_timeout")).scalar_one()
+            )
+            session.connection().execute(text("SET LOCAL lock_timeout='100ms'"))
+            with query_budget(session, seconds=REPAIR_BUDGET_SECONDS):
+                _repair_health_units(
+                    session,
+                    plan,
+                    row,
+                    repairs,
+                    repair_at,
+                    scope=scope,
+                    screen_unknown=phase in {"full", "freshness"}
+                    and "ACCOUNT_SCREEN_STALE" in fresh_issues,
                 )
-                session.connection().execute(text("SET LOCAL lock_timeout='100ms'"))
-                with query_budget(session, seconds=REPAIR_BUDGET_SECONDS):
-                    _repair_health(
-                        session,
-                        plan,
-                        row,
-                        repairs,
-                        repair_at,
-                        screen_unknown=phase in {"full", "freshness"}
-                        and "ACCOUNT_SCREEN_STALE" in fresh_issues,
-                    )
-                    session.flush()
-                session.connection().execute(
-                    text("SELECT set_config('lock_timeout', :value, true)"),
-                    {"value": previous},
-                )
+                session.flush()
+            session.connection().execute(
+                text("SELECT set_config('lock_timeout', :value, true)"),
+                {"value": previous},
+            )
         except (DBAPIError, QueryBudgetExceeded) as error:
             if isinstance(error, DBAPIError) and getattr(
                 error.orig, "sqlstate", None
@@ -609,6 +612,138 @@ def observe_health(
             )
     session.flush()
     return row
+
+
+_DIRECTORY_REPAIR_KEY = "_directory_repair_v1"
+
+
+def _repair_health_units(session, plan, row, repairs, now, *, scope, screen_unknown):
+    """同2秒内轮转两类修复；后续单元失败不能撤销先前已完成的请求。"""
+    stop = monotonic() + REPAIR_BUDGET_SECONDS - 0.2
+    directory = sorted(repairs.get("directory", ()))
+    regular = screen_unknown or any(
+        repairs[name] for name in ("ad", "material", "links")
+    )
+    regular = regular or bool(row.metrics.get("pending_actions"))
+    state = dict(row.metrics.get(_DIRECTORY_REPAIR_KEY) or {})
+    if directory:
+        with session.begin_nested():
+            current_scope = scope or _health_scope(
+                session, plan, owned_accounts(session, plan), now=now
+            )
+        if state.get("scope") != current_scope:
+            state = {
+                "scope": current_scope,
+                "after": "",
+                "next": "directory",
+                "deferred": {},
+                "unfinished": [],
+            }
+    lanes = (["regular"] if regular else []) + (["directory"] if directory else [])
+    if state.get("next", "directory") == "directory":
+        lanes.reverse()
+    for index, lane in enumerate(lanes):
+        remaining = stop - monotonic()
+        if remaining < 0.1:
+            break
+        # 下次先给另一类完整机会，不把单户永久压成1秒子限额。
+        state["next"] = "regular" if lane == "directory" else "directory"
+        if lane == "directory":
+            complete = _repair_directory_accounts(
+                session, plan, row, directory, now, state, stop
+            )
+            if index and not complete:
+                state["next"] = "directory"
+        else:
+            try:
+                with session.begin_nested(), query_budget(session, seconds=remaining):
+                    _repair_health(
+                        session, plan, row, repairs, now, screen_unknown=screen_unknown
+                    )
+                    session.flush()
+            except (DBAPIError, QueryBudgetExceeded) as error:
+                if isinstance(error, DBAPIError) and getattr(
+                    error.orig, "sqlstate", None
+                ) not in {"55P03", "57014"}:
+                    raise
+                if index:
+                    state["next"] = "regular"
+                logger.info("sync health regular repair deferred: bc=%s", plan.bc_id)
+    # 留出的0.2秒用于保存轮转/失败户；尾写取消也只撤销此检查点。
+    try:
+        with session.begin_nested():
+            row.metrics = {**row.metrics, _DIRECTORY_REPAIR_KEY: dict(state)}
+            session.flush()
+    except (DBAPIError, QueryBudgetExceeded) as error:
+        if isinstance(error, DBAPIError) and getattr(
+            error.orig, "sqlstate", None
+        ) not in {"55P03", "57014"}:
+            raise
+        logger.info("sync health repair checkpoint deferred: bc=%s", plan.bc_id)
+
+
+def _repair_directory_accounts(session, plan, row, accounts, now, state, stop):
+    deferred = {a: at for a, at in state.get("deferred", {}).items() if a in accounts}
+    state["deferred"] = deferred
+    unfinished = set(state.get("unfinished", ())) & set(accounts)
+    state["unfinished"] = sorted(unfinished)
+    retry = sorted(a for a, at in deferred.items() if datetime.fromisoformat(at) <= now)
+    available = [a for a in accounts if a not in deferred]
+    # after 是最近成功访问户，不代表账户完成。先走后续户再绕回，密集大户
+    # 每成功100 ID就合作让出；未完成状态单独保存，不能以移动游标伪报完成。
+    ordered = [a for a in available if a > state["after"]] + [
+        a for a in available if a <= state["after"]
+    ]
+    queue = (retry + ordered)[:MAX_REPAIR_ACCOUNTS]
+    complete = True
+    while queue:
+        account = queue.pop(0)
+        remaining = stop - monotonic()
+        if remaining < 0.1:
+            return False
+        try:
+            with session.begin_nested(), query_budget(session, seconds=remaining):
+                # 已入队片由精确pending覆盖排除，续片不重排成功ID。
+                result = refresh_account_directory(
+                    session,
+                    **_common(plan),
+                    advertiser_ids=[account],
+                    now=now,
+                    max_refs=100,
+                )
+                # 目录有独立游标，不能刷新事实修复的2分钟门槛而压住新过期水位。
+                pending = (
+                    unfinished - {account}
+                    if result.complete
+                    else unfinished | {account}
+                )
+                candidate = {
+                    **state,
+                    "after": account,
+                    "deferred": dict(deferred),
+                    "unfinished": sorted(pending),
+                }
+                candidate["deferred"].pop(account, None)
+                # 请求、访问游标与未完集合同一保存点；尾flush失败不能保存假进度。
+                row.metrics = {**row.metrics, _DIRECTORY_REPAIR_KEY: candidate}
+                session.flush()
+        except (DBAPIError, QueryBudgetExceeded) as error:
+            sqlstate = getattr(getattr(error, "orig", None), "sqlstate", None)
+            if isinstance(error, DBAPIError) and sqlstate not in {"55P03", "57014"}:
+                raise
+            # 完整片仍失败的户稍后重试；短尾失败留在原位置，不能误罚慢户。
+            if sqlstate == "55P03" or remaining >= REPAIR_BUDGET_SECONDS - 0.4:
+                deferred[account] = (now + REPAIR_INTERVAL).isoformat()
+            complete = False
+            logger.info("sync health directory repair deferred: bc=%s", plan.bc_id)
+            continue
+        state.update(candidate)
+        deferred = state["deferred"]
+        unfinished = pending
+        if not result.complete:
+            # 本轮选中的其他户先获得机会，余量才回补；不同账户仍不超过50个。
+            queue.append(account)
+    return complete and not unfinished
 
 
 def _repair_fact_accounts(session, plan, accounts, *, kind, now):
@@ -887,7 +1022,7 @@ def _new_coverage_progress(scope, hints=None):
         "offset": 0,
         "metrics": {},
         "issues": [],
-        "repairs": {"ad": [], "material": [], "links": []},
+        "repairs": {"ad": [], "material": [], "links": [], "directory": []},
         "stages": stages,
         "continuation_seq": 0,
         "retry_not_before": None,
@@ -985,6 +1120,11 @@ def _advance_health(session, plan, redis_client, *, cycle, deadline):
     key = _health_progress_key(plan.tenant_id, plan.bc_id)
     raw = redis_client.get(key)
     progress: _HealthProgress | None = json.loads(raw) if raw else None
+    if progress is not None and "directory" not in progress["repairs"]:
+        # 旧Redis进度只来自coverage；其中ad集合是目录缺口，不能误当事实过期。
+        # 原游标/统计/续点保持不变，不把freshness/full测量的ad集合做这种转换。
+        progress["repairs"]["directory"] = progress["repairs"]["ad"]
+        progress["repairs"]["ad"] = []
     # 旧续投不能新建或推进后来的一轮；Beat 的无 token 任务可接续崩溃进度。
     if cycle is not None and (not progress or progress["cycle"] != cycle):
         return "IGNORED"
