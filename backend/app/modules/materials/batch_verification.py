@@ -117,6 +117,15 @@ def try_verify_batch(
                 col(MaterialAssetOperation.remote_response)[
                     "reconciliation_stopped"
                 ].astext.is_distinct_from("true"),
+                or_(
+                    col(MaterialAssetOperation.remote_response)[
+                        "reconciliation_retry_at"
+                    ].astext.is_(None),
+                    col(MaterialAssetOperation.remote_response)[
+                        "reconciliation_retry_at"
+                    ].astext
+                    <= now.isoformat(),
+                ),
                 col(MaterialDistribution.target_route) == anchor.target_route,
                 col(MaterialAssetOperation.frozen_route) == anchor.target_route,
                 col(MaterialAssetOperation.remote_response)[
@@ -203,6 +212,10 @@ def try_verify_batch(
             # 批量入口不能绕过逐项预算；锁内停止耗尽成员，其他成员保留独立身份。
             if single._reconciliation_exhausted(op):
                 single._stop_reconciliation(dist, op)
+                if not op.remote_response.get("reconciliation_stopped"):
+                    single.queue_distribution(
+                        db, dist, op, kind="verify", read_only=read_only
+                    )
                 continue
             eligible.append((dist, op))
         selected = eligible
@@ -264,12 +277,42 @@ def try_verify_batch(
 
     def check_current() -> None:
         with bounded_session(database_engine, task_deadline=deadline) as db, db.begin():
+            # 这里只决定是否允许一次只读平台查询，不发布映射。一次批读核对
+            # 冻结成员即可；跨账户共用素材主记录，FOR UPDATE 会把只读核查串行化。
+            # 返回后的发布仍在下方按素材/操作锁重验 claim、摘要和完整冻结身份。
+            current_rows = db.exec(
+                select(MaterialDistribution, MaterialAssetOperation, MaterialFile)
+                .join(
+                    MaterialAssetOperation,
+                    and_(
+                        col(MaterialAssetOperation.id)
+                        == MaterialDistribution.operation_id,
+                        col(MaterialAssetOperation.tenant_id)
+                        == MaterialDistribution.tenant_id,
+                    ),
+                )
+                .join(
+                    MaterialFile,
+                    and_(
+                        col(MaterialFile.id) == MaterialDistribution.material_id,
+                        col(MaterialFile.tenant_id) == MaterialDistribution.tenant_id,
+                    ),
+                )
+                .where(
+                    MaterialDistribution.tenant_id == context.tenant_id,
+                    col(MaterialDistribution.id).in_({item["dist"] for item in work}),
+                    MaterialDistribution.actor_id == context.actor_id,
+                )
+            ).all()
+            current = {
+                dist.id: (dist, op, material) for dist, op, material in current_rows
+            }
             for item in sorted(
                 work, key=lambda item: (item["material"], item["operation"])
             ):
-                dist = single._load_distribution(db, context, item["dist"])
-                material = _locked_material(db, context, dist.material_id)
-                op = _locked_operation(db, context, item["operation"])
+                if item["dist"] not in current:
+                    raise DomainError("material_claim_changed", "目标核实成员已变化")
+                dist, op, material = current[item["dist"]]
                 if (
                     dist.bc_id != route.bc_id
                     or dist.advertiser_id != advertiser_id
@@ -305,7 +348,7 @@ def try_verify_batch(
                     or op.claimed_until <= datetime.now(UTC)
                 ):
                     raise DomainError("material_claim_changed", "目标核实成员已变化")
-            # 成员逐一锁定并校验冻结边界；同一账户授权每次物理请求只查一次，
+            # 整批读取并校验冻结边界；同一账户授权每次物理请求只查一次，
             # 不在请求之间缓存，权限撤销仍会在发送前阻断整批。
             single._target_access(
                 db, context, dist, upload=False, connection_id=route.connection_id
@@ -590,7 +633,9 @@ def try_verify_batch(
             )
             if code:
                 op.remote_response = {**op.remote_response, "error_code": code}
-            if not admission_deferred:
+            if admission_deferred or code in single.RECONCILIATION_LOCAL_ERRORS:
+                single._defer_local_reconciliation(op, code or "admission_deferred")
+            else:
                 single._reconciliation_progress(op, progress=progress)
             op.attempt_token, op.claimed_until = None, None
             dist.reason_code = (

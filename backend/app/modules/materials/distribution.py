@@ -82,6 +82,62 @@ ACTIVE_DISTRIBUTIONS = ("queued", "preparing", "verifying", "result_unknown")
 RECONCILIATION_MAX_CLAIMS = 120
 RECONCILIATION_SECONDS = 15 * 60
 RECONCILIATION_MAX_NO_PROGRESS = 3
+RECONCILIATION_LOCAL_ERRORS = frozenset(
+    {
+        "tiktok_local_resources_unavailable",
+        "admission_unavailable",
+        "tiktok_call_deadline_exceeded",
+        "material_deadline",
+    }
+)
+RECONCILIATION_BLOCKING_ERRORS = frozenset(
+    {
+        "action_forbidden",
+        "tenant_forbidden",
+        "tenant_unavailable",
+        "account_access_denied",
+        "account_not_in_bc",
+        "account_authorization_changed",
+        "connection_unavailable",
+        "credential_invalid",
+        "route_authorization_changed",
+        "frozen_route_changed",
+        "material_reconciliation_ambiguous",
+    }
+)
+
+
+def _reconciliation_retry_at(operation: MaterialAssetOperation) -> datetime | None:
+    value = operation.remote_response.get("reconciliation_retry_at")
+    return datetime.fromisoformat(value) if value else None
+
+
+def _automatic_reconciliation(operation: MaterialAssetOperation) -> bool:
+    return (
+        operation.remote_response.get("transport") == "native_share"
+        and operation.remote_response.get("media_type", "VIDEO") == "VIDEO"
+        and operation.remote_response.get("share_acknowledged") is True
+        and not operation.remote_response.get("conflicting_video_id")
+        and operation.remote_response.get("error_code")
+        not in RECONCILIATION_BLOCKING_ERRORS
+    )
+
+
+def _defer_local_reconciliation(operation: MaterialAssetOperation, code: str) -> None:
+    # 本地资源/准入等待不等于完成一次平台核查，不消耗远端次数和无进展预算。
+    # 保留此前真实核查次数及无进展计数，下一条原代数消息自动退避续读。
+    now = datetime.now(UTC)
+    budget = operation.remote_response["reconciliation_budget"]
+    operation.remote_response = {
+        **operation.remote_response,
+        "last_reconciliation_error": code,
+        "reconciliation_retry_at": (now + timedelta(seconds=30)).isoformat(),
+        "reconciliation_budget": {
+            **budget,
+            "claims": max(0, budget["claims"] - 1),
+            "started_at": now.isoformat(),
+        },
+    }
 
 
 def _reconciliation_exhausted(operation: MaterialAssetOperation) -> bool:
@@ -99,6 +155,33 @@ def _reconciliation_exhausted(operation: MaterialAssetOperation) -> bool:
 def _stop_reconciliation(
     dist: MaterialDistribution, operation: MaterialAssetOperation
 ) -> None:
+    if _automatic_reconciliation(operation):
+        # 共享已 ACK 的目标确认只有读取副作用。短轮耗尽后降低频率继续确认，
+        # 绝不重发共享、复制源 VID 或要求人工点击才能继续。
+        rounds = operation.remote_response.get("reconciliation_round", 0) + 1
+        retry_at = datetime.now(UTC) + timedelta(minutes=min(30, 5 * rounds))
+        operation.remote_response = {
+            **operation.remote_response,
+            "last_reconciliation_budget": operation.remote_response.get(
+                "reconciliation_budget"
+            ),
+            "last_reconciliation_error": operation.remote_response.get("error_code")
+            or "material_result_pending",
+            "reconciliation_round": rounds,
+            "reconciliation_retry_at": retry_at.isoformat(),
+            "reconciliation_budget": {
+                "started_at": retry_at.isoformat(),
+                "claims": 0,
+                "no_progress": 0,
+            },
+            "reconciliation_stopped": False,
+            "reconciliation_complete": False,
+            "revision": operation.remote_response.get("revision", 0) + 1,
+        }
+        dist.status = operation.status = "verifying"
+        dist.reason_code = "material_result_pending"
+        operation.attempt_token, operation.claimed_until = None, None
+        return
     # 停止自动读取不是未上传证明；原请求、回执及内容身份全部保留。
     operation.remote_response = {
         **operation.remote_response,
@@ -135,6 +218,8 @@ def _reconciliation_progress(
     }
     if progress:
         response.pop("error_code", None)
+        response.pop("reconciliation_retry_at", None)
+        response.pop("reconciliation_round", None)
     operation.remote_response = response
 
 
@@ -159,6 +244,12 @@ def _target_dispatch(
         return None
     if read_only and kind != "verify":
         raise DomainError("invalid_asset_task", "只读核实不能安排上传")
+    if (
+        kind == "verify"
+        and operation.remote_response.get("reconciliation_complete")
+        and _automatic_reconciliation(operation)
+    ):
+        _stop_reconciliation(dist, operation)
     if operation.remote_response.get(
         "reconciliation_complete"
     ) or operation.remote_response.get("reconciliation_stopped"):
@@ -193,7 +284,8 @@ def _target_dispatch(
         and _reconciliation_exhausted(operation)
     ):
         _stop_reconciliation(dist, operation)
-        return None
+        if operation.remote_response.get("reconciliation_stopped"):
+            return None
     payload: dict[str, Any] = {
         "distribution_id": str(dist.id),
         "operation_id": str(operation.id),
@@ -240,6 +332,9 @@ def queue_distribution(
     if identity is None:
         return
     key, payload = identity
+    retry_at = _reconciliation_retry_at(operation)
+    if retry_at is not None:
+        due = max(due or datetime.now(UTC), retry_at)
     existing = None
     if not assume_new:
         existing = session.exec(
@@ -707,6 +802,8 @@ def _delivery_matches(
 ) -> bool:
     return (
         operation.superseded_by_id is None
+        and (_reconciliation_retry_at(operation) or datetime.min.replace(tzinfo=UTC))
+        <= datetime.now(UTC)
         and not operation.remote_response.get("reconciliation_complete")
         and not operation.remote_response.get("reconciliation_stopped")
         and (operation_id is None or operation.id == operation_id)
@@ -1544,6 +1641,10 @@ def run_distribution(
             return
         if kind == "verify" and _reconciliation_exhausted(operation):
             _stop_reconciliation(dist, operation)
+            if not operation.remote_response.get("reconciliation_stopped"):
+                queue_distribution(
+                    session, dist, operation, kind="verify", read_only=read_only
+                )
             return
         expired_send = operation.status == "sending"
         if expired_send:
@@ -1755,9 +1856,19 @@ def run_distribution(
                             context=context,
                             bc_id=dist.bc_id,
                             material_id=dist.material_id,
-                            lock=True,
+                            lock=kind == "prepare",
                         )
-                        operation = _locked_operation(db, context, operation_id)
+                        operation = (
+                            _locked_operation(db, context, operation_id)
+                            if kind == "prepare"
+                            else db.exec(
+                                select(MaterialAssetOperation).where(
+                                    MaterialAssetOperation.tenant_id
+                                    == context.tenant_id,
+                                    MaterialAssetOperation.id == operation_id,
+                                )
+                            ).one()
+                        )
                         if (
                             operation.superseded_by_id is not None
                             or dist.superseded_by_id is not None
@@ -2120,6 +2231,7 @@ def run_distribution(
             deferred = (
                 isinstance(error, api.SdkAdmissionDeferred)
                 or code == "admission_unavailable"
+                or (kind == "verify" and code in RECONCILIATION_LOCAL_ERRORS)
             )
             operation.status = (
                 previous_status
@@ -2140,16 +2252,23 @@ def run_distribution(
                 "error_code": code,
             }
             operation.attempt_token, operation.claimed_until = None, None
-            if kind == "verify" and not isinstance(error, api.SdkAdmissionDeferred):
-                _reconciliation_progress(operation, progress=False)
+            if kind == "verify":
+                if deferred:
+                    _defer_local_reconciliation(operation, code)
+                else:
+                    _reconciliation_progress(operation, progress=False)
             dist.status = (
-                "queued"
+                ("verifying" if kind == "verify" else "queued")
                 if deferred
                 else "blocked"
                 if operation.status == "failed"
                 else "result_unknown"
             )
             dist.reason_code = code
+            if kind == "verify" and _automatic_reconciliation(operation):
+                # 原生共享已有 ACK、当前只有读取等待时，维持自动确认中的进度，
+                # 不把仍有下一次投递的任务误报成需要人工处理。
+                dist.status = "verifying"
             if dist.status != "blocked":
                 delay = (
                     max(1, error.retry_after_ms) / 1000

@@ -189,11 +189,15 @@ def test_admission_wait_does_not_consume_no_progress_but_deadline_still_stops(
             _, op, _ = state(identity)
             assert not op.remote_response.get("reconciliation_stopped")
             assert op.remote_response["reconciliation_budget"]["no_progress"] == 2
-        assert op.remote_response["reconciliation_budget"]["claims"] == 6
+        # 准入尚未通过不计作物理核查；首次等待后原消息遵守退避。
+        assert op.remote_response["reconciliation_budget"]["claims"] == 2
         with Session(engine) as db, db.begin():
             op = db.get(MaterialAssetOperation, op.id)
             op.remote_response = {
                 **op.remote_response,
+                "reconciliation_retry_at": (
+                    datetime.now(UTC) - timedelta(seconds=1)
+                ).isoformat(),
                 "reconciliation_budget": {
                     **op.remote_response["reconciliation_budget"],
                     "started_at": (
