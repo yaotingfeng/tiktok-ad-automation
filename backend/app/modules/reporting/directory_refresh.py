@@ -169,6 +169,7 @@ def refresh_account_directory(
     # 精确当地日仍以事实时区为准。仅收集缺失/到期 ID，不因邻居过期重读新鲜对象。
     with diagnostics.stage("directory_candidates"):
         objects: dict[tuple[str, str, EntityKind], set[str]] = defaultdict(set)
+        missing: dict[tuple[str, str, EntityKind], set[str]] = defaultdict(set)
         parents: dict[tuple[str, str, EntityKind], dict[str, set[str]]] = defaultdict(
             lambda: defaultdict(set)
         )
@@ -195,9 +196,13 @@ def refresh_account_directory(
                     continue
                 key = (row.advertiser_id, ad_type, kind)
                 objects[key].add(row[column])
+                if observed_at is None:
+                    # 仅现有事实关联证明未观测的对象标缺口，到期刷新不能冒充缺失。
+                    missing[key].add(row[column])
                 if parent_column and row[parent_column]:
                     parents[key][row[parent_column]].add(row[column])
         status_requests = []
+        missing_run_ids = set()
         for run in pending:
             # 素材子运行只读冻结素材桥，不能代替通用对象目录；授权范围已在查询中限定。
             if is_material_child(run):
@@ -223,9 +228,14 @@ def refresh_account_directory(
             # 只有完全无筛选的查询覆盖整个层；不相关在途 ID 不会遮住新缺失对象。
             if covered & remaining:
                 status_requests.append(run)
+                if covered & remaining & missing.get(key, set()):
+                    missing_run_ids.add(run.id)
             remaining.difference_update(covered)
     with diagnostics.stage("directory_promote"):
-        promote_status_requests(session, status_requests)
+        promote_status_requests(
+            session, status_requests, missing_run_ids=missing_run_ids
+        )
+    missing_refs_by_type: dict[str, list[EntityRef]] = defaultdict(list)
     refs_by_type: dict[str, list[EntityRef]] = defaultdict(list)
     types: dict[str, dict[str, set[str]]] = defaultdict(lambda: defaultdict(set))
     selected = 0
@@ -236,9 +246,10 @@ def refresh_account_directory(
                 complete = False
                 continue
             selected += 1
-            refs_by_type[ad_type].append(
-                EntityRef(tenant_id, advertiser, kind, remote_id)
-            )
+            ref = EntityRef(tenant_id, advertiser, kind, remote_id)
+            refs_by_type[ad_type].append(ref)
+            if remote_id in missing.get((advertiser, ad_type, kind), set()):
+                missing_refs_by_type[ad_type].append(ref)
             types[advertiser][ad_type].add(kind)
     created = 0
     # 沿用唯一目录请求入口的100 ID分片；分类型传 refs，避免混合类型误发端点。
@@ -255,6 +266,7 @@ def refresh_account_directory(
                 scope="targeted",
                 dispatch_immediately=False,
                 refs=tuple(refs),
+                missing_refs=tuple(missing_refs_by_type[ad_type]),
                 ad_types={adv: {ad_type: types[adv][ad_type]} for adv in advertisers},
             )
     diagnostics.counts(

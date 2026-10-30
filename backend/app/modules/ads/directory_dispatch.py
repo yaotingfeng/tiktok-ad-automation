@@ -27,6 +27,7 @@ def targeted_capacity(session, now=None, *, run=None) -> int:
         SERVICE_KEY,
         STATUS_SERVICE,
         directory_service,
+        is_missing_status,
     )
     from app.modules.ads.material_directory_children import MATERIAL_CHILD_KEY
 
@@ -43,6 +44,7 @@ def targeted_capacity(session, now=None, *, run=None) -> int:
     if not locked:
         return 0
     own_status = run is not None and directory_service(run) == STATUS_SERVICE
+    own_missing = run is not None and is_missing_status(run)
     # 一次活动快照同时计算在途和可借用份额；不能为每个服务再扫积压及历史消息。
     counts = (
         session.connection()
@@ -51,7 +53,8 @@ def targeted_capacity(session, now=None, *, run=None) -> int:
         WITH active AS MATERIALIZED (
           SELECT r.id,r.tenant_id,r.claim_generation,r.next_page,r.claimed_until,
             r.next_attempt_at,r.channel,
-            (NOT r.query ? :child AND coalesce(r.query->>:service='status',false)) AS status_service
+            (NOT r.query ? :child AND coalesce(r.query->>:service IN ('status','status_missing'),false)) AS status_service,
+            coalesce(r.query->>:service='status_missing',false) AS status_missing
           FROM ad_directory_run r
           WHERE r.workload='live' AND r.status IN ('QUEUED','RUNNING','WAITING_REMOTE')
             AND (coalesce(jsonb_array_length(r.query->'ids'),0)>0
@@ -73,6 +76,22 @@ def targeted_capacity(session, now=None, *, run=None) -> int:
           FROM delivery
         )
         SELECT count(*) FILTER (WHERE inflight) AS total,
+          count(*) FILTER (WHERE id=CAST(:run_id AS uuid) AND inflight) AS own_inflight,
+          EXISTS (
+            SELECT 1 FROM classified c JOIN ad_directory_run r ON r.id=c.id
+            WHERE :own_status AND c.tenant_id=CAST(:tenant AS uuid) AND c.status_service AND c.eligible
+              AND r.status IN ('QUEUED','RUNNING','WAITING_REMOTE')
+              AND r.claim_generation=c.claim_generation AND r.next_page=c.next_page
+              AND r.claimed_until IS NOT DISTINCT FROM c.claimed_until
+              AND (r.next_attempt_at IS NULL OR r.next_attempt_at<=:now)
+              AND c.status_missing<>:own_missing
+              AND :own_missing=coalesce((SELECT last_status_missing
+                FROM directory_dispatch_cursor WHERE tenant_id=CAST(:tenant AS uuid)),false)
+              AND r.query->>:service IS NOT DISTINCT FROM
+                CASE WHEN c.status_missing THEN 'status_missing' ELSE 'status' END
+            LIMIT 1 FOR UPDATE OF r SKIP LOCKED
+          ) AS other_status_turn,
+
           count(*) FILTER (WHERE inflight AND status_service<>:own_status) AS opposite_inflight,
           count(*) FILTER (WHERE eligible AND status_service<>:own_status) AS opposite_pending
         FROM classified
@@ -83,11 +102,16 @@ def targeted_capacity(session, now=None, *, run=None) -> int:
                 "child": MATERIAL_CHILD_KEY,
                 "service": SERVICE_KEY,
                 "own_status": own_status,
+                "own_missing": own_missing,
+                "tenant": str(run.tenant_id) if run is not None else None,
+                "run_id": str(run.id) if run is not None else None,
             },
         )
         .mappings()
         .one()
     )
+    if counts["own_inflight"] or (own_status and counts["other_status_turn"]):
+        return 0
     available = max(0, TARGETED_DISPATCH_WINDOW - counts["total"])
     if run is None or TARGETED_DISPATCH_WINDOW < 2:
         return available
@@ -133,6 +157,28 @@ def enqueue_directory_step(
         task_key=directory_step_key(run),
         payload={"run_id": str(run.id), "claim_generation": run.claim_generation},
     )
+    if initial and run.next_page == 1 and not publish_only:
+        # 只有窗口锁下的首次准入推进轮次；分页续投不竞争新窗口，不改变游标。
+        from app.modules.ads.directory_services import (
+            directory_service,
+            is_missing_status,
+        )
+
+        if directory_service(run) == "status":
+            session.connection().execute(
+                text("""
+                INSERT INTO directory_dispatch_cursor(tenant_id,last_dispatched_at,last_status_missing)
+                VALUES (:tenant,:now,:missing)
+                ON CONFLICT (tenant_id) DO UPDATE SET
+                  last_dispatched_at=greatest(directory_dispatch_cursor.last_dispatched_at,EXCLUDED.last_dispatched_at),
+                  last_status_missing=EXCLUDED.last_status_missing
+                """),
+                {
+                    "tenant": run.tenant_id,
+                    "now": datetime.now(UTC),
+                    "missing": is_missing_status(run),
+                },
+            )
     if available_at is not None:
         from app.jobs.models import PendingDispatch
 
