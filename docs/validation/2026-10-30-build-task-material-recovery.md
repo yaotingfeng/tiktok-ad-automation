@@ -18,3 +18,11 @@
 - 本轮为运行恢复，无应用代码、数据库结构、队列、并发、配额、开关或版本变更，不涉及发布。没有宣称自动核查停止策略和列表提示已完成代码整改，也没有将 ENABLE 等同审核通过或实际产生消耗。
 
 原始只读核验脚本和 20 组平台回执留在忽略的 `.runtime/build-recovery-20261030/`，不提交真实业务输出及凭据。
+
+## 追查补证：本地锁等待被计入远端核查无进展
+
+后续补取生产 06:22 UTC 日志，确认 VQGM 目标账户的 `materials.verify_target` 在请求前 `batch_verification.check_current` 失败。精确任务 `ea771d40-0810-4c7b-9e06-be5939ef0025` 于 06:22:39.957 进入 get_videos 请求域，06:22:44.974 以 `tiktok_local_resources_unavailable` 退出，耗时 5016.704 ms；没有 sdk_http_started/response。对应 PostgreSQL 堆栈为 `_locked_material` 的 SELECT FOR UPDATE，明确 `while locking tuple ... in relation material_file`、statement timeout。同窗口也有 `_locked_operation` 超时；不再只以封面查询超时作为旁证。
+
+触发路径：多账户批量素材核查在每次物理请求前逐项锁素材主记录和操作记录，这些素材主记录跨目标账户共享；本地有界事务默认只有5秒。锁等待取消被包装成本地资源错误，批量核查只豁免 AccountAdmissionDeferred，仍将这种未完成平台读取的本地失败计为 no_progress。三次达到阈值后停止，并用预算耗尽覆盖当前原因，前台因此只剩待核实。已证明 VQGM 的具体触发；原持锁事务未保存，不能断言当时具体阻塞者或将所有失败都归为同一持锁进程。GHUY 核查发生于现存 Pod 04:29 UTC 启动前，旧预算已确认，但旧进程原始逐次失败日志不完整，不能声称每次均已还原。
+
+上轮空闲时同目标20项锁定探针1.312秒通过，只证明空闲条件可完成，不推翻真实并发锁等待超时。任务恢复成功不等于已修复此代码触发条件；本地资源退避应与远端核查无进展分开，并审查请求前锁范围及逐次原因留存。本轮仍为诊断，无生产应用修改。
