@@ -549,6 +549,12 @@ def try_verify_batch(
                     )
                     op.remote_response = {**op.remote_response, **evidence}
                     op.status, dist.status = "succeeded", "ready"
+                    from .source_cover_service import enqueue_source_cover
+
+                    # 批量读取和单条上传使用同一封面事件，不遗漏批次快路径。
+                    enqueue_source_cover(
+                        db, context=context, operation=op, purpose="BUILD"
+                    )
                 else:
                     op.status, dist.status = "verifying", "verifying"
                     if not discover and error_code is None:
