@@ -209,7 +209,10 @@ def test_all_failed_campaigns_include_descendants_and_finish_failed(
 def test_material_failure_blocks_only_its_group_and_other_groups_can_build(
     session, context, frozen
 ):
-    from app.modules.builds.preview_models import PlannedGroup, PreviewGroupMaterial
+    from app.modules.builds.preview_material_views import (
+        GroupMaterialView as PreviewGroupMaterial,
+    )
+    from app.modules.builds.preview_models import PlannedGroup
 
     receipt = submissions.submit_preview(
         session, context=context, preview_id=frozen, request_id=uuid4()

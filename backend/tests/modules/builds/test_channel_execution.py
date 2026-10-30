@@ -44,6 +44,7 @@ def channel_execution(
         BuildUnit,
         PlannedAd,
         PlannedGroup,
+        PreviewContract,
         PreviewDrama,
         PreviewDramaGroup,
         PreviewGroupMaterial,
@@ -138,6 +139,17 @@ def channel_execution(
         )
         db.add(preview)
         db.flush()
+        # 本夹具刻意保留旧模板，必须显式登记V1布局，不能依靠缺描述符猜历史。
+        db.add(
+            PreviewContract(
+                tenant_id=context.tenant_id,
+                preview_id=preview.id,
+                bc_id=route.bc_id,
+                version=1,
+                media_kind="VIDEO",
+                legacy_material_layout="GROUP",
+            )
+        )
         link = db.get(PromotionLink, case["link_id"])
         db.add(
             PreviewDrama(

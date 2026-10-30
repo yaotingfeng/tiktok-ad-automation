@@ -21,6 +21,7 @@ def test_new_account_group_budget_does_not_require_historical_adgroups():
 def test_minimum_roas_ineligibility_only_blocks_target_roas():
     assembled = _assemble_scene(
         scope={
+            "media_kind": "VIDEO",
             "access": SimpleNamespace(currency="USD"),
             "minis_id": "mini",
             "basis": "scope",
