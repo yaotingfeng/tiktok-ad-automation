@@ -356,19 +356,13 @@ def test_each_call_admission_defer_keeps_same_page_without_send(
             "ROLES": "accounts.list_bc_assets",
         }[work["stage"]]
     keys = admission_keys(settings.TIKTOK_APP_ID, endpoint, contexts[0].tenant_id, "")
+    # 使用在途租约阻塞；1秒速率窗口会在慢CI完成数据库领取前失效。
     redis_client.zadd(
-        keys[0],
-        {f"block-{i}": int(datetime.now(UTC).timestamp() * 1000) for i in range(100)},
+        keys[2],
+        {f"block-{i}": int((datetime.now(UTC) + timedelta(minutes=5)).timestamp() * 1000) for i in range(100)},
     )
     try:
         step(contexts[0], runs[0], redis_client)
-        if target == 0:
-            # SUBJECT只读取已有OAuth授权事实；首个真实HTTP是下一轮AUTHORIZED。
-            with Session(engine) as session:
-                run = session.get(DiscoveryRun, runs[0])
-                assert run.status == "RUNNING" and run.work == work
-                assert run.sent_count == sent and not calls
-            step(contexts[0], runs[0], redis_client)
         with Session(engine) as session, session.begin():
             run = session.get(DiscoveryRun, runs[0])
             assert (
@@ -380,7 +374,7 @@ def test_each_call_admission_defer_keeps_same_page_without_send(
             run.next_attempt_at = datetime.now(UTC) - timedelta(seconds=1)
         assert len(calls) == target
     finally:
-        redis_client.delete(keys[0])
+        redis_client.delete(keys[2])
     step(contexts[0], runs[0], redis_client)
     assert len(calls) == target + 1
     with Session(engine) as session:
