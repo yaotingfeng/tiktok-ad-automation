@@ -16,6 +16,7 @@ from app.core.errors import DomainError
 from app.integrations.tiktok.adapters.build_results import safe_identifier
 from app.integrations.tiktok.contracts.builds import CreatedObject
 from app.integrations.tiktok.contracts.common import CallEvidence, RemoteCallError
+from app.integrations.tiktok.transport_diagnostics import safe_transport_summary
 from app.modules.accounts.access import resolve_account_access
 from app.modules.builds.execution_models import ExecutionStep, StepEvidence, Submission
 from app.modules.builds.execution_schemas import StepClaim
@@ -66,6 +67,7 @@ def evidence(
     request_id: str | None = None,
     summary: dict[str, Any] | None = None,
     call_evidence: CallEvidence | None = None,
+    transport_diagnostics: dict[str, Any] | None = None,
 ) -> None:
     save_attempt_context(
         session,
@@ -74,6 +76,10 @@ def evidence(
         expected_id=claim.attempt_id if claim else None,
     )
     safe_summary = dict(summary or {})
+    transport = safe_transport_summary(transport_diagnostics)
+    if transport:
+        # 保存失败阶段而非请求内容；Pod重建后仍能关联原attempt/nonce排查。
+        safe_summary["transport"] = transport
     if claim is not None:
         safe_summary["attempt_id"] = str(claim.attempt_id)
     if call_evidence is not None:
@@ -266,6 +272,7 @@ def record_unknown(
     request_id: str | None = None,
     remote_code: int | None = None,
     call_evidence: CallEvidence | None = None,
+    transport_diagnostics: dict[str, Any] | None = None,
 ) -> str:
     step = _step(session, claim)
     # 保存已验证的原业务码用于诊断；错误码本身不证明无副作用，状态仍为 UNKNOWN。
@@ -279,6 +286,7 @@ def record_unknown(
         request_id=request_id,
         call_evidence=call_evidence,
         summary={"reason_code": code, "remote_code": remote_code},
+        transport_diagnostics=transport_diagnostics,
     )
     if step.status != "SUCCEEDED" and not step.remote_id:
         step.status, step.error_code = "UNKNOWN", code
@@ -391,6 +399,7 @@ def record_not_sent(
         request_id=error.evidence.request_id,
         call_evidence=error.evidence,
         summary={"reason_code": error.code, "body_digest": step.request_body_digest},
+        transport_diagnostics=error.transport_diagnostics,
     )
     step.status, step.phase = ("PENDING", "IDLE") if retryable else ("FAILED", "DONE")
     step.error_code = error.code
@@ -437,6 +446,7 @@ def record_rejected(
         conclusion="REMOTE_REJECTED",
         request_id=error.evidence.request_id,
         call_evidence=error.evidence,
+        transport_diagnostics=error.transport_diagnostics,
         summary={
             "reason_code": error.code,
             "remote_code": remote_code,

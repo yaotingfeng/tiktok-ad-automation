@@ -8,6 +8,11 @@ from typing import Any
 from billiard.exceptions import SoftTimeLimitExceeded  # type: ignore[import-untyped]
 
 from app.core.diagnostics import emit, error_fields, identifier, trace_context
+from app.integrations.tiktok.transport_diagnostics import (
+    begin_transport_trace,
+    observe_transport,
+    transport_summary,
+)
 
 
 @contextmanager
@@ -20,10 +25,19 @@ def trace_sdk_request(client: Any, **fields: Any):
 
     def request(*args: Any, **kwargs: Any):
         started = monotonic()
-        emit("sdk_http_started", **identity)
+        transport = observe_transport(
+            begin_transport_trace, client, kwargs.get("_request_timeout")
+        )
+        emit(
+            "sdk_http_started",
+            **identity,
+            http_attempt_id=getattr(transport, "http_attempt_id", None),
+        )
         try:
             response = original(*args, **kwargs)
         except BaseException as error:
+            if transport is not None:
+                observe_transport(transport.fail, error)
             status = getattr(error, "status", None)
             emit(
                 "sdk_http_failed",
@@ -31,6 +45,7 @@ def trace_sdk_request(client: Any, **fields: Any):
                 **error_fields(error),
                 http_status=status if type(status) is int else None,
                 duration_ms=round((monotonic() - started) * 1000, 3),
+                transport=transport_summary(transport),
             )
             raise
         metadata: dict[str, Any] = {}
@@ -67,6 +82,7 @@ def trace_sdk_request(client: Any, **fields: Any):
             **metadata,
             http_status=status if type(status) is int else None,
             duration_ms=round((monotonic() - started) * 1000, 3),
+            transport=transport_summary(transport),
         )
         return response
 

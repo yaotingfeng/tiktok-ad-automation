@@ -18,7 +18,6 @@ from billiard.exceptions import SoftTimeLimitExceeded  # type: ignore[import-unt
 from business_api_client.rest import ApiException  # type: ignore[import-untyped]
 from redis import Redis
 from sqlmodel import Session
-from urllib3 import HTTPSConnectionPool
 from urllib3.exceptions import HTTPError, NewConnectionError
 from urllib3.exceptions import TimeoutError as UrllibTimeoutError
 from urllib3.util.retry import Retry
@@ -27,6 +26,7 @@ from app.core.config import settings
 from app.core.context import TenantContext
 from app.core.credentials import decrypt_credentials
 from app.core.errors import DomainError
+from app.integrations.tiktok.transport_diagnostics import install_transport_tracking
 from app.jobs.admission import AdmissionPolicy, admit_call, admitted_scope, release_call
 from app.modules.accounts.models import TikTokConnection
 from app.modules.tenants.permissions import require_tenant
@@ -75,28 +75,7 @@ def begin_connection_setup_tracking(client: Any) -> None:
     state = getattr(client, "_tiktok_connection_setup_state", None)
     if isinstance(state, dict):
         state["marker"] = object()
-
-
-def _track_connection_setup(client: Any) -> None:
-    state = {"marker": object()}
-    client._tiktok_connection_setup_state = state
-
-    class TrackedHTTPSConnectionPool(HTTPSConnectionPool):
-        def _validate_conn(self, conn: Any) -> None:
-            try:
-                super()._validate_conn(conn)
-            except (HTTPError, OSError) as error:
-                # urllib3可把TLS握手超时包装为ReadTimeoutError；此处尚未调用
-                # conn.request，精确标记原异常，原样抛出以保持目录/报表契约。
-                cast(Any, error)._tiktok_before_http = state["marker"]
-                raise
-
-    manager = client.rest_client.pool_manager
-    # urllib3默认映射是进程共享对象，必须复制，避免污染其他客户端或租户。
-    manager.pool_classes_by_scheme = {
-        **manager.pool_classes_by_scheme,
-        "https": TrackedHTTPSConnectionPool,
-    }
+        state["transport_trace"] = None
 
 
 class AccountAdmissionDeferred(DomainError):
@@ -147,7 +126,7 @@ def official_client(
     ):
         logging.getLogger(name).disabled = True
     client = business_api_client.ApiClient(configuration=configuration)
-    _track_connection_setup(client)
+    install_transport_tracking(client)
     if access_token is not None:
         client.default_headers["Access-Token"] = access_token
     client.rest_client.pool_manager.connection_pool_kw["retries"] = Retry(

@@ -40,6 +40,7 @@ from app.integrations.tiktok.sdk import (
     begin_connection_setup_tracking,
     connection_setup_failure_code,
 )
+from app.integrations.tiktok.transport_diagnostics import transport_snapshot
 from app.modules.builds.readback_compare import parse_page, parse_status
 from app.modules.builds.request_compiler import (
     create_arguments,
@@ -149,16 +150,17 @@ class ApiBuildOperations:
                     and type(raw.get("code")) is int
                     and raw["code"] != 0
                 ):
-                    message = raw.get("message")
                     logger.error(
-                        "official TikTok create rejected: kind=%s code=%s message=%s",
+                        "official TikTok create rejected: kind=%s code=%s",
                         intent.kind,
                         raw["code"],
-                        message if isinstance(message, str) else type(message).__name__,
                     )
                 response = sdk_creation_envelope(raw, kind=intent.kind)
                 return created_result(kind=intent.kind, response=response)
-        except RemoteCallError:
+        except RemoteCallError as error:
+            error.transport_diagnostics = transport_snapshot(
+                client, include_runtime=True
+            )
             raise
         except Exception as error:
             setup_code = connection_setup_failure_code(client, error)
@@ -169,7 +171,12 @@ class ApiBuildOperations:
                     setup_code,
                 )
                 raise RemoteCallError(
-                    setup_code, effect="NOT_SENT", evidence=CallEvidence()
+                    setup_code,
+                    effect="NOT_SENT",
+                    evidence=CallEvidence(),
+                    transport_diagnostics=transport_snapshot(
+                        client, include_runtime=True
+                    ),
                 ) from None
             if not invoked:
                 raise
@@ -181,7 +188,10 @@ class ApiBuildOperations:
             )
             # 已进入SDK调用且没有本次HTTP前失败的确证，不能按异常类型放行重发。
             raise RemoteCallError(
-                "create_result_unknown", effect="UNKNOWN", evidence=CallEvidence()
+                "create_result_unknown",
+                effect="UNKNOWN",
+                evidence=CallEvidence(),
+                transport_diagnostics=transport_snapshot(client, include_runtime=True),
             ) from None
 
     def _read(

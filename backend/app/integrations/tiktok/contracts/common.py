@@ -54,12 +54,14 @@ class RemoteCallError(DomainError):
         effect: RemoteEffect,
         evidence: CallEvidence,
         retry_after_ms: int | None = None,
+        transport_diagnostics: dict[str, Any] | None = None,
     ):
         # 上游原文可能包含凭据和签名 URL，异常仅保留应用定义的提示和关联证据。
         super().__init__(code, "TikTok 调用未取得可确认结果", retryable=False)
         self.effect = effect
         self.evidence = evidence
         self.retry_after_ms = retry_after_ms
+        self.transport_diagnostics = transport_diagnostics
 
 
 @dataclass(frozen=True)

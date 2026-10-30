@@ -1203,6 +1203,9 @@ def process_step(
                     call_evidence=error.evidence
                     if isinstance(error, RemoteCallError)
                     else None,
+                    transport_diagnostics=error.transport_diagnostics
+                    if isinstance(error, RemoteCallError)
+                    else None,
                 )
         safe = (
             error
