@@ -54,7 +54,13 @@ export function ImageCompositionDiff({
   const [error, setError] = useState<unknown>(),
     [resolving, setResolving] = useState(false)
   const differences = useQuery({
-    queryKey: ["image-differences", plan.plan_id, kind, diffPaging.cursor],
+    queryKey: [
+      "image-differences",
+      plan.plan_id,
+      kind,
+      diffPaging.cursor,
+      diffPaging.limit,
+    ],
     queryFn: async ({ signal }) =>
       (
         await imageApi.differences({
@@ -98,7 +104,7 @@ export function ImageCompositionDiff({
     }
   }
   const units = useQuery({
-    queryKey: ["image-plan", plan.plan_id, paging.cursor],
+    queryKey: ["image-plan", plan.plan_id, paging.cursor, paging.limit],
     queryFn: async ({ signal }) =>
       (
         await imageApi.planUnits({

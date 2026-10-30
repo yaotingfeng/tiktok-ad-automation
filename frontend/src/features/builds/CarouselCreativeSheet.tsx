@@ -22,6 +22,7 @@ import {
   DialogDescription,
   DialogFooter,
 } from "@/components/ui/dialog"
+import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Field, FieldGroup, FieldLabel } from "@/components/ui/field"
@@ -77,10 +78,12 @@ export function CarouselCreativeSheet({
     [add, setAdd] = useState<{
       unit: ImageUnitPublic | null
       ids: string[]
+      revision: number
     } | null>(null),
     [selected, setSelected] = useState<string[]>([]),
     [merge, setMerge] = useState(false),
     [reuse, setReuse] = useState(false)
+  const addStale = !!add && add.revision !== revision
   const dirty = Object.keys(editors).length > 0
   function setEditor(id: string, value: ImageEditorState | null) {
     setEditors((current) => {
@@ -104,6 +107,7 @@ export function CarouselCreativeSheet({
       revision,
       generation,
       paging.cursor,
+      paging.limit,
     ],
     queryFn: async ({ signal }) =>
       (
@@ -157,6 +161,7 @@ export function CarouselCreativeSheet({
       revision,
       generation,
       candidatePaging.cursor,
+      candidatePaging.limit,
     ],
     enabled: !!add && !busy,
     queryFn: async ({ signal }) =>
@@ -172,14 +177,15 @@ export function CarouselCreativeSheet({
         })
       ).data,
   })
-  async function edit(command: Edit["command"]) {
+  async function edit(command: Edit["command"], expectedRevision = revision) {
     setBusy(true)
     try {
       const result = await imageApi.edit({
         path,
-        body: { ...change(revision), command },
+        body: { ...change(expectedRevision), command },
       })
       changed(result.data.revision)
+      return result.data.revision
     } catch (e) {
       setError(e)
       throw e
@@ -245,7 +251,7 @@ export function CarouselCreativeSheet({
               <Button
                 variant="outline"
                 disabled={!write || busy}
-                onClick={() => setAdd({ unit: null, ids: [] })}
+                onClick={() => setAdd({ unit: null, ids: [], revision })}
               >
                 手工新建轮播
               </Button>
@@ -343,8 +349,8 @@ export function CarouselCreativeSheet({
                   editor={editors[unit.id]}
                   onEditor={(value) => setEditor(unit.id, value)}
                   onMusicChanged={changed}
-                  onAdd={(unit, ids) => {
-                    setAdd({ unit, ids })
+                  onAdd={(unit, ids, expectedRevision) => {
+                    setAdd({ unit, ids, revision: expectedRevision })
                     setReuse(false)
                   }}
                 />
@@ -417,20 +423,29 @@ export function CarouselCreativeSheet({
                 if (!v) setAdd(null)
               }}
             >
-              <DialogContent>
-                <DialogHeader>
+              <DialogContent className="flex max-h-[90dvh] flex-col">
+                <DialogHeader className="shrink-0">
                   <DialogTitle>添加本剧候选图片</DialogTitle>
                   <DialogDescription>
                     保持已选顺序；每个创意不重复，最多 35 张。
                   </DialogDescription>
                 </DialogHeader>
                 {candidates.error && <RequestError error={candidates.error} />}
-                <FieldGroup>
+                {addStale && (
+                  <Alert>
+                    <AlertDescription>
+                      草稿已更新，请取消本次添加并核对最新内容后再编辑。
+                    </AlertDescription>
+                  </Alert>
+                )}
+                <FieldGroup className="min-h-0 overflow-y-auto">
                   {candidates.data?.items.map((c) => (
                     <Field orientation="horizontal" key={c.material_id}>
                       <Checkbox
                         id={`candidate-${c.material_id}`}
                         disabled={
+                          addStale ||
+                          busy ||
                           !c.enabled ||
                           (!add.ids.includes(c.material_id) &&
                             add.ids.length >= 35)
@@ -452,14 +467,26 @@ export function CarouselCreativeSheet({
                       {!c.enabled && (
                         <Button
                           variant="outline"
-                          disabled={busy}
+                          disabled={busy || addStale}
                           onClick={async () => {
+                            if (addStale) return
                             try {
-                              await edit({
-                                kind: "RESTORE_CANDIDATES",
-                                drama_id: drama.drama_id,
-                                material_ids: [c.material_id],
-                              })
+                              const nextRevision = await edit(
+                                {
+                                  kind: "RESTORE_CANDIDATES",
+                                  drama_id: drama.drama_id,
+                                  material_ids: [c.material_id],
+                                },
+                                add.revision,
+                              )
+                              // 本弹窗自己的恢复操作可推进版本，外部更新仍由 CAS 拦截。
+                              setAdd(
+                                (current) =>
+                                  current && {
+                                    ...current,
+                                    revision: nextRevision,
+                                  },
+                              )
                             } catch {
                               return
                             }
@@ -470,17 +497,17 @@ export function CarouselCreativeSheet({
                       )}
                     </Field>
                   ))}
-                  <Field orientation="horizontal">
-                    <Checkbox
-                      id="allow-image-reuse"
-                      checked={reuse}
-                      onCheckedChange={(v) => setReuse(!!v)}
-                    />
-                    <FieldLabel htmlFor="allow-image-reuse">
-                      明确允许复用其他创意中的图片
-                    </FieldLabel>
-                  </Field>
                 </FieldGroup>
+                <Field orientation="horizontal" className="shrink-0">
+                  <Checkbox
+                    id="allow-image-reuse"
+                    checked={reuse}
+                    onCheckedChange={(v) => setReuse(!!v)}
+                  />
+                  <FieldLabel htmlFor="allow-image-reuse">
+                    明确允许复用其他创意中的图片
+                  </FieldLabel>
+                </Field>
                 <Pager
                   paging={candidatePaging}
                   nextCursor={candidates.data?.next_cursor}
@@ -492,8 +519,9 @@ export function CarouselCreativeSheet({
                     取消
                   </Button>
                   <Button
-                    disabled={busy || !add.ids.length}
+                    disabled={busy || addStale || !add.ids.length}
                     onClick={async () => {
+                      if (addStale) return
                       try {
                         await edit(
                           add.unit
@@ -509,6 +537,7 @@ export function CarouselCreativeSheet({
                                 material_ids: add.ids,
                                 allow_reuse: reuse,
                               },
+                          add.revision,
                         )
                         if (add.unit) setEditor(add.unit.id, null)
                       } catch {

@@ -1276,12 +1276,13 @@ def edit_creative_units(
     affected = []
     removed_images = set()
 
-    def image_content(ids, *, allow_reuse=False, replacing=()):
+    def image_content(ids, *, allow_reuse=False, replacing=(), existing_reuse=()):
         content = _validate_images(session, scope, state, drama_id, ids)
         used = {
             i for u in units if u.id not in replacing for i in u.ordered_material_ids
         }
-        if used.intersection(ids) and not allow_reuse:
+        # 已经明确建立的复用关系允许排序/删减；只有新增交集需要再次确认。
+        if used.intersection(ids).difference(existing_reuse) and not allow_reuse:
             raise DomainError(
                 "image_reuse_confirmation_required", "同图复用需要显式选择"
             )
@@ -1331,7 +1332,10 @@ def edit_creative_units(
     elif command.kind == "SET_IMAGES":
         old = by_id[command.unit_id]
         content = image_content(
-            command.material_ids, allow_reuse=command.allow_reuse, replacing=(old.id,)
+            command.material_ids,
+            allow_reuse=command.allow_reuse,
+            replacing=(old.id,),
+            existing_reuse=old.ordered_material_ids,
         )
         changed = old.ordered_material_ids != command.material_ids
         value = old.model_copy(

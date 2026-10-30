@@ -106,11 +106,18 @@ export function CarouselCreativeCard({
   unit: ImageUnitPublic
   write: boolean
   recommend: boolean
-  onEdit: (command: Edit["command"]) => Promise<void>
+  onEdit: (
+    command: Edit["command"],
+    expectedRevision?: number,
+  ) => Promise<number>
   editor?: ImageEditorState
   onEditor: (value: ImageEditorState | null) => void
   onMusicChanged: (revision: number) => void
-  onAdd: (unit: ImageUnitPublic, ids: string[]) => void
+  onAdd: (
+    unit: ImageUnitPublic,
+    ids: string[],
+    expectedRevision: number,
+  ) => void
 }) {
   const ids = editor?.ids ?? unit.ordered_material_ids
   const [music, setMusic] = useState(false),
@@ -154,13 +161,18 @@ export function CarouselCreativeCard({
         : {
             ids: value,
             revision: editor?.revision ?? unit.revision,
+            draftRevision: editor?.draftRevision ?? revision,
           },
     )
   }
   const save = async () => {
     setBusy(true)
     try {
-      await onEdit({ kind: "SET_IMAGES", unit_id: unit.id, material_ids: ids })
+      // 保留开始编辑时的草稿版本，轮询不能替旧内容取得新版本的写入资格。
+      await onEdit(
+        { kind: "SET_IMAGES", unit_id: unit.id, material_ids: ids },
+        editor?.draftRevision ?? revision,
+      )
       onEditor(null)
     } catch (e) {
       setError(e)
@@ -283,8 +295,10 @@ export function CarouselCreativeCard({
           <div className="flex flex-wrap gap-2">
             <Button
               variant="outline"
-              disabled={ids.length >= 35}
-              onClick={() => onAdd(unit, ids)}
+              disabled={ids.length >= 35 || busy || stale}
+              onClick={() =>
+                onAdd(unit, ids, editor?.draftRevision ?? revision)
+              }
             >
               添加图片
             </Button>

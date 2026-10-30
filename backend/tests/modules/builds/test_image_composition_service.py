@@ -1492,3 +1492,52 @@ def test_candidate_progress_cancel_api_and_tenant_scope(
         json={"request_id": str(uuid4()), "expected_revision": draft.revision},
     )
     assert response.status_code == 200 and response.json()["status"] == "CANCELLED"
+
+
+@pytest.mark.parametrize("remove", [False, True])
+def test_edit_existing_duplicate_preserves_reuse_but_new_reuse_needs_consent(
+    session, image_draft, remove
+):
+    from uuid import UUID
+
+    from app.modules.builds.image_composition_commands import Duplicate, SetImages
+
+    _, _, scope = image_draft
+    first, second, _ = apply_rule(session, image_draft)
+    original = UUID(first["id"])
+    ids = tuple(map(UUID, first["ordered_material_ids"]))
+    clone = UUID(
+        edit(session, image_draft, Duplicate(kind="DUPLICATE", unit_id=original))[
+            "affected_units"
+        ][0]
+    )
+    changed = tuple(reversed(ids))[1:] if remove else tuple(reversed(ids))
+    edit(
+        session,
+        image_draft,
+        SetImages(kind="SET_IMAGES", unit_id=clone, material_ids=changed),
+    )
+    rows = {u["id"]: u for u in list_creative_units(session, scope).items}
+    assert rows[str(clone)]["ordered_material_ids"] == list(map(str, changed))
+    assert rows[str(original)]["ordered_material_ids"] == list(map(str, ids))
+    # 已确认的交集可继续编辑，但其他轮播中的新图片仍须明确同意。
+    new_image = UUID(second["ordered_material_ids"][0])
+    with pytest.raises(DomainError) as denied:
+        edit(
+            session,
+            image_draft,
+            SetImages(
+                kind="SET_IMAGES", unit_id=clone, material_ids=(*changed, new_image)
+            ),
+        )
+    assert denied.value.code == "image_reuse_confirmation_required"
+    edit(
+        session,
+        image_draft,
+        SetImages(
+            kind="SET_IMAGES",
+            unit_id=clone,
+            material_ids=(*changed, new_image),
+            allow_reuse=True,
+        ),
+    )

@@ -26,4 +26,5 @@ export function useImageCursorPage(scope: string) {
 export interface ImageEditorState {
   ids: string[]
   revision: number | undefined
+  draftRevision: number
 }

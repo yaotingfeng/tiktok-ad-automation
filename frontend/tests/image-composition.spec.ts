@@ -870,6 +870,17 @@ test("候选第二页恢复排除后游标重置且保留已选图片，摘要�
     picker.getByRole("checkbox", { name: "已选图片.jpg" }),
   ).toBeChecked()
   expect(invalid).toEqual([])
+  const restoredRevision = env.state.revision
+  await picker
+    .getByRole("button", { name: "保存图片调整", exact: true })
+    .click()
+  await expect(picker).not.toBeVisible()
+  expect(
+    env.calls.filter((call) => call.suffix === "/edits").at(-1)?.body,
+  ).toMatchObject({
+    expected_revision: restoredRevision,
+    command: { kind: "CREATE", material_ids: ["selected"] },
+  })
 })
 
 // 最终审查回归：清理原件后仍须按当前 BC 辨认图片，读取不得隐式上传。
@@ -1064,3 +1075,144 @@ test("本地批次和逐剧编辑共同保留门槛，重载后只读服务端�
     page.getByRole("button", { name: "生成搭建预览", exact: true }),
   ).toBeEnabled()
 })
+
+test("过期图片编辑不能通过添加弹窗覆盖新顺序", async ({ page }) => {
+  const env = await imageBoundary(page)
+  await page.goto(`/tenants/${T}/build-drafts/${D}?bc_id=${BC}`)
+  await page
+    .getByRole("button", { name: "查看与调整轮播", exact: true })
+    .first()
+    .click()
+  const sheet = page.getByRole("dialog", { name: /查看与调整轮播/ })
+  await sheet.getByRole("button", { name: "图片 2 前移", exact: true }).click()
+  env.unit.ordered_material_ids = ["image-3", "image-2", "image-1"]
+  env.unit.revision++
+  env.state.revision++
+  await expect(sheet.getByText(/图片已被其他操作更新/)).toBeVisible()
+  await expect(
+    sheet.getByRole("button", { name: "添加图片", exact: true }),
+  ).toBeDisabled()
+  expect(env.calls.filter((c) => c.suffix === "/edits")).toHaveLength(0)
+})
+
+test("添加图片弹窗打开后并发修改不能提交旧内容", async ({ page }) => {
+  const env = await imageBoundary(page)
+  await page.goto(`/tenants/${T}/build-drafts/${D}?bc_id=${BC}`)
+  await page
+    .getByRole("button", { name: "查看与调整轮播", exact: true })
+    .first()
+    .click()
+  const sheet = page.getByRole("dialog", { name: /查看与调整轮播/ })
+  await sheet.getByRole("button", { name: "添加图片", exact: true }).click()
+  const add = page.getByRole("dialog", {
+    name: "添加本剧候选图片",
+    exact: true,
+  })
+  await expect(
+    add.getByRole("button", { name: "保存图片调整", exact: true }),
+  ).toBeEnabled()
+  env.unit.ordered_material_ids = ["image-3", "image-2", "image-1"]
+  env.unit.revision++
+  env.state.revision++
+  await expect(
+    add.getByRole("button", { name: "保存图片调整", exact: true }),
+  ).toBeDisabled()
+  await expect(add.getByText(/已更新/)).toBeVisible()
+  expect(env.calls.filter((c) => c.suffix === "/edits")).toHaveLength(0)
+})
+
+test("添加图片保存固定打开时版本以阻止轮询前并发覆盖", async ({ page }) => {
+  const env = await imageBoundary(page)
+  await page.route("**/image-composition/edits", (route) => {
+    const body = route.request().postDataJSON()
+    env.calls.push({ suffix: "/edits", body })
+    return route.fulfill({
+      status: 409,
+      json: { code: "draft_revision_conflict", message: "草稿已更新，请刷新" },
+    })
+  })
+  await page.goto(`/tenants/${T}/build-drafts/${D}?bc_id=${BC}`)
+  await page
+    .getByRole("button", { name: "查看与调整轮播", exact: true })
+    .first()
+    .click()
+  const sheet = page.getByRole("dialog", { name: /查看与调整轮播/ })
+  await sheet.getByRole("button", { name: "图片 2 前移", exact: true }).click()
+  // 单元尚未轮询，但草稿状态已读回另一操作的新revision。
+  env.state.revision++
+  await page.waitForResponse((r) =>
+    new URL(r.url()).pathname.endsWith("/image-composition"),
+  )
+  await sheet.getByRole("button", { name: "添加图片", exact: true }).click()
+  const add = page.getByRole("dialog", {
+    name: "添加本剧候选图片",
+    exact: true,
+  })
+  const save = add.getByRole("button", { name: "保存图片调整", exact: true })
+  if (await save.isEnabled()) {
+    await save.click()
+    await expect
+      .poll(() => env.calls.filter((c) => c.suffix === "/edits").length)
+      .toBe(1)
+    expect(
+      env.calls.find((c) => c.suffix === "/edits")!.body.expected_revision,
+    ).toBe(1)
+  } else {
+    expect(env.calls.filter((c) => c.suffix === "/edits")).toHaveLength(0)
+  }
+})
+
+for (const height of [720, 929]) {
+  test(`50及100候选图片在${height}px窗口可翻页和保存`, async ({ page }) => {
+    const env = await imageBoundary(page)
+    await page.setViewportSize({ width: 1280, height })
+    const limits: number[] = []
+    await page.route("**/image-composition/candidates?**", (route) => {
+      const limit = Number(
+        new URL(route.request().url()).searchParams.get("limit"),
+      )
+      limits.push(limit)
+      return route.fulfill({
+        json: {
+          items: Array.from({ length: limit }, (_, i) => ({
+            material_id: `candidate-${i}`,
+            file_name_snapshot: `candidate-${i}.png`,
+            enabled: true,
+          })),
+          total: 200,
+          next_cursor: "next-candidates",
+        },
+      })
+    })
+    await page.goto(`/tenants/${T}/build-drafts/${D}?bc_id=${BC}`)
+    await page
+      .getByRole("button", { name: "查看与调整轮播", exact: true })
+      .first()
+      .click()
+    await page
+      .getByRole("button", { name: "手工新建轮播", exact: true })
+      .click()
+    const add = page.getByRole("dialog", {
+      name: "添加本剧候选图片",
+      exact: true,
+    })
+    await expect(add.getByRole("checkbox")).toHaveCount(51)
+    const save = add.getByRole("button", { name: "保存图片调整", exact: true })
+    await expect(save).toBeInViewport()
+    await add.getByRole("combobox", { name: "每页条数", exact: true }).click()
+    await page.getByRole("option", { name: "100 条", exact: true }).click()
+    await expect(add.getByRole("checkbox")).toHaveCount(101)
+    expect(limits).toEqual([50, 100])
+    await add
+      .getByRole("checkbox", { name: "candidate-0.png", exact: true })
+      .check()
+    await expect(save).toBeInViewport()
+    await save.click()
+    await expect
+      .poll(() => env.calls.filter((c) => c.suffix === "/edits").length)
+      .toBe(1)
+    expect(
+      env.calls.find((c) => c.suffix === "/edits")!.body.command,
+    ).toMatchObject({ kind: "CREATE", material_ids: ["candidate-0"] })
+  })
+}

@@ -281,6 +281,36 @@ def test_current_build_role_required_before_work_and_publication(
         ).all()
     if when == "before":
         assert not wire["calls"]
+    # 任务和单元必须一起结束，否则恢复权限后既不计失败也无法重试。
+    with Session(engine) as session, session.begin():
+        job = session.get(MusicSelectionJob, UUID(result["job_id"]))
+        unit = session.get(
+            DraftCreativeUnit,
+            (
+                scope.tenant_id,
+                scope.draft_id,
+                job.active_generation,
+                UUID(job.targets[0]["unit_id"]),
+            ),
+        )
+        assert unit.music_status == "FAILED"
+        session.get(
+            TenantMembership, (scope.tenant_id, scope.actor_id)
+        ).role = "operator"
+        session.flush()
+        retried = request_music(
+            session,
+            scope,
+            unit.id,
+            unit.revision,
+            unit.music_revision,
+            uuid4(),
+            "RETRY",
+            None,
+        )
+        retry_id = UUID(retried["job_ids"][0])
+    wire["hook"] = None
+    assert run_job(engine, redis_client, retry_id)["status"] == "READY"
 
 
 def test_zero_duration_needs_selection_not_invalid(music_case, wire, redis_client):
@@ -1197,3 +1227,138 @@ def test_selected_retry_repair_and_fixed_rule_only_reads_configured_song(
     advance_music(job_id, 1, database_engine=engine, redis_client=redis_client)
     music_paths = [path for path, _ in wire["calls"] if "/music/" in path]
     assert music_paths and all("/music/get/" in path for path in music_paths)
+
+
+def test_revoked_music_failure_is_bounded_preserves_manual_and_can_batch_retry(
+    music_case, wire, redis_client
+):
+    from app.modules.builds.carousel_music_models import MusicPreparationRun
+    from app.modules.builds.carousel_music_tasks import advance_music_preparation
+    from app.modules.builds.image_composition_commands import Duplicate
+    from app.modules.builds.image_composition_service import edit_creative_units
+    from app.modules.builds.image_music_batch import batch_progress, start_music_retry
+    from app.modules.tenants.models import TenantMembership
+
+    engine, scope = music_case
+    identity = job_ids(engine)[0]
+    with Session(engine) as session, session.begin():
+        job = session.get(MusicSelectionJob, identity)
+        original = UUID(job.targets[0]["unit_id"])
+        draft = session.get(BuildDraft, scope.draft_id)
+        for _ in range(21):
+            edit_creative_units(
+                session,
+                scope,
+                uuid4(),
+                draft.revision,
+                Duplicate(kind="DUPLICATE", unit_id=original),
+            )
+        finish_music_preparation(session)
+        assert len(job.targets) == 22
+        unit = session.get(
+            DraftCreativeUnit,
+            (scope.tenant_id, scope.draft_id, job.active_generation, original),
+        )
+        request_music(
+            session,
+            scope,
+            unit.id,
+            unit.revision,
+            unit.music_revision,
+            uuid4(),
+            "SET_MANUAL",
+            "manual",
+        )
+        session.get(TenantMembership, (scope.tenant_id, scope.actor_id)).role = "viewer"
+    first = run_job(engine, redis_client, identity)
+    assert first["status"] == "PENDING" and first["processed"] == 20
+    second = run_job(engine, redis_client, identity)
+    assert second["status"] == "FAILED" and second["processed"] == 22
+    assert not wire["calls"]
+    with Session(engine) as session, session.begin():
+        job = session.get(MusicSelectionJob, identity)
+        units = [
+            session.get(
+                DraftCreativeUnit,
+                (
+                    scope.tenant_id,
+                    scope.draft_id,
+                    job.active_generation,
+                    UUID(t["unit_id"]),
+                ),
+            )
+            for t in job.targets
+        ]
+        assert sum(u.music_status == "FAILED" for u in units) == 21
+        selected = next(u for u in units if u.id == original)
+        assert (
+            selected.music_status == "READY"
+            and selected.music_id == "manual"
+            and selected.music_protected
+        )
+        session.get(
+            TenantMembership, (scope.tenant_id, scope.actor_id)
+        ).role = "operator"
+        session.flush()
+        draft = session.get(BuildDraft, scope.draft_id)
+        result = start_music_retry(
+            session, scope, uuid4(), draft.revision, [selected.drama_id]
+        )
+        run = session.get(MusicPreparationRun, UUID(result["run_id"]))
+        while run.status == "PENDING":
+            advance_music_preparation(session, run.id, run.generation)
+        assert batch_progress(session, scope, run.id)["retried"] == 21
+
+
+def test_late_revoked_failure_does_not_overwrite_new_manual_song(
+    music_case, wire, redis_client
+):
+    from app.modules.tenants.models import TenantMembership
+
+    engine, scope = music_case
+    identity = job_ids(engine)[0]
+
+    def choose_and_revoke():
+        with Session(engine) as session, session.begin():
+            job = session.get(MusicSelectionJob, identity)
+            unit = session.get(
+                DraftCreativeUnit,
+                (
+                    scope.tenant_id,
+                    scope.draft_id,
+                    job.active_generation,
+                    UUID(job.targets[0]["unit_id"]),
+                ),
+            )
+            request_music(
+                session,
+                scope,
+                unit.id,
+                unit.revision,
+                unit.music_revision,
+                uuid4(),
+                "SET_MANUAL",
+                "manual",
+            )
+            session.get(
+                TenantMembership, (scope.tenant_id, scope.actor_id)
+            ).role = "viewer"
+
+    wire["hook"] = choose_and_revoke
+    assert run_job(engine, redis_client, identity)["status"] == "FAILED"
+    with Session(engine) as session:
+        job = session.get(MusicSelectionJob, identity)
+        unit = session.get(
+            DraftCreativeUnit,
+            (
+                scope.tenant_id,
+                scope.draft_id,
+                job.active_generation,
+                UUID(job.targets[0]["unit_id"]),
+            ),
+        )
+        assert (
+            unit.music_status == "READY"
+            and unit.music_id == "manual"
+            and unit.music_protected
+        )

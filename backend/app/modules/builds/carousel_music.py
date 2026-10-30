@@ -400,8 +400,16 @@ def _public(job):
 
 def _publish(session, job, scope):
     draft = _authority(session, scope, job.seed_advertiser_id, lock=True)
-    if draft.active_image_generation != job.active_generation:
-        job.status, job.claim = "CANCELLED", None
+    _publish_result(session, job, draft)
+
+
+def _publish_result(session, job, draft):
+    if (
+        draft.tenant_id != job.tenant_id
+        or draft.bc_id != job.bc_id
+        or draft.active_image_generation != job.active_generation
+    ):
+        job.status, job.claim, job.repair_after = "CANCELLED", None, None
         return
     # 每片最多 20 个订阅者；跨 generation 只保留审计，不直接写新单元。
     for target in job.targets[job.cursor : job.cursor + 20]:
@@ -436,6 +444,18 @@ def _publish(session, job, scope):
         job.generation += 1
         queue_music(session, job)
     job.claim = None
+
+
+def _fail_music(session, job, error_code):
+    """撤权只能阻止业务成功，不能留下永不终结的本地配乐状态。
+
+    调用方已通过_locked持有草稿/任务锁；仅写失败状态，不读取平台或写入曲目。
+    复用发布的代次、内容、请求及手工保护检查，并继续按20个订阅者分片收尾。
+    """
+    job.error_code, job.result = error_code, {"status": "FAILED"}
+    draft = session.get(BuildDraft, job.draft_id)
+    assert draft is not None  # _locked 已锁定并确认草稿存在。
+    _publish_result(session, job, draft)
 
 
 def _skip_obsolete_subscribers(session, job):
@@ -577,11 +597,7 @@ def advance_music(job_id, generation, *, database_engine, redis_client):
                 dict(job.parameters),
             )
         except DomainError as error:
-            job.error_code, job.result = error.code, {"status": "FAILED"}
-            try:
-                _publish(session, job, scope)
-            except DomainError:
-                job.status, job.claim, job.repair_after = "FAILED", None, None
+            _fail_music(session, job, error.code)
             return _public(job)
     # 真实图片 URL 仅在本次调用栈，不写数据库、outbox 或错误证据。
     selected, error_code, retry, retry_after = None, None, False, 0
@@ -712,12 +728,7 @@ def advance_music(job_id, generation, *, database_engine, redis_client):
                     }
                 _publish(session, job, scope)
         except DomainError as error:
-            job.status, job.error_code, job.claim, job.repair_after = (
-                "FAILED",
-                error.code,
-                None,
-                None,
-            )
+            _fail_music(session, job, error.code)
         return _public(job)
 
 
