@@ -69,3 +69,26 @@ def report_workload(session, job, *, now):
         .scalar_one()
     )
     return "live" if current else "background"
+
+
+def has_background_facts(session, now: datetime) -> bool:
+    """共享后台池有可运行事实时，目录/补链各只占一个候选槽。
+
+    只探测是否存在，不统计积压、不加载 progress；未来退避中的事实不占保底。
+    RUNNING 包含尚未到期的在途工作和待恢复的过期租约。
+    """
+    return bool(
+        session.connection()
+        .execute(
+            text(f"""SELECT EXISTS (
+            SELECT 1 FROM report_sync_job j
+            WHERE j.kind <> 'material_links'
+              AND j.status IN ('QUEUED','WAITING','RUNNING')
+              AND (j.status='RUNNING' OR (j.due_at<=:lane_now
+                AND (j.claimed_until IS NULL OR j.claimed_until<=:lane_now)))
+              AND (j.priority>2 OR {lane_predicate(lane="backfill", alias="j")})
+        )"""),
+            {"lane_now": now},
+        )
+        .scalar_one()
+    )

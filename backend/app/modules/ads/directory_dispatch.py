@@ -186,3 +186,51 @@ def enqueue_directory_step(
         # 等待额度的续步仍走原 outbox；到期前不能发布，避免忙循环和空占租约。
         dispatch.available_at = available_at
         session.add(dispatch)
+
+
+def background_continuation_available(session, run, now) -> bool:
+    """单槽模式下只核对其他在途运行，不对整批候选排名或重新领取。
+
+    使用扫描器同一窗口锁与失联期限；迟到旧消息必须重新竞争，不能持有永久许可。
+    当前页与 outbox 仍在同一事务提交，窗口锁不会跨远端读取持有。
+    """
+    from app.modules.reporting.job_tasks import (
+        DIRECTORY_MESSAGE_LOST_AFTER,
+        PUBLISH_MESSAGE_LOST_AFTER,
+    )
+
+    if (
+        not session.connection()
+        .execute(
+            text(
+                "SELECT pg_try_advisory_xact_lock(hashtextextended('tkada:directory-dispatch-window',0))"
+            )
+        )
+        .scalar_one()
+    ):
+        return False
+    return (
+        not session.connection()
+        .execute(
+            text("""
+        SELECT EXISTS (SELECT 1 FROM ad_directory_run r
+          WHERE r.id<>:run_id AND r.status IN ('QUEUED','RUNNING','WAITING_REMOTE')
+            AND r.channel='OFFICIAL_API'
+            AND NOT (r.workload='live' AND (
+              coalesce(jsonb_array_length(r.query->'ids'),0)>0
+              OR coalesce(jsonb_array_length(r.query->'parent_ids'),0)>0))
+            AND (r.claimed_until>:now OR (r.claimed_until IS NULL AND EXISTS (
+              SELECT 1 FROM pending_dispatch p WHERE p.tenant_id=r.tenant_id
+                AND p.task_key='ads.sync_step:'||r.id::text||':'||r.claim_generation::text||':page:'||r.next_page::text
+                AND (p.published_at IS NULL OR p.published_at>=CASE
+                  WHEN p.task_name='ads.publish_step' THEN :publish_cutoff ELSE :read_cutoff END)))))
+    """),
+            {
+                "run_id": run.id,
+                "now": now,
+                "read_cutoff": now - DIRECTORY_MESSAGE_LOST_AFTER,
+                "publish_cutoff": now - PUBLISH_MESSAGE_LOST_AFTER,
+            },
+        )
+        .scalar_one()
+    )

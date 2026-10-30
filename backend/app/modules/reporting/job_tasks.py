@@ -58,6 +58,7 @@ from app.modules.reporting.jobs import (
     request_time,
 )
 from app.modules.reporting.lanes import (
+    has_background_facts,
     lane_condition,
     report_workload,
 )
@@ -275,7 +276,7 @@ def _message_lost(session: Session, row: AdDirectoryRun, now: datetime) -> bool:
     return dispatch.published_at < now - threshold
 
 
-def _dispatch_directories(session, now):
+def _dispatch_directories(session, now, *, allow_backfill=True):
     from app.modules.ads import directory_dispatch
     from app.modules.ads.directory_candidates import directory_candidates
 
@@ -294,7 +295,9 @@ def _dispatch_directories(session, now):
     candidates = directory_candidates(
         session,
         now,
-        background_window=DIRECTORY_DISPATCH_WINDOW,
+        background_window=1
+        if allow_backfill and has_background_facts(session, now)
+        else DIRECTORY_DISPATCH_WINDOW,
         live_window=directory_dispatch.TARGETED_DISPATCH_WINDOW,
         batch_limit=DIRECTORY_DISPATCH_BATCH,
         directory_lost_after=DIRECTORY_MESSAGE_LOST_AFTER,
@@ -990,9 +993,10 @@ def _dispatch_report_jobs(
         ).one()
         available = max(0, window - inflight)
         claimed = []
+        protect_facts = lane == "backfill" and has_background_facts(session, now)
         if available and lane == "backfill":
-            # 历史事实与关联在补数池内各留份额，再借用空闲槽；不能让补数池空闲，
-            # 却把历史关联排到实时报表后面。窗口/在途计数仍在同一调度锁内。
+            # 四进程还消费目录队列：有事实需求时目录/补链各至多一个在途步骤，
+            # 剩余容量给事实。没有到期事实时恢复借用，不凭积压总数压低吞吐。
             for group in ("facts", "links"):
                 kind_filter = (
                     ReportSyncJob.kind == "material_links"
@@ -1009,7 +1013,11 @@ def _dispatch_report_jobs(
                         lane_condition(lane=lane, now=now),
                     )
                 ).one()
-                share = (window + (group == "facts")) // 2
+                share = (
+                    (1 if group == "links" else window - 1)
+                    if protect_facts
+                    else (window + (group == "facts")) // 2
+                )
                 count = min(available - len(claimed), max(0, share - running))
                 if count:
                     batch = claim_jobs(
@@ -1025,6 +1033,7 @@ def _dispatch_report_jobs(
                     now=now,
                     limit=remaining,
                     lane=lane,
+                    backfill_group="facts" if protect_facts else None,
                 )
             )
         for job in claimed:
@@ -1106,7 +1115,9 @@ def _dispatch_pending(
         ),
     ):
         count = _dispatch_report_jobs(session, now, allow_backfill=allow_backfill) + (
-            _dispatch_directories(session, now) if include_directories else 0
+            _dispatch_directories(session, now, allow_backfill=allow_backfill)
+            if include_directories
+            else 0
         )
 
         session.flush()

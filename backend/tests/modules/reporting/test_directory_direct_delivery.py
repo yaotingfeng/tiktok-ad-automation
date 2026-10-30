@@ -130,13 +130,22 @@ def test_completed_directory_claims_and_sends_next_without_control(
     assert len(sent) == 1  # 重复终态不能再补位或触发发送扫描。
 
 
+@pytest.mark.parametrize("background_facts", [False, True])
 def test_nonterminal_page_sends_its_continuation_without_scanning_backlog(
-    committed_sync_seed, monkeypatch, redis_client
+    committed_sync_seed, monkeypatch, redis_client, background_facts
 ):
     seed, factory = committed_sync_seed
     with factory() as db, db.begin():
-        identity = directory(db, seed).id
+        current = directory(db, seed)
+        identity = current.id
         directory(db, seed)
+        if background_facts:
+            from datetime import UTC, datetime
+
+            from tests.modules.reporting.test_background_execution_share import pending
+
+            current.workload = "background"
+            pending(db, seed, "material_day", 0, datetime.now(UTC))
 
     @contextmanager
     def gateway(**_kwargs):
@@ -168,7 +177,9 @@ def test_nonterminal_page_sends_its_continuation_without_scanning_backlog(
         == "CONTINUE"
     )
     assert not scans
-    assert len(sent) == 1 and sent[0][0] == "ads.targeted_step"
+    assert len(sent) == 1 and sent[0][0] == (
+        "ads.sync_step" if background_facts else "ads.targeted_step"
+    )
     with factory() as db:
         row = db.exec(
             select(PendingDispatch).where(PendingDispatch.tenant_id == seed.tenant_id)
@@ -422,3 +433,128 @@ def test_concurrent_completions_preserve_global_directory_window(
         assert len(rows) == 8
         assert {row.task_name for row in rows} == {"ads.targeted_step"}
         assert {row.payload["run_id"] for row in rows} <= {str(i) for i in waiting}
+
+
+@pytest.mark.parametrize("deferred", [False, True])
+def test_background_continuation_returns_borrowed_slot_to_facts(
+    committed_sync_seed, monkeypatch, redis_client, deferred
+):
+    from datetime import UTC, datetime
+
+    from app.modules.reporting.jobs import enqueue_job
+
+    seed, factory = committed_sync_seed
+    now = datetime.now(UTC)
+    with factory() as db, db.begin():
+        current = directory(db, seed)
+        current.workload = "background"
+        identity = current.id
+        held = directory(db, seed)
+        held.workload = "background"
+        held.claimed_until = now + timedelta(minutes=2)
+        day = now.date() - timedelta(days=3)
+        enqueue_job(
+            db,
+            tenant_id=seed.tenant_id,
+            bc_id="bc-a",
+            actor_id=seed.actor_id,
+            frozen_route=_route(seed),
+            kind="material_day",
+            tier="history",
+            advertiser_ids=["acc-1"],
+            start=day,
+            end=day,
+            due_at=now,
+        )
+
+    def read(_query):
+        if deferred:
+            raise AccountAdmissionDeferred(retry_after_ms=1000, reason="endpoint_rate")
+        return page(complete=False)
+
+    @contextmanager
+    def gateway(**_kwargs):
+        yield SimpleNamespace(ads=SimpleNamespace(read_page=read))
+
+    sent = []
+    monkeypatch.setattr(tasks, "open_tiktok_gateway", gateway)
+    monkeypatch.setattr(
+        outbox.celery_app, "send_task", lambda name, **kw: sent.append(name)
+    )
+    result = tasks.run_directory_step(
+        database_engine=engine,
+        redis_client=redis_client,
+        context=seed.context,
+        run_id=identity,
+        claim_generation=1,
+    )
+    assert result == ("WAIT" if deferred else "CONTINUE")
+    assert not sent
+    with factory() as db:
+        current = db.get(AdDirectoryRun, identity)
+        assert current.next_page == (1 if deferred else 2)
+        assert current.claimed_until is None
+        assert current.status in ("RUNNING", "WAITING_REMOTE")
+        assert not db.exec(
+            select(PendingDispatch).where(PendingDispatch.tenant_id == seed.tenant_id)
+        ).all()
+
+
+def test_concurrent_borrowed_pages_preserve_progress_and_single_successor(
+    committed_sync_seed, monkeypatch, redis_client
+):
+    from datetime import UTC, datetime
+
+    from tests.modules.reporting.test_background_execution_share import pending
+
+    seed, factory = committed_sync_seed
+    with factory() as db, db.begin():
+        identities = []
+        for _ in range(2):
+            row = directory(db, seed)
+            row.workload = "background"
+            identities.append(row.id)
+        pending(db, seed, "material_day", 0, datetime.now(UTC))
+    barrier = Barrier(2)
+
+    def read(_query):
+        barrier.wait(timeout=10)
+        return page(complete=False)
+
+    @contextmanager
+    def gateway(**_kwargs):
+        yield SimpleNamespace(ads=SimpleNamespace(read_page=read))
+
+    monkeypatch.setattr(tasks, "open_tiktok_gateway", gateway)
+    monkeypatch.setattr(outbox.celery_app, "send_task", lambda *a, **kw: None)
+
+    def advance(identity):
+        return tasks.run_directory_step(
+            database_engine=engine,
+            redis_client=redis_client,
+            context=seed.context,
+            run_id=identity,
+            claim_generation=1,
+        )
+
+    with ThreadPoolExecutor(2) as executor:
+        assert list(executor.map(advance, identities)) == ["CONTINUE", "CONTINUE"]
+    with factory() as db, db.begin():
+        for identity in identities:
+            assert db.get(AdDirectoryRun, identity).next_page == 2
+        messages = db.exec(
+            select(PendingDispatch).where(PendingDispatch.tenant_id == seed.tenant_id)
+        ).all()
+        assert len(messages) <= 1
+        if not messages:
+            # 两边都让出也可由普通Beat派发恢复，不重读上一页。
+            assert job_tasks._dispatch_directories(db, datetime.now(UTC)) == 1
+        assert (
+            db.exec(
+                select(PendingDispatch).where(
+                    PendingDispatch.tenant_id == seed.tenant_id
+                )
+            )
+            .one()
+            .task_key.endswith(":page:2")
+        )

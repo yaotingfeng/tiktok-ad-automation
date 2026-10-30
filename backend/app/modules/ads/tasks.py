@@ -32,6 +32,7 @@ from app.modules.ads.directory_dispatch import (
     PUBLISH_TASK_NAME,
     TARGETED_TASK_NAME,
     TASK_NAME,
+    background_continuation_available,
     enqueue_directory_step,
     is_live_directory,
 )
@@ -127,14 +128,19 @@ def _deliver_committed_work(database_engine, work: _CommittedDirectoryWork) -> N
         try:
             from app.modules.reporting.job_tasks import _dispatch_directories
 
-            # 仅在释放目录槽后补位；分页续步复用原槽，不能每页扫描积压。
+            # 仅在释放目录槽后补位；后台页遇到事实竞争也释放借用槽。
             # 同时考虑两池：全量主目录可能生成实时素材子运行。复用原窗口锁、
             # 租户轮转和背景保底；慢查询回滚本次领取，Beat 后续仍可恢复。
             with Session(database_engine) as session, session.begin():
                 session.connection().execute(text("SET LOCAL statement_timeout='2s'"))
                 session.connection().execute(text("SET LOCAL lock_timeout='100ms'"))
                 session.connection().execute(text("SET LOCAL transaction_timeout='3s'"))
-                claimed = _dispatch_directories(session, datetime.now(UTC))
+                from app.modules.reporting import planner
+
+                now = datetime.now(UTC)
+                with Redis.from_url(settings.REDIS_URL) as redis_client:
+                    allowed = planner.backfill_allowed(redis_client, now)
+                claimed = _dispatch_directories(session, now, allow_backfill=allowed)
             deliver = deliver or claimed > 0
         except Exception:
             logger.exception("directory direct refill deferred")
@@ -411,11 +417,15 @@ def _run_directory_step(
             )
             current.claim_generation += 1
             current.claim_token = current.claimed_until = None
-            enqueue_directory_step(
-                session, current, available_at=current.next_attempt_at
-            )
+            if is_live_directory(current):
+                enqueue_directory_step(
+                    session, current, available_at=current.next_attempt_at
+                )
+                work.deliver = True
+            else:
+                # 退避不占后台候补槽；保留同页游标及 due，由正常窗口重新领取。
+                work.refill = True
             session.commit()
-            work.deliver = True
         return "WAIT"
     with _directory_session(database_engine) as session:
         stage_directory_page(
@@ -438,10 +448,26 @@ def _run_directory_step(
         current.error_code = None
         current.next_attempt_at = datetime.now(UTC)
         current.claim_token = current.claimed_until = None
-        # 续步与页同事务提交，统一扫描器的幂等键，消息丢失仍可换代恢复。
-        enqueue_directory_step(session, current, publish_only=page.complete)
+        from app.modules.reporting import planner
+        from app.modules.reporting.lanes import has_background_facts
+
+        if (
+            not page.complete
+            and not is_live_directory(current)
+            and planner.backfill_allowed(redis_client, current.next_attempt_at)
+            and has_background_facts(session, current.next_attempt_at)
+            and not background_continuation_available(
+                session, current, current.next_attempt_at
+            )
+        ):
+            # 归还超额借用槽，等待当前在途目录结束/正常 Beat 补位。
+            # 保留已暂存页和游标；这里不再扫描完整目录积压。
+            pass
+        else:
+            # 实时页、独立发布以及无事实竞争的后台页保留直接续发。
+            enqueue_directory_step(session, current, publish_only=page.complete)
+            work.deliver = True
         session.commit()
-        work.deliver = True
         return "CONTINUE"
 
 
