@@ -36,6 +36,10 @@ from app.integrations.tiktok.official.accounts import (
     RequestScope,
     remaining,
 )
+from app.integrations.tiktok.sdk import (
+    begin_connection_setup_tracking,
+    connection_setup_failure_code,
+)
 from app.modules.builds.readback_compare import parse_page, parse_status
 from app.modules.builds.request_compiler import (
     create_arguments,
@@ -118,20 +122,21 @@ class ApiBuildOperations:
             attempt_id=attempt_id, intent=intent, channel="OFFICIAL_API"
         )
         client = self._requests.client
+        begin_connection_setup_tracking(client)
         methods = {
             "CAMPAIGN": sdk.CampaignCreationApi(client).smart_plus_campaign_create,
             "ADGROUP": sdk.AdgroupApi(client).smart_plus_adgroup_create,
             "AD": sdk.AdApi(client).smart_plus_ad_create,
             "CTA": sdk.CreativeManagementApi(client).creative_portfolio_create,
         }
-        sent = False
+        invoked = False
         try:
             remaining(self._deadline)
             with self._request_scope(intent.advertiser_id, operation, self._deadline):
                 budget = remaining(self._deadline)
                 # async 官方入口保留业务 envelope；不使用会丢弃 code 的同步便捷层。
                 # 不另设 future timeout，禁止请求线程仍在运行时释放共享准入。
-                sent = True
+                invoked = True
                 methods[intent.kind](
                     client.default_headers["Access-Token"],
                     body=arguments,
@@ -156,15 +161,25 @@ class ApiBuildOperations:
         except RemoteCallError:
             raise
         except Exception as error:
-            if not sent:
+            setup_code = connection_setup_failure_code(client, error)
+            if setup_code is not None:
+                logger.warning(
+                    "official TikTok create blocked before HTTP: kind=%s code=%s",
+                    intent.kind,
+                    setup_code,
+                )
+                raise RemoteCallError(
+                    setup_code, effect="NOT_SENT", evidence=CallEvidence()
+                ) from None
+            if not invoked:
                 raise
             # SDK 异常文本可能包含请求信息，只记录类型，禁止输出异常原文。
             logger.error(
-                "official TikTok create failed after send: kind=%s error_type=%s",
+                "official TikTok create failed without confirmed receipt: kind=%s error_type=%s",
                 intent.kind,
                 type(error).__name__,
             )
-            # HTTP 已进入官方发送入口；非零业务码、解析/超时均不证明无副作用。
+            # 已进入SDK调用且没有本次HTTP前失败的确证，不能按异常类型放行重发。
             raise RemoteCallError(
                 "create_result_unknown", effect="UNKNOWN", evidence=CallEvidence()
             ) from None

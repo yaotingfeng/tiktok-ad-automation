@@ -40,6 +40,8 @@ TRANSIENT_NOT_SENT = frozenset(
         # 本地总期限在真实请求发送前耗尽，有持久 NOT_SENT 证据时与连接瞬断
         # 使用同一三次预算；已发送或结果未知仍不会进入此集合。
         "tiktok_call_deadline_exceeded",
+        # 仅官方SDK客户端在HTTPS校验阶段捕获的瞬态故障；HTTP正文尚未发送。
+        "tiktok_connection_not_sent",
     }
 )
 

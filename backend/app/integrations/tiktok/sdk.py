@@ -8,6 +8,7 @@ Socket timeouts alone do not bound DNS, response streaming, or the whole task.
 import logging
 from collections.abc import Iterator
 from contextlib import contextmanager
+from errno import ECONNREFUSED, ECONNRESET, EHOSTUNREACH, ENETUNREACH, ETIMEDOUT
 from typing import Any, cast
 from uuid import UUID
 
@@ -17,7 +18,9 @@ from billiard.exceptions import SoftTimeLimitExceeded  # type: ignore[import-unt
 from business_api_client.rest import ApiException  # type: ignore[import-untyped]
 from redis import Redis
 from sqlmodel import Session
-from urllib3.exceptions import HTTPError
+from urllib3 import HTTPSConnectionPool
+from urllib3.exceptions import HTTPError, NewConnectionError
+from urllib3.exceptions import TimeoutError as UrllibTimeoutError
 from urllib3.util.retry import Retry
 
 from app.core.config import settings
@@ -29,6 +32,71 @@ from app.modules.accounts.models import TikTokConnection
 from app.modules.tenants.permissions import require_tenant
 
 SDK_SCOPE_INTERRUPTS = (SystemExit, KeyboardInterrupt, SoftTimeLimitExceeded)
+
+
+def connection_setup_failure_code(client: Any, error: BaseException) -> str | None:
+    """只认本SDK客户端在HTTP请求前亲自观察到的异常，不按错误名字猜副作用。"""
+    state = getattr(client, "_tiktok_connection_setup_state", None)
+    marker = state.get("marker") if isinstance(state, dict) else None
+    pending, seen = [error], set()
+    while pending:
+        current = pending.pop()
+        if id(current) in seen:
+            continue
+        seen.add(id(current))
+        if (
+            marker is not None
+            and getattr(current, "_tiktok_before_http", None) is marker
+        ):
+            transient = isinstance(
+                current, (TimeoutError, UrllibTimeoutError, NewConnectionError)
+            ) or (
+                isinstance(current, OSError)
+                and current.errno
+                in {ECONNREFUSED, ECONNRESET, EHOSTUNREACH, ENETUNREACH, ETIMEDOUT}
+            )
+            return (
+                "tiktok_connection_not_sent"
+                if transient
+                else "tiktok_connection_setup_failed"
+            )
+        for cause in (
+            current.__cause__,
+            current.__context__,
+            getattr(current, "reason", None),
+        ):
+            if isinstance(cause, BaseException):
+                pending.append(cause)
+    return None
+
+
+def begin_connection_setup_tracking(client: Any) -> None:
+    """每次创建独立nonce，异常上下文里的旧失败不能证明本次没有发送。"""
+    state = getattr(client, "_tiktok_connection_setup_state", None)
+    if isinstance(state, dict):
+        state["marker"] = object()
+
+
+def _track_connection_setup(client: Any) -> None:
+    state = {"marker": object()}
+    client._tiktok_connection_setup_state = state
+
+    class TrackedHTTPSConnectionPool(HTTPSConnectionPool):
+        def _validate_conn(self, conn: Any) -> None:
+            try:
+                super()._validate_conn(conn)
+            except (HTTPError, OSError) as error:
+                # urllib3可把TLS握手超时包装为ReadTimeoutError；此处尚未调用
+                # conn.request，精确标记原异常，原样抛出以保持目录/报表契约。
+                cast(Any, error)._tiktok_before_http = state["marker"]
+                raise
+
+    manager = client.rest_client.pool_manager
+    # urllib3默认映射是进程共享对象，必须复制，避免污染其他客户端或租户。
+    manager.pool_classes_by_scheme = {
+        **manager.pool_classes_by_scheme,
+        "https": TrackedHTTPSConnectionPool,
+    }
 
 
 class AccountAdmissionDeferred(DomainError):
@@ -79,6 +147,7 @@ def official_client(
     ):
         logging.getLogger(name).disabled = True
     client = business_api_client.ApiClient(configuration=configuration)
+    _track_connection_setup(client)
     if access_token is not None:
         client.default_headers["Access-Token"] = access_token
     client.rest_client.pool_manager.connection_pool_kw["retries"] = Retry(
