@@ -329,6 +329,7 @@ def _dispatch_directories(session, now):
     )
     count = 0
     served = set()
+    served_status = {}
     for row in rows:
         from app.modules.ads.directory_backlog import review_unstarted_directory
 
@@ -347,19 +348,38 @@ def _dispatch_directories(session, now):
             row.claim_token = row.claimed_until = None
         enqueue_directory_step(session, row, publish_only=row.id in terminal_runs)
         served.add(row.tenant_id)
+        from app.modules.ads.directory_services import (
+            directory_service,
+            is_missing_status,
+        )
+
+        if (
+            is_live_directory(row)
+            and directory_service(row) == "status"
+            and row.next_page == 1
+            and row.id not in terminal_runs
+        ):
+            served_status[row.tenant_id] = is_missing_status(row)
         count += 1
     for tenant in sorted(served):
         statement = insert(DirectoryDispatchCursor).values(
-            tenant_id=tenant, last_dispatched_at=now
+            tenant_id=tenant,
+            last_dispatched_at=now,
+            last_status_missing=served_status.get(tenant),
         )
         session.exec(
             statement.on_conflict_do_update(
                 index_elements=["tenant_id"],
                 set_={
+                    **(
+                        {"last_status_missing": statement.excluded.last_status_missing}
+                        if tenant in served_status
+                        else {}
+                    ),
                     "last_dispatched_at": func.greatest(
                         col(DirectoryDispatchCursor.last_dispatched_at),
                         statement.excluded.last_dispatched_at,
-                    )
+                    ),
                 },
             )
         )

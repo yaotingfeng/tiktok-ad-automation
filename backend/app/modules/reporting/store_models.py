@@ -223,6 +223,8 @@ class DirectoryDispatchCursor(SQLModel, table=True):
         primary_key=True, foreign_key="tenant.id", ondelete="CASCADE"
     )
     last_dispatched_at: datetime | None = Field(default=None, sa_type=AwareDateTime)
+    # 只记实际派发类别；跨轮交替缺口与普通刷新，单槽时也不饿死另一类。
+    last_status_missing: bool | None = None
 
 
 class ReportSyncState(SQLModel, table=True):

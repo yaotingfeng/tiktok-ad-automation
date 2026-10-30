@@ -64,4 +64,18 @@ def test_new_periodic_refresh_wakes_dispatch_without_overtaking_backlog(
         for row in dispatches(session, sync_seed)
         if row.task_name == "ads.targeted_step"
     ]
-    assert [row.payload["run_id"] for row in targeted] == [str(old.id)]
+    # 上次实际派发是普通刷新；新缺口先获得下一轮，但旧刷新必须得到再下一轮。
+    from uuid import UUID
+
+    assert len(targeted) == 1
+    first = session.get(AdDirectoryRun, UUID(targeted[0].payload["run_id"]))
+    assert first.query["directory_service_v1"] == "status_missing"
+    first.status = "COMPLETE"
+    session.flush()
+    assert job_tasks._dispatch_directories(session, datetime.now(UTC)) == 1
+    targeted = [
+        row
+        for row in dispatches(session, sync_seed)
+        if row.task_name == "ads.targeted_step"
+    ]
+    assert {row.payload["run_id"] for row in targeted} == {str(first.id), str(old.id)}

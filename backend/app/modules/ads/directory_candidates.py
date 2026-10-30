@@ -42,7 +42,8 @@ WITH active AS MATERIALIZED (
     (r.workload='live' AND flags.has_filters) AS targeted,
     (r.workload<>'live' AND flags.has_filters) AS dependency,
     (r.workload='live' AND flags.has_filters AND NOT r.query ? :material_child_key
-      AND coalesce(r.query->>:service_key='status',false)) AS status_service,
+      AND coalesce(r.query->>:service_key IN ('status','status_missing'),false)) AS status_service,
+    coalesce(r.query->>:service_key='status_missing',false) AS status_missing,
     CASE WHEN flags.legacy_creative THEN 1 ELSE 0 END AS creative_last,
     CASE WHEN flags.legacy_creative THEN jsonb_build_array(
       r.tenant_id,r.advertiser_id,r.bc_id,r.actor_id,r.frozen_route,r.partition_key)
@@ -93,12 +94,14 @@ WITH active AS MATERIALIZED (
 ), latest_creative AS MATERIALIZED (
   SELECT legacy_scope,max(request_sequence) AS request_sequence
   FROM active WHERE creative_last=1 GROUP BY legacy_scope
-), eligible AS (
+), eligible_classes AS (
   SELECT d.id,d.tenant_id,d.created_at,d.claim_generation,d.next_page,d.claimed_until,
-    d.targeted,d.dependency,d.status_service,d.creative_last,c.last_dispatched_at,
+    d.targeted,d.dependency,d.status_service,d.status_missing,d.creative_last,c.last_dispatched_at,
+    c.last_status_missing,
     CASE WHEN d.targeted THEN cap.live_available ELSE cap.background_available END AS lane_limit,
-    row_number() OVER (PARTITION BY d.tenant_id,d.targeted,d.dependency,d.status_service ORDER BY
-      d.creative_last,d.created_at,d.id) AS lane_rn
+    row_number() OVER (PARTITION BY d.tenant_id,d.targeted,d.dependency,d.status_service,
+      CASE WHEN d.status_service THEN d.status_missing ELSE false END ORDER BY
+      d.creative_last,d.created_at,d.id) AS class_rn
   FROM delivery d CROSS JOIN capacity cap
   LEFT JOIN directory_dispatch_cursor c ON c.tenant_id=d.tenant_id
   LEFT JOIN latest_creative newer ON newer.legacy_scope=d.legacy_scope
@@ -107,14 +110,24 @@ WITH active AS MATERIALIZED (
     AND (d.next_attempt_at IS NULL OR d.next_attempt_at<=CAST(:now AS timestamptz))
     AND ((d.claimed_until IS NULL AND (NOT d.enqueued OR d.lost))
       OR d.claimed_until<=CAST(:now AS timestamptz))
+), eligible AS (
+  -- 仅在同租户status内交替。NULL首选缺口；持久上次类别使batch=1也不饿死刷新。
+  SELECT e.*,row_number() OVER (
+    PARTITION BY tenant_id,targeted,dependency,status_service ORDER BY
+      CASE WHEN status_service THEN 2*(class_rn-1)+
+        CASE WHEN status_missing=NOT coalesce(last_status_missing,false) THEN 0 ELSE 1 END
+        ELSE 0 END,
+      creative_last,created_at,id) AS lane_rn
+  FROM eligible_classes e
 ), tenant_ranked AS (
   -- 租户轮次只累计各服务窗口内的前缀，防止大量实时任务把同租户后台推到队尾。
   -- 超出前缀的行保留在最后，只有前排被其他事务锁住时才用来补足空槽。
   SELECT id,tenant_id,created_at,claim_generation,next_page,claimed_until,
-    targeted,dependency,status_service,creative_last,last_dispatched_at,
+    targeted,dependency,status_service,status_missing,creative_last,last_dispatched_at,
     lane_rn>lane_limit AS overflow,
     sum(CASE WHEN lane_rn<=lane_limit THEN 1 ELSE 0 END) OVER (
-      PARTITION BY tenant_id ORDER BY targeted DESC,creative_last,created_at,id
+      PARTITION BY tenant_id ORDER BY targeted DESC,creative_last,
+        CASE WHEN status_service THEN lane_rn ELSE 0 END,created_at,id
       ROWS UNBOUNDED PRECEDING) AS rn
   FROM eligible
 ), service_ranked AS MATERIALIZED (
@@ -148,7 +161,8 @@ WITH active AS MATERIALIZED (
             AND (coalesce(jsonb_array_length(r.query->'ids'),0)>0
               OR coalesce(jsonb_array_length(r.query->'parent_ids'),0)>0)
             AND NOT r.query ? :material_child_key
-            AND coalesce(r.query->>:service_key='status',false))=s.status_service
+            AND coalesce(r.query->>:service_key IN ('status','status_missing'),false))=s.status_service
+          AND coalesce(r.query->>:service_key='status_missing',false)=s.status_missing
           AND (r.next_attempt_at IS NULL OR r.next_attempt_at<=CAST(:now AS timestamptz))
         LIMIT 1
         {locking}

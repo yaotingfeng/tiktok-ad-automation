@@ -3,6 +3,7 @@
 import json
 from collections import defaultdict
 from collections.abc import Sequence
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
@@ -70,39 +71,70 @@ def directory_interval(kind: str, *, has_rules: bool) -> timedelta:
     return STATUS_INTERVAL if kind == "ad" else PARENT_INTERVAL
 
 
+@dataclass(frozen=True)
+class DirectoryRefreshResult:
+    created: int
+    complete: bool
+
+
 @diagnostics.timed("directory_refresh")
 def refresh_report_directory(
     session: Session, job: ReportSyncJob, *, now: datetime | None = None
 ) -> int:
     """只刷新本任务账户当地今日有消耗、缺失或到期且未被在途查询覆盖的对象。"""
-    if not settings.ADS_SYNC_ENABLED or job.kind != "ad_day" or job.priority != 1:
+    if job.kind != "ad_day" or job.priority != 1:
         return 0
+    return refresh_account_directory(
+        session,
+        tenant_id=job.tenant_id,
+        bc_id=job.bc_id,
+        actor_id=job.actor_id,
+        frozen_route=job.frozen_route,
+        advertiser_ids=job.advertiser_ids,
+        now=now,
+    ).created
+
+
+def refresh_account_directory(
+    session: Session,
+    *,
+    tenant_id: UUID,
+    bc_id: str,
+    actor_id: UUID,
+    frozen_route: dict,
+    advertiser_ids: Sequence[str],
+    now: datetime | None = None,
+    max_refs: int | None = None,
+) -> DirectoryRefreshResult:
+    """复用已发布事实补目录；可分ID片，已排请求由原在途覆盖充当续读断点。"""
+    if not settings.ADS_SYNC_ENABLED or not advertiser_ids:
+        return DirectoryRefreshResult(0, True)
     from app.modules.reporting.planner import REFRESH_MARGIN
 
     now = now or datetime.now(UTC)
     # 先取得规划锁再读取目录年龄和在途运行，保证并发发布看到前一事务的完整计划。
-    # 只约束热报规划；用户操作后的回读仍走既有独立路径。
+    # 热报发布与健康修复共用此锁；用户操作后的回读仍走既有独立路径。
     with diagnostics.stage("directory_lock"):
         session.connection().execute(
             text("SELECT pg_advisory_xact_lock(hashtextextended(:scope, 0))"),
-            {"scope": f"report-directory:{job.tenant_id}:{job.bc_id}"},
+            {"scope": f"report-directory:{tenant_id}:{bc_id}"},
         )
     with diagnostics.stage("directory_rules"):
         strict_accounts = rule_accounts(
             session,
-            tenant_id=job.tenant_id,
-            bc_id=job.bc_id,
-            accounts=job.advertiser_ids,
+            tenant_id=tenant_id,
+            bc_id=bc_id,
+            accounts=advertiser_ids,
         )
     with diagnostics.stage("directory_pending"):
         pending = session.exec(
             select(AdDirectoryRun).where(
-                AdDirectoryRun.tenant_id == job.tenant_id,
-                AdDirectoryRun.bc_id == job.bc_id,
-                AdDirectoryRun.actor_id == job.actor_id,
-                AdDirectoryRun.frozen_route == job.frozen_route,
+                AdDirectoryRun.tenant_id == tenant_id,
+                AdDirectoryRun.bc_id == bc_id,
+                AdDirectoryRun.actor_id == actor_id,
+                AdDirectoryRun.frozen_route == frozen_route,
                 AdDirectoryRun.workload == "live",
-                col(AdDirectoryRun.advertiser_id).in_(job.advertiser_ids),
+                col(AdDirectoryRun.advertiser_id).in_(advertiser_ids),
                 pending_directory_condition(),
             )
         ).all()
@@ -123,8 +155,8 @@ def refresh_report_directory(
           AND r.stat_date=(CAST(:now AS timestamptz) AT TIME ZONE r.timezone)::date
     """),
                 {
-                    "tenant": job.tenant_id,
-                    "accounts": job.advertiser_ids,
+                    "tenant": tenant_id,
+                    "accounts": advertiser_ids,
                     "now": now,
                     "first_day": now.astimezone(UTC).date() - timedelta(days=1),
                     "last_day": now.astimezone(UTC).date() + timedelta(days=1),
@@ -137,6 +169,7 @@ def refresh_report_directory(
     # 精确当地日仍以事实时区为准。仅收集缺失/到期 ID，不因邻居过期重读新鲜对象。
     with diagnostics.stage("directory_candidates"):
         objects: dict[tuple[str, str, EntityKind], set[str]] = defaultdict(set)
+        missing: dict[tuple[str, str, EntityKind], set[str]] = defaultdict(set)
         parents: dict[tuple[str, str, EntityKind], dict[str, set[str]]] = defaultdict(
             lambda: defaultdict(set)
         )
@@ -163,9 +196,13 @@ def refresh_report_directory(
                     continue
                 key = (row.advertiser_id, ad_type, kind)
                 objects[key].add(row[column])
+                if observed_at is None:
+                    # 仅现有事实关联证明未观测的对象标缺口，到期刷新不能冒充缺失。
+                    missing[key].add(row[column])
                 if parent_column and row[parent_column]:
                     parents[key][row[parent_column]].add(row[column])
         status_requests = []
+        missing_run_ids = set()
         for run in pending:
             # 素材子运行只读冻结素材桥，不能代替通用对象目录；授权范围已在查询中限定。
             if is_material_child(run):
@@ -191,16 +228,28 @@ def refresh_report_directory(
             # 只有完全无筛选的查询覆盖整个层；不相关在途 ID 不会遮住新缺失对象。
             if covered & remaining:
                 status_requests.append(run)
+                if covered & remaining & missing.get(key, set()):
+                    missing_run_ids.add(run.id)
             remaining.difference_update(covered)
     with diagnostics.stage("directory_promote"):
-        promote_status_requests(session, status_requests)
+        promote_status_requests(
+            session, status_requests, missing_run_ids=missing_run_ids
+        )
+    missing_refs_by_type: dict[str, list[EntityRef]] = defaultdict(list)
     refs_by_type: dict[str, list[EntityRef]] = defaultdict(list)
     types: dict[str, dict[str, set[str]]] = defaultdict(lambda: defaultdict(set))
+    selected = 0
+    complete = True
     for (advertiser, ad_type, kind), remote_ids in sorted(objects.items()):
         for remote_id in sorted(remote_ids):
-            refs_by_type[ad_type].append(
-                EntityRef(job.tenant_id, advertiser, kind, remote_id)
-            )
+            if max_refs is not None and selected >= max_refs:
+                complete = False
+                continue
+            selected += 1
+            ref = EntityRef(tenant_id, advertiser, kind, remote_id)
+            refs_by_type[ad_type].append(ref)
+            if remote_id in missing.get((advertiser, ad_type, kind), set()):
+                missing_refs_by_type[ad_type].append(ref)
             types[advertiser][ad_type].add(kind)
     created = 0
     # 沿用唯一目录请求入口的100 ID分片；分类型传 refs，避免混合类型误发端点。
@@ -209,21 +258,22 @@ def refresh_report_directory(
         with diagnostics.stage("directory_request"):
             created += request_directory(
                 session,
-                tenant_id=job.tenant_id,
-                bc_id=job.bc_id,
-                frozen_route=job.frozen_route,
-                actor_id=job.actor_id,
+                tenant_id=tenant_id,
+                bc_id=bc_id,
+                frozen_route=frozen_route,
+                actor_id=actor_id,
                 advertiser_ids=advertisers,
                 scope="targeted",
                 dispatch_immediately=False,
                 refs=tuple(refs),
+                missing_refs=tuple(missing_refs_by_type[ad_type]),
                 ad_types={adv: {ad_type: types[adv][ad_type]} for adv in advertisers},
             )
     diagnostics.counts(
         directory_refs=sum(len(refs) for refs in refs_by_type.values()),
         directory_created=created,
     )
-    return created
+    return DirectoryRefreshResult(created, complete)
 
 
 def request_link_directory(

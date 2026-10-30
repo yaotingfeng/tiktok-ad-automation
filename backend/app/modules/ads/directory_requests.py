@@ -12,6 +12,7 @@ from sqlmodel import Session, col, select
 from app.core.config import settings
 from app.core.context import TenantContext
 from app.core.errors import DomainError
+from app.integrations.tiktok.contracts.ads import EntityRef
 from app.integrations.tiktok.contracts.context import FrozenTikTokRoute
 from app.jobs.outbox import enqueue_after_commit
 from app.modules.accounts.routing import verify_route
@@ -23,6 +24,7 @@ from app.modules.ads.directory_calibration import (
 from app.modules.ads.directory_dispatch import enqueue_directory_step
 from app.modules.ads.directory_services import (
     IDENTITY_SERVICE,
+    MISSING_STATUS_SERVICE,
     SERVICE_KEY,
     STATUS_SERVICE,
 )
@@ -219,6 +221,7 @@ def request_directory(
     workload: str | None = None,
     dispatch_immediately: bool = True,
     service: str | None = STATUS_SERVICE,
+    missing_refs: Collection[EntityRef] | None = None,
     periodic_intervals: Mapping[str, timedelta] | None = None,
     now: datetime | None = None,
 ) -> int:
@@ -236,6 +239,15 @@ def request_directory(
         raise DomainError("directory_request_invalid", "目录服务分类无效")
     if service not in (None, STATUS_SERVICE, IDENTITY_SERVICE):
         raise DomainError("directory_request_invalid", "目录调度目的无效")
+    missing_refs = frozenset(missing_refs or ())
+    if missing_refs and (
+        scope != "targeted"
+        or service != STATUS_SERVICE
+        or not missing_refs.issubset(refs)
+    ):
+        raise DomainError(
+            "directory_request_invalid", "缺失目录对象必须属于本次状态请求"
+        )
     route = FrozenTikTokRoute.model_validate(frozen_route)
     advertiser_ids = tuple(sorted(set(advertiser_ids)))
     periodic = periodic_intervals is not None
@@ -342,7 +354,19 @@ def request_directory(
                     "include_deleted": scope == "directory" or include_deleted,
                 }
                 if scope == "targeted" and service is not None:
-                    query[SERVICE_KEY] = service
+                    # 原100 ID片保持完整，只把有确证缺失对象的片标为同服务子类。
+                    missing = any(
+                        ref.advertiser_id == advertiser_id
+                        and (
+                            (ref.kind == kind and ref.remote_id in id_chunk)
+                            or (
+                                ref.kind in parent_kind
+                                and ref.remote_id in parent_chunk
+                            )
+                        )
+                        for ref in missing_refs
+                    )
+                    query[SERVICE_KEY] = MISSING_STATUS_SERVICE if missing else service
                 partition = _partition_key(query)
                 if periodic:
                     if (

@@ -349,7 +349,8 @@ def test_directory_health_allows_layer_cycle_and_execution_margin(
     metrics, _, repairs = measure_health(session, plan, now=now)
     assert metrics["missing_directory_ads"] == missing
     if missing:
-        assert "acc-2" in repairs["ad"]
+        assert "acc-2" in repairs["directory"]
+        assert not repairs["ad"]
 
 
 @pytest.mark.parametrize("elapsed", [0.5, 1, 4, 5, 6, 7, 7.5])
