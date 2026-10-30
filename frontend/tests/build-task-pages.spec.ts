@@ -567,7 +567,7 @@ test("组内素材分页展示实际目标VID，点击原件才请求短期预�
   await page.goto(`/tenants/${T}/build-tasks/${ID}?bc_id=${BC}`)
   await page.getByRole("button", { name: "查看明细", exact: true }).click()
   await page.getByRole("button", { name: "查看素材", exact: true }).click()
-  await expect(page.getByText(/目标 VID：target-video-real/)).toBeVisible()
+  await expect(page.getByText(/目标视频 ID：target-video-real/)).toBeVisible()
   expect(previews).toBe(0)
   expect(
     api.requests.find((r) => r.path.endsWith("/materials"))?.query.get("limit"),

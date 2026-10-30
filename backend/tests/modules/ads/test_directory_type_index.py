@@ -117,7 +117,8 @@ def test_directory_type_index_roundtrip_semantics_and_bounded_probes(
 
         before = measure()
         started = monotonic()
-        command.upgrade(config, "head")
+        # 只往返本索引迁移；不能先升级到不可逆创意合同再尝试降回0044。
+        command.upgrade(config, REVISION)
         build_seconds = monotonic() - started
         after = measure()
         assert (
@@ -164,8 +165,9 @@ def test_directory_type_index_roundtrip_semantics_and_bounded_probes(
                 == 30003
             )
         command.upgrade(config, REVISION)
-        command.check(config)
         assert measure()["rows"] == after["rows"]
+        command.upgrade(config, "head")
+        command.check(config)
         request.node.user_properties.append(
             (
                 "directory_type_index_metrics",

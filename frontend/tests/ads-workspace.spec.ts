@@ -370,7 +370,12 @@ test.describe("ads workspace", () => {
     await page.getByRole("tab", { name: "素材", exact: true }).click()
     // 素材响应尚未返回：只显示加载提示，不能残留剧维度的行。
     await expect(page.getByText("正在加载当前报表…")).toBeVisible()
-    await expect(page.locator("tbody tr")).toHaveCount(0)
+    // 加载提示已归入tbody；唯一行是提示，不能保留上一维度的业务行。
+    await expect(page.locator("tbody tr")).toHaveCount(1)
+    await expect(page.locator("tbody")).toContainText("正在加载当前报表…")
+    await expect(
+      page.locator("tbody").getByText("总裁归来", { exact: true }),
+    ).toHaveCount(0)
   })
 
   test("页面不再显示账户趋势，也不请求趋势", async ({ page }) => {
