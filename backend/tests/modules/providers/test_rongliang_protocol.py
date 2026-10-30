@@ -96,10 +96,11 @@ def test_rongliang_form_login_form_data_search_and_strict_create_readback():
     assert len(seen) == 6
 
 
-def test_rongliang_create_without_matching_batch_is_result_unknown():
+@pytest.mark.parametrize("response", [True, {"code": 0, "data": True}])
+def test_rongliang_create_without_matching_batch_is_result_unknown(response):
     def handle(request):
         if request.url.path.endswith("/link/create"):
-            return httpx.Response(200, json={"code": 0, "data": True})
+            return httpx.Response(200, json=response)
         if request.url.path.endswith("/link/page"):
             return httpx.Response(200, json={"code": 0, "data": {"records": [], "total": 0}})
         raise AssertionError(request.url)
@@ -225,3 +226,68 @@ def test_rongliang_alias_missing_raises_instead_of_empty(payload):
         with pytest.raises(DomainError) as error:
             client.compilations_alias("77")
     assert error.value.code == "provider_schema_unsupported"
+
+
+@pytest.mark.parametrize("transport_kind", ["httpx", "curl"])
+@pytest.mark.parametrize("create_response", [True, {"code": 0, "data": True}, {"code": "duplicate"}, None])
+def test_rongliang_create_readback_works_for_both_transports(transport_kind, create_response):
+    from types import SimpleNamespace
+
+    from app.modules.providers.adapters.rongliang import _CurlSession
+
+    writes = []
+    def handle(request):
+        if request.url.path.endswith("/link/create"):
+            writes.append(json.loads(request.content))
+            return httpx.Response(200, content=json.dumps(create_response))
+        if request.url.path.endswith("/link/page"):
+            return httpx.Response(200, json={"records": [{
+                "batchId": "B-1", "clientId": 1144, "compilationsId": 8453,
+                "episodicDramaId": 991, "deliverPlatform": 1,
+                "deliveryType": 1, "linkType": 2,
+            }], "total": 1})
+        if request.url.path.endswith("/link/url"):
+            return httpx.Response(200, json={"deepLink": "https://www.tiktok.com/minis/rl?batchId=B-1", "planName": "Moon"})
+        raise AssertionError(request.url)
+
+    with httpx.Client(transport=httpx.MockTransport(handle)) as http:
+        curl = None
+        if transport_kind == "curl":
+            # 保留真实 Curl 包装及响应分类，只替换最底层网络传输。
+            curl = _CurlSession.__new__(_CurlSession)
+            def request(method, url, **kwargs):
+                return handle(httpx.Request(method, url, json=kwargs.get("json")))
+            curl.session = SimpleNamespace(request=request, close=lambda: None)
+        client = RongliangClient(http, token="test-token", curl_session=curl)
+        receipt = client.create_link("8453", {"client_id": "1144", "episodic_drama_id": 991})
+    assert receipt.url == "https://www.tiktok.com/minis/rl?batchId=B-1"
+    assert receipt.config["client_id"] == 1144
+    assert len(writes) == 1
+
+
+def test_rongliang_real_rejection_without_matching_link_stays_failed():
+    def handle(request):
+        if request.url.path.endswith("/link/create"):
+            return httpx.Response(200, json={"code": "forbidden-drama"})
+        if request.url.path.endswith("/link/page"):
+            return httpx.Response(200, json={"records": [{
+                "batchId": "other", "clientId": 1144, "compilationsId": 8453,
+                "episodicDramaId": 992, "deliverPlatform": 1,
+            }], "total": 1})
+        raise AssertionError("Must not read an unrelated link")
+    with httpx.Client(transport=httpx.MockTransport(handle)) as http:
+        with pytest.raises(DomainError) as error:
+            RongliangClient(http).create_link("8453", {"client_id": "1144", "episodic_drama_id": 991})
+    assert error.value.code == "provider_rejected"
+
+
+def test_rongliang_incomplete_readback_defers_to_durable_recovery():
+    def handle(request):
+        if request.url.path.endswith("/link/create"):
+            return httpx.Response(200, json=True)
+        assert request.url.params["pageNumber"] == "1", "Paging belongs to durable recovery"
+        return httpx.Response(200, json={"records": [], "total": 200})
+    with httpx.Client(transport=httpx.MockTransport(handle)) as http:
+        with pytest.raises(DomainError) as error:
+            RongliangClient(http).create_link("8453", {"client_id": "1144", "episodic_drama_id": 991})
+    assert error.value.code == "provider_result_unknown"

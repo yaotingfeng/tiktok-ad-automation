@@ -2532,3 +2532,53 @@ for (const [endpoint, label, loading] of [
     ).toBeDisabled()
   })
 }
+
+test("取链全部失败时说明先恢复链接，不把未启动的小程序查询显示为加载中", async ({
+  page,
+}) => {
+  const api = await buildsBoundary(page)
+  api.summary.drama_count = 0
+  api.summary.input_counts.drama = { failed: 1 } as any
+  await page.route(`**/build-drafts/${D}/inputs?**`, async (route) => {
+    await route.fulfill({
+      json: {
+        items: [
+          {
+            id: "failed-link",
+            kind: "drama",
+            line_no: 1,
+            raw_text: "Moon",
+            status: "failed",
+            reason_code: "provider_rejected",
+            candidates: [],
+            preparation: {
+              link_status: "failed",
+              reason_code: "provider_rejected",
+              title: "Moon",
+              drama: null,
+            },
+          },
+        ],
+        next_cursor: null,
+        total: 1,
+      },
+    })
+  })
+  await page.goto(`/tenants/${tenant}/build-drafts/${D}?bc_id=${bc}`)
+  await expect(page.getByText(/推广链接尚未就绪.*解析并准备/)).toBeVisible()
+  await expect(
+    page.getByText("正在核对推广小程序…", { exact: true }),
+  ).toHaveCount(0)
+  await expect(
+    page.getByText(
+      "版权方未确认取链结果，请重新解析并准备，系统会优先读取已有链接。",
+      { exact: true },
+    ),
+  ).toBeVisible()
+  await expect(
+    page.getByRole("button", { name: "解析并准备", exact: true }),
+  ).toBeEnabled()
+  await expect(
+    page.getByRole("button", { name: "生成搭建预览" }),
+  ).toBeDisabled()
+})

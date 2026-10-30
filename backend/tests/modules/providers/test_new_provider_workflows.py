@@ -51,6 +51,7 @@ class ProviderRemote:
     calls: list[str] = field(default_factory=list)
     bodies: list[dict] = field(default_factory=list)
     created: bool = False
+    rongliang_create_response: Any = True
 
     def __post_init__(self) -> None:
         if not self.dramas:
@@ -259,7 +260,7 @@ class ProviderRemote:
             assert body["episodicDramaId"] == 991
             assert body["compilationsAlias"] == "罪爱难逃"
             self.created = True
-            return httpx.Response(200, json={"code": 0, "data": True})
+            return httpx.Response(200, json=self.rongliang_create_response)
         if path.endswith("/link/url"):
             return httpx.Response(
                 200,
@@ -474,3 +475,22 @@ def test_selected_candidate_enters_provider_detail_stage(make_workflow, kind):
     choose_first_candidate(workflow)
     item = finish(workflow)
     assert item.status == "ready", item.resolved
+
+
+def test_rongliang_existing_link_is_read_without_create(make_workflow):
+    workflow = make_workflow("rongliang")
+    workflow.remote.created = True
+    item = finish(workflow)
+    assert item.status == "ready", item.resolved
+    assert item.resolved["url"] == "https://www.tiktok.com/minis/rl?batchId=R-1"
+    assert not any(call.startswith("POST ") for call in workflow.remote.calls)
+
+
+def test_rongliang_rejected_create_recovers_the_exact_existing_link(make_workflow):
+    workflow = make_workflow("rongliang")
+    # 远端已经创建，但返回重复/拒绝：必须先只读核实，不能把已成功的批次判为失败。
+    workflow.remote.rongliang_create_response = {"code": "duplicate", "msg": "exists"}
+    item = finish(workflow)
+    assert item.status == "ready", item.resolved
+    assert item.resolved["url"] == "https://www.tiktok.com/minis/rl?batchId=R-1"
+    assert sum(call.startswith("POST ") for call in workflow.remote.calls) == 1

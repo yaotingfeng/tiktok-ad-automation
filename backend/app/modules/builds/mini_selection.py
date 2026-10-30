@@ -15,7 +15,7 @@ from app.core.context import TenantContext
 from app.core.errors import DomainError
 from app.integrations.tiktok.contracts.context import FrozenTikTokRoute
 from app.modules.accounts.routing import freeze_route
-from app.modules.providers.models import PromotionLink
+from app.modules.providers.models import PromotionLink, ProviderApplication
 from app.modules.tenants.permissions import require_tenant
 
 from .mini_targets import (
@@ -24,6 +24,7 @@ from .mini_targets import (
     link_url,
     matching_link_id,
     remember_target,
+    resolved_target,
     url_key,
 )
 from .models import BuildDraft, DraftAccount, DraftDrama
@@ -142,14 +143,54 @@ def match_catalog_link(
     session: Session, *, context: TenantContext, link_id: UUID, job: SceneJob
 ) -> bool:
     link = session.get(PromotionLink, link_id)
-    if link is None or link.tenant_id != context.tenant_id:
+    if link is None or link.tenant_id != context.tenant_id or job.tenant_id != context.tenant_id:
         raise DomainError("resource_not_found", "推广链接不存在")
+    known = resolved_target(session, context=context, url=link_url(link))
+    if known:
+        # 明确链接目标和用户已确认的选择优先，不能被应用同名匹配覆盖。
+        return bool(catalog_options(session, job, minis_id=known))
     candidate = (
         explicit_mini_id(link_url(link))
         or urlsplit(link_url(link)).path.rstrip("/").split("/")[-1]
     )
     values = catalog_options(session, job, minis_id=candidate)
     identity = matching_link_id(link_url(link), {item["minis_id"] for item in values})
+    destination = urlsplit(link_url(link))
+    if (
+        identity is None
+        and link.source == "provider"
+        and job.status == "COMPLETE"
+        and destination.scheme == "https"
+        and destination.hostname in {"www.tiktok.com", "tiktok.com"}
+        and not destination.username
+        and not destination.password
+        and destination.path.startswith("/minis/")
+        and len(destination.path.rstrip("/").split("/")) == 3
+    ):
+        application = session.exec(
+            select(ProviderApplication).where(
+                ProviderApplication.tenant_id == context.tenant_id,
+                ProviderApplication.connection_id == link.connection_id,
+                ProviderApplication.external_id == link.application_id,
+            )
+        ).one_or_none()
+        if application and application.name.strip():
+            # 第一阶段已经选定版权方应用：仅在当前账户完整目录中有唯一完全同名
+            # 且可投的 Mini 时自动带入。跨所有已保存分页查重，不按短码/首项猜选。
+            matches = cast(SASession, session).execute(
+                text("""
+                    SELECT DISTINCT item->>'minis_id'
+                    FROM build_scene_job_page p
+                    CROSS JOIN LATERAL jsonb_array_elements(p.facts->'options') item
+                    WHERE p.tenant_id=:tenant_id AND p.job_id=:job_id
+                      AND p.resource='minis' AND item->>'name'=:name
+                      AND item->>'status'='ACTIVE' AND item->>'type'='MINI_SERIES'
+                      AND jsonb_array_length(COALESCE(item->'regions', '[]'::jsonb)) > 0
+                    LIMIT 2
+                """),
+                {"tenant_id": context.tenant_id, "job_id": job.id, "name": application.name.strip()},
+            ).scalars().all()
+            identity = matches[0] if len(matches) == 1 else None
     if identity is None:
         return False
     remember_target(

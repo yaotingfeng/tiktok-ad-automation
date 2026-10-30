@@ -10,6 +10,7 @@ from urllib.parse import urlencode
 
 import httpx
 
+from app.core.errors import DomainError
 from app.modules.providers.capabilities import capabilities_for_kind
 from app.modules.providers.schemas import DramaCandidate
 
@@ -46,9 +47,12 @@ def _checked_body(status: int, body: Any, *, write: bool) -> Any:
             "provider_result_unknown" if write else "provider_unavailable",
             retryable=not write,
         )
-    # 剧集下拉等接口直接返回数组、没有 code/data 外层（2026-10-24 生产实测）。
-    if not 200 <= status < 300 or not isinstance(body, dict | list):
+    if not 200 <= status < 300:
         raise failure("provider_rejected")
+    # 容量接口不统一包裹 code/data：剧集返回数组，建链成功可直接返回 true。
+    # 写入后的未知响应不能判为明确失败，否则会跳过已有批次的只读恢复。
+    if not isinstance(body, dict | list) and not (write and body is True):
+        raise failure("provider_result_unknown" if write else "provider_schema_unsupported")
     return body
 
 
@@ -88,6 +92,7 @@ class _CurlSession:
         json: JsonDict | None = None,
         content: str | None = None,
         form: dict[str, str] | None = None,
+        write: bool = False,
     ) -> Any:
         if params:
             from urllib.parse import urlencode
@@ -117,13 +122,16 @@ class _CurlSession:
                 allow_redirects=False,
             )
         except Exception:
-            raise failure("provider_unavailable", retryable=True) from None
+            raise failure(
+                "provider_result_unknown" if write else "provider_unavailable",
+                retryable=not write,
+            ) from None
         try:
             status = response.status_code
             body_value = response.json()
         except (TypeError, ValueError, jsonlib.JSONDecodeError):
-            raise failure("provider_schema_unsupported") from None
-        return _checked_body(status, body_value, write=False)
+            raise failure("provider_result_unknown" if write else "provider_schema_unsupported") from None
+        return _checked_body(status, body_value, write=write)
 
 
 class RongliangClient:
@@ -194,7 +202,7 @@ class RongliangClient:
         write: bool = False,
     ) -> Any:
         if self._curl is not None:
-            body = self._curl.request(method, API_BASE + path, params=query, json=json)
+            body = self._curl.request(method, API_BASE + path, params=query, json=json, write=write)
         else:
             # 不走通用 request_json：它遇到 HTTP 500 会丢掉响应体，
             # 看不到容量“未登录”的 code=403。
@@ -223,6 +231,8 @@ class RongliangClient:
             body = _checked_body(response.status_code, body_value, write=write)
         if isinstance(body, list):
             return body
+        if write and body is True:
+            return True
         code = body.get("code")
         if code not in (None, 0, "0"):
             raise failure("provider_rejected")
@@ -359,29 +369,40 @@ class RongliangClient:
             "compilationsAlias": normalized.get("alias", ""),
             "episodicDramaId": normalized["episodic_drama_id"],
         }
-        result = self._request("POST", "/link/create", json=body, write=True)
+        try:
+            result = self._request("POST", "/link/create", json=body, write=True)
+        except DomainError as error:
+            if error.code not in {
+                "provider_rejected", "provider_result_unknown",
+                "provider_schema_unsupported", "provider_unavailable",
+            }:
+                raise
+            # 重复/异常回执不代表未创建。按本次应用、剧、起播集和平台精确回读，
+            # 有已存在批次直接复用；查无结果才保留原错误，绝不再次发送创建请求。
+            receipt = self._find_created_link(drama_id, normalized)
+            if receipt is not None:
+                return receipt
+            raise
         if result is not True and not (isinstance(result, dict) and result.get("success") is True):
             raise failure("provider_result_unknown")
-        data = self._request(
-            "GET",
-            "/link/page",
-            query={
-                "pageNumber": 1,
-                "pageSize": PAGE_SIZE,
-                "clientId": normalized["client_id"],
-                "deliverPlatform": normalized["platform"],
-            },
-        )
-        if not isinstance(data, dict) or not isinstance(data.get("records"), list):
+        receipt = self._find_created_link(drama_id, normalized)
+        if receipt is None:
             raise failure("provider_result_unknown")
-        rows = [row for row in data["records"] if isinstance(row, dict) and self._matches(row, drama_id, normalized)]
-        if len(rows) != 1:
+        return receipt
+
+    def _find_created_link(self, drama_id: str, config: JsonDict) -> LinkReceipt | None:
+        page = self.lookup_link(drama_id, config, None)
+        # 即时回读仍有界；目录多页时交给原 recover_create 持久分页继续，
+        # 不能把只查首页当成“链接不存在”，也不在单个 Worker 步骤内无限扫描。
+        if not page.complete:
             raise failure("provider_result_unknown")
-        batch = rows[0].get("batchId")
-        if not isinstance(batch, str) or not batch:
+        found = {row["batchId"]: row for row in page.items}
+        if len(found) > 1:
             raise failure("provider_result_unknown")
-        url_data = self._link_url(batch)
-        return self._receipt(batch, url_data, normalized)
+        if not found:
+            return None
+        batch, data = next(iter(found.items()))
+        return self._receipt(batch, data, config)
 
     def read_link(self, remote_id: str) -> LinkReceipt:
         batch_id = external_id(remote_id)

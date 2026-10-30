@@ -181,6 +181,8 @@ export const reasonLabels: Record<string, string> = {
     "此授权尚未完成当前 BC 的接入，请到“账户与授权 → 授权管理”检查同步状态。",
   manual_link_mapping_required: "剧名已变化，请更新对应的手动链接。",
   manual_link_required: "请补充推广链接。",
+  provider_rejected:
+    "版权方未确认取链结果，请重新解析并准备，系统会优先读取已有链接。",
   manual_link_invalid: "请填写有效的 TikTok Minis 推广链接。",
   manual_attribution_required: "请补充网眼提供的归因名称。",
   manual_link_conflict: "同一剧目 ID 对应不同输入，请合并为一行。",

@@ -865,3 +865,68 @@ def test_preparation_does_not_restart_exhausted_scene(job_env, wire, redis_clien
         job = db.get(SceneJob, catalog.id)
         assert job.status == "FAILED"
         assert job.failure_count == 5
+
+
+@pytest.mark.parametrize("case, expected", [
+    ("unique", "fixture-minis"),
+    ("second_page", "second-mini"),
+    ("duplicate_name", None),
+    ("unavailable", None),
+    ("different_name", None),
+    ("explicit_conflict", None),
+    ("manual_link", None),
+    ("external_url", None),
+    ("saved_conflict", None),
+])
+def test_selected_provider_application_matches_only_unique_available_mini(
+    job_env, wire, redis_client, case, expected
+):
+    from app.modules.builds.mini_selection import match_catalog_link
+    from app.modules.builds.mini_targets import remember_target, resolved_target
+    from app.modules.builds.scene_job_models import SceneJobPage
+    from app.modules.providers.models import ProviderApplication
+    from tests.modules.builds.scene_jobs.test_service import complete
+
+    env = job_env
+    catalog = complete(env, wire, redis_client)
+    with Session(engine) as db, db.begin():
+        link = db.get(PromotionLink, env["link_id"])
+        link.url = "https://www.tiktok.com/minis/opaque-code?batchId=fixture"
+        if case == "explicit_conflict":
+            link.url += "&minis_id=unavailable-explicit-target"
+        if case == "manual_link":
+            link.source = "manual"
+        if case == "external_url":
+            link.url = "https://example.test/minis/opaque-code"
+        if case == "saved_conflict":
+            remember_target(db, context=env["context"], url=link.url, minis_id="user-selected-mini", source="USER")
+        application = db.exec(select(ProviderApplication).where(
+            ProviderApplication.tenant_id == env["context"].tenant_id,
+            ProviderApplication.connection_id == link.connection_id,
+            ProviderApplication.external_id == link.application_id,
+        )).one()
+        application.name = "CoveShorts"
+        job = db.get(SceneJob, catalog.id)
+        first = db.exec(select(SceneJobPage).where(
+            SceneJobPage.job_id == job.id, SceneJobPage.resource == "minis",
+        )).one()
+        option = {**first.facts["options"][0], "name": "CoveShorts"}
+        if case == "different_name":
+            option["name"] = "Another app"
+        if case == "unavailable":
+            option["status"] = "INACTIVE"
+        if case in {"second_page", "duplicate_name"}:
+            db.add(SceneJobPage(**{
+                **first.model_dump(exclude={"id"}), "page": 2,
+                "facts": {"options": [{**option, "minis_id": "second-mini"}]},
+            }))
+            job.facts = {**job.facts, "minis": {**job.facts["minis"], "total_page": 2, "total_number": 2}}
+            if case == "second_page":
+                option["name"] = "Another app"
+        first.facts = {**first.facts, "options": [option]}
+        db.flush()
+        matched = match_catalog_link(db, context=env["context"], link_id=link.id, job=job)
+        assert matched == (expected is not None)
+        selected = resolved_target(db, context=env["context"], url=link.url)
+        known = {"explicit_conflict": "unavailable-explicit-target", "saved_conflict": "user-selected-mini"}
+        assert selected == known.get(case, expected)
