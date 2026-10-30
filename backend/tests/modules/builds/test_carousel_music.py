@@ -1456,6 +1456,148 @@ def test_failed_preparation_can_resume_selected_units_without_restarting_active_
             )
 
 
+@pytest.mark.parametrize(
+    "recover_at", ["after_failure", "while_running", "after_success"]
+)
+def test_failed_preparation_resumes_running_copy_without_restarting_existing_job(
+    music_case, wire, redis_client, recover_at
+):
+    from app.modules.builds.carousel_music import _target
+    from app.modules.builds.carousel_music_models import MusicPreparationRun
+    from app.modules.builds.carousel_music_tasks import advance_music_preparation
+    from app.modules.builds.image_composition_commands import Duplicate
+    from app.modules.builds.image_composition_service import edit_creative_units
+    from app.modules.builds.image_music_batch import start_music_retry
+    from app.modules.tenants.models import TenantMembership
+
+    engine, scope = music_case
+    identity = job_ids(engine)[0]
+    copied = {}
+
+    def restore_and_retry():
+        with Session(engine) as session, session.begin():
+            session.get(
+                TenantMembership, (scope.tenant_id, scope.actor_id)
+            ).role = "operator"
+            session.flush()
+            draft = session.get(BuildDraft, scope.draft_id)
+            unit = session.get(
+                DraftCreativeUnit,
+                (
+                    scope.tenant_id,
+                    scope.draft_id,
+                    draft.active_image_generation,
+                    copied["id"],
+                ),
+            )
+            target = _target(unit)
+            existing = session.get(MusicSelectionJob, identity)
+            existing_generation = existing.generation
+            # 第一次接回副本，第二次必须幂等，不能重启已经匹配的音乐任务。
+            for repeat in range(2):
+                receipt = start_music_retry(
+                    session, scope, uuid4(), draft.revision, [unit.drama_id]
+                )
+                run = session.get(MusicPreparationRun, UUID(receipt["run_id"]))
+                assert (
+                    advance_music_preparation(session, run.id, run.generation)["status"]
+                    == "READY"
+                )
+                jobs = session.exec(select(MusicSelectionJob)).all()
+                assert sum(target in job.targets for job in jobs) == 1
+                assert _target(unit) == target
+                if repeat:
+                    assert run.retried == 0
+                else:
+                    assert run.retried == (2 if recover_at == "after_failure" else 1)
+                if recover_at == "while_running":
+                    assert existing.status == "RUNNING"
+                    assert existing.generation == existing_generation
+
+    def copy_and_fail_preparation():
+        wire["hook"] = None
+        with Session(engine) as session, session.begin():
+            job = session.get(MusicSelectionJob, identity)
+            source = session.get(
+                DraftCreativeUnit,
+                (
+                    scope.tenant_id,
+                    scope.draft_id,
+                    job.active_generation,
+                    UUID(job.targets[0]["unit_id"]),
+                ),
+            )
+            assert source.music_status == "RUNNING"
+            draft = session.get(BuildDraft, scope.draft_id)
+            receipt = edit_creative_units(
+                session,
+                scope,
+                uuid4(),
+                draft.revision,
+                Duplicate(kind="DUPLICATE", unit_id=source.id),
+            )
+            copied["id"] = UUID(str(receipt["affected_units"][0]))
+            unit = session.get(
+                DraftCreativeUnit,
+                (scope.tenant_id, scope.draft_id, job.active_generation, copied["id"]),
+            )
+            assert unit.music_status == "RUNNING"
+            assert not any(
+                target["unit_id"] == str(unit.id)
+                for item in session.exec(select(MusicSelectionJob)).all()
+                for target in item.targets
+            )
+            session.get(
+                TenantMembership, (scope.tenant_id, scope.actor_id)
+            ).role = "viewer"
+            session.flush()
+            prep = session.exec(
+                select(MusicPreparationRun).where(
+                    MusicPreparationRun.status == "PENDING"
+                )
+            ).one()
+            assert (
+                advance_music_preparation(session, prep.id, prep.generation)["status"]
+                == "FAILED"
+            )
+            assert prep.error_code == "action_forbidden"
+            if recover_at == "after_success":
+                session.get(
+                    TenantMembership, (scope.tenant_id, scope.actor_id)
+                ).role = "operator"
+        if recover_at == "while_running":
+            restore_and_retry()
+
+    wire["hook"] = copy_and_fail_preparation
+    assert run_job(engine, redis_client, identity)["status"] == (
+        "FAILED" if recover_at == "after_failure" else "READY"
+    )
+    if recover_at != "while_running":
+        restore_and_retry()
+    for job_id in job_ids(engine):
+        run_job(engine, redis_client, job_id)
+    # 成功缓存及运行中任务均复用原推荐，只有原失败结果需要真正重新请求。
+    assert sum("/music/" in path for path, _ in wire["calls"]) == (
+        4 if recover_at == "after_failure" else 2
+    )
+    with Session(engine) as session:
+        draft = session.get(BuildDraft, scope.draft_id)
+        unit = session.get(
+            DraftCreativeUnit,
+            (
+                scope.tenant_id,
+                scope.draft_id,
+                draft.active_image_generation,
+                copied["id"],
+            ),
+        )
+        assert unit.music_status == "READY" and unit.music_id == "recommended"
+        assert all(
+            item.music_status in {"READY", "NEEDS_SELECTION"}
+            for item in session.exec(select(DraftCreativeUnit)).all()
+        )
+
+
 @pytest.mark.parametrize("music_case", [{"prepare": False}], indirect=True)
 @pytest.mark.parametrize("old_failure", [False, True])
 def test_batch_retry_does_not_take_over_normal_or_new_generation_preparation(

@@ -195,7 +195,9 @@ def _resume_unqueued_music(session, scope, draft, unit):
     from .carousel_music import _target, enqueue_music
     from .carousel_music_models import MusicPreparationRun
 
-    if unit.music_status != "PENDING" or unit.music_protected:
+    # 副本会继承源单元的 RUNNING，但准备失败时可能尚未订阅任何任务。
+    # 两种未完成状态都检查完整订阅；已有任务仍交给原生命周期，不能重启。
+    if unit.music_status not in {"PENDING", "RUNNING"} or unit.music_protected:
         return False
     failed = session.exec(
         select(MusicPreparationRun.id)
@@ -227,7 +229,7 @@ def _resume_unqueued_music(session, scope, draft, unit):
     ).first()
     if existing is not None:
         return False
-    enqueue_music(session, scope, draft, unit_ids=[unit.id])
+    enqueue_music(session, scope, draft, unit_ids=[unit.id], retry_failed=True)
     return True
 
 

@@ -149,7 +149,7 @@ def _effective_parameters(state, unit, image_count):
     return effective_music_rule(rule, image_count)
 
 
-def enqueue_music(session, scope, draft, *, unit_ids=None):
+def enqueue_music(session, scope, draft, *, unit_ids=None, retry_failed=False):
     """与激活/编辑同事务入队；不展开目标账户，不在事务里访问平台。"""
     from .carousel_music_tasks import queue_music
 
@@ -228,6 +228,15 @@ def enqueue_music(session, scope, draft, *, unit_ids=None):
             queue_music(session, job)
         elif target not in job.targets:
             job.targets = [*job.targets, target]
+            if (
+                retry_failed
+                and job.status == "FAILED"
+                and job.result.get("status") == "FAILED"
+            ):
+                # 用户明确补接失败准备的副本时，不能把原任务的失败缓存再次发布给它。
+                # 保留已发布游标，只重试新增订阅；运行中任务与成功缓存均不重置。
+                job.result, job.error_code, job.claim = {}, None, None
+                job.attempts, job.wait_turns = 0, 0
             if job.status in {"READY", "FAILED", "CANCELLED"}:
                 job.status = "PENDING"
                 job.generation += 1
