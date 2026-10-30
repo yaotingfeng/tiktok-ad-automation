@@ -544,6 +544,15 @@ handle("builds-minis_options", (req) => {
   }
 })
 
+// 演示目录由固定数据即时返回；刷新保留已选小程序，不伪造远端同步任务。
+handle("builds-refresh_minis_catalog", (req) => {
+  const draft = demoDrafts.find(
+    (d) => d.draft_id === req.path.draft_id && d.tenant_id === req.path.tenant_id,
+  )
+  if (!draft) return demoError(404, "draft_not_found", "草稿不存在")
+  return { expired: 0 }
+})
+
 // 选择 Mini
 handle("builds-select_mini", (req) => {
   const { draft_id } = req.path
