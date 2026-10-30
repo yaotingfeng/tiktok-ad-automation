@@ -4,7 +4,7 @@ from uuid import UUID
 from app.core.errors import DomainError
 
 DEFAULT_NAME_TEMPLATE = "{provider_drama}-{drama_id}"
-NAME_FIELDS = frozenset({"provider_drama", "drama_id", "YYYYMMDD"})
+NAME_FIELDS = frozenset({"provider_drama", "drama_id", "YYYYMMDD", "provider_pinyin"})
 # 没有版权方剧目 ID 的手动剧目在命名时使用系统编号，前缀区分于版权方编号。
 LOCAL_DRAMA_ID_PREFIX = "ada-"
 
@@ -61,13 +61,14 @@ def render_names(
         or (not protected_base and (not provider_pinyin.strip() or not title.strip()))
     ):
         raise DomainError("naming_context_missing", "缺少有效版权方数字剧目 ID")
-    # 网眼仅替换“版权方＋剧名”；剧目 ID、日期及固定文字共用同一模板。
+    # 网眼仅替换“版权方＋剧名”；独立拼音标签使用冻结的版权方标识，不从归因开头猜取。
     # 插入值是字面文本，归因花括号不会被再次解析。批次编号由系统统一追加。
     campaign = (
         template.format_map(
             {
                 "provider_drama": protected_base or f"{provider_pinyin}-{title}",
                 "drama_id": drama_id,
+                "provider_pinyin": provider_pinyin,
                 "YYYYMMDD": date_text,
             }
         )

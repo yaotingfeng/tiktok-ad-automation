@@ -974,6 +974,24 @@ test("一个格式同时改变嘉书和网眼，批次编号自动追加且剧�
       naming.getByRole("region", { name: provider, exact: true }).locator("dd"),
     ).toHaveText([campaign, `${campaign}-g01`, `${campaign}-g01-sp1`])
   }
+  await page
+    .getByRole("button", { name: "添加版权方拼音", exact: true })
+    .click()
+  await expect(template).toHaveValue(
+    "[版权方＋剧名]-[剧目 ID]-[日期]-[版权方拼音]",
+  )
+  await expect(
+    page.getByRole("button", { name: "添加版权方拼音", exact: true }),
+  ).toBeDisabled()
+  for (const [provider, base, pinyin] of [
+    ["嘉书", "jiashu-The Bond-106001", "jiashu"],
+    ["网眼", "{b30008/s328302/c3}-The Bond-328302", "wangyan"],
+  ]) {
+    const campaign = `${base}-20260913-${pinyin}-A7K2`
+    await expect(
+      naming.getByRole("region", { name: provider, exact: true }).locator("dd"),
+    ).toHaveText([campaign, `${campaign}-g01`, `${campaign}-g01-sp1`])
+  }
   await template.fill("[版权方＋剧名]-固定文字-[剧目 ID]")
   await expect(
     naming
@@ -1679,7 +1697,9 @@ test("结构示例读取服务器预算，试算失败后不显示旧广告数",
   await page.goto(editUrl)
   const example = page.getByRole("region", { name: "结构与预算示例" })
   await expect(example).toContainText("每基础广告文案版本数 K=2")
-  await expect(page.locator("#strategy-creative_count-help")).toContainText("K 为每基础广告的文案版本数")
+  await expect(page.locator("#strategy-creative_count-help")).toContainText(
+    "K 为每基础广告的文案版本数",
+  )
   await expect(example).toContainText("示例日预算合计：USD 100")
   let observed: any
   await page.route("**/strategies/structure-estimate", async (route) => {

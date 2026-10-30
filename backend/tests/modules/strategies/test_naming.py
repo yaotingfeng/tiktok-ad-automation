@@ -55,6 +55,7 @@ def test_custom_date_order_and_literal_text_apply_to_both_providers(protected):
         "{provider_drama}-{drama_id}-{unknown}",
         "{provider_drama}-{drama_id}-{drama_id}",
         "{provider_drama}-{drama_id}-{YYYYMMDD}-{YYYYMMDD}",
+        "{provider_drama}-{drama_id}-{provider_pinyin}-{provider_pinyin}",
         "-{",
         "-{}",
     ],
@@ -104,3 +105,19 @@ def test_manual_drama_without_provider_id_uses_stable_local_number():
     assert local_id.startswith("ada-") and len(local_id) == 12
     names = render_names(**{**ARGS, "protected_base": "", "display_drama_id": local_id})
     assert names[0] == f"jiashu-The Bond-{local_id}-A7K2"
+
+
+@pytest.mark.parametrize(
+    ("provider", "protected"),
+    [("jiashu", ""), ("wangyan", ARGS["protected_base"]), ("rongliang", "RL-The Bond")],
+)
+def test_provider_pinyin_tag_uses_provider_context_and_preserves_attribution(
+    provider, protected
+):
+    names = render_names(
+        **{**ARGS, "provider_pinyin": provider, "protected_base": protected},
+        template="{provider_drama}-{drama_id}-{YYYYMMDD}-{provider_pinyin}",
+    )
+    base = protected or f"{provider}-The Bond"
+    campaign = f"{base}-106001-20260913-{provider}-A7K2"
+    assert names == (campaign, campaign + "-g01", campaign + "-g01-sp2")

@@ -16,7 +16,12 @@ export function StrategyNamingExample({
     { label: "嘉书", campaign: renderNameExample(nameTemplate) },
     {
       label: "网眼",
-      campaign: renderNameExample(nameTemplate, EXAMPLE_BASE, "328302"),
+      campaign: renderNameExample(
+        nameTemplate,
+        EXAMPLE_BASE,
+        "328302",
+        "wangyan",
+      ),
     },
   ]
   return (
@@ -24,7 +29,7 @@ export function StrategyNamingExample({
       <CardHeader>
         <CardTitle>广告命名示例</CardTitle>
         <CardDescription>
-          同一格式，仅“版权方＋剧名”按版权方自动生成。
+          同一格式，“版权方＋剧名”和“版权方拼音”按对应版权方自动生成。
         </CardDescription>
       </CardHeader>
       <CardContent className="flex flex-col gap-5 text-sm">

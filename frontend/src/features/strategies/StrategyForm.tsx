@@ -1139,7 +1139,7 @@ export function StrategyForm({
                   "campaign_name_template",
                   displayNameTemplate(nameTemplate),
                   (value) => setNameTemplate(parseNameTemplate(value)),
-                  "版权方＋剧名固定在开头，剧目 ID 必须保留。其后可调整顺序、分隔符和固定文字，日期按需添加。剧目 ID 取对应版权方的剧目 ID。",
+                  "版权方＋剧名固定在开头，剧目 ID 必须保留。其后可调整顺序、分隔符和固定文字，日期和版权方拼音按需添加（如 wangyan）。剧目 ID 取对应版权方的剧目 ID。",
                 )}
                 {!readonly && (
                   <div className="flex flex-wrap gap-2">

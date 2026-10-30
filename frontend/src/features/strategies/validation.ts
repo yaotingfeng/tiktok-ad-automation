@@ -8,6 +8,7 @@ export const NAME_LABELS: Record<string, string> = {
   provider_drama: "版权方＋剧名",
   drama_id: "剧目 ID",
   YYYYMMDD: "日期",
+  provider_pinyin: "版权方拼音",
 }
 const NAME_FIELDS = Object.keys(NAME_LABELS)
 
@@ -53,7 +54,7 @@ function templateError(
     const end = value.indexOf("}", i + 1),
       field = value.slice(i + 1, end)
     if (end < 0 || !allowed.includes(field))
-      return "请使用版权方＋剧名、剧目 ID、日期字段；批次编号由系统自动添加。"
+      return "请使用版权方＋剧名、剧目 ID、日期、版权方拼音字段；批次编号由系统自动添加。"
     if (fields.has(field)) return `${NAME_LABELS[field]}只能出现一次。`
     fields.add(field)
     i = end
@@ -74,6 +75,7 @@ export function renderNameExample(
   value: string,
   providerDrama = "jiashu-The Bond",
   dramaId = "106001",
+  providerPinyin = "jiashu",
 ) {
   if (nameTemplateError(value)) return null
   const values: Record<string, string> = {
@@ -81,6 +83,7 @@ export function renderNameExample(
     "}}": "}",
     "{provider_drama}": providerDrama,
     "{drama_id}": dramaId,
+    "{provider_pinyin}": providerPinyin,
     "{YYYYMMDD}": "20260913",
   }
   return `${value.replace(/\{\{|\}\}|\{[^{}]+\}/g, (token) => values[token]!)}-A7K2`
