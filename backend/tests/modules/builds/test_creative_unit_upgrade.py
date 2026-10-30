@@ -172,7 +172,11 @@ def test_real_old_schema_upgrade_and_mixed_history_drain(monkeypatch):
     from sqlmodel import Session
 
     from app.modules.accounts.connection_models import BCDefaultRoute
-    from app.modules.builds.execution_models import ExecutionStep, SubmissionUnit
+    from app.modules.builds.execution_models import (
+        ExecutionStep,
+        StepEvidence,
+        SubmissionUnit,
+    )
     from app.modules.builds.preview_models import BuildUnit, PreviewDrama
     from tests.migration_database import historical_database
     from tests.modules.builds.test_drafts import create_intent
@@ -288,6 +292,42 @@ def test_real_old_schema_upgrade_and_mixed_history_drain(monkeypatch):
                     )
                     transaction.rollback()
             assert db.get(ExecutionStep, step_id).status == "UNKNOWN"
+            # 每种证据独立保存点，不能更新或删除不可变的历史回执。
+            for receipt_id, expected_drained in (
+                ("created-campaign", True),
+                ("different-campaign", False),
+            ):
+                with db.begin_nested() as transaction:
+                    db.get(BuildPreview, writer_id).status = "FROZEN"
+                    source = db.get(ExecutionStep, step_id)
+                    source.status, source.remote_id = "SUCCEEDED", "created-campaign"
+                    db.add(
+                        ExecutionStep(
+                            **scope,
+                            submission_id=source.submission_id,
+                            unit_id=source.unit_id,
+                            kind="READBACK",
+                            step_key="obsolete-readback",
+                            parent_step_id=source.id,
+                            status="UNKNOWN",
+                        )
+                    )
+                    db.add(
+                        StepEvidence(
+                            tenant_id=source.tenant_id,
+                            submission_id=source.submission_id,
+                            step_id=source.id,
+                            attempt=0,
+                            conclusion="CREATED",
+                            summary={"remote_id": receipt_id},
+                        )
+                    )
+                    db.flush()
+                    assert (
+                        probe.creative_unit_drain(db.connection())["drained"]
+                        is expected_drained
+                    )
+                    transaction.rollback()
 
 
 def test_probe_v2_work_is_separate_and_unknown_schema_fails_closed(
@@ -306,3 +346,20 @@ def test_probe_v2_work_is_separate_and_unknown_schema_fails_closed(
         with pytest.raises(RuntimeError, match="Unknown creative contract schema"):
             probe.creative_unit_drain(session.connection())
         transaction.rollback()
+
+
+def test_deployed_sync_schema_and_merged_carousel_head_are_recognized(monkeypatch):
+    from alembic import command
+
+    from tests.migration_database import historical_database
+
+    probe = release_probe()
+    with historical_database(monkeypatch, "0066_directory_status_turn") as (
+        engine,
+        config,
+    ):
+        with engine.connect() as connection:
+            assert probe.creative_unit_drain(connection)["drained"] is True
+        command.upgrade(config, "head")
+        with engine.connect() as connection:
+            assert probe.creative_unit_drain(connection)["drained"] is True

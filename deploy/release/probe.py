@@ -130,6 +130,9 @@ LEGACY_CREATIVE_HEADS = frozenset(
 0057_carousel_copy_integrity
 0058_selected_music_retry
 0059_video_creative_units
+0062_directory_pending_index
+0064_closeout_job_scope
+0066_directory_status_turn
 02a_tenants
 02b_connections
 02c_directory
@@ -198,7 +201,13 @@ reporting_queries
 tenant_material_library
 """.split()
 )
-V2_CREATIVE_HEADS = {"0060_frozen_creative_units", "0061_carousel_ad_readiness"}
+V2_CREATIVE_HEADS = {
+    "0060_frozen_creative_units",
+    "0061_carousel_ad_readiness",
+    "0063_merge_sync_carousel",
+    "0065_merge_closeout_carousel",
+    "0067_merge_directory_turn",
+}
 
 
 def creative_unit_drain(connection=None):
@@ -225,14 +234,41 @@ def creative_unit_drain(connection=None):
     join = (
         ""
         if legacy
-        else " LEFT JOIN preview_contract c ON c.tenant_id=p.tenant_id AND c.preview_id=p.id"
+        else " LEFT JOIN preview_contract c"
+        " ON c.tenant_id=p.tenant_id AND c.preview_id=p.id"
     )
     predicate = "true" if legacy else "(c.version=1 OR c.preview_id IS NULL)"
+    # 旧镜像加载自身已发布模型并复用业务闭环谓词，不依赖候选ORM或新表。
+    # 原步骤和回执保持原样；已验证补建/明确创建回执的旧READBACK本来就不再执行。
+    from app import models as _models  # noqa: F401
+    from app.modules.builds.receipt_completion import obsolete_readback_sql
+
+    outstanding = "NOT " + obsolete_readback_sql("e")
+    if connection.execute(
+        text("SELECT to_regclass('build_verified_replacement') IS NOT NULL")
+    ).scalar_one():
+        from app.modules.builds.corrections import resolved_sql
+
+        outstanding += " AND NOT (" + resolved_sql("e") + ")"
     blockers = {}
     queries = {
-        "preview_building": f"SELECT p.id FROM build_preview p{join} WHERE {predicate} AND p.status='BUILDING'",
-        "submission_runnable": f"SELECT s.id FROM build_submission s JOIN build_preview p ON p.tenant_id=s.tenant_id AND p.id=s.preview_id{join} WHERE {predicate} AND (NOT s.expanded OR s.status NOT IN ('COMPLETED','PARTIAL','FAILED'))",
-        "step_runnable_or_unknown": f"SELECT e.id FROM execution_step e JOIN build_preview p ON p.tenant_id=e.tenant_id AND p.id=e.preview_id{join} WHERE {predicate} AND e.status IN ('QUEUED','PENDING','RUNNING','RETRYABLE','UNKNOWN')",
+        "preview_building": (
+            f"SELECT p.id FROM build_preview p{join} WHERE {predicate}"
+            " AND p.status='BUILDING'"
+        ),
+        "submission_runnable": (
+            "SELECT s.id FROM build_submission s JOIN build_preview p"
+            f" ON p.tenant_id=s.tenant_id AND p.id=s.preview_id{join}"
+            f" WHERE {predicate} AND (NOT s.expanded"
+            " OR s.status NOT IN ('COMPLETED','PARTIAL','FAILED'))"
+        ),
+        "step_runnable_or_unknown": (
+            "SELECT e.id FROM execution_step e JOIN build_preview p"
+            f" ON p.tenant_id=e.tenant_id AND p.id=e.preview_id{join}"
+            f" WHERE {predicate} AND e.status IN"
+            " ('QUEUED','PENDING','RUNNING','RETRYABLE','UNKNOWN')"
+            f" AND {outstanding}"
+        ),
     }
     if not legacy:
         queries["missing_descriptor"] = (
