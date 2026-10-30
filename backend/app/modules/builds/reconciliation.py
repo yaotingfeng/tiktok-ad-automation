@@ -834,6 +834,9 @@ def _finish(
             },
             request_id=page.evidence.request_id,
         )
+        from app.modules.builds.created_directory import publish_created_object
+
+        publish_created_object(session, step=source, route=claim.route)
         return _remember(
             step, ReconciliationResult("MISMATCH" if mismatch else "SUCCEEDED")
         )

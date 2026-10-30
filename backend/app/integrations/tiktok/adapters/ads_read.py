@@ -150,6 +150,95 @@ class FinanceReadState:
         return self.advertiser_id
 
 
+def material_usages(
+    row: dict[str, Any],
+    ad_ref: EntityRef,
+    *,
+    smart: bool,
+    creative_id: str | None = None,
+) -> tuple[list[AdMaterialUsage], bool]:
+    """创建回执与平台目录共用素材身份解析，不发送请求。"""
+    entries = row.get("creative_list") if smart else [row]
+    if type(entries) is not list:
+        return [], False
+    try:
+        carousel = decode_carousels(
+            row,
+            advertiser_id=ad_ref.advertiser_id,
+            ad_id=ad_ref.remote_id,
+            smart=smart,
+            creative_id=creative_id,
+        )
+    except ValueError as exc:
+        raise invalid() from exc
+    usages = []
+    complete = carousel.complete
+    for entry in entries:
+        if type(entry) is not dict:
+            raise invalid()
+        info = entry.get("creative_info", {}) if smart else entry
+        if type(info) is not dict:
+            raise invalid()
+        video = info.get("video_info") if smart else None
+        if video is not None and type(video) is not dict:
+            raise invalid()
+        video_id = video.get("video_id") if video else info.get("video_id")
+        assets: list[tuple[str, str]] = []
+        if video_id is not None:
+            assets.append((identifier(video_id), "VIDEO"))
+        elif info.get("tiktok_item_id") is not None:
+            # 帖子是独立平台命名空间；不能伪造素材库 VID、主素材报表类型或本地文件关联。
+            assets.append((identifier(info["tiktok_item_id"]), "TIKTOK_POST"))
+        else:
+            # 视频封面不是独立主素材；只有无视频的图片广告登记图片使用。
+            images = info.get("image_info", []) if smart else info.get("image_ids", [])
+            if type(images) is not list:
+                raise invalid()
+            for item in images:
+                image_id = (
+                    item.get("image_id", item.get("web_uri"))
+                    if type(item) is dict
+                    else item
+                )
+                if image_id is None:
+                    complete = False
+                    continue
+                assets.append((identifier(image_id), "IMAGE"))
+        if not assets:
+            complete = False
+            continue
+        ad_material_id = entry.get("ad_material_id") if smart or creative_id else None
+        if ad_material_id is not None:
+            identifier(ad_material_id)
+        name = (
+            info.get("material_name", "") if smart else entry.get("material_name", "")
+        )
+        if type(name) is not str:
+            raise invalid()
+        status = (
+            entry.get("material_operation_status")
+            if smart
+            else entry.get("operation_status")
+        )
+        if status is not None:
+            identifier(status)
+        native_creative = entry.get("smart_plus_creative_id") if smart else creative_id
+        if native_creative is not None:
+            identifier(native_creative)
+        for asset_id, asset_type in assets:
+            usages.append(
+                AdMaterialUsage(
+                    MaterialUseRef(ad_ref, asset_id, ad_material_id, asset_type),
+                    None,
+                    status,
+                    True,
+                    name,
+                    creative_ids=(native_creative,) if native_creative else (),
+                )
+            )
+    return usages, complete
+
+
 class AdsReadAdapter:
     def __init__(
         self,
@@ -229,93 +318,7 @@ class AdsReadAdapter:
         smart: bool,
         creative_id: str | None = None,
     ) -> tuple[list[AdMaterialUsage], bool]:
-        entries = row.get("creative_list") if smart else [row]
-        if type(entries) is not list:
-            return [], False
-        try:
-            carousel = decode_carousels(
-                row,
-                advertiser_id=ad_ref.advertiser_id,
-                ad_id=ad_ref.remote_id,
-                smart=smart,
-                creative_id=creative_id,
-            )
-        except ValueError as exc:
-            raise invalid() from exc
-        usages = []
-        complete = carousel.complete
-        for entry in entries:
-            if type(entry) is not dict:
-                raise invalid()
-            info = entry.get("creative_info", {}) if smart else entry
-            if type(info) is not dict:
-                raise invalid()
-            video = info.get("video_info") if smart else None
-            if video is not None and type(video) is not dict:
-                raise invalid()
-            video_id = video.get("video_id") if video else info.get("video_id")
-            assets: list[tuple[str, str]] = []
-            if video_id is not None:
-                assets.append((identifier(video_id), "VIDEO"))
-            elif info.get("tiktok_item_id") is not None:
-                # 帖子是独立平台命名空间；不能伪造素材库 VID、主素材报表类型或本地文件关联。
-                assets.append((identifier(info["tiktok_item_id"]), "TIKTOK_POST"))
-            else:
-                # 视频封面不是独立主素材；只有无视频的图片广告登记图片使用。
-                images = (
-                    info.get("image_info", []) if smart else info.get("image_ids", [])
-                )
-                if type(images) is not list:
-                    raise invalid()
-                for item in images:
-                    image_id = (
-                        item.get("image_id", item.get("web_uri"))
-                        if type(item) is dict
-                        else item
-                    )
-                    if image_id is None:
-                        complete = False
-                        continue
-                    assets.append((identifier(image_id), "IMAGE"))
-            if not assets:
-                complete = False
-                continue
-            ad_material_id = (
-                entry.get("ad_material_id") if smart or creative_id else None
-            )
-            if ad_material_id is not None:
-                identifier(ad_material_id)
-            name = (
-                info.get("material_name", "")
-                if smart
-                else entry.get("material_name", "")
-            )
-            if type(name) is not str:
-                raise invalid()
-            status = (
-                entry.get("material_operation_status")
-                if smart
-                else entry.get("operation_status")
-            )
-            if status is not None:
-                identifier(status)
-            native_creative = (
-                entry.get("smart_plus_creative_id") if smart else creative_id
-            )
-            if native_creative is not None:
-                identifier(native_creative)
-            for asset_id, asset_type in assets:
-                usages.append(
-                    AdMaterialUsage(
-                        MaterialUseRef(ad_ref, asset_id, ad_material_id, asset_type),
-                        None,
-                        status,
-                        True,
-                        name,
-                        creative_ids=(native_creative,) if native_creative else (),
-                    )
-                )
-        return usages, complete
+        return material_usages(row, ad_ref, smart=smart, creative_id=creative_id)
 
     def read_page(self, query: DirectoryQuery) -> DirectoryPage:
         return self._read_page(query, defer_materials=False)

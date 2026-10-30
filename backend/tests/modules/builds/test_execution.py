@@ -111,7 +111,9 @@ def executable(isolated_strategy_database, monkeypatch, request):
                 session,
                 context=context,
                 strategy_id=version.strategy_id,
-                config=config(max_materials_per_group=2, ads_per_group=1, creative_count=2),
+                config=config(
+                    max_materials_per_group=2, ads_per_group=1, creative_count=2
+                ),
             ),
             drama_lines=["Moon"],
             account_lines=accounts,
@@ -262,9 +264,43 @@ def test_all_layers_enable_target_assets_and_no_row_locks_during_official_wire(
         c["creative_info"]["image_info"][0]["web_uri"] for c in ads[0]["creative_list"]
     } == {"cover-0", "cover-1"}
     with Session(db) as session:
+        from app.modules.ads.models import (
+            AdMaterialReference,
+            AdObject,
+            CampaignNameProjection,
+        )
+        from app.modules.ads.sync_models import AdDirectoryRun
         from app.modules.materials.cover_models import MaterialCoverJob
 
         assert not session.exec(select(MaterialCoverJob)).all()
+        objects = session.exec(select(AdObject)).all()
+        assert sorted(o.kind for o in objects) == ["ad", "ad", "adgroup", "campaign"]
+        assert all(o.operation_status == "ENABLE" for o in objects)
+        assert all(
+            o.review_status is None and o.delivery_status is None for o in objects
+        )
+        assert all(o.source_channel == "OFFICIAL_API" for o in objects)
+        campaign = next(o for o in objects if o.kind == "campaign")
+        group_object = next(o for o in objects if o.kind == "adgroup")
+        assert group_object.parent_remote_id == campaign.remote_id
+        assert all(
+            o.parent_remote_id == group_object.remote_id
+            for o in objects
+            if o.kind == "ad"
+        )
+        assert (
+            session.exec(select(CampaignNameProjection)).one().raw_name == campaign.name
+        )
+        uses = session.exec(select(AdMaterialReference)).all()
+        assert len(uses) == 4
+        assert {u.platform_material_id for u in uses} == {"target-0", "target-1"}
+        assert all(
+            u.ad_material_id is None and u.operation_status is None for u in uses
+        )
+        assert all(u.complete for u in uses)
+        assert all(u.local_material_id and u.name.startswith("Moon-") for u in uses)
+        # 创建落库不能产生新的同步任务，也不能伪造平台同步水位。
+        assert not session.exec(select(AdDirectoryRun)).all()
         assert all(
             session.get(ExecutionStep, id).status == "SUCCEEDED"
             for kind in ["MATERIAL", "CTA", "CAMPAIGN", "ADGROUP", "AD"]

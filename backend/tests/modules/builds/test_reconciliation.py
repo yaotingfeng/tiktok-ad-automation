@@ -410,6 +410,13 @@ def test_unknown_campaign_remote_effect_is_recovered_without_create_or_database_
             and step.request_body == body
         )
         assert not step.mismatch and step.review_status == "CAMPAIGN_STATUS_ENABLE"
+        from app.modules.ads.models import AdObject
+
+        obj = session.get(
+            AdObject,
+            (step.tenant_id, body["advertiser_id"], "campaign", step.remote_id),
+        )
+        assert obj is not None and obj.name == body["campaign_name"]
         evidence = session.exec(
             select(StepEvidence).where(StepEvidence.step_id == identity)
         ).all()

@@ -218,6 +218,10 @@ def record_created(session: Session, *, claim: StepClaim, result: CreatedObject)
     step.updated_at = datetime.now(UTC)
     session.add(step)
     session.flush()
+    if live:
+        from app.modules.builds.created_directory import publish_created_object
+
+        publish_created_object(session, step=step, route=claim.route)
     return step.status
 
 
