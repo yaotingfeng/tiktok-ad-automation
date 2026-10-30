@@ -91,9 +91,15 @@ export function BuildError({ error }: { error: unknown }) {
       <AlertTitle>
         {status === 403
           ? "权限不足"
-          : status === 409
-            ? "草稿已更新"
-            : "操作未完成"}
+          : [
+                "tiktok_call_deadline_exceeded",
+                "tiktok_local_resources_unavailable",
+                "scene_refresh_failed",
+              ].includes(code)
+            ? "目录读取未完成"
+            : status === 409
+              ? "草稿已更新"
+              : "操作未完成"}
       </AlertTitle>
       <AlertDescription>
         {typeof code === "string" && reasonLabels[code]
@@ -178,6 +184,9 @@ export const reasonLabels: Record<string, string> = {
   manual_link_invalid: "请填写有效的 TikTok Minis 推广链接。",
   manual_attribution_required: "请补充网眼提供的归因名称。",
   manual_link_conflict: "同一剧目 ID 对应不同输入，请合并为一行。",
+  tiktok_call_deadline_exceeded: "目录读取暂时超时，请点击更新后重试。",
+  tiktok_local_resources_unavailable: "目录读取暂时繁忙，请点击更新后重试。",
+  scene_refresh_failed: "目录读取失败，请点击更新后重试。",
   minis_selection_required: "请在推广小程序区域按名称选择后继续",
   minis_catalog_stale: "小程序目录已过期，请更新可用小程序后重新选择",
   minis_link_conflict: "所选小程序与推广链接指向不一致，请分开搭建",

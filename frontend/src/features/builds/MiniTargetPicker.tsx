@@ -125,13 +125,15 @@ export function MiniTargetPicker({
                 (confirmedMini?.revision === summary.revision &&
                   (!data || data.state === "pending") &&
                   confirmedMini.name) ||
-                (query.isPending || data?.state === "pending"
-                  ? "正在读取可用小程序…"
-                  : data?.state === "conflict"
-                    ? "剧目已有不同推广目标，请核对后选择"
-                    : data?.state === "unavailable"
-                      ? "参考账户暂无可用短剧小程序"
-                      : "请按名称选择本批次剧目对应的小程序")}
+                (query.isError
+                  ? "可用小程序读取失败，请更新后重试"
+                  : query.isPending || data?.state === "pending"
+                    ? "正在读取可用小程序…"
+                    : data?.state === "conflict"
+                      ? "剧目已有不同推广目标，请核对后选择"
+                      : data?.state === "unavailable"
+                        ? "参考账户暂无可用短剧小程序"
+                        : "请按名称选择本批次剧目对应的小程序")}
             </p>
           </div>
           <div className="flex gap-2">
@@ -169,15 +171,18 @@ export function MiniTargetPicker({
         </div>
         {query.error ? <BuildError error={query.error} /> : null}
         {error ? <BuildError error={error} /> : null}
-        {data?.state === "pending" && summary.status === "READY" && write && (
-          <Button
-            className="self-start"
-            variant="outline"
-            onClick={() => void onPrepare()}
-          >
-            更新可用小程序
-          </Button>
-        )}
+        {(query.isError || data?.state === "pending") &&
+          summary.status === "READY" &&
+          write && (
+            <Button
+              className="self-start"
+              variant="outline"
+              disabled={refreshing || busy}
+              onClick={() => void refresh()}
+            >
+              更新可用小程序
+            </Button>
+          )}
         <p className="text-xs text-muted-foreground">
           选择会用于本批次全部剧目，系统会检查各目标账户是否可用，并记住已确认链接的对应关系。
         </p>

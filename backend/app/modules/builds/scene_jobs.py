@@ -195,6 +195,7 @@ def ensure_scene_preparation(
             "account_build_unverified",
             "scene_refresh_failed",
             "tiktok_local_resources_unavailable",
+            "tiktok_call_deadline_exceeded",
         }
         proof = (
             get_capability_evidence(
@@ -211,13 +212,16 @@ def ensure_scene_preparation(
             return ScenePreparation(
                 job.id, "blocked", job.error_code or "scene_refresh_failed"
             )
-        if job.status == "FAILED" and job.error_code in {
+        if job.error_code in {
             "scene_refresh_failed",
             "tiktok_local_resources_unavailable",
+            "tiktok_call_deadline_exceeded",
         }:
             job.status = "PENDING"
             # 从真正失败的资源及页码恢复，不能跳到无关的历史预算查询。
             job.error_code = None
+            # 显式重新准备开启新的有界重试周期，保留已保存资源及分页。
+            job.failure_count = 0
             job.revision += 1
             session.add(job)
             _queue(session, job)
@@ -289,20 +293,27 @@ def _scope_for_job(
     return scope
 
 
-def _lock_job(session: Session, tenant_id: UUID, identity: UUID) -> SceneJob | None:
+def _lock_job(
+    session: Session,
+    tenant_id: UUID,
+    identity: UUID,
+    *,
+    shared_connection: bool = False,
+) -> SceneJob | None:
     found = session.exec(
         select(SceneJob).where(SceneJob.id == identity, SceneJob.tenant_id == tenant_id)
     ).first()
     if found is None:
         return None
-    # Same parent-before-child ordering as ensure, credential changes and receipt.
+    # 先连接后任务；纯校验/回写只共享锁定授权，让不同账户并行。
+    # 领取阶段可能引导能力刷新，仍保留独占锁，避免共享锁升级死锁。
     session.exec(
         select(TikTokConnection)
         .where(
             TikTokConnection.id == found.connection_id,
             TikTokConnection.tenant_id == tenant_id,
         )
-        .with_for_update()
+        .with_for_update(read=shared_connection)
     ).first()
     return session.exec(
         select(SceneJob)
@@ -464,7 +475,7 @@ def process_scene_job(
             bounded_session(database_engine, task_deadline=deadline) as session,
             session.begin(),
         ):
-            current = _lock_job(session, tenant_id, identity)
+            current = _lock_job(session, tenant_id, identity, shared_connection=True)
             if (
                 current is None
                 or current.actor_id != actor_id
@@ -534,7 +545,7 @@ def process_scene_job(
             bounded_session(database_engine, task_deadline=deadline) as session,
             session.begin(),
         ):
-            current = _lock_job(session, tenant_id, identity)
+            current = _lock_job(session, tenant_id, identity, shared_connection=True)
             if (
                 current is None
                 or current.status != "PENDING"
@@ -699,6 +710,7 @@ def process_scene_job(
                 "scene_refresh_failed",
                 "mcp_refresh_pending",
                 "tiktok_local_resources_unavailable",
+                "tiktok_call_deadline_exceeded",
             }:
                 current.status = "BLOCKED"
             elif current.failure_count >= 5:
