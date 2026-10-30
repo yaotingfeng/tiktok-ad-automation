@@ -806,3 +806,62 @@ def test_manual_minis_refresh_expires_current_route_catalog(
             draft_minis(db, context=env["context"], draft_id=draft_id).state
             == "pending"
         )
+
+
+@pytest.mark.parametrize("status", ["BLOCKED", "FAILED"])
+def test_failed_catalog_reports_error_instead_of_pending(
+    job_env, wire, redis_client, status
+):
+    from app.core.errors import DomainError
+    from app.modules.builds.identity_selection import draft_identities
+    from app.modules.builds.mini_selection import draft_minis
+    from app.modules.builds.scene_job_models import SceneJobPage
+
+    env = job_env
+    draft_id, _, catalog = selection_draft(env, wire, redis_client)
+    with Session(engine) as db, db.begin():
+        job = db.get(SceneJob, catalog.id)
+        job.status, job.resource = status, "minis"
+        job.error_code = "tiktok_call_deadline_exceeded"
+        for row in db.exec(
+            select(SceneJobPage).where(SceneJobPage.job_id == job.id)
+        ).all():
+            db.delete(row)
+    for reader in (draft_minis, draft_identities):
+        with Session(engine) as db, pytest.raises(DomainError) as error:
+            reader(db, context=env["context"], draft_id=draft_id)
+        assert error.value.code == "tiktok_call_deadline_exceeded"
+
+
+def test_preparation_does_not_restart_exhausted_scene(job_env, wire, redis_client):
+    from app.modules.builds.scene_job_models import DraftSceneDependency
+
+    env = job_env
+    draft_id, _, catalog = selection_draft(env, wire, redis_client)
+    with Session(engine) as db, db.begin():
+        draft = db.get(BuildDraft, draft_id)
+        prep = db.exec(
+            select(DraftPreparation).where(DraftPreparation.draft_id == draft_id)
+        ).one()
+        prep.status, prep.phase, draft.status = "PENDING", "scenes", "PREPARING"
+        dependencies = db.exec(
+            select(DraftSceneDependency).where(
+                DraftSceneDependency.preparation_id == prep.id
+            )
+        ).all()
+        assert dependencies
+        for dependency in dependencies:
+            dependency.status = "PENDING"
+            dependency.job_id = catalog.id
+        job = db.get(SceneJob, catalog.id)
+        job.status, job.error_code, job.failure_count = (
+            "FAILED",
+            "tiktok_call_deadline_exceeded",
+            5,
+        )
+        task_id = prep.id
+    assert tick(env, task_id)
+    with Session(engine) as db:
+        job = db.get(SceneJob, catalog.id)
+        assert job.status == "FAILED"
+        assert job.failure_count == 5

@@ -203,7 +203,7 @@ def _catalog(
         bc_id=draft.bc_id,
         connection_id=draft.execution_connection_id,
     )
-    return account, account_catalog(
+    job = account_catalog(
         session,
         context=context,
         account=account,
@@ -211,6 +211,39 @@ def _catalog(
         resource=resource,
         media_kind=draft.media_kind,
     )
+    if job is None:
+        # 缺少目录不等于仍在读取：只报告当前授权、账户与场景依据下的终态失败。
+        from .scene import _account_scope
+
+        latest = session.exec(
+            select(SceneJob)
+            .where(
+                SceneJob.tenant_id == context.tenant_id,
+                SceneJob.bc_id == draft.bc_id,
+                SceneJob.advertiser_id == account,
+                SceneJob.connection_id == route.connection_id,
+                SceneJob.media_kind == draft.media_kind,
+                SceneJob.frozen_route == route.model_dump(mode="json"),
+            )
+            .order_by(col(SceneJob.created_at).desc(), col(SceneJob.id).desc())
+            .limit(1)
+        ).first()
+        if latest and latest.status in {"BLOCKED", "FAILED"}:
+            scope = _account_scope(
+                session,
+                context=context,
+                bc_id=draft.bc_id,
+                advertiser_id=account,
+                minis_id=latest.minis_id,
+                route=route,
+                media_kind=draft.media_kind,
+            )
+            if scope["basis"] == latest.scope_basis:
+                raise DomainError(
+                    latest.error_code or "scene_refresh_failed",
+                    "参考账户目录读取失败，请更新后重试；若仍失败请检查账户授权。",
+                )
+    return account, job
 
 
 def account_catalog(
