@@ -1,4 +1,4 @@
-"""源封面启动事件不执行网络；实际图片操作仍由封面 Worker 执行。"""
+"""账户封面启动事件不执行网络；实际图片操作仍由封面 Worker 执行。"""
 
 from typing import Any
 from uuid import UUID
@@ -22,7 +22,9 @@ def prepare_source_cover_task(
 ) -> None:
     require_bounded_worker(self, hard_limit=45)
     try:
-        if set(payload) != {"operation_id"}:
+        if set(payload) not in ({"operation_id"}, {"operation_id", "purpose"}) or (
+            "purpose" in payload and payload["purpose"] != "BUILD"
+        ):
             raise ValueError
         context = TenantContext(
             tenant_id=UUID(tenant_id), actor_id=UUID(actor_id), role="operator"
@@ -32,7 +34,11 @@ def prepare_source_cover_task(
         raise DomainError("invalid_asset_task", "源封面任务参数无效") from None
     with Session(engine) as session, session.begin():
         prepare_source_cover(
-            session, context=context, operation_id=operation_id, dispatch_id=dispatch_id
+            session,
+            context=context,
+            operation_id=operation_id,
+            dispatch_id=dispatch_id,
+            purpose=payload.get("purpose", "SOURCE"),
         )
 
 
