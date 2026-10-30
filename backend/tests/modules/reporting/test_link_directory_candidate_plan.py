@@ -125,6 +125,26 @@ def test_candidate_history_scan_does_not_repeat_per_mapped_post(
         record_property("directory_rows_examined", scanned)
         assert scanned <= 20100
 
+        def nodes(node):
+            yield node
+            for child in node.get("Plans", []):
+                yield from nodes(child)
+
+        # 单窗口金额聚合不能随着每个MID重做；目录去重不应遮住另一平方成本。
+        aggregates = [
+            node
+            for node in nodes(explanation["Plan"])
+            if node["Node Type"] == "Aggregate"
+        ]
+        record_property(
+            "aggregate_loops", [node["Actual Loops"] for node in aggregates]
+        )
+        assert all(node["Actual Loops"] <= 1 for node in aggregates)
+        facts_examined = _scanned(explanation["Plan"], "material_report_day")
+        record_property("fact_rows_examined", facts_examined)
+        # 所有规模都只从金额聚合读事实，不能再按每个映射回扫逐日事实。
+        assert facts_examined <= count * 4
+
     finally:
         connection.exec_driver_sql(f"DEALLOCATE {name}")
 
@@ -304,5 +324,145 @@ def test_spark_complete_directory_guard_is_unchanged(
     )
     try:
         assert bool(connection.exec_driver_sql(execute).mappings().all()) == expected
+    finally:
+        connection.exec_driver_sql(f"DEALLOCATE {name}")
+
+
+@pytest.mark.parametrize(
+    "case,expected",
+    [
+        ("multiple_days", True),
+        ("net_zero", False),
+        ("revenue_only", True),
+        ("null_amounts", False),
+        ("before_window", False),
+        ("after_window", False),
+        ("other_account", False),
+        ("other_tenant", False),
+        ("already_linked", False),
+        ("empty_video", True),
+    ],
+)
+def test_value_candidates_keep_exact_fact_scope_and_net_amounts(
+    session, sync_seed, monkeypatch, case, expected
+):
+    from uuid import uuid4
+
+    from app.modules.reporting.store_models import MaterialReportDay
+
+    monkeypatch.setattr(settings, "ADS_SYNC_ENABLED", True)
+    job, now = _seed(session, sync_seed, count=1)
+    job.end_date = D + timedelta(days=1)
+    # 同 MID 的多日事实只生成一个候选；NULL 金额、其他账户/租户及窗外正额不补漏。
+    values = [(D, "1", None), (D + timedelta(days=1), "2", None)]
+    if case == "net_zero":
+        values = [(D, "1", None), (D + timedelta(days=1), "-1", None)]
+    elif case == "revenue_only":
+        values = [(D, None, "1")]
+    elif case == "null_amounts":
+        values = [(D, None, None)]
+    elif case == "before_window":
+        values = [(D - timedelta(days=1), "1", None), (D, "0", None)]
+    elif case == "after_window":
+        values = [(D + timedelta(days=2), "1", None), (D, "0", None)]
+    for day, spend, revenue in values:
+        session.add(
+            MaterialReportDay(
+                tenant_id=uuid4() if case == "other_tenant" else sync_seed.tenant_id,
+                advertiser_id="acc-2" if case == "other_account" else "acc-1",
+                stat_date=day,
+                main_material_id="extra-mid",
+                main_material_type="VIDEO_NON_SPARK_ADS",
+                currency="USD",
+                timezone="Asia/Hong_Kong",
+                fetched_at=now,
+                sync_job_id=job.id,
+                spend=spend,
+                revenue_total=revenue,
+            )
+        )
+    session.add(
+        MaterialPostLink(
+            tenant_id=sync_seed.tenant_id,
+            advertiser_id="acc-1",
+            main_material_id="extra-mid",
+            ad_remote_id="extra-ad",
+            platform_material_id="" if case == "empty_video" else None,
+            main_material_type="VIDEO_NON_SPARK_ADS",
+            observed_at=now,
+        )
+    )
+    if case == "already_linked":
+        session.add(
+            MaterialPostLink(
+                tenant_id=sync_seed.tenant_id,
+                advertiser_id="acc-1",
+                main_material_id="extra-mid",
+                ad_remote_id="other-ad",
+                platform_material_id="known-video",
+                main_material_type="VIDEO_NON_SPARK_ADS",
+                observed_at=now,
+            )
+        )
+    session.flush()
+    connection = session.connection()
+    name, execute = _prepare_actual_pending_query(
+        connection, *_capture(session, job, now)
+    )
+    try:
+        rows = connection.exec_driver_sql(execute).mappings().all()
+        assert [r["ad_remote_id"] for r in rows] == (
+            ["ad-00", "extra-ad"] if expected else ["ad-00"]
+        )
+    finally:
+        connection.exec_driver_sql(f"DEALLOCATE {name}")
+
+
+@pytest.mark.parametrize("bounds", ["null_start", "null_end", "inverted"])
+def test_candidate_invalid_dates_do_not_open_the_window(
+    session, sync_seed, monkeypatch, bounds
+):
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(settings, "ADS_SYNC_ENABLED", True)
+    stored, now = _seed(session, sync_seed, count=1)
+    # 持久化日期非空；也保留临时调用者原 BETWEEN NULL 不匹配的行为。
+    job = SimpleNamespace(**stored.model_dump())
+    if bounds == "null_start":
+        job.start_date = None
+    elif bounds == "null_end":
+        job.end_date = None
+    else:
+        job.start_date = D + timedelta(days=1)
+    connection = session.connection()
+    name, execute = _prepare_actual_pending_query(
+        connection, *_capture(session, job, now)
+    )
+    try:
+        assert connection.exec_driver_sql(execute).all() == []
+    finally:
+        connection.exec_driver_sql(f"DEALLOCATE {name}")
+
+
+def test_candidate_order_and_limit_are_applied_after_distinct(
+    session, sync_seed, monkeypatch
+):
+    monkeypatch.setattr(settings, "ADS_SYNC_ENABLED", True)
+    job, now = _seed(session, sync_seed, count=120)
+    connection = session.connection()
+    connection.execute(
+        text("""
+        UPDATE material_post_link SET ad_remote_id='ad-' ||
+          lpad(split_part(main_material_id,'-',2),3,'0')
+        WHERE tenant_id=:tenant AND advertiser_id='acc-1'
+        """),
+        {"tenant": sync_seed.tenant_id},
+    )
+    name, execute = _prepare_actual_pending_query(
+        connection, *_capture(session, job, now)
+    )
+    try:
+        rows = connection.exec_driver_sql(execute).mappings().all()
+        assert [r["ad_remote_id"] for r in rows] == [f"ad-{i:03}" for i in range(100)]
     finally:
         connection.exec_driver_sql(f"DEALLOCATE {name}")
