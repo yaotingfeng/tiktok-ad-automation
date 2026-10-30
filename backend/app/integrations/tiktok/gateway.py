@@ -449,14 +449,29 @@ def open_tiktok_gateway(
             isolation_guard()
 
     @contextmanager
-    def admit(advertiser_id: str | None, operation: str) -> Iterator[None]:
+    def admit(
+        advertiser_id: str | None, operation: str, physical_endpoint: str | None = None
+    ) -> Iterator[None]:
         _capability(advertiser_id, operation)
         policy_operation = (
             "reports.integrated"
             if route.channel == "OFFICIAL_API" and operation == "reports.bc"
             else operation
         )
-        policy = admission_policy(policy_operation, channel=route.channel)
+        if route.channel == "OFFICIAL_API" and physical_endpoint is None:
+            from app.integrations.tiktok.platform_quotas import sdk_endpoint
+
+            try:
+                physical_endpoint = sdk_endpoint(operation)
+            except ValueError:
+                # 未登记SDK路径不可套用其他接口的额度；旧配置仅用于尚未迁移的部署。
+                if "sdk_level" in settings.TIKTOK_CALL_POLICIES:
+                    raise DomainError(
+                        "admission_policy_invalid", "SDK物理接口额度尚未登记"
+                    ) from None
+        policy = admission_policy(
+            policy_operation, channel=route.channel, physical_endpoint=physical_endpoint
+        )
         remaining_ms = (task_deadline - datetime.now(UTC)).total_seconds() * 1000
         if remaining_ms <= 0 or policy.lease_ms <= remaining_ms + 1000:
             raise DomainError(
@@ -476,6 +491,7 @@ def open_tiktok_gateway(
                 scope=scope,
                 policy=policy,
                 workload=workload,
+                physical_endpoint=physical_endpoint,
             ):
                 yield
 
@@ -526,12 +542,13 @@ def open_tiktok_gateway(
         operation: str,
         entity_kind: str,
         deadline: datetime,
+        physical_endpoint: str,
     ) -> Iterator[None]:
         if deadline != task_deadline:
             raise DomainError("read_deadline_invalid", "调用期限与任务不一致")
         full_operation = f"management.{operation}"
         authorize(advertiser_id, full_operation, entity_kind)
-        with admit(advertiser_id, full_operation):
+        with admit(advertiser_id, full_operation, physical_endpoint):
             authorize(advertiser_id, full_operation, entity_kind)
             yield
 

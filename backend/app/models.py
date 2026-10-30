@@ -172,3 +172,5 @@ from app.modules.materials.carousel_models import (  # noqa: E402, F401
     CarouselPresetVersion,
 )
 from app.modules.reporting import store_models  # noqa: E402, F401
+
+from app.modules.ad_management import batch_models as management_batch_models  # noqa: E402, F401

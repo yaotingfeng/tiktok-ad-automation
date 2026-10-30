@@ -421,4 +421,6 @@ def test_sdk_campaign_update_uses_matching_campaign_method(
         "campaign_id": "campaign-1",
         **sent,
     }
-    assert scope_calls == [("adv-1", operation, "campaign", deadline)]
+    from app.integrations.tiktok.platform_quotas import sdk_endpoint
+    assert scope_calls == [("adv-1", operation, "campaign", deadline,
+        sdk_endpoint(f"management.{operation}", kind="campaign", smart=smart_plus))]

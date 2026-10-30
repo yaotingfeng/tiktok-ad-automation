@@ -59,6 +59,7 @@ def _public(row: ManagementTask) -> ManagementTaskPublic:
         bc_id=row.bc_id,
         status=cast(Any, row.status),
         counts=_counts(row.counts),
+        preparation_error=row.request.get("preparation_error_message"),
     )
 
 

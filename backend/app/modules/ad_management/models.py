@@ -130,6 +130,13 @@ class ManagementTask(SQLModel, table=True):
     __table_args__ = (
         UniqueConstraint("tenant_id", "id", name="uq_management_task_tenant_id"),
         UniqueConstraint(
+            "tenant_id", "id", "source_kind", name="uq_management_task_source"
+        ),
+        CheckConstraint(
+            "(source_kind = 'PREVIEW' AND preview_id IS NOT NULL) OR (source_kind = 'DIRECT' AND preview_id IS NULL AND request ? 'mutation' AND request ? 'selection')",
+            name="ck_management_task_source",
+        ),
+        UniqueConstraint(
             "tenant_id", "id", "preview_id", name="uq_management_task_preview_scope"
         ),
         ForeignKeyConstraint(
@@ -163,7 +170,10 @@ class ManagementTask(SQLModel, table=True):
     tenant_id: UUID = Field(foreign_key="tenant.id", index=True)
     bc_id: str = Field(max_length=128)
     actor_id: UUID = Field(foreign_key="user.id")
-    preview_id: UUID
+    preview_id: UUID | None = None
+    source_kind: str = Field(default="PREVIEW", max_length=16)
+    request: dict = Field(default_factory=dict, sa_column=Column(JSONB, nullable=False))
+    prepare_cursor: int = Field(default=0)
     idempotency_key: UUID
     digest: str = Field(max_length=64)
     route: dict = Field(default_factory=dict, sa_column=Column(JSONB, nullable=False))
@@ -183,6 +193,22 @@ class ManagementTaskItem(SQLModel, table=True):
     __tablename__ = "management_task_item"
     __table_args__ = (
         UniqueConstraint("tenant_id", "id", name="uq_management_task_item_tenant_id"),
+        UniqueConstraint(
+            "tenant_id", "task_id", "id", name="uq_management_task_item_task_id"
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "task_id", "source_kind"],
+            [
+                "management_task.tenant_id",
+                "management_task.id",
+                "management_task.source_kind",
+            ],
+            name="fk_management_item_source",
+        ),
+        CheckConstraint(
+            "(source_kind = 'PREVIEW' AND preview_id IS NOT NULL AND preview_item_id IS NOT NULL) OR (source_kind = 'DIRECT' AND preview_id IS NULL AND preview_item_id IS NULL)",
+            name="ck_management_item_source",
+        ),
         ForeignKeyConstraint(
             ["tenant_id", "task_id"],
             ["management_task.tenant_id", "management_task.id"],
@@ -219,6 +245,7 @@ class ManagementTaskItem(SQLModel, table=True):
         CheckConstraint(
             "claim_generation >= 1", name="ck_management_task_item_claim_generation"
         ),
+        Index("ix_management_item_position", "tenant_id", "task_id", "position"),
         Index(
             "ix_management_task_item_status", "tenant_id", "task_id", "execution_result"
         ),
@@ -229,8 +256,9 @@ class ManagementTaskItem(SQLModel, table=True):
     id: UUID = Field(default_factory=uuid4, primary_key=True)
     tenant_id: UUID
     task_id: UUID
-    preview_item_id: UUID
-    preview_id: UUID
+    source_kind: str = Field(default="PREVIEW", max_length=16)
+    preview_item_id: UUID | None = None
+    preview_id: UUID | None = None
     position: int = 0
     ref: dict = Field(default_factory=dict, sa_column=Column(JSONB, nullable=False))
     material_use: dict | None = Field(
@@ -262,6 +290,9 @@ class ManagementTaskItem(SQLModel, table=True):
 class ManagementRequestAttempt(SQLModel, table=True):
     __tablename__ = "management_request_attempt"
     __table_args__ = (
+        UniqueConstraint(
+            "tenant_id", "task_item_id", "id", name="uq_management_attempt_item_id"
+        ),
         UniqueConstraint(
             "tenant_id", "id", name="uq_management_request_attempt_tenant_id"
         ),

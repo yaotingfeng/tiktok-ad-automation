@@ -30,7 +30,7 @@ import {
 import { paginate } from "../runtime/paging"
 import { DemoReply, demoError, handle } from "../runtime/registry"
 
-// 体验版假后端：广告管理（报表勾选 → 冻结选择 → 预览 → 提交任务 → 执行 → 操作记录）。
+// 体验版假后端：广告管理（报表勾选 → 冻结选择 → 直接提交 → 后台准备 → 执行 → 操作记录）。
 // 所有修改都落到共享的 demoWorld.launched，广告报表随之变化。
 // 业务规则与真实系统一致：
 // - 预算改在持有预算的那一层：演示数据里系列使用系列预算（CBO），选广告组时改广告组预算；
@@ -100,7 +100,10 @@ interface StoredSelection {
   refs: EntityRef[]
   materialUses: MaterialUseRef[]
 }
-const selections = new Map<string, StoredSelection>()
+const selections = new Map<
+  string,
+  StoredSelection & { tenantId: string; bcId: string; expiresAt: number }
+>()
 
 /** 报表行键：`${bc}-${对象ID}`；账户、剧、素材行另有前缀，不能直接管理。 */
 function remoteIdOfRowKey(rowKey: string) {
@@ -109,9 +112,14 @@ function remoteIdOfRowKey(rowKey: string) {
   return parts[1]
 }
 
-function frozen(tenantId: string, stored: StoredSelection): FrozenSelection {
+function frozen(
+  tenantId: string,
+  stored: StoredSelection,
+  bcId: string,
+): FrozenSelection {
   const selectionId = demoUuid()
-  selections.set(selectionId, stored)
+  const expiresAt = now() + 30 * 60 * 1000
+  selections.set(selectionId, { ...stored, tenantId, bcId, expiresAt })
   return {
     selection_id: selectionId,
     snapshot_id: demoUuid(9001),
@@ -119,16 +127,17 @@ function frozen(tenantId: string, stored: StoredSelection): FrozenSelection {
     material_uses: stored.materialUses,
     membership_digest:
       `${tenantId.slice(0, 8)}${selectionId.slice(-12)}`.padEnd(64, "0"),
-    expires_at: isoAt(now() + 30 * 60 * 1000),
+    expires_at: isoAt(expiresAt),
   }
 }
 
-handle("ads_reporting-freeze_ad_selection", ({ path, body }) => {
+handle("ads_reporting-freeze_ad_selection", ({ path, query, body }) => {
   // “选择全部匹配结果”时前端只给排除列表；演示数据量小，按全部已上线系列处理。
   const keys =
     body.mode === "ALL_MATCHING"
       ? demoWorld.launched
-          .map((c) => `${MAIN_BC_ID}-${c.campaign_id}`)
+          .filter((c) => c.bc_id === query.bc_id)
+          .map((c) => `${query.bc_id}-${c.campaign_id}`)
           .filter((key) => !(body.excluded_row_keys ?? []).includes(key))
       : (body.row_keys ?? [])
   const refs = keys
@@ -136,7 +145,7 @@ handle("ads_reporting-freeze_ad_selection", ({ path, body }) => {
     .map((id) => (id ? findObject(id) : null))
     .filter((found): found is Found => !!found)
     .map((found) => refOf(path.tenant_id, found))
-  return frozen(path.tenant_id, { refs, materialUses: [] })
+  return frozen(path.tenant_id, { refs, materialUses: [] }, query.bc_id)
 })
 
 handle(
@@ -160,7 +169,7 @@ handle(
         material_type: "VIDEO",
       }
     })
-    return frozen(path.tenant_id, { refs: [], materialUses })
+    return frozen(path.tenant_id, { refs: [], materialUses }, query.bc_id)
   },
 )
 
@@ -191,7 +200,7 @@ handle("ad_management-resolve_rename_selection", ({ path, body }) => {
   }
   return new DemoReply(201, {
     selection: refs.length
-      ? frozen(path.tenant_id, { refs, materialUses: [] })
+      ? frozen(path.tenant_id, { refs, materialUses: [] }, body.bc_id)
       : null,
     problems,
   })
@@ -519,6 +528,9 @@ handle("ad_management-prepare_preview", ({ path, body }) => {
 
 interface StoredTask {
   task_id: string
+  tenant_id: string
+  direct?: boolean
+  preparationProblems?: ManagementTaskPublic["preparation_problems"]
   bc_id: string
   created_at: string
   started: number
@@ -542,8 +554,18 @@ const TASK_STAGES = [
   ["DONE", 0],
 ] as const
 
+const DIRECT_TASK_STAGES = [
+  ["PREPARING", 1000],
+  ["READY", 500],
+  ["RUNNING", 2000],
+  ["DONE", 0],
+] as const
+
 function taskView(task: StoredTask): ManagementTaskPublic {
-  const stage = stageAt(task.started, TASK_STAGES)
+  const stage = stageAt(
+    task.started,
+    task.direct ? DIRECT_TASK_STAGES : TASK_STAGES,
+  )
   const done = !task.cancelled && (task.fixed !== undefined || stage.done)
   // 执行完成的那一刻把修改写回演示数据（只写一次）。
   if (done && !task.applied && task.fixed === undefined) {
@@ -576,11 +598,19 @@ function taskView(task: StoredTask): ManagementTaskPublic {
     }
   })
   const counts = countsOf(task.selection, items)
+  if (task.direct) {
+    counts.prepared = stage.stage === "PREPARING" ? 0 : counts.selected
+    counts.skipped = items.filter(
+      (item) =>
+        item.execution_result === "NO_CHANGE" ||
+        item.execution_result === "UNSUPPORTED",
+    ).length
+  }
   const status: ManagementTaskPublic["status"] = task.cancelled
     ? "CANCELLED"
     : (task.fixed ??
       (!done
-        ? (stage.stage as "QUEUED" | "RUNNING")
+        ? (stage.stage as "PREPARING" | "READY" | "QUEUED" | "RUNNING")
         : (counts.rejected ?? 0) > 0
           ? (counts.accepted ?? 0) > 0
             ? "PARTIAL"
@@ -605,14 +635,24 @@ function taskView(task: StoredTask): ManagementTaskPublic {
     source: task.source,
     target_kinds: targetKinds,
     status,
-    counts,
-    items,
+    counts:
+      task.direct && stage.stage === "PREPARING" && !task.cancelled
+        ? { selected: counts.selected, prepared: 0, targets: 0, pending: 0 }
+        : counts,
+    items: task.direct && stage.stage === "PREPARING" ? [] : items,
+    items_total: task.direct && stage.stage === "PREPARING" ? 0 : items.length,
+    items_offset: 0,
+    next_items_offset: null,
+    preparation_problems: task.preparationProblems ?? [],
   }
 }
 
 // 执行时长结束后主动结算一次：即使没有页面在轮询任务，报表也能读到修改后的值。
 function settleLater(task: StoredTask) {
-  const total = TASK_STAGES.reduce((sum, [, ms]) => sum + ms, 0)
+  const total = (task.direct ? DIRECT_TASK_STAGES : TASK_STAGES).reduce(
+    (sum, [, ms]) => sum + ms,
+    0,
+  )
   setTimeout(() => taskView(task), total + 50)
 }
 
@@ -624,6 +664,7 @@ handle("ad_management-submit_task", ({ path, body }) => {
   const existing = tasks.find((task) => task.task_id === body.idempotency_key)
   if (existing) return new DemoReply(202, taskView(existing))
   const task: StoredTask = {
+    tenant_id: path.tenant_id,
     task_id: body.idempotency_key.match(/^[0-9a-f-]{36}$/)
       ? body.idempotency_key
       : demoUuid(),
@@ -643,6 +684,58 @@ handle("ad_management-submit_task", ({ path, body }) => {
   return new DemoReply(202, taskView(task))
 })
 
+// 直接提交保留冻结输入与幂等映射；同键重试先返回已有任务，不依赖选择继续有效。
+const directRequests = new Map<string, { digest: string; task: StoredTask }>()
+function canonical(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonical)
+  if (value && typeof value === "object")
+    return Object.fromEntries(
+      Object.entries(value)
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([key, item]) => [key, canonical(item)]),
+    )
+  return value
+}
+
+handle("ad_management-submit_direct_task", ({ path, body }) => {
+  const key = `${path.tenant_id}:${body.idempotency_key}`
+  const digest = JSON.stringify(
+    canonical({ ...body, row_problems: body.row_problems ?? [] }),
+  )
+  const existing = directRequests.get(key)
+  if (existing)
+    return existing.digest === digest
+      ? new DemoReply(202, taskView(existing.task))
+      : demoError(409, "idempotency_conflict", "同一提交标识不能用于不同操作")
+  const selection = selections.get(body.selection_id)
+  if (!selection || selection.expiresAt <= now())
+    return demoError(409, "selection_expired", "选择已过期，请重新勾选")
+  if (selection.tenantId !== path.tenant_id || selection.bcId !== body.bc_id)
+    return demoError(409, "selection_scope_mismatch", "选择不属于当前租户或 BC")
+  const frozenSelection = structuredClone(selection)
+  const mutation = structuredClone(body.mutation)
+  const task: StoredTask = {
+    tenant_id: path.tenant_id,
+    task_id: demoUuid(),
+    bc_id: body.bc_id,
+    created_at: isoAt(now()),
+    started: now(),
+    actor_name: DEMO_USER.full_name,
+    mutation,
+    source: { kind: "manual" },
+    direct: true,
+    planned: plan(path.tenant_id, frozenSelection, mutation),
+    selection: frozenSelection,
+    preparationProblems: (body.row_problems ?? []).map((problem) => ({
+      ...problem,
+    })),
+  }
+  directRequests.set(key, { digest, task })
+  tasks.unshift(task)
+  settleLater(task)
+  return new DemoReply(202, taskView(task))
+})
+
 const ACTION_FILTER: Record<string, (task: StoredTask) => boolean> = {
   enable: (t) => t.mutation.field === "status" && t.mutation.value === "ENABLE",
   disable: (t) =>
@@ -652,9 +745,10 @@ const ACTION_FILTER: Record<string, (task: StoredTask) => boolean> = {
   rename: (t) => t.mutation.field === "name",
 }
 
-handle("ad_management-list_tasks", ({ query }) => {
+handle("ad_management-list_tasks", ({ path, query }) => {
   const filtered = tasks.filter(
     (task) =>
+      task.tenant_id === path.tenant_id &&
       task.bc_id === query.bc_id &&
       (!query.action || ACTION_FILTER[query.action]?.(task)) &&
       (!query.source || task.source?.kind === query.source),
@@ -662,24 +756,38 @@ handle("ad_management-list_tasks", ({ query }) => {
   return paginate(filtered.map(taskView), query, (task) => task.task_id)
 })
 
-const taskById = (id: string) => tasks.find((task) => task.task_id === id)
+const taskById = (id: string, tenantId: string) =>
+  tasks.find((task) => task.task_id === id && task.tenant_id === tenantId)
 
-handle("ad_management-get_task", ({ path }) => {
-  const task = taskById(path.task_id)
-  return task ? taskView(task) : demoError(404, "task_not_found", "任务不存在")
+handle("ad_management-get_task", ({ path, query }) => {
+  const task = taskById(path.task_id, path.tenant_id)
+  if (!task || task.tenant_id !== path.tenant_id)
+    return demoError(404, "task_not_found", "任务不存在")
+  const view = taskView(task)
+  const offset = Math.max(0, query.offset ?? 0)
+  const limit = Math.max(1, Math.min(500, query.limit ?? 100))
+  const items = view.items ?? []
+  return {
+    ...view,
+    items: items.slice(offset, offset + limit),
+    items_total: items.length,
+    items_offset: offset,
+    next_items_offset: offset + limit < items.length ? offset + limit : null,
+  }
 })
 
 handle("ad_management-cancel_task", ({ path }) => {
-  const task = taskById(path.task_id)
+  const task = taskById(path.task_id, path.tenant_id)
   if (!task) return demoError(404, "task_not_found", "任务不存在")
   const view = taskView(task)
-  if (view.status === "QUEUED") task.cancelled = true
+  if (["PREPARING", "READY", "QUEUED"].includes(view.status))
+    task.cancelled = true
   return taskView(task)
 })
 
 // 失败项重试：被拒绝的对象重新执行，几秒后成功。
 handle("ad_management-retry_task", ({ path }) => {
-  const task = taskById(path.task_id)
+  const task = taskById(path.task_id, path.tenant_id)
   if (!task) return demoError(404, "task_not_found", "任务不存在")
   const rejected = task.rejectIndexes ?? []
   task.rejectIndexes = []
@@ -696,13 +804,13 @@ handle("ad_management-retry_task", ({ path }) => {
 
 // 核查结果未知的对象：演示数据里核查后都确认已生效。
 handle("ad_management-reconcile_task", ({ path }) =>
-  taskById(path.task_id)
-    ? taskView(taskById(path.task_id) as StoredTask)
+  taskById(path.task_id, path.tenant_id)
+    ? taskView(taskById(path.task_id, path.tenant_id) as StoredTask)
     : demoError(404, "task_not_found", "任务不存在"),
 )
 
 handle("ad_management-retry_targeted_refresh", ({ path }) => {
-  const task = taskById(path.task_id)
+  const task = taskById(path.task_id, path.tenant_id)
   return task
     ? new DemoReply(202, taskView(task))
     : demoError(404, "task_not_found", "任务不存在")
@@ -710,7 +818,7 @@ handle("ad_management-retry_targeted_refresh", ({ path }) => {
 
 // 一键恢复：把任务里已成功的对象改回原值。
 handle("ad_management-prepare_restore", ({ path }) => {
-  const task = taskById(path.task_id)
+  const task = taskById(path.task_id, path.tenant_id)
   if (!task) return demoError(404, "task_not_found", "任务不存在")
   const view = taskView(task)
   const restorable = view.items?.filter(
@@ -778,6 +886,7 @@ function seedTask(input: {
   )
   const started = Date.parse(isoDaysAgo(input.daysAgo, input.hour))
   const task: StoredTask = {
+    tenant_id: MAIN_TENANT_ID,
     task_id: demoUuid(nextId()),
     bc_id: MAIN_BC_ID,
     created_at: isoAt(started),

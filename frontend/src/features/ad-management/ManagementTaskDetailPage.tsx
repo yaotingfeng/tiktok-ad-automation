@@ -25,20 +25,26 @@ export function ManagementTaskDetailPage() {
   const search = useSearch({ strict: false }) as { bc_id?: string }
   const queryClient = useQueryClient()
   const navigate = useNavigate()
+  const [offset, setOffset] = useState(0)
   const [notice, setNotice] = useState<string | null>(null)
   const [restorePreview, setRestorePreview] =
     useState<ManagementPreviewPublic | null>(null)
   const query = useQuery({
-    queryKey: ["tenant", tenantId, "ad-management-task", taskId],
+    queryKey: ["tenant", tenantId, "ad-management-task", taskId, offset],
     enabled: !!tenantId && !!taskId,
     queryFn: async ({ signal }) =>
       (
         await AdManagementService.getTask({
           path: { tenant_id: tenantId!, task_id: taskId },
+          query: { offset, limit: 100 },
           signal,
         })
       ).data,
     refetchInterval: (current) =>
+      current.state.data?.items?.some(
+        (item) => item.observation_state === "RECONCILE_REQUESTED",
+      ) ||
+      current.state.data?.status === "PREPARING" ||
       current.state.data?.status === "RUNNING" ||
       current.state.data?.status === "QUEUED"
         ? 5000
@@ -214,7 +220,13 @@ export function ManagementTaskDetailPage() {
                 <Badge variant="outline">
                   {statusLabel[task.status] ?? task.status}
                 </Badge>
+                <span>
+                  准备 {counts?.prepared ?? 0} / {counts?.selected ?? 0}
+                </span>
                 <span>目标 {counts?.targets ?? 0}</span>
+                <span>成功 {counts?.accepted ?? 0}</span>
+                <span>跳过 {counts?.skipped ?? 0}</span>
+                <span>失败 {counts?.rejected ?? 0}</span>
                 <span>不可用 {counts?.unsupported ?? 0}</span>
                 <span>未知 {unknown}</span>
                 {refreshPending > 0 && (
@@ -228,24 +240,27 @@ export function ManagementTaskDetailPage() {
               <CardTitle>操作</CardTitle>
             </CardHeader>
             <CardContent className="flex flex-wrap gap-2">
-              {write && ["QUEUED", "RUNNING"].includes(task.status) && (
-                <Button
-                  variant="outline"
-                  onClick={() => action.mutate("cancel")}
-                  disabled={action.isPending}
-                >
-                  取消未发送项
-                </Button>
-              )}
-              {write && task.status === "PARTIAL" && unknown === 0 && (
-                <Button
-                  variant="outline"
-                  onClick={() => action.mutate("retry")}
-                  disabled={action.isPending}
-                >
-                  重试未发送项
-                </Button>
-              )}
+              {write &&
+                ["PREPARING", "QUEUED", "RUNNING"].includes(task.status) && (
+                  <Button
+                    variant="outline"
+                    onClick={() => action.mutate("cancel")}
+                    disabled={action.isPending}
+                  >
+                    取消未发送项
+                  </Button>
+                )}
+              {write &&
+                ((task.status === "PARTIAL" && unknown === 0) ||
+                  (task.status === "FAILED" && task.preparation_error)) && (
+                  <Button
+                    variant="outline"
+                    onClick={() => action.mutate("retry")}
+                    disabled={action.isPending}
+                  >
+                    {task.preparation_error ? "重试后台准备" : "重试未发送项"}
+                  </Button>
+                )}
               {write && refreshPending > 0 && (
                 <Button
                   variant="outline"
@@ -289,6 +304,38 @@ export function ManagementTaskDetailPage() {
               <CardTitle>逐项回执</CardTitle>
             </CardHeader>
             <CardContent>
+              <div className="mb-3 flex items-center gap-3 text-sm">
+                <Button
+                  variant="outline"
+                  disabled={offset === 0}
+                  onClick={() => setOffset(Math.max(0, offset - 100))}
+                >
+                  上一页
+                </Button>
+                <span>共 {task.items_total ?? 0} 项</span>
+                <Button
+                  variant="outline"
+                  disabled={task.next_items_offset == null}
+                  onClick={() => setOffset(task.next_items_offset ?? offset)}
+                >
+                  下一页
+                </Button>
+              </div>
+              {task.preparation_problems?.map((problem, index) => (
+                <p
+                  key={`${problem.campaign_id}:${index}`}
+                  className="text-sm text-amber-700"
+                >
+                  {problem.campaign_id} · {problem.reason}
+                </p>
+              ))}
+              {task.preparation_error && (
+                <Alert variant="destructive">
+                  <AlertDescription>
+                    准备失败：{task.preparation_error}
+                  </AlertDescription>
+                </Alert>
+              )}
               <div className="max-h-80 overflow-auto rounded-md border">
                 <table className="w-full text-sm">
                   <thead>

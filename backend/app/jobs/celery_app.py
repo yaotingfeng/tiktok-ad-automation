@@ -83,6 +83,7 @@ celery_app.conf.update(
         "ads.targeted_step": {"queue": "ads-live-directory"},
         "reporting.export": {"queue": "ads-reporting"},
         "ad_management.execute": {"queue": "ad-management"},
+        "ad_management.reconcile": {"queue": "ad-management"},
         "reporting.cleanup_exports": {"queue": "ads-reporting"},
         "automation.scan_due": {"queue": "control"},
         "automation.run_rule": {"queue": "ads-reporting"},

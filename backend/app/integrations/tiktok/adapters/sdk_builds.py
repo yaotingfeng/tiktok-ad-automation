@@ -34,6 +34,7 @@ from app.integrations.tiktok.group_isolation import (
 from app.integrations.tiktok.official.accounts import (
     OfficialReadRequests,
     RequestScope,
+    _strict_sdk_envelope,
     remaining,
 )
 from app.integrations.tiktok.sdk import (
@@ -137,13 +138,16 @@ class ApiBuildOperations:
                 budget = remaining(self._deadline)
                 # async 官方入口保留业务 envelope；不使用会丢弃 code 的同步便捷层。
                 # 不另设 future timeout，禁止请求线程仍在运行时释放共享准入。
+                # SDK客户端可复用于同一任务；清空旧正文，异常时只能引用本次响应。
+                client.last_response = None
                 invoked = True
-                methods[intent.kind](
-                    client.default_headers["Access-Token"],
-                    body=arguments,
-                    async_req=True,
-                    _request_timeout=(min(5.0, budget), min(30.0, budget)),
-                ).get()
+                with _strict_sdk_envelope(client, operation=operation):
+                    methods[intent.kind](
+                        client.default_headers["Access-Token"],
+                        body=arguments,
+                        async_req=True,
+                        _request_timeout=(min(5.0, budget), min(30.0, budget)),
+                    ).get()
                 raw = json.loads(client.last_response.data)
                 if (
                     isinstance(raw, dict)
@@ -180,6 +184,27 @@ class ApiBuildOperations:
                 ) from None
             if not invoked:
                 raise
+            # 40100必须先穿透物理scope，把QPM/QPD等待写入共享冷却，再保留
+            # 本次拒绝证据。创建仍按既有白名单判断副作用，不能因限流放行重发。
+            raw = None
+            try:
+                body = client.last_response.data
+                if len(body) <= 8 * 1024 * 1024:
+                    raw = json.loads(body)
+            except ValueError, TypeError, AttributeError, RecursionError:
+                pass
+            # 严格校验拒绝布尔/字符串code，但安全request_id仍属于本次响应。
+            if type(raw) is dict and (
+                type(raw.get("code")) is not int or raw["code"] != 0
+            ):
+                try:
+                    sdk_creation_envelope(raw, kind=intent.kind)
+                except RemoteCallError as rejected:
+                    rejected.retry_after_ms = getattr(error, "retry_after_ms", None)
+                    rejected.transport_diagnostics = transport_snapshot(
+                        client, include_runtime=True
+                    )
+                    raise rejected from None
             # SDK 异常文本可能包含请求信息，只记录类型，禁止输出异常原文。
             logger.error(
                 "official TikTok create failed without confirmed receipt: kind=%s error_type=%s",

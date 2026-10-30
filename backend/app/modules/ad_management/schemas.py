@@ -144,6 +144,8 @@ class ManagementCounts(BaseModel):
     unknown: int = Field(default=0, ge=0)
     not_sent: int = Field(default=0, ge=0)
     pending: int = Field(default=0, ge=0)
+    prepared: int = Field(default=0, ge=0)
+    skipped: int = Field(default=0, ge=0)
 
 
 class ManagementAttemptPublic(BaseModel):
@@ -228,6 +230,11 @@ class ManagementTaskPublic(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     task_id: UUID
+    items_total: int = 0
+    items_offset: int = 0
+    next_items_offset: int | None = None
+    preparation_error: str | None = None
+    preparation_problems: list[dict[str, str]] = Field(default_factory=list)
     bc_id: str
     # 以下摘要只在列表与详情读取时填充；提交接口的即时回执不带。
     created_at: datetime | None = None
@@ -299,3 +306,10 @@ class RenameRowProblem(BaseModel):
 class RenameSelectionPublic(BaseModel):
     selection: FrozenSelection | None
     problems: list[RenameRowProblem]
+
+
+class DirectManagementRequest(ManagementPreviewRequest):
+    idempotency_key: UUID
+    row_problems: list[RenameRowProblem] = Field(
+        default_factory=list, max_length=MAX_RENAME_ROWS
+    )

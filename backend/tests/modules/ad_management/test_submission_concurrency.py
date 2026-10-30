@@ -86,7 +86,10 @@ def committed_management_env():
                     connection_id=connection.id,
                     authorization_revision=connection.authorization_revision,
                     scopes=["2", "6"],
-                    permission_summary={"read_authorized": True, "build_authorized": True},
+                    permission_summary={
+                        "read_authorized": True,
+                        "build_authorized": True,
+                    },
                     source="SYNTHETIC_COMPLETE_EVIDENCE",
                     verified_at=now,
                 ),
@@ -161,6 +164,7 @@ def test_duplicate_submission_creates_one_task_and_dispatch(committed_management
         setup.commit()
         preview_id, preview_digest = preview.id, preview.digest
     key = uuid4()
+
     def submit_once():
         with Session(engine) as worker:
             result = submit_management_task(
@@ -174,14 +178,18 @@ def test_duplicate_submission_creates_one_task_and_dispatch(committed_management
             first, second = pool.map(lambda _n: submit_once(), (1, 2))
         assert first.task_id == second.task_id
         with Session(engine) as check:
-            assert len(
-                check.exec(
-                    select(PendingDispatch).where(
-                        PendingDispatch.tenant_id == context.tenant_id,
-                        PendingDispatch.task_key == f"ad-management:{first.task_id}",
-                    )
-                ).all()
-            ) == 1
+            assert (
+                len(
+                    check.exec(
+                        select(PendingDispatch).where(
+                            PendingDispatch.tenant_id == context.tenant_id,
+                            PendingDispatch.task_key
+                            == f"ad-management:{first.task_id}",
+                        )
+                    ).all()
+                )
+                == 1
+            )
             copied = check.exec(
                 select(ManagementTaskItem).where(
                     ManagementTaskItem.task_id == first.task_id
@@ -191,9 +199,7 @@ def test_duplicate_submission_creates_one_task_and_dispatch(committed_management
             assert copied.membership_digest is None
         with Session(engine) as conflict:
             with pytest.raises(DomainError, match="idempotency_conflict"):
-                submit_management_task(
-                    conflict, context, preview_id, "e" * 64, key
-                )
+                submit_management_task(conflict, context, preview_id, "e" * 64, key)
     finally:
         # Child rows are explicitly cleaned because setup was committed for
         # visibility across PostgreSQL connections.
@@ -233,7 +239,9 @@ def test_duplicate_submission_creates_one_task_and_dispatch(committed_management
             cleanup.commit()
 
 
-def test_expired_preview_and_failed_outbox_leave_no_task(session, management_env, monkeypatch):
+def test_expired_preview_and_failed_outbox_leave_no_task(
+    session, management_env, monkeypatch
+):
     context, *_ = management_env
     expired = _preview(
         session,
@@ -243,7 +251,14 @@ def test_expired_preview_and_failed_outbox_leave_no_task(session, management_env
     )
     with pytest.raises(DomainError, match="preview_expired"):
         submit_management_task(session, context, expired.id, expired.digest, uuid4())
-    assert session.exec(select(PendingDispatch)).all() == []
+    assert (
+        session.exec(
+            select(PendingDispatch).where(
+                PendingDispatch.tenant_id == context.tenant_id
+            )
+        ).all()
+        == []
+    )
 
     ready = _preview(session, management_env)
     from app.modules.ad_management import submissions
@@ -258,13 +273,23 @@ def test_expired_preview_and_failed_outbox_leave_no_task(session, management_env
     # The nested submission savepoint must remove task/items/outbox even when
     # the caller catches the exception and commits its outer transaction.
     session.commit()
-    assert session.exec(select(PendingDispatch)).all() == []
-    assert session.exec(
-        select(ManagementTask).where(
-            ManagementTask.tenant_id == context.tenant_id,
-            ManagementTask.idempotency_key == failed_key,
-        )
-    ).all() == []
+    assert (
+        session.exec(
+            select(PendingDispatch).where(
+                PendingDispatch.tenant_id == context.tenant_id
+            )
+        ).all()
+        == []
+    )
+    assert (
+        session.exec(
+            select(ManagementTask).where(
+                ManagementTask.tenant_id == context.tenant_id,
+                ManagementTask.idempotency_key == failed_key,
+            )
+        ).all()
+        == []
+    )
 
 
 def test_repeated_lease_is_rejected_and_non_intersecting_objects_run_in_parallel(

@@ -205,15 +205,30 @@ def admitted_account_call(
     policy: AdmissionPolicy,
 ) -> Iterator[None]:
     settings.require_tiktok_app()
+    physical = None
+    if "sdk_level" in settings.TIKTOK_CALL_POLICIES:
+        from app.integrations.tiktok.platform_quotas import sdk_endpoint
+        from app.jobs.admission import admission_policy
+
+        try:
+            physical = sdk_endpoint(endpoint)
+        except ValueError:
+            raise DomainError(
+                "admission_policy_invalid", "SDK物理接口额度尚未登记"
+            ) from None
+        policy = admission_policy(
+            endpoint, channel="OFFICIAL_API", physical_endpoint=physical
+        )
     with admitted_scope(
         redis_client,
         app_scope=settings.TIKTOK_APP_ID,
-        endpoint=endpoint,
+        endpoint=physical or endpoint,
         tenant_id=context.tenant_id,
         advertiser_id=advertiser_id,
         policy=policy,
         denied_error=AccountAdmissionDeferred,
         admit=admit_call,
         release=release_call,
+        rate_group=physical,
     ):
         yield

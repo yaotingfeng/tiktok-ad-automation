@@ -508,12 +508,12 @@ const ads: TourChapter = {
     ),
     look(
       "填写新预算",
-      "预算会改在实际持有预算的那一层。点下面的按钮填入 250，下方会立即预览每个对象的“原值 → 新值”。",
-      "#management-value",
+      "预算会改在实际持有预算的那一层。点下面的按钮填入 250，提交后由后台逐项校验并执行。",
+      '[aria-label="管理新值"]',
       {
         action: {
           label: "填入 250",
-          run: () => void fillField("#management-value", "250"),
+          run: () => void fillField('[aria-label="管理新值"]', "250"),
         },
         readyWhen: () =>
           !!inDialog("button", /^提交/)() && !mainHas("没有需要修改的对象")(),
@@ -523,8 +523,8 @@ const ads: TourChapter = {
     click(
       "确认提交",
       "提交",
-      "核对预览无误后提交。提交前不会改动任何广告。",
-      inDialog("button", /^提交，/),
+      "确认预算参数后直接提交管理任务，准备进度与逐项结果可在操作记录查看。",
+      inDialog("button", /^提交管理任务$/),
       { settleMs: 1500 },
     ),
     click(

@@ -30,6 +30,13 @@ class McpManagementOperations:
             raise DomainError("management_permission_unverified", "管理请求缺少账户能力门禁")
         self._check: CapabilityCheck = check
 
+    def apply_batch(
+        self, commands: tuple[ManagementCommand, ...]
+    ) -> tuple[ManagementReceipt, ...]:
+        from .management_batches import apply_mcp_batch
+
+        return apply_mcp_batch(self, commands)
+
     def apply(self, command: ManagementCommand) -> ManagementReceipt:
         if not isinstance(command, ManagementCommand):
             raise TypeError("management command required")

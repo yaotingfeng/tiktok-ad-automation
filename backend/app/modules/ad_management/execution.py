@@ -14,7 +14,7 @@ from typing import Any, cast
 from uuid import UUID, uuid4
 
 from redis import Redis
-from sqlalchemy import Engine
+from sqlalchemy import Engine, func
 from sqlmodel import Session, col, select
 
 from app.core.config import settings
@@ -31,7 +31,6 @@ from app.integrations.tiktok.contracts.management import (
 )
 from app.integrations.tiktok.gateway import open_tiktok_gateway
 from app.integrations.tiktok.object_coordination import MutationLease, claim_mutation
-from app.jobs.models import PendingDispatch
 from app.jobs.outbox import enqueue_after_commit
 from app.modules.accounts.routing import verify_route
 from app.modules.ad_management.models import (
@@ -105,6 +104,10 @@ def _command(item: ManagementTaskItem) -> ManagementCommand:
     if field is None:
         raise DomainError("management_operation_invalid", "冻结管理操作无效")
     original = dict(capability.get("configuration") or {})
+    if item.parent_ref and item.parent_ref.get("kind") == "campaign":
+        original["campaign_id"] = item.parent_ref["remote_id"]
+    if item.material_use and item.material_use.get("material_type"):
+        original["material_type"] = item.material_use["material_type"]
     if capability.get("ad_type") is not None:
         original.setdefault("ad_type", capability["ad_type"])
     final = item.final_value
@@ -243,6 +246,69 @@ def _can_run(
     return True
 
 
+def _recover_cancelled_claims(session: Session, task: ManagementTask) -> None:
+    """调用方已锁父任务；取消后只归档过期领取，绝不进入平台写入路径。"""
+    from sqlalchemy import or_
+
+    from app.modules.ad_management.reconciliation import queue_reconciliation
+    from app.modules.ad_management.recovery_dispatch import schedule_wakeup
+
+    now = _now()
+    rows = session.exec(
+        select(ManagementTaskItem)
+        .where(
+            ManagementTaskItem.task_id == task.id,
+            ManagementTaskItem.tenant_id == task.tenant_id,
+            ManagementTaskItem.execution_result == "PENDING",
+            col(ManagementTaskItem.claim_token).is_not(None),
+            or_(
+                ManagementTaskItem.claimed_until <= now,
+                col(ManagementTaskItem.claimed_until).is_(None),
+            ),
+        )
+        .order_by(ManagementTaskItem.id)
+        .with_for_update()
+    ).all()
+    unknown_ids = []
+    for item in rows:
+        # 复用请求围栏：记录过请求但未取得回执的领取过期后必须变UNKNOWN。
+        # 明确未发送的领取才可取消；不能把缺少回执解释为平台拒绝。
+        attempts = _attempts(session, item)
+        _can_run(session, item, attempts)
+        if (
+            item.execution_result == "PENDING"
+            and attempts
+            and attempts[-1].outcome == "REJECTED"
+        ):
+            item.execution_result = "REJECTED"
+        if item.execution_result in {"PENDING", "NOT_SENT"}:
+            item.execution_result = "CANCELLED"
+            item.delivery_status = "CANCELLED"
+            item.reason = "cancelled"
+        elif item.execution_result == "UNKNOWN":
+            unknown_ids.append(item.id)
+        item.claim_token = None
+        item.claimed_until = None
+        session.add(item)
+    session.flush()
+    if unknown_ids:
+        queue_reconciliation(session, task, tuple(unknown_ids))
+    # 提前到达的恢复消息不能消耗尚未到期领取的唯一唤醒机会。
+    next_expiry = session.exec(
+        select(func.min(ManagementTaskItem.claimed_until)).where(
+            ManagementTaskItem.task_id == task.id,
+            ManagementTaskItem.tenant_id == task.tenant_id,
+            ManagementTaskItem.execution_result == "PENDING",
+            col(ManagementTaskItem.claim_token).is_not(None),
+            ManagementTaskItem.claimed_until > now,
+        )
+    ).one()
+    if next_expiry is not None:
+        schedule_wakeup(
+            session, task, next_expiry + timedelta(seconds=1), kind="claim", quantum=30
+        )
+
+
 def _same_frozen_value(
     session: Session, item: ManagementTaskItem, ref: EntityRef
 ) -> None:
@@ -321,6 +387,30 @@ def _same_frozen_value(
         raise DomainError("management_original_changed", "管理目标原始值已变化")
 
 
+def _locked_item(session: Session, item_id: UUID, *, lock_task: bool = True):
+    """取消先锁父任务，修改也采用同一锁序，防止并发回执与取消形成死锁。"""
+    if lock_task:
+        scope = session.exec(
+            select(ManagementTaskItem.task_id, ManagementTaskItem.tenant_id).where(
+                ManagementTaskItem.id == item_id
+            )
+        ).one_or_none()
+        if scope is None:
+            return None
+        task = session.exec(
+            select(ManagementTask)
+            .where(ManagementTask.id == scope[0], ManagementTask.tenant_id == scope[1])
+            .with_for_update()
+        ).one_or_none()
+        if task is None:
+            return None
+    return session.exec(
+        select(ManagementTaskItem)
+        .where(ManagementTaskItem.id == item_id)
+        .with_for_update()
+    ).one_or_none()
+
+
 def _update_task(session: Session, task_id: UUID, tenant_id: UUID) -> None:
     task = session.exec(
         select(ManagementTask)
@@ -332,12 +422,26 @@ def _update_task(session: Session, task_id: UUID, tenant_id: UUID) -> None:
     ).one_or_none()
     if task is None:
         return
+    if task.status == "PREPARING":
+        return
+    # 万条任务只读取状态聚合，不在每个回执后物化整批JSON和逐项查询attempt。
     rows = session.exec(
-        select(ManagementTaskItem).where(
+        select(
+            ManagementTaskItem.execution_result,
+            ManagementTaskItem.observation_state,
+            func.count(),
+        )
+        .where(
             ManagementTaskItem.task_id == task.id,
             ManagementTaskItem.tenant_id == tenant_id,
         )
+        .group_by(
+            ManagementTaskItem.execution_result, ManagementTaskItem.observation_state
+        )
     ).all()
+    totals: dict[str, int] = {}
+    for result, _observation, total in rows:
+        totals[result] = totals.get(result, 0) + int(total)
     counts = dict(task.counts or {})
     for key in (
         "accepted",
@@ -347,33 +451,43 @@ def _update_task(session: Session, task_id: UUID, tenant_id: UUID) -> None:
         "pending",
         "unsupported",
     ):
-        counts[key] = sum(
-            1
-            for row in rows
-            if row.execution_result
-            == {
-                "accepted": "ACCEPTED",
-                "rejected": "REJECTED",
-                "unknown": "UNKNOWN",
-                "not_sent": "NOT_SENT",
-                "pending": "PENDING",
-                "unsupported": "UNSUPPORTED",
-            }[key]
-        )
+        counts[key] = totals.get(key.upper(), 0)
     counts["refresh_pending"] = sum(
-        1
-        for row in rows
-        if row.execution_result == "ACCEPTED"
-        and row.observation_state == "REFRESH_PENDING"
+        int(total)
+        for result, observation, total in rows
+        if result == "ACCEPTED" and observation == "REFRESH_PENDING"
     )
     task.counts = counts
-    statuses = {row.execution_result for row in rows}
-    if "PENDING" in statuses or any(
-        row.execution_result == "NOT_SENT"
-        and (attempts := _attempts(session, row))
-        and attempts[-1].retryable
-        for row in rows
-    ):
+    latest_retryable = (
+        select(ManagementRequestAttempt.retryable)
+        .where(
+            ManagementRequestAttempt.task_item_id == ManagementTaskItem.id,
+            ManagementRequestAttempt.tenant_id == tenant_id,
+        )
+        .order_by(col(ManagementRequestAttempt.attempt).desc())
+        .limit(1)
+        .correlate(ManagementTaskItem)
+        .scalar_subquery()
+    )
+    retry_pending = (
+        session.exec(
+            select(ManagementTaskItem.id)
+            .where(
+                ManagementTaskItem.task_id == task.id,
+                ManagementTaskItem.tenant_id == tenant_id,
+                ManagementTaskItem.execution_result == "NOT_SENT",
+                latest_retryable == True,  # noqa: E712
+            )
+            .limit(1)
+        ).first()
+        is not None
+        if totals.get("NOT_SENT")
+        else False
+    )
+    statuses = set(totals)
+    if task.status == "CANCELLED":
+        pass  # 取消后仍可记录在途回执，但不能复活任务或发送剩余项。
+    elif "PENDING" in statuses or retry_pending:
         task.status = "RUNNING"
     elif "UNKNOWN" in statuses:
         task.status = "NEEDS_REVIEW"
@@ -432,13 +546,11 @@ def _persist_outcome(
     lease: MutationLease,
     context: TenantContext,
     route: FrozenTikTokRoute,
+    update_summary: bool = True,
+    enqueue_retry: bool = True,
 ) -> bool:
     with Session(database_engine) as session, session.begin():
-        item = session.exec(
-            select(ManagementTaskItem)
-            .where(ManagementTaskItem.id == item_id)
-            .with_for_update()
-        ).one_or_none()
+        item = _locked_item(session, item_id, lock_task=update_summary)
         if (
             item is None
             or item.claim_token != token
@@ -475,27 +587,32 @@ def _persist_outcome(
             return False
         attempt.outcome = outcome
         attempt.request_id = request_id
-        retryable = retryable and outcome == "NOT_SENT" and attempt_no < 3
+        quota_wait = response.get("reason") == "admission_deferred"
+        transport_attempts = sum(
+            row.response.get("reason") != "admission_deferred"
+            for row in _attempts(session, item)
+            if row.id != attempt.id
+        ) + (0 if quota_wait else 1)
+        # 本地额度等待没有平台发送，不能把排队三次误当成传输重试耗尽。
+        retryable = (
+            retryable
+            and outcome == "NOT_SENT"
+            and (quota_wait or transport_attempts < 3)
+        )
         if retryable:
             delay = max(
-                5 * 2 ** (attempt_no - 1), (response.get("retry_after_ms") or 0) / 1000
+                0.1 if quota_wait else 5 * 2 ** max(0, transport_attempts - 1),
+                (response.get("retry_after_ms") or 0) / 1000,
             )
             retry_at = _now() + timedelta(seconds=delay)
             response = {**response, "retry_at": retry_at.isoformat()}
-            task = session.get(ManagementTask, item.task_id)
-            assert task is not None
-            dispatch_id = enqueue_after_commit(
-                session,
-                context=TenantContext(task.tenant_id, task.actor_id, "operator"),
-                task_name="ad_management.execute",
-                task_key=f"ad-management-retry:{item.id}:{attempt_no}",
-                payload={"task_id": str(task.id), "generation": generation},
-            )
-            dispatch = session.get(PendingDispatch, dispatch_id)
-            assert dispatch is not None
-            dispatch.available_at = retry_at
-            session.add(dispatch)
-        elif outcome == "NOT_SENT" and attempt_no >= 3:
+            if enqueue_retry:
+                task = session.get(ManagementTask, item.task_id)
+                assert task is not None
+                from app.modules.ad_management.recovery_dispatch import schedule_wakeup
+
+                schedule_wakeup(session, task, retry_at, kind="retry")
+        elif outcome == "NOT_SENT" and not quota_wait and transport_attempts >= 3:
             response = {**response, "retry_exhausted": True}
         attempt.retryable = retryable
         attempt.response = response
@@ -526,7 +643,14 @@ def _persist_outcome(
         item.claim_token = None
         item.claimed_until = None
         session.add(item)
-        _update_task(session, item.task_id, item.tenant_id)
+        if outcome == "UNKNOWN":
+            from app.modules.ad_management.reconciliation import queue_reconciliation
+
+            task = session.get(ManagementTask, item.task_id)
+            if task is not None:
+                queue_reconciliation(session, task, (item.id,))
+        if update_summary:
+            _update_task(session, item.task_id, item.tenant_id)
     return True
 
 
@@ -573,11 +697,7 @@ def _set_refresh_state(
 ) -> None:
     """Persist targeted-refresh progress independently of the write receipt."""
     with Session(database_engine) as session, session.begin():
-        item = session.exec(
-            select(ManagementTaskItem)
-            .where(ManagementTaskItem.id == item_id)
-            .with_for_update()
-        ).one_or_none()
+        item = _locked_item(session, item_id)
         if item is None or item.execution_result != "ACCEPTED":
             return
         item.observation_state = "REFRESH_PENDING" if pending else "ACCEPTED"
@@ -605,11 +725,7 @@ def _set_refresh_state(
 def _retry_targeted_refresh(database_engine: Engine, item_id: UUID) -> None:
     """Retry a durable post-write refresh without replaying the mutation."""
     with Session(database_engine) as session:
-        item = session.exec(
-            select(ManagementTaskItem)
-            .where(ManagementTaskItem.id == item_id)
-            .with_for_update()
-        ).one_or_none()
+        item = _locked_item(session, item_id)
         if item is None or item.execution_result != "ACCEPTED":
             return
         task = session.get(ManagementTask, item.task_id)
@@ -640,11 +756,7 @@ def _mark_unknown_after_persist_failure(
     """Turn this owner's committed pre-attempt into UNKNOWN on receipt failure."""
     try:
         with Session(database_engine) as session, session.begin():
-            item = session.exec(
-                select(ManagementTaskItem)
-                .where(ManagementTaskItem.id == item_id)
-                .with_for_update()
-            ).one_or_none()
+            item = _locked_item(session, item_id)
             if (
                 item is None
                 or item.claim_token != token
@@ -701,11 +813,7 @@ def _mark_unknown_after_fence_failure(
     """
     try:
         with Session(database_engine) as session, session.begin():
-            item = session.exec(
-                select(ManagementTaskItem)
-                .where(ManagementTaskItem.id == item_id)
-                .with_for_update()
-            ).one_or_none()
+            item = _locked_item(session, item_id)
             if (
                 item is None
                 or item.claim_token != token
@@ -747,18 +855,14 @@ def _mark_unknown_after_fence_failure(
         return
 
 
-def execute_item(database_engine: Engine, item_id: UUID) -> None:
+def execute_item(database_engine: Engine, item_id: UUID) -> bool | None:
     """Execute one item; failures are persisted per item and never abort siblings."""
     redis_client = _redis()
     lease: MutationLease | None = None
     owner = uuid4()
     try:
         with Session(database_engine) as session:
-            item = session.exec(
-                select(ManagementTaskItem)
-                .where(ManagementTaskItem.id == item_id)
-                .with_for_update()
-            ).one_or_none()
+            item = _locked_item(session, item_id)
             if item is None:
                 raise DomainError("management_item_not_found", "管理任务项不存在")
             task = session.exec(
@@ -775,6 +879,11 @@ def execute_item(database_engine: Engine, item_id: UUID) -> None:
             ):
                 session.commit()
                 _retry_targeted_refresh(database_engine, item_id)
+                return
+            if task.status == "CANCELLED":
+                _recover_cancelled_claims(session, task)
+                _update_task(session, task.id, task.tenant_id)
+                session.commit()
                 return
             attempts = _attempts(session, item)
             if not _can_run(session, item, attempts):
@@ -830,6 +939,15 @@ def execute_item(database_engine: Engine, item_id: UUID) -> None:
             item.delivery_status = "ATTEMPT_RECORDED"
             session.add_all([item, task])
             session.flush()
+            from app.modules.ad_management.recovery_dispatch import schedule_wakeup
+
+            schedule_wakeup(
+                session,
+                task,
+                item.claimed_until + timedelta(seconds=1),
+                kind="claim",
+                quantum=30,
+            )
             session.commit()
             # Attempt row identity is separate from Redis claim generation.
 
@@ -878,6 +996,8 @@ def execute_item(database_engine: Engine, item_id: UUID) -> None:
                 latest_task = preflight.get(ManagementTask, latest.task_id)
                 if latest_task is None:
                     raise DomainError("management_task_not_found", "管理任务不存在")
+                if latest_task.status == "CANCELLED":
+                    raise DomainError("management_task_cancelled", "管理任务已取消")
                 latest_route = _route(latest_task)
                 if latest_route != route or (latest.capability or {}).get(
                     "route"
@@ -1000,6 +1120,9 @@ def execute_item(database_engine: Engine, item_id: UUID) -> None:
             else:
                 _set_refresh_state(database_engine, item_id, pending=False)
     except DomainError as error:
+        if error.code == "mutation_busy":
+            # 共享祖先锁竞争不是对象失败；没有发送也没有attempt，让编排层重排。
+            return False
         # Claim/preflight failures are isolated to this item and are recorded as
         # a non-sent, non-retryable attempt where possible.
         with Session(database_engine) as session:

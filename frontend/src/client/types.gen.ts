@@ -1795,6 +1795,29 @@ export type DifferenceMaterial = {
 };
 
 /**
+ * DirectManagementRequest
+ */
+export type DirectManagementRequest = {
+    /**
+     * Selection Id
+     */
+    selection_id: string;
+    /**
+     * Bc Id
+     */
+    bc_id: string;
+    mutation: MutationSpec;
+    /**
+     * Idempotency Key
+     */
+    idempotency_key: string;
+    /**
+     * Row Problems
+     */
+    row_problems?: Array<RenameRowProblem>;
+};
+
+/**
  * DraftDramaPublic
  */
 export type DraftDramaPublic = {
@@ -4189,6 +4212,14 @@ export type ManagementCounts = {
      * Pending
      */
     pending?: number;
+    /**
+     * Prepared
+     */
+    prepared?: number;
+    /**
+     * Skipped
+     */
+    skipped?: number;
 };
 
 /**
@@ -4336,6 +4367,28 @@ export type ManagementTaskPublic = {
      * Task Id
      */
     task_id: string;
+    /**
+     * Items Total
+     */
+    items_total?: number;
+    /**
+     * Items Offset
+     */
+    items_offset?: number;
+    /**
+     * Next Items Offset
+     */
+    next_items_offset?: number | null;
+    /**
+     * Preparation Error
+     */
+    preparation_error?: string | null;
+    /**
+     * Preparation Problems
+     */
+    preparation_problems?: Array<{
+        [key: string]: string;
+    }>;
     /**
      * Bc Id
      */
@@ -11018,6 +11071,36 @@ export type accountsPutDefaultConnectionResponses = {
 
 export type accountsPutDefaultConnectionResponse = accountsPutDefaultConnectionResponses[keyof accountsPutDefaultConnectionResponses];
 
+export type adManagementSubmitDirectTaskData = {
+    body: DirectManagementRequest;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+    };
+    query?: never;
+    url: '/api/tenants/{tenant_id}/ad-management-requests';
+};
+
+export type adManagementSubmitDirectTaskErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type adManagementSubmitDirectTaskError = adManagementSubmitDirectTaskErrors[keyof adManagementSubmitDirectTaskErrors];
+
+export type adManagementSubmitDirectTaskResponses = {
+    /**
+     * Successful Response
+     */
+    202: ManagementTaskPublic;
+};
+
+export type adManagementSubmitDirectTaskResponse = adManagementSubmitDirectTaskResponses[keyof adManagementSubmitDirectTaskResponses];
+
 export type adManagementPreparePreviewData = {
     body: ManagementPreviewRequest;
     path: {
@@ -11171,7 +11254,16 @@ export type adManagementGetTaskData = {
          */
         task_id: string;
     };
-    query?: never;
+    query?: {
+        /**
+         * Offset
+         */
+        offset?: number;
+        /**
+         * Limit
+         */
+        limit?: number;
+    };
     url: '/api/tenants/{tenant_id}/ad-management-tasks/{task_id}';
 };
 

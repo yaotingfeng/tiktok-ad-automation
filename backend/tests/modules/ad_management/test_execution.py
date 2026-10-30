@@ -1011,7 +1011,7 @@ def test_terminal_task_dispatches_durable_refresh_pending_item(c5_env, monkeypat
         session.commit()
     calls = []
     monkeypatch.setattr(
-        "app.modules.ad_management.tasks.execute_item",
+        "app.modules.ad_management.dispatch_work.ex.execute_item",
         lambda _engine, current_id: calls.append(current_id),
     )
     from app.modules.ad_management.tasks import execute_management_task

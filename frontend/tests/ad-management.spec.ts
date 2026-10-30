@@ -55,6 +55,7 @@ async function managementBoundary(
   } = {},
 ) {
   await adsBoundary(page, options.reportOptions)
+  const directBodies: Array<Record<string, unknown>> = []
   const previewBodies: Array<Record<string, unknown>> = []
   const listQueries: Array<Record<string, string>> = []
   const renameSelectionBodies: Array<Record<string, unknown>> = []
@@ -62,6 +63,21 @@ async function managementBoundary(
     const request = handler.request()
     const url = new URL(request.url())
     const path = url.pathname
+    if (
+      request.method() === "POST" &&
+      path.endsWith("/ad-management-requests")
+    ) {
+      directBodies.push(request.postDataJSON())
+      return handler.fulfill({
+        status: 202,
+        json: {
+          task_id: taskId,
+          bc_id: BC_A,
+          status: "PREPARING",
+          counts: { selected: 1, prepared: 0, targets: 0 },
+        },
+      })
+    }
     if (options.viewer && path === "/api/me/tenants")
       return handler.fulfill({
         json: {
@@ -329,93 +345,10 @@ async function managementBoundary(
       })
     return handler.fallback()
   })
-  return { previewBodies, listQueries, renameSelectionBodies }
+  return { directBodies, previewBodies, listQueries, renameSelectionBodies }
 }
 
 test.describe("广告管理工作台", () => {
-  test("当前选择提交后留在报表，保留筛选并可主动查看中文回执", async ({
-    page,
-  }) => {
-    const { previewBodies } = await managementBoundary(page)
-    await page.goto(`/tenants/${TENANT}/ads?bc_id=${BC_A}`)
-    await page.getByRole("tab", { name: "系列", exact: true }).click()
-    await page.getByRole("textbox", { name: "搜索广告" }).fill("总裁归来")
-    await page.getByRole("button", { name: "应用筛选" }).click()
-    await page
-      .getByRole("checkbox", { name: "选择 嘉书-总裁归来-测试" })
-      .check()
-    await page.getByRole("button", { name: "暂停", exact: true }).click()
-    await expect(page.getByRole("heading", { name: "批量暂停" })).toBeVisible()
-    await expect.poll(() => previewBodies.length).toBe(1)
-    expect(previewBodies[0]?.mutation).toMatchObject({
-      field: "status",
-      mode: "set",
-      value: "DISABLE",
-    })
-    // 面板先说明改哪一层，再给出“选中 → 将修改”的摘要和带名称的明细。
-    await expect(page.getByText("只暂停所选的系列本身")).toBeVisible()
-    await expect(
-      page.getByText("已选 1 个系列 → 将修改 1 个对象（系列 1 个）"),
-    ).toBeVisible()
-    await expect(page.getByText("账户：adv-1")).toBeVisible()
-    await expect(page.getByText("将暂停", { exact: true })).toBeVisible()
-    // 后台新发布只提示，不关闭用户正在确认的冻结管理预览。
-    await page.route("**/ad-sync-status?*", (handler) =>
-      handler.fulfill({
-        json: {
-          accounts: [],
-          latest_directory_at: null,
-          publication_version: "background-new",
-          plan: {
-            enabled: true,
-            bc_report_supported: true,
-            next_hot_at: null,
-            next_daily_at: null,
-            slowed: false,
-          },
-        },
-      }),
-    )
-    await page.clock.install()
-    await page.clock.fastForward(31_000)
-    await expect(page.getByRole("heading", { name: "批量暂停" })).toBeVisible()
-    // 暂停不涉及上级，不出现上级勾选，也不会带 include_parents。
-    await expect(
-      page.getByRole("checkbox", { name: "同时启用暂停中的上级" }),
-    ).toHaveCount(0)
-    expect(previewBodies[0]?.mutation?.include_parents).toEqual([])
-    await expect(page.getByText("五分钟内有效")).toBeVisible()
-    await page.getByRole("button", { name: "提交，修改 1 个对象" }).click()
-    await expect(page).toHaveURL(new RegExp(`/tenants/${TENANT}/ads\\?`))
-    await expect(page.getByRole("textbox", { name: "搜索广告" })).toHaveValue(
-      "总裁归来",
-    )
-    await expect(
-      page.getByRole("heading", { name: "广告报表", exact: true }),
-    ).toBeVisible()
-    await expect(
-      page.getByRole("tab", { name: "系列", exact: true }),
-    ).toHaveAttribute("data-state", "active")
-    await page.getByRole("link", { name: "查看操作记录", exact: true }).click()
-    await expect(page).toHaveURL(new RegExp(`/ad-management-tasks/${taskId}`))
-    await expect(
-      page.getByRole("heading", { name: "操作记录详情" }),
-    ).toBeVisible()
-    await expect(page.getByText("等待数据刷新", { exact: true })).toBeVisible()
-    await expect(
-      page.getByRole("cell", { name: "平台已接收", exact: true }),
-    ).toBeVisible()
-    await expect(
-      page.getByRole("cell", { name: "已送达", exact: true }),
-    ).toBeVisible()
-    await expect(
-      page.getByRole("cell", { name: "第 1 次：平台已接收", exact: true }),
-    ).toBeVisible()
-    await expect(page.getByText("REFRESH_PENDING")).toHaveCount(0)
-    await page.getByRole("button", { name: /刷新重试/ }).click()
-    await expect(page.getByText("已排队重试定向刷新")).toBeVisible()
-  })
-
   test("任务列表显示状态且 viewer 隐藏写入口", async ({ page }) => {
     await managementBoundary(page, { viewer: true })
     await page.goto(`/tenants/${TENANT}/ads?bc_id=${BC_A}`)
@@ -486,7 +419,9 @@ test.describe("广告管理工作台", () => {
     expect(listQueries.at(-1)?.cursor).toBe("next-page")
     await page.getByRole("button", { name: "上一页" }).click()
     await expect(manual).toBeVisible()
-    await expect(page.getByRole("row", { name: /目标 ROAS 设为 1.5/ })).toHaveCount(0)
+    await expect(
+      page.getByRole("row", { name: /目标 ROAS 设为 1.5/ }),
+    ).toHaveCount(0)
     await page.getByRole("button", { name: "下一页" }).click()
     await expect(page.getByText("共 51 条 · 第 2 / 2 页")).toBeVisible()
 
@@ -515,156 +450,6 @@ test.describe("广告管理工作台", () => {
     await page.goBack()
     await expect(manual).toBeVisible()
     await expect(page.getByRole("button", { name: "上一页" })).toBeDisabled()
-  })
-
-  test("排除不可用项会把冻结 ref 发送给服务器", async ({ page }) => {
-    const { previewBodies } = await managementBoundary(page, {
-      unsupported: true,
-    })
-    await page.goto(`/tenants/${TENANT}/ads?bc_id=${BC_A}`)
-    await page.getByRole("tab", { name: "系列", exact: true }).click()
-    await page
-      .getByRole("checkbox", { name: "选择 嘉书-总裁归来-测试" })
-      .check()
-    await page.getByRole("button", { name: "修改预算" }).click()
-    await expect(page.getByRole("heading", { name: "修改预算" })).toBeVisible()
-    await page.getByRole("textbox", { name: "管理新值" }).fill("25")
-    await expect(page.getByText("跳过无法修改的 1 项")).toBeVisible()
-    await expect(
-      page.getByText("当前预算为 0 或无效，无法在此基础上修改"),
-    ).toBeVisible()
-    await expect(page.getByRole("button", { name: /^提交/ })).toBeDisabled()
-    await page.getByRole("checkbox", { name: "跳过无法修改的对象" }).click()
-    await expect.poll(() => previewBodies.length).toBe(2)
-    expect(previewBodies[1]?.mutation?.excluded_refs).toEqual([GROUP_REF])
-    await expect(page.getByText("已跳过，不会提交")).toBeVisible()
-    await expect(
-      page.getByRole("button", { name: "提交，修改 1 个对象" }),
-    ).toBeEnabled()
-  })
-
-  test("勾选后表头直接出现动作，启用提交 ENABLE", async ({ page }) => {
-    await managementBoundary(page)
-    await page.goto(`/tenants/${TENANT}/ads?bc_id=${BC_A}`)
-    await page.getByRole("tab", { name: "系列", exact: true }).click()
-    await page
-      .getByRole("checkbox", { name: "选择 嘉书-总裁归来-测试" })
-      .check()
-    for (const name of [
-      "启用",
-      "暂停",
-      "修改目标 ROAS",
-      "修改预算",
-      "取消选择",
-    ])
-      await expect(
-        page.getByRole("button", { name, exact: true }),
-      ).toBeVisible()
-    await expect(page.getByRole("button", { name: "批量操作" })).toHaveCount(0)
-    const preview = page.waitForRequest(
-      (r) =>
-        r.url().includes("ad-management-previews") && r.method() === "POST",
-    )
-    await page.getByRole("button", { name: "启用", exact: true }).click()
-    expect((await preview).postDataJSON().mutation).toMatchObject({
-      field: "status",
-      mode: "set",
-      value: "ENABLE",
-    })
-    await expect(page.getByRole("heading", { name: "批量启用" })).toBeVisible()
-    await expect(page.getByRole("combobox", { name: "操作维度" })).toHaveCount(
-      0,
-    )
-  })
-
-  test("启用时列出暂停中的上级，勾选后把这些上级一起提交", async ({ page }) => {
-    const { previewBodies } = await managementBoundary(page, {
-      blockedParent: true,
-    })
-    await page.goto(`/tenants/${TENANT}/ads?bc_id=${BC_A}`)
-    await page.getByRole("tab", { name: "系列", exact: true }).click()
-    await page
-      .getByRole("checkbox", { name: "选择 嘉书-总裁归来-测试" })
-      .check()
-    await page.getByRole("button", { name: "启用", exact: true }).click()
-    await expect(page.getByText("有 1 个上级处于暂停状态")).toBeVisible()
-    await expect(page.getByText("系列 · 暂停中的上级系列")).toBeVisible()
-    await expect(
-      page.getByRole("button", { name: "提交，修改 1 个对象" }),
-    ).toBeEnabled()
-    await page.getByRole("checkbox", { name: "同时启用暂停中的上级" }).click()
-    await expect.poll(() => previewBodies.length).toBe(2)
-    // 传给后端的是暂停中的上级本身，而不是用户选中的对象。
-    expect(previewBodies[1]?.mutation?.include_parents).toEqual([PARENT_REF])
-    // 上级变成待修改项后提示与勾选仍保留，用户可以随时取消。
-    await expect(
-      page.getByRole("checkbox", { name: "同时启用暂停中的上级" }),
-    ).toBeChecked()
-    await expect(
-      page.getByRole("button", { name: "提交，修改 2 个对象" }),
-    ).toBeEnabled()
-  })
-
-  test("预览被拒绝时显示服务器给出的原因", async ({ page }) => {
-    const message =
-      "同一系列的广告组目标 ROAS 必须一致；这些广告组原值不同，按百分比或加减调整会得到不同结果，请改用“设为”统一数值"
-    await managementBoundary(page, {
-      previewError: {
-        status: 409,
-        code: "management_roas_series_conflict",
-        message,
-      },
-    })
-    await page.goto(`/tenants/${TENANT}/ads?bc_id=${BC_A}`)
-    await page.getByRole("tab", { name: "系列", exact: true }).click()
-    await page
-      .getByRole("checkbox", { name: "选择 嘉书-总裁归来-测试" })
-      .check()
-    await page.getByRole("button", { name: "修改目标 ROAS" }).click()
-    await expect(
-      page.getByText(
-        "目标 ROAS 只设置在广告组上，系列和广告没有单独的目标 ROAS。",
-      ),
-    ).toBeVisible()
-    await page.getByRole("textbox", { name: "管理新值" }).fill("10")
-    await expect(page.getByText(message)).toBeVisible()
-  })
-
-  test("修改目标 ROAS 支持按百分比增加，数值为空不生成预览", async ({
-    page,
-  }) => {
-    const { previewBodies } = await managementBoundary(page)
-    await page.goto(`/tenants/${TENANT}/ads?bc_id=${BC_A}`)
-    await page.getByRole("tab", { name: "广告组", exact: true }).click()
-    await page.getByRole("checkbox").nth(1).check()
-    await page.getByRole("button", { name: "修改目标 ROAS" }).click()
-    await expect(
-      page.getByRole("heading", { name: "修改目标 ROAS" }),
-    ).toBeVisible()
-    await expect(page.getByText("请输入大于 0 的数值")).toBeVisible()
-    await expect(page.getByRole("status", { name: /正在生成/ })).toHaveCount(0)
-    await page.getByRole("combobox", { name: "调整方式" }).click()
-    await page.getByRole("option", { name: "增加百分比" }).click()
-    // 空值或非法数值都不能发出预览请求，避免默认值误改真实广告。
-    await page.getByRole("textbox", { name: "管理新值" }).fill("abc")
-    await page.waitForTimeout(700)
-    expect(previewBodies).toHaveLength(0)
-    // 0 与科学计数法、十六进制等后端 Decimal 不认的写法同样不发预览。
-    for (const invalid of ["0", "1e3", "0x10"]) {
-      await page.getByRole("textbox", { name: "管理新值" }).fill(invalid)
-      await expect(page.getByText("请输入大于 0 的数值")).toBeVisible()
-      await page.waitForTimeout(700)
-      expect(previewBodies).toHaveLength(0)
-    }
-    const preview = page.waitForRequest((r) =>
-      r.url().includes("ad-management-previews"),
-    )
-    await page.getByRole("textbox", { name: "管理新值" }).fill("10")
-    expect((await preview).postDataJSON().mutation).toMatchObject({
-      field: "roas",
-      mode: "increase_percent",
-      value: "10",
-    })
   })
 
   test("账户维度不提供修改目标 ROAS", async ({ page }) => {
@@ -698,104 +483,6 @@ test.describe("广告管理工作台", () => {
     await expect(
       page.getByRole("checkbox", { name: "选择 嘉书-总裁归来-测试" }),
     ).not.toBeChecked()
-  })
-
-  test("推广系列勾选后批量改名，前缀生成预览并提交", async ({ page }) => {
-    const { previewBodies } = await managementBoundary(page)
-    await page.goto(`/tenants/${TENANT}/ads?bc_id=${BC_A}`)
-    await page.getByRole("tab", { name: "系列", exact: true }).click()
-    await page
-      .getByRole("checkbox", { name: "选择 嘉书-总裁归来-测试" })
-      .check()
-    await page.getByRole("button", { name: "批量改名" }).click()
-    await expect(page.getByRole("heading", { name: "批量改名" })).toBeVisible()
-    // 勾选入口默认查找替换页签；未点“生成预览”前不请求预览。
-    await expect(page.getByRole("tab", { name: "查找替换" })).toHaveAttribute(
-      "aria-selected",
-      "true",
-    )
-    await page.getByRole("tab", { name: "前缀后缀" }).click()
-    await expect(page.getByText("在名称最前面或最后面加上文字")).toBeVisible()
-    await page.getByLabel("前缀", { exact: true }).fill("【停】")
-    expect(previewBodies).toHaveLength(0)
-    await page.getByRole("button", { name: "生成预览" }).click()
-    await expect(page.getByText("报表中将归到 剧A")).toBeVisible()
-    expect(previewBodies.at(-1)?.mutation).toMatchObject({
-      field: "name",
-      mode: "set",
-      rename: { kind: "affix", prefix: "【停】" },
-    })
-    await expect(
-      page.getByText("共 1 条：修改 1、跳过 0、异常 0"),
-    ).toBeVisible()
-    await expect(
-      page.getByText("改名会同步修改 TikTok 后台的推广系列名称"),
-    ).toBeVisible()
-    // 生成预览后再改规则，必须重新生成预览才能提交。
-    await page.getByLabel("后缀", { exact: true }).fill("-1015")
-    await expect(
-      page.getByText("改名规则已修改，请重新生成预览。"),
-    ).toBeVisible()
-    await expect(
-      page.getByRole("button", { name: "提交，修改 1 个对象" }),
-    ).toBeDisabled()
-    await page.getByLabel("后缀", { exact: true }).fill("")
-    await page.getByRole("button", { name: "提交，修改 1 个对象" }).click()
-    await expect(page).toHaveURL(new RegExp(`/tenants/${TENANT}/ads\\?`))
-    await expect(
-      page.getByRole("heading", { name: "广告报表", exact: true }),
-    ).toBeVisible()
-    await expect(
-      page.getByRole("tab", { name: "系列", exact: true }),
-    ).toHaveAttribute("data-state", "active")
-    await page.getByRole("link", { name: "查看操作记录", exact: true }).click()
-    await expect(page).toHaveURL(new RegExp(`/ad-management-tasks/${taskId}`))
-  })
-
-  test("按表格改名：粘贴两列，找不到的 ID 标为异常", async ({ page }) => {
-    const { previewBodies, renameSelectionBodies } =
-      await managementBoundary(page)
-    await page.goto(`/tenants/${TENANT}/ads?bc_id=${BC_A}`)
-    await page.getByRole("tab", { name: "系列", exact: true }).click()
-    await page.getByRole("button", { name: "按表格改名" }).click()
-    await page
-      .getByLabel("粘贴推广系列 ID 和新名称")
-      .fill(
-        "推广系列ID\t新名称\n1700000000000000001\t嘉书-剧A-1015\n1799999999999999999\tx",
-      )
-    await expect(page.getByText("已识别 2 行")).toBeVisible()
-    await page.getByRole("button", { name: "生成预览" }).click()
-    await expect(
-      page.getByText("1799999999999999999", { exact: true }),
-    ).toBeVisible()
-    await expect(page.getByText("未找到该推广系列")).toBeVisible()
-    expect(renameSelectionBodies[0]).toEqual({
-      bc_id: BC_A,
-      rows: [
-        { campaign_id: "1700000000000000001", new_name: "嘉书-剧A-1015" },
-        { campaign_id: "1799999999999999999", new_name: "x" },
-      ],
-    })
-    await expect.poll(() => previewBodies.length).toBe(1)
-    expect(previewBodies[0]).toMatchObject({
-      selection_id: selectionId,
-      mutation: {
-        field: "name",
-        rename: {
-          kind: "explicit",
-          names: {
-            "1700000000000000001": "嘉书-剧A-1015",
-            "1799999999999999999": "x",
-          },
-        },
-      },
-    })
-    await expect(
-      page.getByText("共 2 条：修改 1、跳过 0、异常 1"),
-    ).toBeVisible()
-    await expect(
-      page.getByRole("button", { name: "仅提交可修改的行" }),
-    ).toBeEnabled()
   })
 })
 
@@ -909,7 +596,6 @@ for (const paged of [false, true]) {
     await expect(row.getByText("已暂停", { exact: true })).toBeVisible()
     await row.getByRole("checkbox").check()
     await page.getByRole("button", { name: "启用", exact: true }).click()
-    await page.getByRole("button", { name: "提交，修改 1 个对象" }).click()
     await expect(
       page.getByRole("link", { name: "查看操作记录", exact: true }),
     ).toBeVisible()
@@ -967,3 +653,167 @@ for (const paged of [false, true]) {
     expect(queries.at(-1)?.get("query")).toBe("总裁归来")
   })
 }
+
+async function selectCampaign(page: Parameters<typeof adsBoundary>[0]) {
+  await page.goto(`/tenants/${TENANT}/ads?bc_id=${BC_A}`)
+  await page.getByRole("tab", { name: "系列", exact: true }).click()
+  await page.getByRole("checkbox", { name: "选择 嘉书-总裁归来-测试" }).check()
+}
+
+test("启停点击直接受理，不发预览请求、不再确认", async ({ page }) => {
+  const boundary = await managementBoundary(page)
+  await selectCampaign(page)
+  await page.getByRole("button", { name: "暂停", exact: true }).click()
+  await expect.poll(() => boundary.directBodies.length).toBe(1)
+  expect(boundary.previewBodies).toEqual([])
+  expect(boundary.directBodies[0]).toMatchObject({
+    selection_id: selectionId,
+    bc_id: BC_A,
+    mutation: { field: "status", mode: "set", value: "DISABLE" },
+  })
+  await expect(page.getByRole("heading", { name: "批量暂停" })).toHaveCount(0)
+  await expect(
+    page.getByRole("link", { name: "查看操作记录", exact: true }),
+  ).toBeVisible()
+})
+
+test("数值只提交参数，准备由后台完成", async ({ page }) => {
+  const boundary = await managementBoundary(page)
+  await selectCampaign(page)
+  await page.getByRole("button", { name: "修改预算", exact: true }).click()
+  await expect(
+    page.getByRole("button", { name: "提交管理任务" }),
+  ).toBeDisabled()
+  await page.getByRole("textbox", { name: "管理新值" }).fill("100")
+  await page.getByRole("button", { name: "提交管理任务" }).click()
+  await expect.poll(() => boundary.directBodies.length).toBe(1)
+  expect(boundary.previewBodies).toEqual([])
+  expect(boundary.directBodies[0]?.mutation).toMatchObject({
+    field: "budget",
+    mode: "set",
+    value: "100",
+  })
+})
+
+test("提交失败重试保留幂等键", async ({ page }) => {
+  await managementBoundary(page)
+  const bodies: Record<string, unknown>[] = []
+  await page.route("**/ad-management-requests", (handler) => {
+    bodies.push(handler.request().postDataJSON())
+    return handler.fulfill(
+      bodies.length === 1
+        ? { status: 503, json: { detail: "暂时不可用" } }
+        : {
+            status: 202,
+            json: {
+              task_id: taskId,
+              bc_id: BC_A,
+              status: "PREPARING",
+              counts: {},
+            },
+          },
+    )
+  })
+  await selectCampaign(page)
+  await page.getByRole("button", { name: "暂停", exact: true }).click()
+  await expect.poll(() => bodies.length).toBe(1)
+  await page.getByRole("button", { name: "重试提交" }).click()
+  await expect.poll(() => bodies.length).toBe(2)
+  expect(bodies[0]?.idempotency_key).toBe(bodies[1]?.idempotency_key)
+})
+
+test("改名参数直接提交且表格异常行随任务保存", async ({ page }) => {
+  const boundary = await managementBoundary(page)
+  await selectCampaign(page)
+  await page.getByRole("button", { name: "按表格改名", exact: true }).click()
+  await page
+    .getByRole("textbox", { name: "粘贴推广系列 ID 和新名称" })
+    .fill("1700000000000000001\t新名称\n1799999999999999999\tx")
+  await page.getByRole("button", { name: "提交管理任务" }).click()
+  await expect.poll(() => boundary.directBodies.length).toBe(1)
+  expect(boundary.previewBodies).toEqual([])
+  expect(boundary.directBodies[0]?.row_problems).toEqual([
+    { campaign_id: "1799999999999999999", new_name: "x", reason: "not_found" },
+  ])
+})
+
+test("任务明细分页并显示中文准备失败原因", async ({ page }) => {
+  await managementBoundary(page)
+  const offsets: number[] = []
+  await page.route(
+    `**/api/tenants/${TENANT}/ad-management-tasks/${taskId}?*`,
+    (handler) => {
+      const offset = Number(
+        new URL(handler.request().url()).searchParams.get("offset"),
+      )
+      offsets.push(offset)
+      return handler.fulfill({
+        json: {
+          task_id: taskId,
+          bc_id: BC_A,
+          status: "FAILED",
+          counts: { selected: 10748, prepared: 200, targets: 200 },
+          items_total: 200,
+          items_offset: offset,
+          next_items_offset: offset === 0 ? 100 : null,
+          preparation_error:
+            "后台准备未完成：当前权限、连接或冻结参数已不可用，请检查后重试。",
+          items: [],
+        },
+      })
+    },
+  )
+  await page.goto(
+    `/tenants/${TENANT}/ad-management-tasks/${taskId}?bc_id=${BC_A}`,
+  )
+  await expect(page.getByText("准备 200 / 10748")).toBeVisible()
+  await expect(page.getByText(/后台准备未完成/)).toBeVisible()
+  await page.getByRole("button", { name: "下一页", exact: true }).click()
+  await expect.poll(() => offsets.at(-1)).toBe(100)
+  await expect(
+    page.getByRole("button", { name: "下一页", exact: true }),
+  ).toBeDisabled()
+})
+
+test("UNKNOWN只读核查异步显示观察匹配，受理仍为未知", async ({ page }) => {
+  await managementBoundary(page)
+  let reads = 0
+  await page.route(
+    `**/api/tenants/${TENANT}/ad-management-tasks/${taskId}?*`,
+    (handler) => {
+      reads += 1
+      return handler.fulfill({
+        json: {
+          task_id: taskId,
+          bc_id: BC_A,
+          status: "NEEDS_REVIEW",
+          counts: { selected: 1, unknown: 1 },
+          items_total: 1,
+          items: [
+            {
+              ref: CAMPAIGN_REF,
+              execution_result: "UNKNOWN",
+              observation_state:
+                reads === 1 ? "RECONCILE_REQUESTED" : "OBSERVED_MATCH",
+            },
+          ],
+        },
+      })
+    },
+  )
+  await page.goto(
+    `/tenants/${TENANT}/ad-management-tasks/${taskId}?bc_id=${BC_A}`,
+  )
+  await expect(
+    page.getByRole("cell", { name: "等待平台只读核查", exact: true }),
+  ).toBeVisible()
+  await expect(
+    page.getByRole("cell", { name: "观察值符合目标，受理仍未知", exact: true }),
+  ).toBeVisible({ timeout: 12000 })
+  await expect(
+    page.getByRole("cell", { name: "结果待核查", exact: true }),
+  ).toBeVisible()
+  await expect(
+    page.getByRole("cell", { name: "平台已接收", exact: true }),
+  ).toHaveCount(0)
+})

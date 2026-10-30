@@ -162,12 +162,20 @@ def _object_for_ref(
     route: Any,
 ) -> AdObject | None:
     try:
-        row = locate(session, context=context, bc_id=bc_id, ref=ref)
+        cache = session.info.get("management_expansion_cache")
+        if cache is not None:
+            row = cache["objects"].get(_ref_key(ref))
+            if row is None:
+                return None
+        else:
+            row = locate(session, context=context, bc_id=bc_id, ref=ref)
         if (
             route is None
             or row.source_connection_id != route.connection_id
             or row.source_channel != route.channel
         ):
+            if cache is not None:
+                return None
             raise DomainError(
                 "management_source_conflict",
                 "目录对象来源与冻结 BC/连接不一致",
@@ -192,6 +200,16 @@ def _management_allowed(
     """预览时按与提交门禁同一规则（management_rules.management_allowed）判断能否管理。"""
     if route is None or entity_kind not in MANAGEMENT_ENTITY_KINDS.get(operation, ()):
         return False
+    cache = session.info.get("management_expansion_cache")
+    if cache is not None:
+        grant = cache["grants"].get(advertiser_id)
+        authorization = cache["authorization"]
+        return bool(
+            grant
+            and authorization
+            and grant.permission_state == "VERIFIED"
+            and management_allowed(grant, authorization.scopes, operation)
+        )
     grant = session.get(
         BCAccountAccess, (context.tenant_id, bc_id, advertiser_id, route.connection_id)
     )
@@ -224,6 +242,9 @@ def _child_adgroups(
     目标 ROAS 同步到整个系列、组预算系列的预算落在各广告组，都需要从系列
     找到它的广告组；只取冻结时刻之前观察到的行，冻结后新建的组不会被吸收。
     """
+    cache = session.info.get("management_expansion_cache")
+    if cache is not None:
+        return cache["children"].get((campaign.advertiser_id, campaign.remote_id), [])
     return list(
         session.exec(
             select(AdObject)
@@ -308,6 +329,15 @@ def _budget_owners(
     return [group]
 
 
+def _material(session, use):
+    cache = session.info.get("management_expansion_cache")
+    return (
+        cache["materials"].get(_use_key(use))
+        if cache is not None
+        else locate_material_use(session, use)
+    )
+
+
 def _current_value(
     session: Session,
     row: AdObject,
@@ -315,7 +345,7 @@ def _current_value(
     field: str,
 ) -> Decimal | str | None:
     if use is not None and field in {"status", "material_status"}:
-        material = locate_material_use(session, use)
+        material = _material(session, use)
         return (
             material.operation_status if material is not None else row.operation_status
         )
@@ -332,6 +362,10 @@ def _grouping_revision(session: Session, ref: EntityRef) -> int:
 
     if ref.kind != "campaign":
         return 0
+    cache = session.info.get("management_expansion_cache")
+    if cache is not None:
+        row = cache["projections"].get((ref.advertiser_id, ref.remote_id))
+        return row.grouping_revision if row is not None else 0
     row = session.exec(
         select(CampaignNameProjection)
         .where(
@@ -502,16 +536,21 @@ def _series_key(
         return (row.advertiser_id, row.remote_id)
     from app.modules.ads.models import CampaignNameProjection
 
-    projection = session.exec(
-        select(CampaignNameProjection)
-        .where(
-            CampaignNameProjection.tenant_id == campaign.tenant_id,
-            CampaignNameProjection.advertiser_id == campaign.advertiser_id,
-            CampaignNameProjection.campaign_remote_id == campaign.remote_id,
-        )
-        .order_by(col(CampaignNameProjection.name_revision).desc())
-        .limit(1)
-    ).first()
+    cache = session.info.get("management_expansion_cache")
+    projection = (
+        cache["projections"].get((campaign.advertiser_id, campaign.remote_id))
+        if cache is not None
+        else session.exec(
+            select(CampaignNameProjection)
+            .where(
+                CampaignNameProjection.tenant_id == campaign.tenant_id,
+                CampaignNameProjection.advertiser_id == campaign.advertiser_id,
+                CampaignNameProjection.campaign_remote_id == campaign.remote_id,
+            )
+            .order_by(col(CampaignNameProjection.name_revision).desc())
+            .limit(1)
+        ).first()
+    )
     if projection is not None and projection.status == "VALID":
         return (
             campaign.advertiser_id,
@@ -579,10 +618,20 @@ def _expand(
     mutation: MutationSpec,
     require_capabilities: bool = False,
     route: Any = None,
+    frozen_record: FrozenSelectionRecord | None = None,
 ) -> Expansion:
-    selected_bc, selection, selection_record = _load_selection(
-        session, context, selection_id
-    )
+    if frozen_record is None:
+        selected_bc, selection, selection_record = _load_selection(
+            session, context, selection_id
+        )
+    else:
+        from app.modules.reporting.selection import selection_public
+
+        selected_bc, selection, selection_record = (
+            frozen_record.bc_id,
+            selection_public(frozen_record),
+            frozen_record,
+        )
     if selected_bc != bc_id:
         raise DomainError("read_bc_mismatch", "冻结选择不属于当前 BC")
     excluded_refs = {_ref_key(ref) for ref in mutation.excluded_refs}
@@ -856,7 +905,30 @@ def _expand(
                 return None
             raise
 
-    def add_item(
+    def add_item(row, *, use=None, linked=False, force_field=None):
+        try:
+            add_item_unchecked(row, use=use, linked=linked, force_field=force_field)
+        except DomainError as exc:
+            if frozen_record is None:
+                raise
+            # 后台准备逐项记录不可用，不因单个坏数值中断整批任务。
+            items.append(
+                ExpandedItem(
+                    row.ref,
+                    use,
+                    None,
+                    None,
+                    exc.code,
+                    "UNSUPPORTED",
+                    None,
+                    row.parent_ref,
+                    0,
+                    {},
+                    linked,
+                )
+            )
+
+    def add_item_unchecked(
         row: AdObject,
         *,
         use: MaterialUseRef | None = None,
@@ -864,7 +936,7 @@ def _expand(
         force_field: str | None = None,
     ) -> None:
         field = force_field or effective_field
-        material = locate_material_use(session, use) if use is not None else None
+        material = _material(session, use) if use is not None else None
         if use is not None and use.ad_material_id is not None and material is None:
             grouping_revision = grouping_revision_for(row)
             items.append(
@@ -1392,10 +1464,28 @@ def _expand(
                 else (item.ref.advertiser_id, item.ref.remote_id)
             )
             by_series[series].add(str(item.final_value))
-        if any(len(values) > 1 for values in by_series.values()):
+        conflicts = {key for key, values in by_series.items() if len(values) > 1}
+        if conflicts and frozen_record is None:
             raise DomainError(
                 "management_roas_series_conflict", "同系列不同最终 ROAS，预览拒绝"
             )
+        if conflicts:
+            for index, item in enumerate(items):
+                row = objects.get(_ref_key(item.ref))
+                if (
+                    row is not None
+                    and _series_key(
+                        session, row, objects, context=context, bc_id=bc_id, route=route
+                    )
+                    in conflicts
+                ):
+                    items[index] = replace(
+                        item,
+                        command=None,
+                        execution_result="CONFLICT",
+                        reason="roas_series_conflict",
+                    )
+            commands = [item.command for item in items if item.command is not None]
 
     # 预览只展示目录里已有的名称；名称不参与写入，查不到时界面回退到对象 ID。
     names = {_ref_key(row.ref): row.name for row in objects.values()}

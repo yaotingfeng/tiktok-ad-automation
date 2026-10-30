@@ -93,6 +93,8 @@ class Settings(BaseSettings):
     ADS_DIRECTORY_WORKER_CONCURRENCY: int = Field(default=1, ge=1, le=32)
     ADS_REPORTING_WORKER_CONCURRENCY: int = Field(default=1, ge=1, le=32)
     AD_MANAGEMENT_WORKER_CONCURRENCY: int = Field(default=1, ge=1, le=1)
+    # 单进程共享请求窗口；真实发出仍由物理接口QPS/QPM/QPD及资源配额控制。
+    AD_MANAGEMENT_REQUEST_CONCURRENCY: int = Field(default=50, ge=1, le=50)
     # R2 分片接收和 TikTok URL 转存支持 1 GiB；不放宽旧 SDK 整文件内存保护。
     MATERIAL_URL_MAX_UPLOAD_BYTES: int = Field(default=1024**3, gt=0)
     # 0 表示不限制 R2 临时原件总量；计数与清理仍正常运行。

@@ -52,6 +52,8 @@ import type {
   adManagementRetryTargetedRefreshResponse,
   adManagementRetryTaskData,
   adManagementRetryTaskResponse,
+  adManagementSubmitDirectTaskData,
+  adManagementSubmitDirectTaskResponse,
   adManagementSubmitTaskData,
   adManagementSubmitTaskResponse,
   addBindingsData,
@@ -495,7 +497,7 @@ export const DEMO_OPERATIONS = {
   "accounts-revoke": { method: "POST", path: "/api/tenants/{tenant_id}/tiktok/mcp/connections/{connection_id}/revocations", query: {} },
   "acknowledge_ingest_parts": { method: "POST", path: "/api/tenants/{tenant_id}/materials/ingest-sessions/{session_id}/files/{material_id}/part-receipts", query: {} },
   "ad_management-cancel_task": { method: "POST", path: "/api/tenants/{tenant_id}/ad-management-tasks/{task_id}/cancel", query: {} },
-  "ad_management-get_task": { method: "GET", path: "/api/tenants/{tenant_id}/ad-management-tasks/{task_id}", query: {} },
+  "ad_management-get_task": { method: "GET", path: "/api/tenants/{tenant_id}/ad-management-tasks/{task_id}", query: {"offset":"number","limit":"number"} },
   "ad_management-list_tasks": { method: "GET", path: "/api/tenants/{tenant_id}/ad-management-tasks", query: {"limit":"number"} },
   "ad_management-prepare_preview": { method: "POST", path: "/api/tenants/{tenant_id}/ad-management-previews", query: {} },
   "ad_management-prepare_restore": { method: "POST", path: "/api/tenants/{tenant_id}/ad-management-tasks/{task_id}/restore", query: {} },
@@ -503,6 +505,7 @@ export const DEMO_OPERATIONS = {
   "ad_management-resolve_rename_selection": { method: "POST", path: "/api/tenants/{tenant_id}/ad-management-rename-selections", query: {} },
   "ad_management-retry_targeted_refresh": { method: "POST", path: "/api/tenants/{tenant_id}/ad-management-tasks/{task_id}/refresh", query: {} },
   "ad_management-retry_task": { method: "POST", path: "/api/tenants/{tenant_id}/ad-management-tasks/{task_id}/retry", query: {} },
+  "ad_management-submit_direct_task": { method: "POST", path: "/api/tenants/{tenant_id}/ad-management-requests", query: {} },
   "ad_management-submit_task": { method: "POST", path: "/api/tenants/{tenant_id}/ad-management-tasks", query: {} },
   "addBindings": { method: "POST", path: "/api/tenants/{tenant_id}/tiktok/mcp/connections/{connection_id}/bindings", query: {} },
   "ads_reporting-ad_detail": { method: "GET", path: "/api/tenants/{tenant_id}/ads/{kind}/{remote_id}", query: {} },
@@ -745,6 +748,7 @@ export interface DemoOperationTypes {
   "ad_management-resolve_rename_selection": { data: adManagementResolveRenameSelectionData; response: adManagementResolveRenameSelectionResponse }
   "ad_management-retry_targeted_refresh": { data: adManagementRetryTargetedRefreshData; response: adManagementRetryTargetedRefreshResponse }
   "ad_management-retry_task": { data: adManagementRetryTaskData; response: adManagementRetryTaskResponse }
+  "ad_management-submit_direct_task": { data: adManagementSubmitDirectTaskData; response: adManagementSubmitDirectTaskResponse }
   "ad_management-submit_task": { data: adManagementSubmitTaskData; response: adManagementSubmitTaskResponse }
   "addBindings": { data: addBindingsData; response: addBindingsResponse }
   "ads_reporting-ad_detail": { data: adsReportingAdDetailData; response: adsReportingAdDetailResponse }

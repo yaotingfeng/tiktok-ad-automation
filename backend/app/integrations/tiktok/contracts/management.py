@@ -24,7 +24,7 @@ _MANAGEMENT_OPERATIONS = {
 _ENTITY_KINDS = frozenset(
     {"campaign", "adgroup", "ad", "creative", "material", "account"}
 )
-_MAX_MATERIAL_BATCH = 50
+_MAX_MATERIAL_BATCH = 20
 
 
 def _text(value: object, name: str) -> str:
@@ -141,3 +141,7 @@ MAX_MATERIAL_BATCH = _MAX_MATERIAL_BATCH
 
 class ManagementOperations(Protocol):
     def apply(self, command: ManagementCommand) -> ManagementReceipt: ...
+
+    def apply_batch(
+        self, commands: tuple[ManagementCommand, ...]
+    ) -> tuple[ManagementReceipt, ...]: ...

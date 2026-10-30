@@ -85,7 +85,7 @@ def test_recorded_effect(c5_env, redis_client, monkeypatch, failure):
     @contextmanager
     def gateway(**kw):
         @contextmanager
-        def scope(adv, operation, _kind, _deadline):
+        def scope(adv, operation, _kind, _deadline, _physical_endpoint):
             try:
                 with admit_tiktok_call(
                     redis_client,
@@ -144,7 +144,10 @@ def test_recorded_effect(c5_env, redis_client, monkeypatch, failure):
 
             retry = session.exec(
                 select(PendingDispatch).where(
-                    PendingDispatch.task_key == f"ad-management-retry:{item_id}:1"
+                    PendingDispatch.tenant_id == context.tenant_id,
+                    PendingDispatch.task_key.like(
+                        f"ad-management-wake:{_task_id}:retry:%"
+                    ),
                 )
             ).one()
             assert retry.available_at > attempt.request_at
@@ -173,7 +176,7 @@ def test_recorded_effect(c5_env, redis_client, monkeypatch, failure):
             if failure == "quota_conflict":
                 failure = "pre_send_conflict"
             for attempt_no in (2, 3):
-                # 到期由时钟推进模拟；真实 Redis 仍被占用，验证有界延期而非忙循环。
+                # 到期由时钟推进模拟；真实Redis仍占用，配额等待不消耗传输失败预算。
                 last = session.exec(
                     select(ManagementRequestAttempt)
                     .where(ManagementRequestAttempt.task_item_id == item_id)
@@ -209,7 +212,7 @@ def test_recorded_effect(c5_env, redis_client, monkeypatch, failure):
                     )
                     break
             else:
-                assert not latest.retryable and latest.response["retry_exhausted"]
+                assert latest.retryable and not latest.response.get("retry_exhausted")
                 execute_item(engine, item_id)
                 assert not sent
         elif failure == "pre_send_conflict":

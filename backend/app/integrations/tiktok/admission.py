@@ -87,6 +87,7 @@ def admit_tiktok_call(
     scope: str,
     policy: AdmissionPolicy,
     workload: Workload = "live",
+    physical_endpoint: str | None = None,
 ) -> Iterator[None]:
     if advertiser_id is not None and (
         not isinstance(advertiser_id, str) or not advertiser_id.strip()
@@ -106,8 +107,13 @@ def admit_tiktok_call(
         else operation
     )
     rate_group = (
-        SDK_READ_RATE_GROUPS.get(operation) if route.channel == "OFFICIAL_API" else None
+        physical_endpoint or SDK_READ_RATE_GROUPS.get(operation)
+        if route.channel == "OFFICIAL_API"
+        else None
     )
+    # 两个速率桶都按真实接口归一，改名和预算不能拆开campaign/update额度。
+    if physical_endpoint is not None and route.channel == "OFFICIAL_API":
+        canonical = physical_endpoint
     with admitted_scope(
         redis_client,
         app_scope=scope,
@@ -131,6 +137,7 @@ def admit_candidate_call(
     scope: str,
     operation: str,
     policy: AdmissionPolicy,
+    physical_endpoint: str | None = None,
 ) -> Iterator[None]:
     if operation not in PROTOCOL_OPERATIONS | ACCOUNT_DIRECTORY_OPERATIONS:
         raise DomainError(
@@ -142,10 +149,11 @@ def admit_candidate_call(
     with admitted_scope(
         redis_client,
         app_scope=scope,
-        endpoint=operation,
+        endpoint=physical_endpoint or operation,
         tenant_id=tenant_id,
         advertiser_id="",
         policy=policy,
         denied_error=AccountAdmissionDeferred,
+        rate_group=physical_endpoint,
     ):
         yield

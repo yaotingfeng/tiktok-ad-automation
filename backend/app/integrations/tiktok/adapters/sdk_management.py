@@ -6,6 +6,8 @@
 
 import json
 from collections.abc import Callable
+from contextlib import nullcontext
+from dataclasses import replace
 from datetime import datetime
 from decimal import Decimal
 from typing import Any
@@ -24,10 +26,14 @@ from app.integrations.tiktok.contracts.management import (
     ManagementCommand,
     ManagementReceipt,
 )
-from app.integrations.tiktok.official.accounts import RequestScope, remaining
+from app.integrations.tiktok.official.accounts import (
+    RequestScope,
+    _strict_sdk_envelope,
+    remaining,
+)
 
 CapabilityCheck = Callable[[str, str, str], None]
-ManagementScope = Callable[[str, str, str, datetime], Any]
+ManagementScope = Callable[[str, str, str, datetime, str], Any]
 
 
 def _smart_plus(command: ManagementCommand) -> bool:
@@ -113,6 +119,52 @@ def _receipt(raw: object) -> ManagementReceipt:
         return ManagementReceipt("REJECTED", evidence.request_id, False, evidence)
     raise RemoteCallError(
         "management_result_unknown", effect="UNKNOWN", evidence=evidence
+    )
+
+
+def _management_envelope(client: Any, operation: str) -> Any:
+    # 工厂生产的官方ApiClient始终具备deserialize。无该方法的纯传输测试替身
+    # 仍由_receipt/batch_receipts校验原始JSON，不能用SDK转换后的code作证。
+    if callable(getattr(client, "deserialize", None)):
+        return _strict_sdk_envelope(client, operation=operation)
+    return nullcontext()
+
+
+def _sdk_rejection(
+    client: Any, error: Exception, *, previous_response: object = None
+) -> ManagementReceipt | None:
+    """SDK可在返回业务拒绝后抛错；只恢复本次真实非零envelope的拒绝证据。
+
+    调用方须在物理准入scope退出后调用，使40100的provider延期异常先穿过
+    scope，落共享冷却。拒绝不证明可以重发写操作，故回执始终不可自动重试。
+    """
+    response = getattr(client, "last_response", None)
+    if response is None or response is previous_response:
+        return None
+    try:
+        if len(response.data) > 8 * 1024 * 1024:
+            return None
+        raw = json.loads(response.data)
+    except ValueError, TypeError, AttributeError, RecursionError:
+        return None
+    if type(raw) is not dict or type(raw.get("code")) is not int or raw["code"] == 0:
+        return None
+    data = raw.get("data")
+    # 有成员证据时仍交由批量解析，不能用顶层业务码覆盖混合/矛盾的成员结果。
+    if isinstance(data, dict) and any(
+        value
+        for key, value in data.items()
+        if key.endswith("_ids") or key == "error_list"
+    ):
+        return None
+    receipt = _receipt(raw)
+    provider = getattr(error, "admission_source", None) == "provider"
+    return replace(
+        receipt,
+        reason="management_provider_rate_limited"
+        if provider
+        else "management_provider_rejected",
+        retry_after_ms=getattr(error, "retry_after_ms", None),
     )
 
 
@@ -207,8 +259,16 @@ class SdkManagementOperations:
                 "management_permission_unverified", "管理请求缺少专用准入门禁"
             )
 
+    def apply_batch(
+        self, commands: tuple[ManagementCommand, ...]
+    ) -> tuple[ManagementReceipt, ...]:
+        from .management_batches import apply_sdk_batch
+
+        return apply_sdk_batch(self, commands)
+
     def apply(self, command: ManagementCommand) -> ManagementReceipt:
         sent = False
+        previous_response = getattr(self._client, "last_response", None)
         try:
             if not isinstance(command, ManagementCommand):
                 raise TypeError("management command required")
@@ -263,11 +323,14 @@ class SdkManagementOperations:
                     else sdk.AdgroupApi(self._client).adgroup_update
                 )
             remaining(self._deadline)
+            from app.integrations.tiktok.platform_quotas import sdk_endpoint
+
             scope = management_scope(
                 command.ref.advertiser_id,
                 command.operation,
                 command.ref.kind,
                 self._deadline,
+                sdk_endpoint(operation, kind=command.ref.kind, smart=smart_plus),
             )
             with scope:
                 budget = remaining(self._deadline)
@@ -275,15 +338,22 @@ class SdkManagementOperations:
                     self._before_send()
                 access_token = self._client.default_headers["Access-Token"]
                 sent = True
-                method(
-                    access_token,
-                    body=payload,
-                    async_req=True,
-                    _request_timeout=(min(5.0, budget), min(30.0, budget)),
-                ).get()
+                with _management_envelope(self._client, operation):
+                    method(
+                        access_token,
+                        body=payload,
+                        async_req=True,
+                        _request_timeout=(min(5.0, budget), min(30.0, budget)),
+                    ).get()
                 raw = json.loads(self._client.last_response.data)
                 return _receipt(raw)
         except Exception as error:
+            if sent:
+                rejected = _sdk_rejection(
+                    self._client, error, previous_response=previous_response
+                )
+                if rejected is not None:
+                    return rejected
             # 只有到达 SDK 方法调用边界才可能产生远端效果。准入/授权/原值校验
             # 都在此之前；异常文案不落库，仅传递应用错误码与明确的发送阶段。
             if (

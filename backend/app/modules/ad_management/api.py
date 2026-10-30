@@ -21,6 +21,7 @@ from app.modules.ad_management.actions import (
 from app.modules.ad_management.previews import prepare_preview
 from app.modules.ad_management.rename import resolve_rename_rows
 from app.modules.ad_management.schemas import (
+    DirectManagementRequest,
     ManagementPreviewPublic,
     ManagementPreviewRequest,
     ManagementRetryRequest,
@@ -35,6 +36,36 @@ from app.modules.tenants.permissions import require_tenant
 router = APIRouter(prefix="/tenants/{tenant_id}", tags=["ad_management"])
 Cursor = Annotated[str | None, Query(max_length=128)]
 Limit = Annotated[int, Query(ge=1, le=100)]
+
+
+@router.post(
+    "/ad-management-requests",
+    response_model=ManagementTaskPublic,
+    status_code=202,
+    operation_id="ad_management-submit_direct_task",
+)
+def submit_direct_task_route(
+    tenant_id: UUID,
+    body: DirectManagementRequest,
+    session: SessionDep,
+    user: CurrentUser,
+) -> ManagementTaskPublic:
+    from app.modules.ad_management.direct_submission import submit_direct_task
+
+    context = require_tenant(
+        session, actor_id=user.id, tenant_id=tenant_id, action="ads_manage"
+    )
+    result = submit_direct_task(
+        session,
+        context,
+        body.bc_id,
+        body.selection_id,
+        body.mutation,
+        body.idempotency_key,
+        row_problems=[row.model_dump() for row in body.row_problems],
+    )
+    session.commit()
+    return result
 
 
 @router.post(
@@ -148,6 +179,8 @@ def get_task_route(
     task_id: UUID,
     session: SessionDep,
     user: CurrentUser,
+    offset: Annotated[int, Query(ge=0)] = 0,
+    limit: Limit = 100,
 ) -> ManagementTaskPublic:
     context = require_tenant(
         session, actor_id=user.id, tenant_id=tenant_id, action="read"
@@ -166,7 +199,7 @@ def get_task_route(
         from app.core.errors import DomainError
 
         raise DomainError("management_task_not_found", "管理任务不存在")
-    return get_task(session, context, row.bc_id, task_id)
+    return get_task(session, context, row.bc_id, task_id, offset=offset, limit=limit)
 
 
 @router.post(

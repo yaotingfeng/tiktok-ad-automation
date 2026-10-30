@@ -108,10 +108,35 @@ def readable_history(context: TenantContext, bc_id: str):
         .correlate(ManagementTask)
         .exists()
     )
+    # 准备前尚无 task items；冻结账户也必须逐集合满足原连接与代数授权。
+    frozen_accounts = (
+        func.jsonb_array_elements_text(
+            func.coalesce(
+                ManagementTask.request["selection"]["advertiser_ids"], cast([], JSONB)
+            )
+        )
+        .table_valued("value")
+        .render_derived(name="frozen_accounts")
+    )
+    hidden_frozen = (
+        select(frozen_accounts.c.value)
+        .where(
+            ~select(readable.c.advertiser_id)
+            .where(
+                readable.c.route == route,
+                readable.c.advertiser_id == frozen_accounts.c.value,
+            )
+            .correlate(ManagementTask, frozen_accounts)
+            .exists()
+        )
+        .correlate(ManagementTask)
+        .exists()
+    )
     return and_(
         select(readable.c.advertiser_id)
         .where(readable.c.route == route)
         .correlate(ManagementTask)
         .exists(),
         ~hidden_item,
+        ~hidden_frozen,
     )

@@ -89,6 +89,7 @@ export function AdsWorkspace() {
   const [actionError, setActionError] = useState<string | null>(null)
   const [frozenSelection, setFrozenSelection] =
     useState<FrozenSelection | null>(null)
+  const [managementSubmitting, setManagementSubmitting] = useState(false)
   const [previewOpen, setPreviewOpen] = useState(false)
   const [managementAction, setManagementAction] =
     useState<ManagementAction | null>(null)
@@ -478,7 +479,13 @@ export function AdsWorkspace() {
     next: ManagementAction,
     single?: { row: ReportRow; scope: DetailActionScope },
   ) => {
-    if (roleReadonly) return
+    if (
+      roleReadonly ||
+      managementSubmitting ||
+      selectionMutation.isPending ||
+      adMaterialSelection.isPending
+    )
+      return
     if (single && !single.scope.snapshotId) {
       setActionError("该对象没有可操作的报表快照，请刷新后重试")
       return
@@ -532,7 +539,13 @@ export function AdsWorkspace() {
     adMaterialIds: string[],
     value: "ENABLE" | "DISABLE",
   ) => {
-    if (roleReadonly) return
+    if (
+      roleReadonly ||
+      managementSubmitting ||
+      selectionMutation.isPending ||
+      adMaterialSelection.isPending
+    )
+      return
     runAction(() => {
       setManagementAction({ field: "status", value })
       setManagementDimension("material")
@@ -786,7 +799,10 @@ export function AdsWorkspace() {
                     dimension: dimension.value,
                     dataOnly: !applied.include_empty,
                     readonly: roleReadonly,
-                    busy: selectionMutation.isPending || !ads.snapshot,
+                    busy:
+                      managementSubmitting ||
+                      selectionMutation.isPending ||
+                      !ads.snapshot,
                     onAction: (action) => startManagementAction(action),
                     onSelectAllMatching: ads.selection.selectAllMatching,
                     onClear: ads.selection.clear,
@@ -885,6 +901,7 @@ export function AdsWorkspace() {
           dimension={managementDimension}
           open={previewOpen}
           onOpenChange={setPreviewOpen}
+          onSubmittingChange={setManagementSubmitting}
           onSubmitted={(task) => {
             if (scopeRef.current !== `${tenantId}:${task.bc_id}`) return
             setSubmittedTask({ ...task, submittedAt: Date.now() })

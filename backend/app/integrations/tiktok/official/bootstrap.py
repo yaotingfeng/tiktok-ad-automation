@@ -21,6 +21,7 @@ from app.integrations.tiktok.bounded_resources import bounded_redis, bounded_ses
 from app.integrations.tiktok.contracts.accounts import CandidateReadContext
 from app.integrations.tiktok.official.accounts import OfficialAccountsGateway
 from app.integrations.tiktok.official.authorization import material_authorization
+from app.integrations.tiktok.platform_quotas import sdk_endpoint
 from app.integrations.tiktok.sdk import admitted_account_call, official_client
 from app.jobs.admission import admission_policy
 from app.modules.accounts.discovery import locked_run, validate_run
@@ -82,7 +83,10 @@ def open_api_candidate_accounts(
         ):
             raise DomainError("gateway_operation_forbidden", "候选仅允许账户目录读取")
         material()
-        policy = admission_policy(operation)
+        physical = sdk_endpoint(operation)
+        policy = admission_policy(
+            operation, channel="OFFICIAL_API", physical_endpoint=physical
+        )
         if policy.lease_ms <= max(
             50_000, (task_deadline - datetime.now(UTC)).total_seconds() * 1000 + 1000
         ):
@@ -101,6 +105,7 @@ def open_api_candidate_accounts(
                 ),
                 operation=operation,
                 policy=policy,
+                physical_endpoint=physical,
             ):
                 material()
                 with bounded_session(
@@ -128,6 +133,7 @@ def open_api_candidate_accounts(
             )
     finally:
         private.clear()
+
 
 @contextmanager
 def open_api_connection_accounts(
@@ -181,9 +187,14 @@ def open_api_connection_accounts(
             or operation not in ACCOUNT_DIRECTORY_OPERATIONS
             or deadline != task_deadline
         ):
-            raise DomainError("gateway_operation_forbidden", "API 同步仅允许账户目录读取")
+            raise DomainError(
+                "gateway_operation_forbidden", "API 同步仅允许账户目录读取"
+            )
         material()
-        policy = admission_policy(operation)
+        physical = sdk_endpoint(operation)
+        policy = admission_policy(
+            operation, channel="OFFICIAL_API", physical_endpoint=physical
+        )
         if policy.lease_ms <= max(
             50_000, (task_deadline - datetime.now(UTC)).total_seconds() * 1000 + 1000
         ):

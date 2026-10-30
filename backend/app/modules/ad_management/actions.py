@@ -90,47 +90,55 @@ def _scoped_task(
     ).one_or_none()
     if task is None:
         raise DomainError("management_task_not_found", "管理任务不存在")
-    route = _route(task)
-    refs = session.exec(
-        select(ManagementTaskItem.ref).where(
-            ManagementTaskItem.task_id == task.id,
-            ManagementTaskItem.tenant_id == context.tenant_id,
+    # 历史权限按集合核验，万条任务不逐项重复查询目录/授权。
+    visible = session.exec(
+        select(ManagementTask.id).where(
+            ManagementTask.id == task.id, readable_history(context, bc_id)
         )
-    ).all()
-    capability_name = "ads_manage" if action == "ads_manage" else "read"
-    try:
-        for value in refs:
-            advertiser_id = (
-                value.get("advertiser_id") if isinstance(value, dict) else None
+    ).first()
+    if visible is None:
+        raise DomainError("management_task_not_found", "管理任务不存在")
+    if action == "ads_manage":
+        route = _route(task)
+        scopes = session.exec(
+            select(
+                ManagementTaskItem.ref["advertiser_id"].astext,
+                ManagementTaskItem.capability["operation"].astext,
+                ManagementTaskItem.ref["kind"].astext,
             )
-            if not isinstance(advertiser_id, str):
-                raise DomainError("management_request_invalid", "任务目标身份无效")
-            item = session.exec(
-                select(ManagementTaskItem).where(
-                    ManagementTaskItem.task_id == task.id,
-                    ManagementTaskItem.tenant_id == context.tenant_id,
-                    ManagementTaskItem.ref == value,
-                )
-            ).first()
+            .where(
+                ManagementTaskItem.tenant_id == context.tenant_id,
+                ManagementTaskItem.task_id == task.id,
+                ManagementTaskItem.execution_result.in_(
+                    ["PENDING", "NOT_SENT", "ACCEPTED"]
+                ),
+            )
+            .distinct()
+        ).all()
+        for advertiser_id, operation, entity_kind in scopes:
             verify_route(
                 session,
                 context=context,
                 route=route,
                 advertiser_id=advertiser_id,
-                capability=capability_name,
-                operation=(item.capability or {}).get("operation") if item else None,
-                entity_kind=(item.capability or {}).get("entity_kind")
-                if item
-                else None,
+                capability="ads_manage",
+                operation=operation,
+                entity_kind=entity_kind,
             )
-    except DomainError as exc:
-        raise DomainError("management_task_not_found", "管理任务不存在") from exc
     return task
 
 
 def get_task(
-    session: Session, context: TenantContext, bc_id: str, task_id: UUID
+    session: Session,
+    context: TenantContext,
+    bc_id: str,
+    task_id: UUID,
+    *,
+    offset: int = 0,
+    limit: int = 100,
 ) -> ManagementTaskPublic:
+    if offset < 0 or not 1 <= limit <= 100:
+        raise DomainError("invalid_cursor", "分页大小无效")
     task = _scoped_task(session, context, bc_id, task_id)
     rows = session.exec(
         select(ManagementTaskItem)
@@ -139,17 +147,25 @@ def get_task(
             ManagementTaskItem.tenant_id == context.tenant_id,
         )
         .order_by(col(ManagementTaskItem.position))
+        .offset(offset)
+        .limit(limit)
     ).all()
-    public_items: list[ManagementItemPublic] = []
-    for row in rows:
-        attempts = session.exec(
+    by_item: dict[UUID, list[ManagementRequestAttempt]] = {}
+    if rows:
+        for attempt in session.exec(
             select(ManagementRequestAttempt)
             .where(
-                ManagementRequestAttempt.task_item_id == row.id,
                 ManagementRequestAttempt.tenant_id == context.tenant_id,
+                col(ManagementRequestAttempt.task_item_id).in_(
+                    [row.id for row in rows]
+                ),
             )
             .order_by(col(ManagementRequestAttempt.attempt))
-        ).all()
+        ).all():
+            by_item.setdefault(attempt.task_item_id, []).append(attempt)
+    public_items: list[ManagementItemPublic] = []
+    for row in rows:
+        attempts = by_item.get(row.id, [])
         public_items.append(
             _item_public(row).model_copy(
                 update={
@@ -167,7 +183,29 @@ def get_task(
             )
         )
     summary = _with_summaries(session, context, [task])[0]
-    return summary.model_copy(update={"items": tuple(public_items)})
+    total = session.exec(
+        select(func.count())
+        .select_from(ManagementTaskItem)
+        .where(
+            ManagementTaskItem.tenant_id == context.tenant_id,
+            ManagementTaskItem.task_id == task.id,
+        )
+    ).one()
+    return summary.model_copy(
+        update={
+            "items": tuple(public_items),
+            "items_total": total,
+            "items_offset": offset,
+            "next_items_offset": offset + limit if offset + limit < total else None,
+            "preparation_error": task.request.get("preparation_error_message")
+            or (
+                "后台准备失败，请检查当前权限与连接后重试。"
+                if task.request.get("preparation_error")
+                else None
+            ),
+            "preparation_problems": task.request.get("row_problems", []),
+        }
+    )
 
 
 # 操作记录筛选：动作按冻结的变更字段归类，启停再按目标状态拆成启用/暂停。
@@ -247,7 +285,11 @@ def _with_summaries(
         target_kinds.setdefault(task_id, {})[str(entity_kind)] = int(total)
     result: list[ManagementTaskPublic] = []
     for task in tasks:
-        raw = mutations.get(task.preview_id) or {}
+        raw = (
+            task.request.get("mutation", {})
+            if task.source_kind == "DIRECT"
+            else mutations.get(task.preview_id) or {}
+        )
         try:
             mutation = ManagementTaskMutation(
                 field=raw["field"],
@@ -296,12 +338,19 @@ def list_tasks(
         readable_history(context, bc_id),
     )
     if action is not None:
-        field = ManagementPreview.mutation["field"].astext
-        value = ManagementPreview.mutation["value"].astext
+        field = func.coalesce(
+            ManagementTask.request["mutation"]["field"].astext,
+            ManagementPreview.mutation["field"].astext,
+        )
+        value = func.coalesce(
+            ManagementTask.request["mutation"]["value"].astext,
+            ManagementPreview.mutation["value"].astext,
+        )
         statement = statement.join(
             ManagementPreview,
             (col(ManagementPreview.tenant_id) == col(ManagementTask.tenant_id))
             & (col(ManagementPreview.id) == col(ManagementTask.preview_id)),
+            isouter=True,
         )
         if action in {"enable", "disable"}:
             statement = statement.where(field == "status", value == action.upper())
@@ -367,7 +416,10 @@ def cancel_task(
         .with_for_update()
     ).all()
     for item in rows:
-        if item.execution_result == "PENDING" and item.claim_token is None:
+        if (
+            item.execution_result in {"PENDING", "NOT_SENT"}
+            and item.claim_token is None
+        ):
             item.execution_result = "CANCELLED"
             item.delivery_status = "CANCELLED"
             item.reason = "cancelled"
@@ -429,7 +481,14 @@ def retry_task(
         ).first()
         if latest is None or latest.retryable:
             eligible.append(item)
-    if not eligible:
+    resume_preparation = (
+        source.source_kind == "DIRECT"
+        and source.status == "FAILED"
+        and bool(source.request.get("preparation_error"))
+    )
+    if resume_preparation:
+        eligible = list(items)
+    if not eligible and not resume_preparation:
         raise DomainError(
             "management_retry_not_allowed", "没有明确未发送的任务项可重试"
         )
@@ -438,11 +497,25 @@ def retry_task(
         bc_id=source.bc_id,
         actor_id=context.actor_id,
         preview_id=source.preview_id,
+        source_kind=source.source_kind,
+        request={
+            key: value
+            for key, value in source.request.items()
+            if key not in {"preparation_error", "preparation_error_message"}
+        },
+        prepare_cursor=source.prepare_cursor,
         idempotency_key=idempotency_key,
         digest=source.digest,
         route=dict(source.route),
-        status="QUEUED",
-        counts=dict(source.counts),
+        status="PREPARING" if resume_preparation else "QUEUED",
+        counts=dict(source.counts)
+        if resume_preparation
+        else ManagementCounts(
+            selected=len(eligible),
+            targets=len(eligible),
+            pending=len(eligible),
+            prepared=len(eligible),
+        ).model_dump(),
     )
     session.add(task)
     session.flush()
@@ -451,6 +524,7 @@ def retry_task(
             ManagementTaskItem(
                 tenant_id=old.tenant_id,
                 task_id=task.id,
+                source_kind=old.source_kind,
                 preview_item_id=old.preview_item_id,
                 preview_id=old.preview_id,
                 position=position,
@@ -459,8 +533,11 @@ def retry_task(
                 original_value=old.original_value,
                 final_value=old.final_value,
                 reason=None,
+                grouping_revision=old.grouping_revision,
                 membership_digest=old.membership_digest,
-                execution_result="PENDING",
+                execution_result=old.execution_result
+                if resume_preparation
+                else "PENDING",
                 capability=dict(old.capability),
                 parent_ref=dict(old.parent_ref) if old.parent_ref else None,
             )
@@ -472,6 +549,15 @@ def retry_task(
         task_key=f"ad-management:{task.id}",
         payload={"task_id": str(task.id), "generation": 1},
     )
+    if resume_preparation:
+        from app.jobs.outbox import enqueue_many_after_commit
+        from app.modules.ad_management.preparation_dispatch import (
+            preparation_watchdog_entry,
+        )
+
+        enqueue_many_after_commit(
+            session, context=context, entries=[preparation_watchdog_entry(task)]
+        )
     session.flush()
     return _public(task)
 
@@ -496,10 +582,17 @@ def prepare_restore(
         )
         .order_by(col(ManagementTaskItem.position))
     ).all()
-    source_preview = session.get(ManagementPreview, task.preview_id)
-    if source_preview is None:
+    source_preview = (
+        session.get(ManagementPreview, task.preview_id) if task.preview_id else None
+    )
+    source_mutation = (
+        task.request.get("mutation", {})
+        if task.source_kind == "DIRECT"
+        else (source_preview.mutation if source_preview else {})
+    )
+    if source_preview is None and task.source_kind != "DIRECT":
         raise DomainError("management_preview_not_found", "原管理预览不存在")
-    if (source_preview.mutation or {}).get("field") == "name":
+    if source_mutation.get("field") == "name":
         # 改名的原名可能已被其它改名占用，一键回滚无法保证不重名，需人工重新提交。
         raise DomainError(
             "management_restore_unsupported",
@@ -515,11 +608,26 @@ def prepare_restore(
     digest = hashlib.sha256(
         json.dumps(digest_payload, sort_keys=True).encode()
     ).hexdigest()
+    if source_preview is None:
+        from app.modules.reporting.selection import create_target_selection
+
+        restore_selection = create_target_selection(
+            session,
+            context=context,
+            bc_id=task.bc_id,
+            refs=[i.ref for i in old_items],
+            uses=[i.material_use for i in old_items if i.material_use],
+            filters={"source_task_id": str(task.id), "purpose": "restore"},
+            now=now,
+        )
+        selection_id = restore_selection.id
+    else:
+        selection_id = source_preview.selection_id
     preview = ManagementPreview(
         tenant_id=task.tenant_id,
         bc_id=task.bc_id,
         actor_id=context.actor_id,
-        selection_id=source_preview.selection_id,
+        selection_id=selection_id,
         digest=digest,
         mutation={"field": "restore", "source_task_id": str(task.id)},
         route=route.model_dump(mode="json"),
