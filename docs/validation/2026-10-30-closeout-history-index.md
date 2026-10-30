@@ -1,0 +1,74 @@
+# 昨日收尾历史查询：0064 索引候选验证
+
+状态：候选实现与本地验证完成，发布方案已明确；本文尚未记录生产迁移、镜像切换或上线验收结果。当前生产仍为 `48123e1cc42082f7b2911efe80fb1afb71fbdf66`，schema 为 `0062_directory_pending_index`。48123 的基础验收通过不代表持续同步问题已解决：收尾历史查询仍超时，历史积压与事实新鲜度仍需业务验收。
+
+本文承接[同步端到端恢复与持续生产验收](2026-10-30-sync-end-to-end-recovery.md)，只说明此次收尾查询与独立索引变更，不把此前健康、链接或后台并发的结果重复归给本候选。
+
+## 现场证据与根因
+
+48123 的现存五分钟控制日志出现多个 BC 的 closeout 阶段延期。2026-10-30 01:25:47 UTC（北京时间09:25:47）的一次只读一致快照探针进一步区分两条查询：
+
+- 第一条查昨日事实缺口，实际耗时 **8.016ms**，返回广告与素材两种缺口。
+- 第二条查已有收尾任务，在原 **3秒**预算内被取消，SQLSTATE 为 **57014**。原计划使用 `ix_report_sync_job_due`；该索引以状态、优先级、到期时间排列，不能先按冻结租户、BC、actor 和日期排除大批异日历史。
+
+因此本次目标是第二条历史去重查询，不扩大第一条事实扫描、阶段期限或数据库超时，也不把正常排队一概解释为数据库故障。
+
+本地无DDL的 EXISTS 原型没有解决扫描成本：240,000 条异日历史加2条同日记录时，命中、未命中及 custom/generic 计划仍访问21,819块。不能改成只检查活动状态；原语义要求 COMPLETE、FAILED、CANCELLED 等终态任务也阻止重复规划。
+
+## 候选范围与语义
+
+新增迁移 [`0064_closeout_job_scope`](../../backend/app/alembic/versions/0064_closeout_job_scope.py)，父版本精确为 `0062_directory_pending_index`，只创建一个普通部分索引：
+
+```sql
+CREATE INDEX ix_report_closeout_scope
+ON report_sync_job (tenant_id, bc_id, actor_id, end_date)
+WHERE priority = 0 AND start_date = end_date;
+```
+
+[`planner.plan_day_closeout`](../../backend/app/modules/reporting/planner.py) 的第二条查询把服务内部固定收尾优先级写成 `j.priority=0`，使 PostgreSQL generic 计划可以证明部分索引谓词。没有拼接用户输入。租户、BC、actor、冻结路由、单日日期范围、账户数组和所有任务状态的过滤保持；路由与账户JSON仍由残余条件精确过滤，不进入宽索引键。
+
+单独建索引但继续绑定优先级参数不足以稳定改善 generic 计划：本地原绑定参数仍访问21,819块，固定0后才进入新索引。本次不改变任务名称、载荷、租约、持久续点、队列、开关或平台额度；不增加Worker、不提高阶段预算，不改健康120秒完整周期、5分钟有效或事实20分钟目标。
+
+## 本地验证与限制
+
+专属成本测试捕获实际应用入口发出的SQL，再执行真实 PostgreSQL PREPARE 和 EXPLAIN ANALYZE；没有手写替代查询、强制索引或放宽失败门槛。
+
+| 验证 | 结果 |
+|---|---|
+| 8项成本：custom/generic × 命中/未命中 × 同日小/大范围 | 全部通过 |
+| 48项语义：6种状态 × 8种范围边界 | 全部通过 |
+| 13项既有closeout查询与跨日用例 | 全部通过 |
+| 上述整组 | **69 passed，29.363秒** |
+| 根代理独立整合：8成本＋索引往返＋迁移图检查 | **10 passed，35.257秒** |
+
+根代理10项中的8项成本与前组重叠，不能相加称79个不同用例。索引升级、降级、再升级只在本地测试执行；50,001行夹具中升级耗时0.126773秒、索引294,912字节，不同任务状态及业务数据保持。此规模夹具与下述普通本地测试库的catalog采样不同，不能混用索引大小；迁移图检查与候选单步发布边界分开验证。本次5个Python文件的Ruff、格式检查通过，根代理明确使用共享 `.venv` 后类型检查通过；先前误用系统环境产生的13条 unresolved import 不计为代码缺陷或最终验证失败。XML 有 record_property/xunit2 格式告警，属性已保存，未出现测试失败。
+
+240,000条异日历史加2条同日记录，修复后实际访问4块；再加入10,000条同日其它账户记录，访问600块，过滤仍局限同日范围，没有重新读取异日历史。同日大BC仍须过滤路由与账户，不是账户单点查询。本机执行时间0.026–2.252ms，仅是本地夹具结果；临时表、缓存和数据分布与生产不同，不能承诺上线后3秒内完成或整体业务达标。
+
+真实本地 PostgreSQL catalog 返回 valid/ready 均为true，定义为：
+
+```text
+CREATE INDEX ix_report_closeout_scope ON public.report_sync_job USING btree (tenant_id, bc_id, actor_id, end_date) WHERE ((priority = 0) AND (start_date = end_date))
+```
+
+该 definition、predicate、valid/ready 已与冻结迁移驱动及上线验收驱动的守卫逐项匹配。其它结构字段（表、列顺序、访问方法、非唯一、无额外包含列）仍由迁移后与上线后的真实catalog查询验证；没有把未采集字段写成已实测。四个私有驱动语法、31个纯函数正反例及候选 `0062→0064` 单步迁移图验证通过，独立静态审查无阻断。以上均不等于已执行生产迁移。
+
+## 选定的独立发布方案
+
+候选从既有 `feat/automation-rules-ux` 分支选定精确SHA，最终由 `closeout-release.json` 冻结旧/新SHA、文件白名单、迁移源码及驱动哈希。**不使用共享main的默认 migration head**：main中的0046–0061及0063合并节点不属于本次生产升级；候选必须只有0064一个head，0062到0064仅一个revision。
+
+发布前核对旧版本48123、原schema0062、独占锁、远端精确SHA、干净检出、镜像摘要及原配置。所有11角色的实际Settings与启动命令重算连接预算：9个Worker共41个prefork子进程，项目池上限153；control实际3、BG实际4。加上当时其它数据库客户端、同库无法归属客户端和10个运维预留后，必须低于普通连接上限197；旧快照不代替停服前实时复核。
+
+Kubernetes清单、并发、内存/CPU、四开关和平台配额不变。先停止Beat，再按各角色既有正常退出宽限停止其余角色；确认11个Deployment均0副本且所有应用Pod退出后，才创建候选镜像的独立迁移Job。没有额外要求历史队列全量清空，不删除消息或持久业务进度。
+
+迁移Job固定 `backoffLimit=0`、`restartPolicy=Never`；普通Alembic事务只执行 `upgrade 0064_closeout_job_scope`，DDL单语句预算5分钟、锁等待5秒，Job总期限420秒，驱动等待上限480秒。迁移前必须是0062且目标索引不存在，迁移后必须是0064及目标索引valid/ready、精确定义匹配。索引构建仍需读取历史任务表；本地快速完成不是生产建索引时长保证。
+
+迁移成功后才在零Pod状态下，以资源版本和完整旧Pod模板的CAS仅替换镜像，保留实际模板（包括与源码模板既有差异）。恢复API与Worker并确认Ready后再恢复Beat。验收包含全部角色/镜像摘要/原配置/HTTPS、schema与索引、实际control3与BG4及唯一子进程、planner加载的固定0谓词和既有健康/链接合同；只读验收exec最多4并发，不投递业务任务代替验证。
+
+按照用户2026-10-29明确偏好，本次方案不创建备份、不做恢复演练，也不核验近期备份。本文如实记录此豁免，不写成备份已验证。迁移或验收失败保留发布锁与状态供具体审核；**不自动执行DDL降级、恢复旧应用或清除队列**。本地降级测试不构成生产自动回退授权。
+
+## 未完成的生产验收
+
+本文编写时尚无本候选的构建、迁移、切换和生产验收结果。发布后的索引存在性和代码加载只属于基础验收；还须确认原closeout阶段不再持续取消、收尾游标与实际任务提交推进，并结合事实发布时间、覆盖完整性及净积压评价业务效果。不能把规划阶段 completed、任务WAITING或服务Ready当成完整业务成功。
+
+私有证据保存在忽略目录 `.runtime/sync-recovery-20261030/`：`closeout-cost/green.xml`、`green-cost-summary.json`、`review.md`，`cycle-48123e1c/closeout-cost/root-integration.xml`，以及 `closeout-catalog-local.json`、`closeout-draft-review.json`。公开提交仅保留本文归纳，不包含真实账户标识、业务原始输出、连接配置或凭据。
