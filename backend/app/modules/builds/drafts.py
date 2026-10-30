@@ -802,6 +802,13 @@ def _scenes_page(
         .limit(PAGE_SIZE)
     ).all()
     for dependency, job in finished:
+        # 同一轮准备不能把已耗尽重试的只读任务再次续起；新一轮显式准备才恢复。
+        if job.status == "FAILED":
+            dependency.status, dependency.error_code = (
+                "BLOCKED",
+                job.error_code or "scene_refresh_failed",
+            )
+            continue
         # Once a job has completed, another account's queue delay must not turn
         # preparation into an endless refresh sweep. The pure preview will report
         # expired facts; execution ensure can renew the identical scope later.

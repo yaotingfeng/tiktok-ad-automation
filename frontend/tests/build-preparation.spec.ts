@@ -2496,3 +2496,39 @@ test("手动刷新小程序先过期缓存再重新准备", async ({ page }) => 
     api.requests.some((request) => request.path.endsWith("/prepare")),
   ).toBeTruthy()
 })
+
+for (const [endpoint, label, loading] of [
+  ["minis", "小程序", "正在读取可用小程序…"],
+  ["identities", "投放身份", "正在读取可用投放身份…"],
+]) {
+  test(`目录读取失败显示原因且可以更新${label}`, async ({ page }) => {
+    await buildsBoundary(page)
+    await page.route(`**/build-drafts/${D}/${endpoint}**`, (route) =>
+      route.fulfill({
+        status: 409,
+        json: { code: "tiktok_call_deadline_exceeded" },
+      }),
+    )
+    // 小程序更新先使目录过期，再走原准备入口；不提交搭建。
+    await page.route(`**/build-drafts/${D}/minis/refresh`, (route) =>
+      route.fulfill({ json: { expired: 0 } }),
+    )
+    await page.goto(`/tenants/${tenant}/build-drafts/${D}?bc_id=${bc}`)
+    await expect(
+      page.getByText(`可用${label}读取失败，请更新后重试`, { exact: true }),
+    ).toBeVisible()
+    await expect(page.getByText(loading, { exact: true })).toHaveCount(0)
+    const prepared = page.waitForRequest(
+      (request) =>
+        request.url().endsWith(`/build-drafts/${D}/prepare`) &&
+        request.method() === "POST",
+    )
+    await page
+      .getByRole("button", { name: `更新可用${label}`, exact: true })
+      .click()
+    await prepared
+    await expect(
+      page.getByRole("button", { name: "生成搭建预览", exact: true }),
+    ).toBeDisabled()
+  })
+}
