@@ -1,6 +1,6 @@
 # 同步积压恢复（2026-11-08）
 
-状态：诊断及第一阶段内存稳定修复中，未宣布积压清空。
+状态：第一阶段Control内存修复已生产验收；第二阶段BC锁修复本地验证完成，待精确版本发布及持续净消化验收。
 
 ## 已确认生产证据
 
@@ -17,3 +17,15 @@ Control当前容器2Gi、三个prefork，累计78次重启且最近OOMKilled。�
 ## 验证与上线
 
 部署合同测试24项通过8.155秒，配置差异检查通过。源清单须持久保存；仅针对本项目Control、共享发布锁、resourceVersion/template CAS后切换，保持正常退出。无新备份或恢复演练。实际生产结果待续。
+
+## 内存配置实际生效
+
+配置源提交638b3d26；共享发布锁下仅Control模板CAS更新，保留应用67537f33。新Control pod 6865bff8f4-h4982已Ready，真实Celery stats为concurrency3/processes3/max-tasks-per-child100；命令384000KiB及资源2/4Gi与源模板一致。11角色Ready，其他Deployment spec与两项私有配置摘要保持，发布锁已释放。部署合同最终24项通过7.586秒；未推送源码。
+
+## 第二阶段：BC外键锁竞争
+
+12次生产PG活动采样发现经营business_run长事务idle in transaction约98秒，同BC目录ad_directory_run INSERT等待transactionid约38–58秒，并有tenant_bc FOR UPDATE锁队列。经营规划、核算及配置只需串行化经营写入，不修改tenant_bc主键；原FOR UPDATE也阻止目录/报表插入所需的外键KEY SHARE。
+
+五处BC锁（projection._scope_lock/advance_run、tasks.work_business外层及两处配置BC写入口）改FOR NO KEY UPDATE，保持与同类/旧FOR UPDATE互斥，允许FK KEY SHARE；BusinessRun/Scope行锁、原skip_locked、顺序和发布revision/租户围栏保持，无DDL/消息/水位修改。旧新版本互斥兼容，但旧持锁事务须正常退出后才验收阻塞消失。
+
+新增真实PG并发行为在旧码先失败，55P03的CONTEXT明确为tenant_bc外键SELECT FOR KEY SHARE；修改后57项business回归全部通过21.61秒，三源mypy通过，Ruff/格式检查通过（测试import顺序已修）。独立审查未发现Critical/Important。没有把Celery任务succeeded当业务COMPLETE，也不把字符串429匹配当HTTP限流证据。

@@ -108,7 +108,7 @@ def save_rate(
                 col(TenantBC.tenant_id) == context.tenant_id,
                 col(TenantBC.bc_id) == bc_id,
             )
-            .with_for_update()
+            .with_for_update(key_share=True)
         ).first()
     else:
         raise ValueError("未知费率类别")
@@ -178,13 +178,13 @@ def save_mapping(
     ).first()
     if drama is None:
         raise DomainError("resource_not_found", "当前租户剧目不存在")
-    # scope行串行化同范围编辑；初始化前由账户授权行与唯一键防止跨范围写入。
+    # BC非键锁串行化同范围编辑，不阻塞目录/报表子记录的外键校验。
     session.exec(
         select(TenantBC)
         .where(
             col(TenantBC.tenant_id) == context.tenant_id, col(TenantBC.bc_id) == bc_id
         )
-        .with_for_update()
+        .with_for_update(key_share=True)
     ).one()
     key = (context.tenant_id, bc_id, advertiser_id, campaign_id)
     row = session.get(BusinessMapping, key)

@@ -1,14 +1,17 @@
 from datetime import UTC, date, datetime
 from uuid import uuid4
 
-from sqlalchemy import delete
+import pytest
+from sqlalchemy import delete, text
+from sqlalchemy.exc import DBAPIError
 from sqlmodel import Session, select
 
+from app.core.context import TenantContext
 from app.core.db import engine
 from app.models import User
 from app.modules.accounts.models import TenantBC
 from app.modules.business.models import BusinessPublication, BusinessRun, BusinessScope
-from app.modules.business.projection import advance_run
+from app.modules.business.projection import _scope_lock, advance_run
 from app.modules.business.source import source_snapshot
 from app.modules.tenants.models import Tenant, TenantMembership
 
@@ -68,6 +71,34 @@ def test_real_postgres_bc_lock_and_lost_worker_recovery():
             setup.add(run)
             setup.commit()
             run_id = run.id
+        # 经营范围互斥不能阻塞同BC子记录的外键KEY SHARE校验；真实独立连接验证。
+        with Session(engine) as owner, Session(engine) as child:
+            _scope_lock(owner, TenantContext(tenant_id, actor_id, "operator"), bc_id)
+            child.connection().execute(text("SET LOCAL lock_timeout='250ms'"))
+            child.add(
+                BusinessRun(
+                    tenant_id=tenant_id,
+                    bc_id=bc_id,
+                    actor_id=actor_id,
+                    quarter=date(2026, 10, 1),
+                    end_date=date(2026, 10, 2),
+                    cursor=date(2026, 10, 1),
+                    scope_revision=1,
+                    source_signature=signature,
+                    inputs=inputs,
+                )
+            )
+            child.flush()
+            child.rollback()
+            # 放行外键后，第二个经营写事务仍必须等待同一BC围栏。
+            child.connection().execute(text("SET LOCAL lock_timeout='250ms'"))
+            with pytest.raises(DBAPIError) as caught:
+                _scope_lock(
+                    child, TenantContext(tenant_id, actor_id, "operator"), bc_id
+                )
+            assert caught.value.orig.sqlstate == "55P03"
+            child.rollback()
+            owner.rollback()
         with Session(engine) as owner, Session(engine) as competitor:
             owner.exec(
                 select(TenantBC)

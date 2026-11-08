@@ -185,7 +185,8 @@ def work_business() -> int:
                         col(BusinessRun.quarter).desc(), col(BusinessRun.created_at)
                     )
                     .limit(1)
-                    .with_for_update(of=TenantBC, skip_locked=True)
+                    # 经营互斥不锁BC主键，避免阻塞同步任务的外键校验。
+                    .with_for_update(of=TenantBC, key_share=True, skip_locked=True)
                 ).first()
                 if run_id is None:
                     break

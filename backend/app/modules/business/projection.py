@@ -69,12 +69,14 @@ def next_quarter(day: date) -> date:
 
 
 def _scope_lock(session: Session, context: TenantContext, bc_id: str) -> None:
+    # 只串行化经营写事务，不修改BC主键；NO KEY UPDATE保留互斥，
+    # 同时允许目录/报表创建时对BC外键做KEY SHARE校验。
     session.exec(
         select(TenantBC)
         .where(
             col(TenantBC.tenant_id) == context.tenant_id, col(TenantBC.bc_id) == bc_id
         )
-        .with_for_update()
+        .with_for_update(key_share=True)
     ).one()
 
 
@@ -695,7 +697,7 @@ def advance_run(session: Session, run_id: UUID, *, now: datetime | None = None) 
             col(TenantBC.tenant_id) == identity.tenant_id,
             col(TenantBC.bc_id) == identity.bc_id,
         )
-        .with_for_update(skip_locked=True)
+        .with_for_update(key_share=True, skip_locked=True)
     ).first()
     if parent is None:
         return False
