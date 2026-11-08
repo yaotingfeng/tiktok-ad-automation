@@ -6,7 +6,7 @@ import time
 from contextlib import contextmanager, nullcontext
 from datetime import UTC, datetime, timedelta
 from hashlib import sha256
-from typing import Any
+from typing import Any, cast
 from uuid import UUID, uuid4
 
 from billiard.exceptions import SoftTimeLimitExceeded
@@ -66,6 +66,8 @@ REPORT_DISPATCH_WINDOW = 36
 # 按小批摊销窗口/租户发现，批间提交释放锁；不能一次锁住整个候补窗口。
 DISPATCH_COMMIT_BATCH = 4
 DISPATCH_LARGE_COMMIT_BATCH = 8
+# 只记录扫描批量提示，不持有业务租约；空闲后自动恢复正常批量。
+DISPATCH_BATCH_HINT_TTL = 300
 # 一轮周期目录分批推进；此游标不占用账户筛选或规则相位的进度键。
 DIRECTORY_PLAN_PROGRESS = "directory_cycle_v1"
 # 批量上限配合查询预算保护数据库；不再按固定分钟额度延迟必要任务发现。
@@ -891,6 +893,49 @@ def _report_refill_after(database_engine, redis_client, job):
                 logger.exception("report direct refill failed: job=%s", job.id)
 
 
+def _dispatch_batch_hint(redis: Redis, key: str) -> tuple[str | None, int]:
+    try:
+        # redis同步/异步命令共用返回注解，此处明确使用同步客户端。
+        observed = cast(bytes | str | None, redis.get(key))
+        if observed is None:
+            return None, DISPATCH_LARGE_COMMIT_BATCH
+        value = observed.decode() if isinstance(observed, bytes) else observed
+        limit = int(value.rsplit(":", 1)[1])
+        return value, max(1, min(limit, DISPATCH_LARGE_COMMIT_BATCH))
+    except RedisError, ValueError, IndexError, UnicodeError:
+        # 提示不可用时保守提交单条，不能让辅助状态阻断业务领取。
+        logger.warning("sync dispatch batch hint unavailable")
+        return None, 1
+
+
+def _update_dispatch_batch_hint(
+    redis: Redis,
+    key: str,
+    *,
+    observed: str | None = None,
+    limit: int = 1,
+) -> None:
+    value = f"{uuid4().hex}:{limit}"
+    try:
+        if observed is None:
+            # 每次超时都换代；并行旧批即使随后成功，也不能抹去新的降批。
+            redis.set(key, value, ex=DISPATCH_BATCH_HINT_TTL)
+        else:
+            redis.eval(
+                "if redis.call('get',KEYS[1]) == ARGV[1] then "
+                "return redis.call('set',KEYS[1],ARGV[2],'EX',ARGV[3]) "
+                "else return 0 end",
+                1,
+                key,
+                observed,
+                value,
+                str(DISPATCH_BATCH_HINT_TTL),
+            )
+    except RedisError:
+        # 此处在提交/回滚之后，提示写入失败不能改变已完成事务的计数。
+        logger.warning("sync dispatch batch hint update unavailable")
+
+
 def _dispatch_pending(
     database_engine: Engine,
     now: datetime,
@@ -925,15 +970,24 @@ def _dispatch_pending(
                 # 空家族/锁冲突在下一次唤醒重试；本轮不随另一类的每个续步重复扫描。
                 if family in exhausted:
                     continue
+                hint_key = f"sync:dispatch-batch:v1:{settings.TIKTOK_APP_ID}:{family}"
+                observed, hint_limit = (
+                    _dispatch_batch_hint(redis, hint_key)
+                    if family != "balance"
+                    else (None, DISPATCH_LARGE_COMMIT_BATCH)
+                )
                 remaining = stop - time.monotonic()
                 if remaining <= 0:
                     return count
-                # 首轮报告/目录仍各至多四个，余额原批量不变；两秒回调不扩大。
-                # 后续预算充足才用八个摊薄发现/围栏往返，超时仍只撤销当前批。
-                batch_limit = (
-                    DISPATCH_LARGE_COMMIT_BATCH
-                    if round_index > 0 and remaining > 2
-                    else DISPATCH_COMMIT_BATCH
+                # 首轮至多四个、后轮预算充足才用八个；上次超时的家族先提交
+                # 单条，避免每次唤醒都撤销同一前缀。余额仍保留原批量。
+                batch_limit = min(
+                    hint_limit,
+                    (
+                        DISPATCH_LARGE_COMMIT_BATCH
+                        if round_index > 0 and remaining > 2
+                        else DISPATCH_COMMIT_BATCH
+                    ),
                 )
                 try:
                     # 每类派发独立提交：后续查询耗尽总预算不能撤销前面已领取的
@@ -966,11 +1020,25 @@ def _dispatch_pending(
                         session.flush()
                     count += dispatched
                     current += dispatched
+                    if (
+                        observed is not None
+                        and dispatched == batch_limit == hint_limit
+                        and hint_limit < DISPATCH_LARGE_COMMIT_BATCH
+                    ):
+                        # 完整批提交后逐一恢复；CAS保证旧并行成功不能覆盖新降批。
+                        _update_dispatch_batch_hint(
+                            redis,
+                            hint_key,
+                            observed=observed,
+                            limit=min(batch_limit + 1, DISPATCH_LARGE_COMMIT_BATCH),
+                        )
                     if not dispatched:
                         exhausted.add(family)
                 except (DBAPIError, QueryBudgetExceeded) as error:
                     if not _planning_budget_error(error):
                         raise
+                    if family != "balance":
+                        _update_dispatch_batch_hint(redis, hint_key)
                     logger.info(
                         "sync dispatch yielded: family=%s committed=%s", family, count
                     )
