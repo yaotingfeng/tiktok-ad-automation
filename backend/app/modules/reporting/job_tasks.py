@@ -904,12 +904,20 @@ def _dispatch_pending(
 
     count = 0
     stop = time.monotonic() + (budget_seconds if budget_seconds is not None else 4)
-    families = (
+    families: tuple[str, ...] = (
         ("report", "directory", "balance")
         if include_directories
         else ("report", "balance")
     )
     with Redis.from_url(settings.REDIS_URL) as redis:
+        # 前一家族可能用完本轮总预算；跨唤醒轮换起点，不能每次都让目录/余额
+        # 等在报表后面。共享游标仅分配扫描机会，不改变租约、额度或公平成本。
+        # 两家族的Worker补位与三家族控制唤醒独立轮换，避免互相跳过某个起点。
+        cursor_key = f"sync:dispatch-family:v1:{settings.TIKTOK_APP_ID}:{len(families)}"
+        with redis.pipeline() as cursor:
+            turn, _ = cursor.incr(cursor_key).expire(cursor_key, 86400).execute()
+        start = (turn - 1) % len(families)
+        families = families[start:] + families[:start]
         exhausted: set[str] = set()
         for round_index in range(8):
             current = 0
