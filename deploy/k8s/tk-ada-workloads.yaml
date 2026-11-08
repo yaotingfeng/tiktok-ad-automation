@@ -374,8 +374,8 @@ spec:
           imagePullPolicy: IfNotPresent
           resources:
             requests: {cpu: "250m", memory: 1Gi}
-            limits: {cpu: "1", memory: 2Gi}
-          # 本地发布四进程；逐执行围栏保留，总目录窗口40与平台额度不变。
+            limits: {cpu: "2", memory: 2Gi}
+          # 本地发布四进程共用两核，避免解码/暂存被单核限速；目录窗口40与平台额度保持。
           command: [celery, -A, "app.jobs.celery_app:celery_app", worker, -Q, ads-publish, --pool, prefork, --concurrency, "4", --loglevel=INFO, --hostname, "ads-directory@%h"]
           readinessProbe:
             exec:
