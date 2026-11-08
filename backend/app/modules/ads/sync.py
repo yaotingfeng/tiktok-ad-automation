@@ -737,13 +737,27 @@ def _stage_directory_entities(session, run, version, fallback):
     )
 
 
+def _entity_metadata_table(staged: str) -> str:
+    return "directory_metadata_" + staged.removeprefix("directory_entities_")
+
+
 def _stage_entities(session, run, version, fallback, batches):
     name = f"directory_entities_{uuid4().hex}"
     session.connection().execute(
         text(f"""
         CREATE TEMP TABLE {name} (kind text, remote_id text, observed_at timestamptz,
-            payload jsonb NOT NULL, parent_kind text, parent_remote_id text,
-            published_version integer, PRIMARY KEY(kind,remote_id)) ON COMMIT DROP
+            payload jsonb NOT NULL, PRIMARY KEY(kind,remote_id)) ON COMMIT DROP
+    """)
+    )
+    # 载荷暂存只写一次；真实胜出版本另存窄表，不能每段反复扫描和更新宽heap。
+    # 两表同一事务销毁，窄表保留完整对象身份，读取时再次限定租户/账户。
+    session.connection().execute(
+        text(f"""
+        CREATE TEMP TABLE {_entity_metadata_table(name)} (
+            tenant_id uuid NOT NULL, advertiser_id text NOT NULL,
+            kind text NOT NULL, remote_id text NOT NULL,
+            parent_kind text, parent_remote_id text, published_version integer NOT NULL,
+            PRIMARY KEY(tenant_id,advertiser_id,kind,remote_id)) ON COMMIT DROP
     """)
     )
     for batch in batches:
@@ -817,25 +831,32 @@ def _publish_staged_entities(session, run, staged):
             ),
             parameters,
         )
-        # 元数据也须按同一主键段回写。一次回写数万条会重新扫描宽账户并
-        # 耗尽30秒；每键LATERAL固定走正式PK，目标临时表同样限定本段。
+        # 使用已经读出的本段键，避免范围谓词仍被规划为每段扫描整张宽TEMP。
+        # 必须是UPSERT之后的独立SQL：READ COMMITTED下等待并发赢家提交后，
+        # 这里的新快照才能读到其真实父身份/版本，不能合并进同语句CTE。
         connection.execute(
             text(f"""
-            WITH metadata AS MATERIALIZED (
-              SELECT s.kind,s.remote_id,o.parent_kind,o.parent_remote_id,o.published_version
-              FROM {staged} s CROSS JOIN LATERAL (
-                SELECT current.parent_kind,current.parent_remote_id,current.published_version
-                FROM ad_object current
-                WHERE current.tenant_id=:tenant AND current.advertiser_id=:advertiser
-                  AND current.kind=s.kind AND current.remote_id=s.remote_id OFFSET 0
-              ) o WHERE {predicate}
-            )
-            UPDATE {staged} dest SET parent_kind=m.parent_kind,
-              parent_remote_id=m.parent_remote_id,published_version=m.published_version
-            FROM metadata m WHERE dest.kind=m.kind AND dest.remote_id=m.remote_id
-              AND {predicate.replace("s.", "dest.")}
+            INSERT INTO {_entity_metadata_table(staged)}
+                (tenant_id,advertiser_id,kind,remote_id,parent_kind,parent_remote_id,published_version)
+            SELECT :tenant,:advertiser,b.kind,b.remote_id,
+                o.parent_kind,o.parent_remote_id,o.published_version
+            FROM unnest(CAST(:kinds AS text[]),CAST(:ids AS text[])) b(kind,remote_id)
+            CROSS JOIN LATERAL (
+              SELECT current.parent_kind,current.parent_remote_id,current.published_version
+              FROM ad_object current
+              WHERE current.tenant_id=:tenant AND current.advertiser_id=:advertiser
+                AND current.kind=b.kind AND current.remote_id=b.remote_id OFFSET 0
+            ) o
+            ON CONFLICT(tenant_id,advertiser_id,kind,remote_id) DO UPDATE SET
+                parent_kind=EXCLUDED.parent_kind,parent_remote_id=EXCLUDED.parent_remote_id,
+                published_version=EXCLUDED.published_version
         """),
-            dict(parameters, tenant=run.tenant_id, advertiser=run.advertiser_id),
+            {
+                "tenant": run.tenant_id,
+                "advertiser": run.advertiser_id,
+                "kinds": [key[0] for key in keys],
+                "ids": [key[1] for key in keys],
+            },
         )
         after = (end[0], end[1])
     for obj in list(session.identity_map.values()):
@@ -888,9 +909,16 @@ def _material_owner_objects(session, run, materials, staged):
         .execute(
             text(f"""
         SELECT kind,remote_id,parent_kind,parent_remote_id,published_version
-        FROM {staged} WHERE kind=:kind AND remote_id=ANY(:ids)
+        FROM {_entity_metadata_table(staged)}
+        WHERE tenant_id=:tenant AND advertiser_id=:advertiser
+          AND kind=:kind AND remote_id=ANY(:ids)
     """),
-            {"kind": run.kind, "ids": sorted(identities)},
+            {
+                "tenant": run.tenant_id,
+                "advertiser": run.advertiser_id,
+                "kind": run.kind,
+                "ids": sorted(identities),
+            },
         )
         .mappings()
     )

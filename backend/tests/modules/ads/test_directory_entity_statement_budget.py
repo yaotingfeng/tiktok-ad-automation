@@ -164,6 +164,7 @@ def test_metadata_write_also_fits_single_statement_budget(
         for i in range(600)
     ]
     staged = sync._stage_entities(session, run, 9, datetime.now(UTC), [items])
+    metadata = sync._entity_metadata_table(staged)
     suffix = uuid4().hex
     session.execute(
         text(
@@ -172,7 +173,7 @@ def test_metadata_write_also_fits_single_statement_budget(
     )
     session.execute(
         text(
-            f"CREATE TRIGGER test_metadata_delay_{suffix} BEFORE UPDATE ON {staged} FOR EACH ROW EXECUTE FUNCTION test_metadata_delay_{suffix}()"
+            f"CREATE TRIGGER test_metadata_delay_{suffix} BEFORE INSERT OR UPDATE ON {metadata} FOR EACH ROW EXECUTE FUNCTION test_metadata_delay_{suffix}()"
         )
     )
     monkeypatch.setattr(sync, "_ENTITY_WRITE_BATCH_SIZE", 32)
@@ -186,7 +187,7 @@ def test_metadata_write_also_fits_single_statement_budget(
     assert len(published) == 600 and all(o.published_version == 9 for o in published)
     assert (
         session.execute(
-            text(f"SELECT count(*) FROM {staged} WHERE published_version=9")
+            text(f"SELECT count(*) FROM {metadata} WHERE published_version=9")
         ).scalar_one()
         == 600
     )
