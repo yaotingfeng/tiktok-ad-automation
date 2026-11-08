@@ -345,6 +345,8 @@ def _complete_chain(pages: list[AdDirectoryPage]) -> list[AdDirectoryPage]:
 
 # 每条语句限制参数量和 JSONB 负载，避免把大目录一次塞进单条 INSERT。
 _PUBLISH_BATCH_SIZE = 500
+# 单次实体SQL有界，完整目录仍在调用方的同一个原子事务里。
+_ENTITY_WRITE_BATCH_SIZE = 5000
 
 
 def _batches[T](items: list[T]):
@@ -775,23 +777,47 @@ def _stage_entities(session, run, version, fallback, batches):
 
 
 def _publish_staged_entities(session, run, staged):
-    # 全集已完成身份/类型/观察去重；一次父表集合写保留statement触发器，避免
-    # 每500条反复规划/扫描投影。宽数据始终留在PG，Python仅消费500条窄审计。
+    # 全集已完成身份/类型/观察去重；按暂存主键分段，不把宽正文搬回Python。
+    # 数万对象单条UPSERT可触及30秒SQL期限并反复整批回滚；每段5000条，
+    # 整次发布仍只用原事务/版本，后段失败会撤回前段，绝不提交半份目录。
     connection = session.connection()
     connection.execute(text(f"ANALYZE {staged}"))
-    # 长连接会缓存投影触发器对transition table的计划；大批次之后的小批次
-    # 可能继续扫描整张ad_entity_read。按本批实际行数重新规划，保留准备语句、
-    # 临时页和事务锁，避免小范围发布反复达到SQL期限而整体回滚。
-    connection.execute(text("DISCARD PLANS"))
-    connection.execute(
-        text(
-            _entity_upsert_sql(f"""
-        SELECT {",".join("incoming." + name for name in _ENTITY_COLUMNS.split(","))}
-        FROM {staged} s CROSS JOIN LATERAL
-            jsonb_populate_record(NULL::ad_object,s.payload) incoming
-    """)
+    after = None
+    while True:
+        lower = "WHERE (kind,remote_id)>(:after_kind,:after_id)" if after else ""
+        parameters: dict[str, Any] = {"limit": _ENTITY_WRITE_BATCH_SIZE}
+        if after:
+            parameters.update(after_kind=after[0], after_id=after[1])
+        keys = connection.execute(
+            text(
+                f"SELECT kind,remote_id FROM {staged} {lower} "
+                "ORDER BY kind,remote_id LIMIT :limit"
+            ),
+            parameters,
+        ).all()
+        if not keys:
+            break
+        end = keys[-1]
+        parameters.update(end_kind=end[0], end_id=end[1])
+        predicate = "(s.kind,s.remote_id)<=(:end_kind,:end_id)"
+        if after:
+            predicate += " AND (s.kind,s.remote_id)>(:after_kind,:after_id)"
+        # 每段重规划transition table，避免连接上前一个大批次计划扫描整个投影。
+        # 保留准备语句、临时页和原事务锁；不能只在整份目录的首段刷新。
+        connection.execute(text("DISCARD PLANS"))
+        connection.execute(
+            text(
+                _entity_upsert_sql(f"""
+            SELECT {",".join("incoming." + name for name in _ENTITY_COLUMNS.split(","))}
+            FROM {staged} s CROSS JOIN LATERAL
+                jsonb_populate_record(NULL::ad_object,s.payload) incoming
+            WHERE {predicate}
+            ORDER BY s.kind,s.remote_id
+        """)
+            ),
+            parameters,
         )
-    )
+        after = (end[0], end[1])
     for obj in list(session.identity_map.values()):
         if isinstance(obj, AdObject):
             identity = inspect(obj).identity
