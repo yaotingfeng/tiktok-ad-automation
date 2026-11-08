@@ -6,7 +6,7 @@ import hashlib
 import json
 import logging
 from collections.abc import Iterator
-from contextlib import ExitStack, contextmanager
+from contextlib import ExitStack, contextmanager, nullcontext
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Any, Literal, cast
@@ -248,7 +248,11 @@ def run_directory_step(
     try:
         with (
             work.dispatch_stack,
-            execution_cost_context(
+            # 末页已暂存的publisher只做本地事务，不能为零HTTP工作登记producer，
+            # 否则会被调度结算的收据行锁挡在业务领取/重试保护之外。
+            nullcontext()
+            if publish_only
+            else execution_cost_context(
                 database_engine,
                 tenant_id=context.tenant_id,
                 execution_id=run_id,
