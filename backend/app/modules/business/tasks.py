@@ -4,6 +4,7 @@ import logging
 from datetime import UTC, date, datetime, timedelta
 from time import monotonic
 
+from billiard.exceptions import SoftTimeLimitExceeded  # type: ignore[import-untyped]
 from fastapi import HTTPException
 from sqlalchemy import and_
 from sqlmodel import Session, col, select
@@ -155,11 +156,19 @@ def schedule_business() -> int:
     from app.modules.business.maintenance import cleanup_business
 
     with Session(engine) as session:
-        count = schedule_due(session, now=datetime.now(UTC))
-        session.commit()
-        cleanup_business(session, now=datetime.now(UTC))
-        session.commit()
-        return count
+        try:
+            # 单个25秒唤醒只处理一个BC，先提交其进度；不能让第二个大快照
+            # 耗尽期限后把前一个BC的调度一起撤销，后续BC按原到期顺序轮转。
+            count = schedule_due(session, now=datetime.now(UTC), limit=1)
+            session.commit()
+            cleanup_business(session, now=datetime.now(UTC))
+            session.commit()
+            return count
+        except SoftTimeLimitExceeded:
+            # 软中断可能落在驱动解码/接收结果中；直接丢弃物理连接并释放事务锁，
+            # 不能把仍有协议结果的连接放回Control池污染后续同步任务。
+            session.invalidate()
+            raise
 
 
 @celery_app.task(name="business.work", soft_time_limit=25, time_limit=30)  # type: ignore[untyped-decorator]

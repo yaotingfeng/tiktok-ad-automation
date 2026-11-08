@@ -203,8 +203,10 @@ def request_rebuild(
         if pending_end is not None:
             stop = max(stop, pending_end)
         snapshot, signature = source_snapshot(session, scope, quarter, stop, now)
-        candidate = session.exec(
-            select(BusinessRun)
+        # 已加载的发布版本含大JSON；候选检查只查身份，get复用同事务身份映射，
+        # 避免仅为验证签名再次传输并解码完整inputs/coverage。
+        candidate_id = session.exec(
+            select(col(BusinessRun.id))
             .where(
                 col(BusinessRun.tenant_id) == scope.tenant_id,
                 col(BusinessRun.bc_id) == bc_id,
@@ -223,6 +225,7 @@ def request_rebuild(
             .order_by(col(BusinessRun.created_at).desc())
             .limit(1)
         ).first()
+        candidate = session.get(BusinessRun, candidate_id) if candidate_id else None
         if candidate is None:
             # 每个季度最多一份候选；失效候选保留证据但不能再发布。
             old_candidates = session.exec(
