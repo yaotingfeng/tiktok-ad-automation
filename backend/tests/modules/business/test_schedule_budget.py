@@ -73,3 +73,69 @@ def test_scheduler_soft_timeout_discards_the_physical_connection(monkeypatch, se
             ).scalar_one()
     finally:
         isolated.dispose()
+
+
+def test_source_snapshot_reads_value_rows_without_orm_state_hydration(
+    session, business_case
+):
+    from sqlmodel import select
+
+    from app.modules.business.models import BusinessScope
+    from app.modules.business.source import source_snapshot
+    from app.modules.reporting.store_models import ReportSyncState
+
+    c = business_case
+    seed_days(session, c)
+    build(session, c)
+    scope = session.exec(
+        select(BusinessScope).where(BusinessScope.tenant_id == c.context.tenant_id)
+    ).one()
+    when = datetime(2026, 11, 4, 12, tzinfo=UTC)
+    expected, signature = source_snapshot(
+        session, scope, date(2026, 10, 1), c.day, when
+    )
+    assert len(expected["states"]) == 34
+    for instance in list(session.identity_map.values()):
+        if isinstance(instance, ReportSyncState):
+            session.expunge(instance)
+    hydrated = []
+
+    def loaded(_session, instance):
+        if isinstance(instance, ReportSyncState):
+            hydrated.append(instance)
+
+    event.listen(session, "loaded_as_persistent", loaded)
+    try:
+        actual, actual_signature = source_snapshot(
+            session, scope, date(2026, 10, 1), c.day, when
+        )
+    finally:
+        event.remove(session, "loaded_as_persistent", loaded)
+    assert actual == expected and actual_signature == signature
+    assert not hydrated, "来源签名只需字段值，不应构造全部日状态ORM对象"
+
+
+def test_cleanup_candidate_omits_large_frozen_json(session, business_case):
+    from app.modules.business.maintenance import cleanup_business
+
+    c = business_case
+    seed_days(session, c)
+    build(session, c)
+    statements = []
+    connection = session.connection()
+
+    def capture(_connection, _cursor, statement, _params, _context, _many):
+        if "FROM business_run" in statement and "FOR UPDATE" in statement:
+            statements.append(statement)
+
+    event.listen(connection, "before_cursor_execute", capture)
+    try:
+        cleanup_business(session, now=datetime(2026, 11, 10, tzinfo=UTC))
+    finally:
+        event.remove(connection, "before_cursor_execute", capture)
+    assert statements
+    assert all(
+        "business_run.inputs" not in sql.split("FROM", 1)[0]
+        and "business_run.coverage" not in sql.split("FROM", 1)[0]
+        for sql in statements
+    )

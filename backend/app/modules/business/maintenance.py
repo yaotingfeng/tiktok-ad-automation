@@ -6,6 +6,7 @@ from typing import Any, cast
 from sqlalchemy import delete, exists, func, or_, text
 from sqlalchemy import select as sa_select
 from sqlalchemy.engine import CursorResult
+from sqlalchemy.orm import QueryableAttribute, load_only
 from sqlmodel import Session, col, select
 
 from app.core.config import settings
@@ -59,6 +60,21 @@ def cleanup_business(session: Session, *, now: datetime, batch: int = 5000) -> i
         session.add(export)
     candidates = session.exec(
         select(BusinessRun)
+        # 清理只需身份、范围与状态；不解码已冻结的大inputs/coverage快照。
+        .options(
+            load_only(
+                *(
+                    cast(QueryableAttribute[Any], attribute)
+                    for attribute in (
+                        BusinessRun.id,
+                        BusinessRun.tenant_id,
+                        BusinessRun.bc_id,
+                        BusinessRun.quarter,
+                        BusinessRun.status,
+                    )
+                )
+            )
+        )
         .where(
             col(BusinessRun.status).in_(["COMPLETE", "SUPERSEDED", "FAILED"]),
             func.coalesce(col(BusinessRun.finished_at), col(BusinessRun.created_at))

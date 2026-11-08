@@ -8,6 +8,7 @@ from uuid import UUID
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import and_, tuple_
+from sqlalchemy import select as sa_select
 from sqlmodel import Session, col, select
 
 from app.core.context import TenantContext
@@ -58,8 +59,19 @@ def source_snapshot(
     )
     member_map = {m.advertiser_id: m for m in relevant}
     states = (
-        session.exec(
-            select(ReportSyncState)
+        # 一个季度可能有数十万账户日；签名只需值，避免为只读状态构造/注册
+        # 全部ORM对象，同时保留同事务自动flush及原筛选、排序、覆盖语义。
+        session.execute(
+            sa_select(
+                col(ReportSyncState.advertiser_id),
+                col(ReportSyncState.stat_date),
+                col(ReportSyncState.status),
+                col(ReportSyncState.publication_version),
+                col(ReportSyncState.updated_at),
+                col(ReportSyncState.row_count),
+                col(ReportSyncState.observed_at),
+                col(ReportSyncState.last_success_at),
+            )
             .where(
                 col(ReportSyncState.tenant_id) == scope.tenant_id,
                 col(ReportSyncState.advertiser_id).in_(readable),
