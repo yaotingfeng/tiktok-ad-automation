@@ -7,8 +7,9 @@ from datetime import datetime, timedelta
 from uuid import UUID, uuid4
 
 from redis import Redis
-from sqlalchemy import and_, case, func, or_, text, union_all, update
+from sqlalchemy import and_, case, false, func, or_, text, union_all, update
 from sqlalchemy.orm import aliased
+from sqlalchemy.sql.elements import ColumnElement
 from sqlmodel import Session, col, select
 
 from app.core.config import settings
@@ -44,6 +45,54 @@ from app.modules.sync_control.worker_pool import (
     report_background_category,
     reserve_background_turn,
 )
+
+
+def _current_link(now: datetime) -> ColumnElement[bool]:
+    return and_(
+        col(ReportSyncJob.start_date) == col(ReportSyncJob.end_date),
+        col(ReportSyncJob.end_date)
+        == func.date(func.timezone(col(SyncScope.timezone), now)),
+    )
+
+
+def _pool_ready_heads(
+    *, live_remaining: int, background_remaining: int, now: datetime
+) -> list[ColumnElement[bool]]:
+    # 所属池已满不算租户获得了机会；发现和领取共用容量条件。
+    if not live_remaining and not background_remaining:
+        return [false()]
+    predicates: list[ColumnElement[bool]] = []
+    if not live_remaining:
+        predicates.append(col(SyncSchedule.work_class) != "realtime")
+    if not background_remaining:
+        predicates.append(col(SyncSchedule.work_class) != "history")
+    if not live_remaining or not background_remaining:
+        pool_link = _current_link(now)
+        if not live_remaining:
+            pool_link = ~pool_link
+        has_pool_link = (
+            select(col(SyncExecutionScope.id))
+            .join(
+                ReportSyncJob,
+                col(ReportSyncJob.id) == col(SyncExecutionScope.report_job_id),
+            )
+            .join(SyncScope, col(SyncScope.id) == col(SyncExecutionScope.scope_id))
+            .where(
+                col(SyncExecutionScope.scope_id) == col(SyncSchedule.scope_id),
+                col(SyncExecutionScope.status) == "PENDING",
+                col(SyncExecutionScope.owner_epoch) == col(SyncScope.owner_epoch),
+                col(ReportSyncJob.owner_epoch) == col(SyncScope.owner_epoch),
+                pool_link,
+            )
+            .correlate(SyncSchedule)
+            .limit(1)
+            .offset(0)
+            .exists()
+        )
+        predicates.append(
+            or_(col(SyncSchedule.work_class) != "directory", has_pool_link)
+        )
+    return predicates
 
 
 def _lock_execution_heads(
@@ -193,6 +242,13 @@ def _dispatch_due(
         ]
         if not allow_backfill:
             due.append(col(SyncSchedule.work_class) != "history")
+        due.extend(
+            _pool_ready_heads(
+                live_remaining=live_remaining,
+                background_remaining=background_remaining,
+                now=now,
+            )
+        )
         # 有界租户批次；只读取到期头及其cursor，不排序全部执行历史。
         from app.modules.sync_control.fairness import due_tenants
 
@@ -203,14 +259,13 @@ def _dispatch_due(
         for _round in range(claim_limit - dispatched + 16):
             progressed = False
             for tenant_id in tenants:
-                if dispatched >= claim_limit:
+                if dispatched >= claim_limit or not (
+                    live_remaining or background_remaining
+                ):
                     break
                 cursor = budgets.acquire(tenant_id, endpoint)
                 if cursor is None:
                     continue
-                # 这是租户获得调度机会的轮转时间；无可执行候选也必须让回其他租户。
-                # HTTP公平成本仍只由真实领取/发送收据推进，不能给未派发任务虚扣次数。
-                cursor.last_dispatched_at = max(cursor.last_dispatched_at, now)
                 candidate_classes = [
                     work_class
                     for work_class in (
@@ -231,6 +286,11 @@ def _dispatch_due(
                         select(SyncSchedule.scope_id, SyncSchedule.work_class)
                         .where(
                             *due,
+                            *_pool_ready_heads(
+                                live_remaining=live_remaining,
+                                background_remaining=background_remaining,
+                                now=now,
+                            ),
                             SyncSchedule.tenant_id == tenant_id,
                             SyncSchedule.work_class == work_class,
                             col(SyncSchedule.scope_id).not_in(skipped_scopes),
@@ -258,6 +318,9 @@ def _dispatch_due(
                 heads.sort(key=lambda row: candidate_classes.index(row.work_class))
                 if not heads:
                     continue
+                # 同批前一租户可能刚填满某池；仅有当前可用池的候选才算获得机会。
+                # 其后的锁/配额阻塞仍轮转，避免受阻租户长期占住发现入口。
+                cursor.last_dispatched_at = max(cursor.last_dispatched_at, now)
                 retained, inflight_classes = cost_classes(
                     session, tenant_id=tenant_id, endpoint=endpoint, now=now
                 )
@@ -272,11 +335,7 @@ def _dispatch_due(
                 )
                 head = next(row for row in heads if row.work_class == work_class)
                 low_budget = []
-                current_link = and_(
-                    col(ReportSyncJob.start_date) == col(ReportSyncJob.end_date),
-                    col(ReportSyncJob.end_date)
-                    == func.date(func.timezone(col(SyncScope.timezone), now)),
-                )
+                current_link = _current_link(now)
                 if work_class == "directory":
                     if not live_remaining:
                         low_budget.append(~current_link)

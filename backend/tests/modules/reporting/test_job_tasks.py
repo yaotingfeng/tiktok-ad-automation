@@ -370,6 +370,8 @@ def test_cleanup_preserves_run_summaries_and_hourly_facts_but_expires_query_snap
         "directory_superseded": 0,
         "directory_pages": 0,
         "material_pages": 0,
+        "covered_directories": 0,
+        "covered_reports": 0,
     }
     session.expire_all()
     assert session.get(QuerySnapshot, snapshot_id) is None
@@ -1164,7 +1166,7 @@ def test_single_slot_refill_round_robins_three_tenants_across_rounds(
 
     from app.core.db import engine
     from app.modules.reporting.jobs import enqueue_job
-    from app.modules.reporting.store_models import ReportSyncJob
+    from app.modules.reporting.store_models import ReportDispatchCursor, ReportSyncJob
     from tests.modules.reporting.sync_conftest import (
         committed_sync_seed as seed_fixture,
     )
@@ -1225,6 +1227,14 @@ def test_single_slot_refill_round_robins_three_tenants_across_rounds(
             ).all()
             active = [r.id for r in running]
             seen = [r.tenant_id for r in running]
+            unserved = {seed.tenant_id for seed, _ in seeds} - set(seen)
+            cursors = session.exec(
+                select(ReportDispatchCursor).where(
+                    col(ReportDispatchCursor.tenant_id).in_(unserved)
+                )
+            ).all()
+            # 池满后的空扫描没有服务第三租户，不能把它的机会年龄抹到本轮now。
+            assert all(cursor.last_dispatched_at < now for cursor in cursors)
         for round_no in range(6):
             finished = active.pop(0)
             with factory() as session, session.begin():
