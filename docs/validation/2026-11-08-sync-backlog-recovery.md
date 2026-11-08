@@ -29,3 +29,9 @@ Control当前容器2Gi、三个prefork，累计78次重启且最近OOMKilled。�
 五处BC锁（projection._scope_lock/advance_run、tasks.work_business外层及两处配置BC写入口）改FOR NO KEY UPDATE，保持与同类/旧FOR UPDATE互斥，允许FK KEY SHARE；BusinessRun/Scope行锁、原skip_locked、顺序和发布revision/租户围栏保持，无DDL/消息/水位修改。旧新版本互斥兼容，但旧持锁事务须正常退出后才验收阻塞消失。
 
 新增真实PG并发行为在旧码先失败，55P03的CONTEXT明确为tenant_bc外键SELECT FOR KEY SHARE；修改后57项business回归全部通过21.61秒，三源mypy通过，Ruff/格式检查通过（测试import顺序已修）。独立审查未发现Critical/Important。没有把Celery任务succeeded当业务COMPLETE，也不把字符串429匹配当HTTP限流证据。
+
+## 发布前的后续回读
+
+新Control约8分钟时Ready/重启0，读取cgroup当前约0.95Gi/峰值1.43Gi，子进程PID已轮换；只证明短窗回收生效，不保证未来无OOM。目录、定向目录和backfill生产异常日志均存在tenant_bc外键KEY SHARE超时CONTEXT，支持本轮BC锁修复针对实际阻塞，不仅是合成测试推断。
+
+12:08:53只读一致快照目录10854/报告10978，合计21832；仅内存稳定后仍有积压，没有宣称整体完成。源码a6cda471尚未推送或发布，构建脚本保留公司main精确版本门禁（公司main仍67537f33）。已按AGENTS要求发出推送公司main并上线的明确授权请求；原发布器、干净候选和差异检查均已准备，没有绕过源码门禁。其他会话665d6ce0代码已独立提交但不在本轮候选a6cda471中，不混入发布。
