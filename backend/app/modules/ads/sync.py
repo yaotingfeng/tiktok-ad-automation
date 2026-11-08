@@ -779,6 +779,10 @@ def _publish_staged_entities(session, run, staged):
     # 每500条反复规划/扫描投影。宽数据始终留在PG，Python仅消费500条窄审计。
     connection = session.connection()
     connection.execute(text(f"ANALYZE {staged}"))
+    # 长连接会缓存投影触发器对transition table的计划；大批次之后的小批次
+    # 可能继续扫描整张ad_entity_read。按本批实际行数重新规划，保留准备语句、
+    # 临时页和事务锁，避免小范围发布反复达到SQL期限而整体回滚。
+    connection.execute(text("DISCARD PLANS"))
     connection.execute(
         text(
             _entity_upsert_sql(f"""
