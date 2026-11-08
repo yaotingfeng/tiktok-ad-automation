@@ -405,6 +405,21 @@ def test_recommend_accepts_actual_page_size_returned_by_platform(music_sdk):
     assert result.next_cursor is None and result.truncated is False
 
 
+@pytest.mark.parametrize("found", [True, False])
+def test_read_accepts_actual_page_size_without_inventing_missing_music(
+    music_sdk, found
+):
+    opened, replies, _, budget, _, _ = music_sdk
+    response = envelope([music_row()] if found else [])
+    response["data"]["page_info"]["page_size"] = 1
+    replies.append(response)
+    result = opened().read(advertiser_id="123", music_ids=("music-1",), budget=budget)
+    assert tuple(item.music_id for item in result.items) == (
+        ("music-1",) if found else ()
+    )
+    assert result.next_cursor is None
+
+
 def test_read_missing_ids_stay_missing_and_page_mismatch_rejected(music_sdk):
     opened, replies, _, budget, _, _ = music_sdk
     replies.append(envelope())
