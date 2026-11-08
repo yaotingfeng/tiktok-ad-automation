@@ -4,6 +4,7 @@ from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
 from sqlalchemy import DateTime, Uuid, and_, case, cast, func, literal, or_, tuple_
+from sqlalchemy.orm import aliased
 from sqlmodel import Session, col, select
 
 from app.jobs.models import PendingDispatch
@@ -180,27 +181,37 @@ def compact_sync_dispatches(
             published_only=True,
             cursor_prefix="planning:",
         )
-        wakes = session.exec(
+        # ID列表必须是物理访问边界：若把前缀/JSON条件直接放在基表查询，
+        # PG可能低估前缀选择率，改扫tenant/task_key复合索引再过滤候选ID。
+        # 先锁住有界主键页并禁止谓词下推，再按原合同筛选；锁冲突仍直接跳过。
+        page = (
             select(PendingDispatch)
+            .where(col(PendingDispatch.id).in_(planning_candidates))
+            .with_for_update(skip_locked=True)
+            .cte("planning_dispatch_page")
+            .prefix_with("MATERIALIZED")
+        )
+        planning_dispatch = aliased(PendingDispatch, page)
+        wakes = session.exec(
+            select(planning_dispatch)
             .where(
-                col(PendingDispatch.id).in_(planning_candidates),
-                col(PendingDispatch.task_name)
+                col(planning_dispatch.id).in_(planning_candidates),
+                col(planning_dispatch.task_name)
                 == literal("reporting.plan_due", literal_execute=True),
                 or_(
-                    col(PendingDispatch.task_key).startswith("sync-directory-wake:"),
-                    col(PendingDispatch.task_key).startswith(
+                    col(planning_dispatch.task_key).startswith("sync-directory-wake:"),
+                    col(planning_dispatch.task_key).startswith(
                         "directory-request-refill:"
                     ),
-                    col(PendingDispatch.task_key).startswith("sync-health:"),
+                    col(planning_dispatch.task_key).startswith("sync-health:"),
                 ),
-                col(PendingDispatch.payload) == {"dispatch_only": True},
-                col(PendingDispatch.published_at) <= cutoff,
-                col(PendingDispatch.compacted_at).is_(None),
-                col(PendingDispatch.dispatch_contract_version).is_(None),
+                col(planning_dispatch.payload) == {"dispatch_only": True},
+                col(planning_dispatch.published_at) <= cutoff,
+                col(planning_dispatch.compacted_at).is_(None),
+                col(planning_dispatch.dispatch_contract_version).is_(None),
             )
-            .order_by(col(PendingDispatch.published_at), col(PendingDispatch.id))
+            .order_by(col(planning_dispatch.published_at), col(planning_dispatch.id))
             .limit(limit - total)
-            .with_for_update(skip_locked=True)
         ).all()
         for row in wakes:
             row.payload_digest = row.payload_digest or _payload_digest(row.payload)
@@ -210,7 +221,7 @@ def compact_sync_dispatches(
     if total < limit:
         # 旧规划续点自身已带30秒绝对期限。只清精确合同且期限也已超过保留期的
         # 已发送正文；非法/无时区时间不做强制转换，不补造V2身份或删除旧摘要。
-        payload = col(PendingDispatch.payload)
+        payload = col(planning_dispatch.payload)
         raw_id, raw_deadline = (
             payload["continuation_id"].astext,
             payload["expires_at"].astext,
@@ -223,23 +234,22 @@ def compact_sync_dispatches(
             else_=None,
         )
         rows = session.exec(
-            select(PendingDispatch)
+            select(planning_dispatch)
             .where(
-                col(PendingDispatch.id).in_(planning_candidates),
-                col(PendingDispatch.task_name)
+                col(planning_dispatch.id).in_(planning_candidates),
+                col(planning_dispatch.task_name)
                 == literal("reporting.plan_continue", literal_execute=True),
-                col(PendingDispatch.task_key) == "report-planning-continue:" + raw_id,
+                col(planning_dispatch.task_key) == "report-planning-continue:" + raw_id,
                 raw_id.op("~")(_UUID),
                 raw_deadline.op("~")(r"(Z|[+-][0-9]{2}:[0-9]{2})$"),
                 payload.op("-")("continuation_id").op("-")("expires_at") == {},
                 deadline <= cutoff,
-                col(PendingDispatch.published_at) <= cutoff,
-                col(PendingDispatch.compacted_at).is_(None),
-                col(PendingDispatch.dispatch_contract_version).is_(None),
+                col(planning_dispatch.published_at) <= cutoff,
+                col(planning_dispatch.compacted_at).is_(None),
+                col(planning_dispatch.dispatch_contract_version).is_(None),
             )
-            .order_by(col(PendingDispatch.published_at), col(PendingDispatch.id))
+            .order_by(col(planning_dispatch.published_at), col(planning_dispatch.id))
             .limit(limit - total)
-            .with_for_update(skip_locked=True)
         ).all()
         for row in rows:
             row.payload_digest = row.payload_digest or _payload_digest(row.payload)
