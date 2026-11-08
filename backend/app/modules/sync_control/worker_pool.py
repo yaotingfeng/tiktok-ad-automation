@@ -88,56 +88,6 @@ def background_lease_count(session: Session, *, now: datetime) -> int:
     )
 
 
-def _due_categories(
-    session: Session, *, now: datetime, allow_backfill: bool
-) -> set[str]:
-    # 每个EXISTS只找一个可运行的规范头；未来计划、已占位及本地publisher不抢远端份额。
-    rows = (
-        session.connection()
-        .execute(
-            text("""
-    SELECT 'facts' WHERE :allow AND EXISTS (
-      SELECT 1 FROM sync_schedule h JOIN sync_scope s ON s.id=h.scope_id
-      JOIN sync_execution_scope e ON e.scope_id=s.id JOIN report_sync_job j ON j.id=e.report_job_id
-      WHERE h.active AND h.next_eligible_at<=:now AND (h.leased_until IS NULL OR h.leased_until<=:now)
-        AND h.work_class='history' AND j.kind<>'material_links' AND e.status='PENDING'
-        AND e.owner_epoch=s.owner_epoch AND j.owner_epoch=s.owner_epoch
-        AND j.status IN ('QUEUED','WAITING','RUNNING') AND j.due_at<=:now
-        AND (j.claimed_until IS NULL OR j.claimed_until<=:now))
-    UNION ALL SELECT 'links' WHERE :allow AND EXISTS (
-      SELECT 1 FROM sync_schedule h JOIN sync_scope s ON s.id=h.scope_id
-      JOIN sync_execution_scope e ON e.scope_id=s.id JOIN report_sync_job j ON j.id=e.report_job_id
-      WHERE h.active AND h.next_eligible_at<=:now AND (h.leased_until IS NULL OR h.leased_until<=:now)
-        AND j.kind='material_links' AND e.status='PENDING' AND e.owner_epoch=s.owner_epoch AND j.owner_epoch=s.owner_epoch
-        AND NOT (j.start_date=j.end_date AND j.end_date=(:now AT TIME ZONE s.timezone)::date)
-        AND j.status IN ('QUEUED','WAITING','RUNNING') AND j.due_at<=:now
-        AND (j.claimed_until IS NULL OR j.claimed_until<=:now))
-    UNION ALL SELECT 'directory' WHERE EXISTS (
-      SELECT 1 FROM sync_schedule h JOIN sync_scope s ON s.id=h.scope_id
-      JOIN sync_execution_scope e ON e.scope_id=s.id JOIN ad_directory_run r ON r.id=e.directory_run_id
-      WHERE h.active AND h.next_eligible_at<=:now AND (h.leased_until IS NULL OR h.leased_until<=:now)
-        AND e.status='PENDING' AND e.owner_epoch=s.owner_epoch AND r.owner_epoch=s.owner_epoch
-        AND r.status IN ('QUEUED','RUNNING','ADMISSION_WAIT','WAITING_REMOTE')
-        AND (r.next_attempt_at IS NULL OR r.next_attempt_at<=:now)
-        AND (r.claimed_until IS NULL OR r.claimed_until<=:now)
-        AND NOT (r.workload='live' AND (coalesce(jsonb_array_length(r.query->'ids'),0)>0
-                 OR coalesce(jsonb_array_length(r.query->'parent_ids'),0)>0))
-        AND NOT EXISTS (SELECT 1 FROM ad_directory_page p WHERE p.run_id=r.id AND p.complete IS TRUE))
-    UNION ALL SELECT 'maintenance' WHERE EXISTS (
-      SELECT 1 FROM sync_schedule h JOIN sync_scope s ON s.id=h.scope_id
-      JOIN sync_execution_scope e ON e.scope_id=s.id JOIN report_balance_run r ON r.id=e.balance_run_id
-      WHERE h.active AND h.next_eligible_at<=:now AND (h.leased_until IS NULL OR h.leased_until<=:now)
-        AND e.status='PENDING' AND e.owner_epoch=s.owner_epoch AND r.owner_epoch=s.owner_epoch
-        AND r.status='ACTIVE' AND (r.next_attempt_at IS NULL OR r.next_attempt_at<=:now)
-        AND (r.claimed_until IS NULL OR r.claimed_until<=:now))
-    """),
-            {"now": now, "allow": allow_backfill},
-        )
-        .scalars()
-    )
-    return set(rows)
-
-
 def _readiness_candidates(
     session: Session, *, category: str, cursor: str, now: datetime, limit: int
 ) -> list[tuple[UUID, UUID, str, str, bool]]:
@@ -208,7 +158,7 @@ def _ready_categories(
     now: datetime,
     allow_backfill: bool,
     budget_seconds: float = 0.03,
-    probe_limit: int = 64,
+    probe_limit: int = 16,
 ) -> set[str]:
     from app.core.config import settings
     from app.jobs.admission import admission_policy
@@ -220,9 +170,22 @@ def _ready_categories(
     stop = monotonic() + budget_seconds
     cache = {}
     zero = str(UUID(int=0))
-    due = _due_categories(session, now=now, allow_backfill=allow_backfill)
-    for candidate in sorted(due - {category}):
-        if monotonic() >= stop:
+    # 不先做全库EXISTS库存扫描：大库上仅库存就超过30ms，会跳过全部竞争类。
+    # 直接探测有界head页，并按当前调用类轮换同行起点，慢页不能固定遮住另一类。
+    peers = sorted(POOL_WEIGHTS.keys() - {category})
+    if not allow_backfill:
+        peers = [peer for peer in peers if peer not in {"facts", "links"}]
+    if not peers:
+        return eligible
+    with redis.pipeline() as sequence:
+        sequence.hincrby(cursor_key, f"__turn__:{category}:{int(allow_backfill)}", 1)
+        sequence.expire(cursor_key, 86400)
+        turn, _ = sequence.execute()
+    start = (turn - 1) % len(peers)
+    peers = peers[start:] + peers[:start]
+    for peer_index, candidate in enumerate(peers):
+        # 软预算至少给本次首类一个有界SQL机会；硬SQL/事务预算仍由调用方约束。
+        if peer_index and monotonic() >= stop:
             break
         stored = cast(bytes | str | None, redis.hget(cursor_key, candidate))
         cursor = stored.decode() if isinstance(stored, bytes) else (stored or zero)
@@ -235,17 +198,17 @@ def _ready_categories(
                 session, category=candidate, cursor=zero, now=now, limit=probe_limit
             )
         next_cursor = cursor
-        for index, (scope_id, tenant_id, endpoint, advertiser, runnable) in enumerate(
-            rows
-        ):
-            # 即使SQL恰好用完软预算也至少探测一项，保证游标不会永远停在慢页前。
-            if index and monotonic() >= stop:
-                break
-            next_cursor = str(scope_id)
+        probes = 0
+        for scope_id, tenant_id, endpoint, advertiser, runnable in rows:
             if not runnable:
-                continue  # 失效/受保护前缀也推进游标，下轮继续探测，不假报可运行。
+                # SQL已经证明的失效前缀只推进位置，不耗一次真正的额度探测机会。
+                next_cursor = str(scope_id)
+                continue
             key = (tenant_id, endpoint, advertiser)
             if key not in cache:
+                if probes and monotonic() >= stop:
+                    break  # 未探测的有效候选保留在游标之后，下轮继续。
+                probes += 1
                 cache[key] = dispatch_readiness(
                     redis,
                     policy=admission_policy(
@@ -259,6 +222,7 @@ def _ready_categories(
                     tenant_id=tenant_id,
                     advertiser_id=advertiser,
                 )
+            next_cursor = str(scope_id)
             if cache[key].capacity_hint > 0:
                 eligible.add(candidate)
                 break
