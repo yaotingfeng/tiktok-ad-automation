@@ -280,6 +280,8 @@ metadata:
     role: worker-control
 spec:
   replicas: 1
+  # 控制进程先正常退出再启动新实例，避免滚动期间加倍连接及内存峰值。
+  strategy: {type: Recreate}
   revisionHistoryLimit: 2
   selector:
     matchLabels:
@@ -302,11 +304,12 @@ spec:
           image: __APP_IMAGE__
           imagePullPolicy: IfNotPresent
           resources:
-            requests: {cpu: "250m", memory: 1Gi}
-            limits: {cpu: "1", memory: 2Gi}
-          # 控制任务多在等待数据库/平台；独立第三槽降低健康续点和实时规划的排队。
-          # 本轮仅增一个prefork（池上限+3），仍保留1核/2Gi和正常退出后零副本切换。
-          command: [celery, -A, "app.jobs.celery_app:celery_app", worker, -Q, control, --pool, prefork, --concurrency, "3", --loglevel=INFO, --hostname, "control@%h"]
+            requests: {cpu: "250m", memory: 2Gi}
+            limits: {cpu: "1", memory: 4Gi}
+          # 三个控制子进程实测单进程峰值约1Gi；原2Gi容器会被OOM终止。
+          # 预留瞬时峰值，超额子进程在完成当前任务后回收，保留租约和正常退出。
+          # 不增加执行槽或数据库连接；任务数上限也限制长期保留的Python堆。
+          command: [celery, -A, "app.jobs.celery_app:celery_app", worker, -Q, control, --pool, prefork, --concurrency, "3", --max-memory-per-child, "384000", --max-tasks-per-child, "100", --loglevel=INFO, --hostname, "control@%h"]
           readinessProbe:
             exec:
               command: [python, -c, "import socket; from app.jobs.celery_app import celery_app; r=celery_app.control.ping(destination=['control@'+socket.gethostname()], timeout=5); raise SystemExit(0 if r else 1)"]
