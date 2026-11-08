@@ -644,11 +644,11 @@ spec:
           image: __APP_IMAGE__
           imagePullPolicy: IfNotPresent
           resources:
-            requests: {cpu: "1", memory: 6Gi}
-            limits: {cpu: "3", memory: 6Gi}
-          # 后台八槽与持久化background池8/12配套；发布使用Recreate避免新旧进程叠加。
-          # 子进程超过500MiB后完成当前任务再回收；6Gi内存申请保留整个Pod上限。
-          command: [celery, -A, "app.jobs.celery_app:celery_app", worker, -Q, "ads-backfill,ads-directory", --pool, prefork, --concurrency, "8", --max-memory-per-child, "512000", --loglevel=INFO, --hostname, "ads-backfill@%h"]
+            requests: {cpu: "1", memory: 10Gi}
+            limits: {cpu: "3", memory: 10Gi}
+          # 后台十二槽与持久化background池12/12配套；调整须先排空且确认旧Pod退出。
+          # 子进程超过500MiB后完成当前任务再回收；10Gi申请保留父进程和任务峰值余量。
+          command: [celery, -A, "app.jobs.celery_app:celery_app", worker, -Q, "ads-backfill,ads-directory", --pool, prefork, --concurrency, "12", --max-memory-per-child, "512000", --loglevel=INFO, --hostname, "ads-backfill@%h"]
           readinessProbe:
             exec:
               command: [python, -c, "import socket; from app.jobs.celery_app import celery_app; r=celery_app.control.ping(destination=['ads-backfill@'+socket.gethostname()], timeout=5); raise SystemExit(0 if r else 1)"]

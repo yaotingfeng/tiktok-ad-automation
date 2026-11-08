@@ -131,7 +131,7 @@ def test_shared_pool_due_probes_skip_large_terminal_execution_history(
     from sqlalchemy import event
 
     from app.modules.sync_control.worker_pool import (
-        _due_categories,
+        _readiness_candidates,
         background_lease_count,
     )
 
@@ -176,12 +176,23 @@ def test_shared_pool_due_probes_skip_large_terminal_execution_history(
     connection, captured = session.connection(), []
 
     def capture(_connection, _cursor, statement, parameters, _context, _many):
-        if "SELECT 'facts'" in statement or "WITH leased_heads" in statement:
+        if (
+            "WITH candidates AS MATERIALIZED" in statement
+            or "WITH leased_heads" in statement
+        ):
             captured.append((statement, parameters))
 
     event.listen(connection, "before_cursor_execute", capture)
     try:
-        assert _due_categories(session, now=now, allow_backfill=True) == {"facts"}
+        candidates = _readiness_candidates(
+            session,
+            category="facts",
+            cursor="00000000-0000-0000-0000-000000000000",
+            now=now,
+            limit=16,
+        )
+        assert len(candidates) == 1 and candidates[0][0] == child.scope_id
+        assert candidates[0][-1] is True
         assert background_lease_count(session, now=now) == 0
     finally:
         event.remove(connection, "before_cursor_execute", capture)
