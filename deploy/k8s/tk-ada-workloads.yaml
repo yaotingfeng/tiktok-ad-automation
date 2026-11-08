@@ -367,7 +367,8 @@ spec:
       imagePullSecrets:
         - name: tiktok-ad-automation-registry
       automountServiceAccountToken: false
-      terminationGracePeriodSeconds: 240
+      # 大目录本地发布至多600秒，覆盖Celery690秒硬限及正常退出余量。
+      terminationGracePeriodSeconds: 750
       containers:
         - name: worker-ads-directory
           image: __APP_IMAGE__

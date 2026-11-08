@@ -9,6 +9,7 @@ from collections.abc import Iterator
 from contextlib import ExitStack, contextmanager, nullcontext
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
+from time import monotonic
 from typing import Any, Literal, cast
 from uuid import UUID, uuid4
 
@@ -62,6 +63,11 @@ _LOCK_TIMEOUT = "20s"
 _TRANSACTION_TIMEOUT = "45s"
 _PUBLISH_TRANSACTION_TIMEOUT = "180s"
 _MATERIAL_PUBLISH_STATEMENT_TIMEOUT_MS = 90_000
+# 已完整暂存的大目录按独立本地预算落库；不延长任何HTTP或普通目录期限。
+_LARGE_PUBLISH_ROWS = 5000
+_LARGE_PUBLISH_TRANSACTION_SECONDS = 600
+_LARGE_MATERIAL_PUBLISH_STATEMENT_TIMEOUT_MS = 300_000
+_LARGE_PUBLISH_LEASE_SECONDS = 690
 logger = logging.getLogger(__name__)
 
 
@@ -84,9 +90,9 @@ def _directory_session(
                 text(f"SET LOCAL lock_timeout = '{_LOCK_TIMEOUT}'")
             )
             session.connection().execute(text("SET LOCAL statement_timeout = '30s'"))
-            # 仅单槽本地发布给大目录累计IO独立预算；读取/实时定向仍是45秒。
-            # 180秒从领取前开始，早于195秒软限及210秒发布租约；等锁仍20秒。
-            # 仅canonical素材写可用90秒，其他单语句仍30秒，不重开事务期限。
+            # 普通本地发布先用180秒；完整暂存载荷超过5000后才按入口绝对
+            # 期限扩展到至多600秒。读取仍45秒；普通素材90秒、大目录300秒，
+            # 其它SQL仍30秒，等锁20秒，Celery660/690及大目录租约690兜底。
             timeout = (
                 _PUBLISH_TRANSACTION_TIMEOUT if publish_only else _TRANSACTION_TIMEOUT
             )
@@ -151,6 +157,8 @@ class _CommittedDirectoryWork:
         None
     )
     material_fingerprint: str | None = None
+    publication_started: float = field(default_factory=monotonic)
+    large_publication: bool = False
 
 
 def _material_fingerprint(run: AdDirectoryRun) -> str:
@@ -321,6 +329,22 @@ def run_directory_step(
         raise
     finally:
         _deliver_committed_work(database_engine, work)
+
+
+def _set_large_publication_timeout(session: Session, *, started: float) -> None:
+    remaining = int(
+        (_LARGE_PUBLISH_TRANSACTION_SECONDS - (monotonic() - started)) * 1000
+    )
+    if remaining <= 0:
+        raise SoftTimeLimitExceeded()
+    session.connection().execute(
+        # PG18非零改非零不会重启活动timer；先停再按入口剩余时间启用。
+        # MATERIALIZED确保同一SQL内按顺序执行，不重新获得完整600秒。
+        text("""WITH disabled AS MATERIALIZED (
+            SELECT set_config('transaction_timeout','0',true)
+        ) SELECT set_config('transaction_timeout',:timeout,true) FROM disabled"""),
+        {"timeout": f"{remaining}ms"},
+    )
 
 
 def _execute_directory_step(
@@ -540,6 +564,26 @@ def _run_directory_step(
             )
             .limit(1)
         ).first()
+        if publish_only and terminal_staged is not None:
+            # 只计实际发布载荷；不把MATERIAL_CONTEXT冻结桥当作额外对象。
+            # 此查询仍在原30秒语句/180秒事务中，失败走原子发布的既有重试。
+            rows = int(
+                session.connection()
+                .execute(
+                    text("""SELECT COALESCE(sum(jsonb_array_length(p.items)
+                    +jsonb_array_length(p.materials)),0)
+                    FROM ad_directory_page p WHERE p.run_id=:run
+                      AND p.coverage<>'MATERIAL_CONTEXT'"""),
+                    {"run": run.id},
+                )
+                .scalar_one()
+            )
+            work.large_publication = rows > _LARGE_PUBLISH_ROWS
+            if work.large_publication:
+                # 扣除入场和规模检查已花时间；不能在本事务中重新获得完整600秒。
+                _set_large_publication_timeout(
+                    session, started=work.publication_started
+                )
         if not publish_only and terminal_staged is not None:
             # 末页已提交后，旧读取消息不能越过canonical发布领取。
             return "WAIT"
@@ -631,9 +675,14 @@ def _run_directory_step(
             )
         if not continuing:
             run.claim_token = uuid4()
-            run.claimed_until = now + timedelta(
-                seconds=_PUBLISH_LEASE_SECONDS if publish_only else _LEASE_SECONDS
-            )
+            lease_seconds = _LEASE_SECONDS
+            if publish_only:
+                lease_seconds = (
+                    _LARGE_PUBLISH_LEASE_SECONDS
+                    if work.large_publication
+                    else _PUBLISH_LEASE_SECONDS
+                )
+            run.claimed_until = now + timedelta(seconds=lease_seconds)
         claim_token = run.claim_token
         assert claim_token is not None
         route = _route(run.frozen_route)
@@ -680,7 +729,13 @@ def _run_directory_step(
                     claim_generation=claim_generation,
                     # 仅本地publisher的素材整批写使用独立单语句预算；读取任务不放宽。
                     material_statement_timeout_ms=(
-                        _MATERIAL_PUBLISH_STATEMENT_TIMEOUT_MS if publish_only else None
+                        (
+                            _LARGE_MATERIAL_PUBLISH_STATEMENT_TIMEOUT_MS
+                            if work.large_publication
+                            else _MATERIAL_PUBLISH_STATEMENT_TIMEOUT_MS
+                        )
+                        if publish_only
+                        else None
                     ),
                 )
             except DomainError as error:
@@ -957,8 +1012,8 @@ def sync_step(
 
 @celery_app.task(  # type: ignore[untyped-decorator]
     name=PUBLISH_TASK_NAME,
-    time_limit=210,
-    soft_time_limit=195,
+    time_limit=690,
+    soft_time_limit=660,
     acks_late=True,
     reject_on_worker_lost=True,
 )

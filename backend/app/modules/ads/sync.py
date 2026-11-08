@@ -817,21 +817,32 @@ def _publish_staged_entities(session, run, staged):
             ),
             parameters,
         )
+        # 元数据也须按同一主键段回写。一次回写数万条会重新扫描宽账户并
+        # 耗尽30秒；每键LATERAL固定走正式PK，目标临时表同样限定本段。
+        connection.execute(
+            text(f"""
+            WITH metadata AS MATERIALIZED (
+              SELECT s.kind,s.remote_id,o.parent_kind,o.parent_remote_id,o.published_version
+              FROM {staged} s CROSS JOIN LATERAL (
+                SELECT current.parent_kind,current.parent_remote_id,current.published_version
+                FROM ad_object current
+                WHERE current.tenant_id=:tenant AND current.advertiser_id=:advertiser
+                  AND current.kind=s.kind AND current.remote_id=s.remote_id OFFSET 0
+              ) o WHERE {predicate}
+            )
+            UPDATE {staged} dest SET parent_kind=m.parent_kind,
+              parent_remote_id=m.parent_remote_id,published_version=m.published_version
+            FROM metadata m WHERE dest.kind=m.kind AND dest.remote_id=m.remote_id
+              AND {predicate.replace("s.", "dest.")}
+        """),
+            dict(parameters, tenant=run.tenant_id, advertiser=run.advertiser_id),
+        )
         after = (end[0], end[1])
     for obj in list(session.identity_map.values()):
         if isinstance(obj, AdObject):
             identity = inspect(obj).identity
             if identity and identity[:2] == (run.tenant_id, run.advertiser_id):
                 session.expire(obj)
-    connection.execute(
-        text(f"""
-        UPDATE {staged} s SET parent_kind=o.parent_kind,parent_remote_id=o.parent_remote_id,
-            published_version=o.published_version FROM ad_object o
-        WHERE o.tenant_id=:tenant AND o.advertiser_id=:advertiser
-            AND o.kind=s.kind AND o.remote_id=s.remote_id
-    """),
-        {"tenant": run.tenant_id, "advertiser": run.advertiser_id},
-    )
     result = session.exec(
         select(AdObject)
         .where(
