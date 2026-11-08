@@ -352,6 +352,7 @@ metadata:
 spec:
   replicas: 1
   revisionHistoryLimit: 2
+  strategy: {type: Recreate}
   selector:
     matchLabels:
       app: tiktok-ad-automation
@@ -374,10 +375,10 @@ spec:
           image: __APP_IMAGE__
           imagePullPolicy: IfNotPresent
           resources:
-            requests: {cpu: "250m", memory: 1Gi}
-            limits: {cpu: "2", memory: 2Gi}
-          # 本地发布四进程共用两核，避免解码/暂存被单核限速；目录窗口40与平台额度保持。
-          command: [celery, -A, "app.jobs.celery_app:celery_app", worker, -Q, ads-publish, --pool, prefork, --concurrency, "4", --loglevel=INFO, --hostname, "ads-directory@%h"]
+            requests: {cpu: "1", memory: 2Gi}
+            limits: {cpu: "4", memory: 4Gi}
+          # 本地发布独立八进程；正常退出避免新旧发布池叠加，目录窗口40与平台额度保持。
+          command: [celery, -A, "app.jobs.celery_app:celery_app", worker, -Q, ads-publish, --pool, prefork, --concurrency, "8", --loglevel=INFO, --hostname, "ads-directory@%h"]
           readinessProbe:
             exec:
               command: [python, -c, "import socket; from app.jobs.celery_app import celery_app; r=celery_app.control.ping(destination=['ads-directory@'+socket.gethostname()], timeout=5); raise SystemExit(0 if r else 1)"]
