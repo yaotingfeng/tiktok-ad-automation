@@ -2,6 +2,7 @@
 
 import json
 import logging
+import re
 from collections.abc import Callable
 from datetime import datetime
 from typing import Any
@@ -50,6 +51,82 @@ from app.modules.builds.request_compiler import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _rejection_hints(raw: object) -> dict[str, list[str]]:
+    """仅输出预定义标签；不保存平台原文、账户值、令牌或签名链接。"""
+    message = raw.get("message") if isinstance(raw, dict) else None
+    message = message[:4096].lower() if isinstance(message, str) else ""
+    # 创建接口在 SDK 反序列化时也会抛错；错误码本身不足以定位拒绝字段。
+    parameters = (
+        "advertiser_id",
+        "campaign_id",
+        "adgroup_id",
+        "schedule_start_time",
+        "schedule_end_time",
+        "schedule_type",
+        "operation_status",
+        "minis_id",
+        "promotion_type",
+        "optimization_goal",
+        "optimization_event",
+        "bid_type",
+        "deep_bid_type",
+        "roas_bid",
+        "budget",
+        "budget_mode",
+        "targeting_spec",
+        "location_ids",
+        "placements",
+        "placement_type",
+        "identity_id",
+        "identity_type",
+        "image_id",
+        "image_ids",
+        "music_id",
+        "ad_format",
+        "creative_list",
+        "creative_info",
+        "creative_material_mode",
+    )
+    reasons = (
+        "current time",
+        "later than",
+        "earlier than",
+        "past",
+        "future",
+        "required",
+        "invalid",
+        "not supported",
+        "not allowed",
+        "not exist",
+        "permission",
+        "minimum",
+        "maximum",
+        "start time",
+        "end time",
+        "carousel",
+        "image",
+        "video",
+        "disabled",
+        "enabled",
+    )
+    return {
+        "parameters": [
+            word for word in parameters if re.search(rf"\b{word}\b", message)
+        ],
+        "reasons": [word for word in reasons if re.search(rf"\b{word}\b", message)],
+    }
+
+
+def _log_rejection(raw: object, *, kind: str) -> None:
+    if isinstance(raw, dict) and type(raw.get("code")) is int and raw["code"] != 0:
+        logger.error(
+            "official TikTok create rejected: kind=%s code=%s hints=%s",
+            kind,
+            raw["code"],
+            _rejection_hints(raw),
+        )
 
 
 class ApiBuildOperations:
@@ -149,16 +226,7 @@ class ApiBuildOperations:
                         _request_timeout=(min(5.0, budget), min(30.0, budget)),
                     ).get()
                 raw = json.loads(client.last_response.data)
-                if (
-                    isinstance(raw, dict)
-                    and type(raw.get("code")) is int
-                    and raw["code"] != 0
-                ):
-                    logger.error(
-                        "official TikTok create rejected: kind=%s code=%s",
-                        intent.kind,
-                        raw["code"],
-                    )
+                _log_rejection(raw, kind=intent.kind)
                 response = sdk_creation_envelope(raw, kind=intent.kind)
                 return created_result(kind=intent.kind, response=response)
         except RemoteCallError as error:
@@ -197,6 +265,7 @@ class ApiBuildOperations:
             if type(raw) is dict and (
                 type(raw.get("code")) is not int or raw["code"] != 0
             ):
+                _log_rejection(raw, kind=intent.kind)
                 try:
                     sdk_creation_envelope(raw, kind=intent.kind)
                 except RemoteCallError as rejected:

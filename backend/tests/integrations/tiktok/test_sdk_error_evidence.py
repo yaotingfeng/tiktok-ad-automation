@@ -201,3 +201,51 @@ def test_sdk_adgroup_40002_is_a_bounded_no_effect_rejection(sdk_write):
         request_id="provider-request", remote_code=40002
     )
     assert not calls and not replies
+
+
+def test_build_rejection_hints_only_emit_defined_parameter_and_reason_labels():
+    from app.integrations.tiktok.adapters.sdk_builds import _rejection_hints
+
+    assert _rejection_hints(
+        {
+            "message": "schedule_start_time must be later than current time. "
+            + PRIVATE_MESSAGE
+        }
+    ) == {
+        "parameters": ["schedule_start_time"],
+        "reasons": ["current time", "later than"],
+    }
+    assert _rejection_hints({"message": PRIVATE_MESSAGE}) == {
+        "parameters": [],
+        "reasons": [],
+    }
+    assert _rejection_hints({"message": {"schedule_start_time": "private-token"}}) == {
+        "parameters": [],
+        "reasons": [],
+    }
+
+
+def test_sdk_create_logs_safe_parameter_hints_when_sdk_raises(
+    sdk_write, caplog, monkeypatch
+):
+    from app.integrations.tiktok.adapters.sdk_builds import logger
+
+    # Alembic 的测试初始化会关闭已有 logger；这里核验真实日志路径。
+    monkeypatch.setattr(logger, "disabled", False)
+    operation, invoke, replies, _ = sdk_write
+    if operation != "ad":
+        pytest.skip("build adapter only")
+    replies.append(
+        {
+            "code": 40002,
+            "request_id": "provider-request",
+            "message": "schedule_start_time must be later than current time "
+            + PRIVATE_MESSAGE,
+        }
+    )
+    with pytest.raises(RemoteCallError):
+        invoke()
+    assert "schedule_start_time" in caplog.text
+    assert "current time" in caplog.text
+    assert "private-token" not in caplog.text
+    assert "signature=private" not in caplog.text
