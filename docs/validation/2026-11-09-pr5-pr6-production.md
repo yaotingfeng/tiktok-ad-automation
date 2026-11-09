@@ -1,6 +1,6 @@
 # PR #5、#6 合并与生产发布
 
-状态：合并候选验证通过，待推送与生产发布。
+状态：PR #5、#6 已合并、双远端推送并完成生产发布验收。
 
 范围：从双远端 main 的 578f5d62 准备独立干净副本，依次以合并提交纳入 PR #5 平台错误展示与 PR #6 同草稿续建。保留主工作区未推送的 SDK/音乐修改及未跟踪构建文件，不纳入本次发布。冲突保留两份进度记录；错误标识沿用公共 contracts.common，续建无副作用证明共用 NO_EFFECT_REJECTIONS。
 
@@ -11,3 +11,13 @@
 验证结果与实际发布 SHA、镜像摘要、耗时及运行状态在完成后补充。所有私有状态保存在 .runtime/pr56-production-20261109/，不入 Git。
 
 本轮组合验证：独立本地 PostgreSQL18/Redis，238 项后端通过（140.82秒），包含两 PR 的核心回归、提交、状态、回执和多连接续建锁测试；15 项相关浏览器用例通过；TypeScript/正式版及体验版构建、24个变更Python文件Ruff及格式、后端源文件ty和8个前端文件Biome通过。未运行真实TikTok写操作。
+
+## 实际生产验收
+
+应用 `7c8de674a813bfa7e8b87fd67107764f5552aa23` 已发布新加坡 ACK/test，入口 https://tkada.shortclipflix.com；镜像摘要 `sha256:cc946d39f122fe77cb17229a964d3344550f17c0dff8cffcbd1157b3e7a9621b`。GitHub #5、#6 均已 closed/merged；GitHub 与公司 main 均包含原始 PR 提交及两个合并提交。
+
+在前一批 578f5d62 全角色完成、解锁且恢复 CI 后取得本批独占锁。停止 API/Beat、取消全部旧 Worker 消费，连续两次 active/reserved/scheduled/active_queues 为空，正常零 Pod 后比较并交换仅更新镜像；API/九 Worker 同版本启动、唯一 Beat 最后。无迁移，schema 仍 0101_business_dashboard；未备份、未恢复演练。原完整部署 spec、实际配置/注册摘要、四个 true 开关及每角色数据库池均核验保持，后台实际/typed12、prefetch12，publisher8/CPU4/750秒正常退出宽限保持。
+
+11角色Ready、9Worker真实ping、唯一Beat、精确镜像摘要、HTTPS健康200通过；线上预览/任务DTO续建字段加载通过。公网首页及两个搭建页面相关静态资源与运行镜像逐文件SHA256一致。本地构建首页与容器产物不同，最终公网一致性依据为精确运行镜像内实际静态文件，未将本地构建替代生产核验。
+
+发布锁已释放；本轮文档记录推送后恢复本项目 Jenkins 原状态。没有发送 TikTok 广告创建/修改或替用户重提原草稿。错误详情与续建功能已部署；真实客户任务仍由用户核对新预览后提交，平台原参数拒绝不会因此自动修正。续建任务受理后仍禁止直接回退不识别续建合同的旧 Worker。
