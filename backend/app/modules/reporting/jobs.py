@@ -78,6 +78,12 @@ _CONTRACT_ERRORS = frozenset(
         "report_row_invalid",
         "report_value_invalid",
         "report_operation_invalid",
+        "operation_log_format_invalid",
+        "operation_log_response_invalid",
+        "operation_log_scope_invalid",
+        "operation_log_phase_invalid",
+        "operation_log_create_exhausted",
+        "operation_log_range_invalid",
         "route_binding_changed",
         "route_authorization_changed",
         "route_contract_changed",
@@ -688,6 +694,10 @@ def _run(
     advertisers = tuple(job.advertiser_ids)
     accounts = _accounts(session, job.tenant_id, advertisers)
     s, e, t, j = job.start_date, job.end_date, job.tenant_id, job.id
+    if job.kind == "operation_log":
+        from app.modules.operation_logs.worker import run_step
+
+        return run_step(session, job, reader, accounts, external=reader.reader.external)
     if job.kind in BASIC_KINDS:
         reader = CheckpointReader(
             session, job, reader, scope=_material_scope(job), row_limit=TRUNCATION_ROWS
@@ -1035,7 +1045,8 @@ def execute_job(
                     result = "WAITING"
                 elif more:
                     job.status, job.error_code = "WAITING", None
-                    job.due_at = datetime.now(UTC)
+                    if job.kind != "operation_log":
+                        job.due_at = datetime.now(UTC)
                     result = "WAITING"
                 else:
                     job.status, job.error_code, job.finished_at = (
@@ -1044,7 +1055,10 @@ def execute_job(
                         datetime.now(UTC),
                     )
                     result = "COMPLETE"
-                    if job.kind == "material_links" or job.campaign_ids:
+                    if (
+                        job.kind in {"material_links", "operation_log"}
+                        or job.campaign_ids
+                    ):
                         from app.modules.sync_control.contracts import ExecutionFence
                         from app.modules.sync_control.requirements import (
                             satisfy_requirements,
@@ -1173,6 +1187,31 @@ def _handle_error(session, job: ReportSyncJob, error: DomainError) -> str:
             }
         }
         return "WAITING"
+    if error.code == "operation_log_export_too_large" and job.kind == "operation_log":
+        if job.start_date < job.end_date:
+            job.status, job.finished_at = "COMPLETE", datetime.now(UTC)
+            session.flush()
+            common = {
+                "tenant_id": job.tenant_id,
+                "bc_id": job.bc_id,
+                "kind": job.kind,
+                "tier": "history",
+                "advertiser_ids": job.advertiser_ids,
+                "frozen_route": job.frozen_route,
+                "actor_id": job.actor_id,
+                "requested_at": request_time(job),
+                "execution_window_days": max(
+                    1, ((job.end_date - job.start_date).days + 2) // 2
+                ),
+            }
+            middle = job.start_date + (job.end_date - job.start_date) // 2
+            enqueue_job(session, **common, start=job.start_date, end=middle)
+            enqueue_job(
+                session, **common, start=middle + timedelta(days=1), end=job.end_date
+            )
+            return "SPLIT"
+        job.status, job.finished_at = "FAILED", datetime.now(UTC)
+        return "FAILED"
     if error.code == "report_truncation_risk":
         if _split(session, job):
             job.status, job.finished_at = "COMPLETE", datetime.now(UTC)
@@ -1197,6 +1236,8 @@ def _handle_error(session, job: ReportSyncJob, error: DomainError) -> str:
         job.due_at = now + timedelta(seconds=delay)
         return "WAITING"
     job.status, job.finished_at = "FAILED", datetime.now(UTC)
+    if job.kind == "operation_log":
+        return "FAILED"  # 日志失败独立留在任务上，不能伪造报表覆盖水位。
     publish.mark_failed(
         session,
         tenant_id=job.tenant_id,

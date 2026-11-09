@@ -209,7 +209,7 @@ def _dispatch_due(
     endpoints: Sequence[str] = tuple(
         dict.fromkeys(
             report_endpoint(kind)
-            for kind in ("ad_day", "material_day", "material_links")
+            for kind in ("ad_day", "material_day", "material_links", "operation_log")
         )
     )
     # Worker槽不足时跨物理接口轮转；某接口提额不能永远占满全部槽。

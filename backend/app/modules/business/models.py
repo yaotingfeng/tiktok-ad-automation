@@ -184,6 +184,7 @@ class BusinessEvidence(SQLModel, table=True):
     bid: Decimal | None = Field(default=None, sa_type=Numeric)
     eligible: bool | None = None
     source: str = Field(max_length=1000)
+    evidence_revision: str | None = Field(default=None, max_length=64)
     actor_id: UUID = Field(foreign_key="user.id")
     updated_at: datetime = Field(default_factory=utcnow, sa_type=AwareDateTime)
 

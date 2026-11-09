@@ -214,19 +214,26 @@ def query_dashboard(
         else []
     )
     issues.update(all_issues)
+    if "COMPENSATION_EVIDENCE_MISSING" in issues:
+        issues.add("COMPENSATION_PARTIAL")
 
     def values(raw: Any) -> dict[str, Decimal | None]:
         result = {k: raw[k] for k in AMOUNT_KEYS}
         if restricted:
             result.update(dict.fromkeys(SUBSIDY_KEYS))
-        return _ratios(result, filters.scenario)
+        calculated = _ratios(result, filters.scenario)
+        # 条件赔付可展示小计，但不能把缺失部分当0加入完整含预计情景。
+        if filters.scenario != "base" and "COMPENSATION_PARTIAL" in issues:
+            calculated.update(scenario_revenue=None, scenario_roas=None)
+        return calculated
 
     totals = dict(raw_totals)
     if not total and not missing:
         totals = dict.fromkeys(AMOUNT_KEYS, ZERO)
     if missing or plan.policy_unknown:
         # 缺日报会漏掉未知赔付对象/跨档，不能把已知部分当作完整预估。
-        totals.update(dict.fromkeys(("compensation", *SUBSIDY_KEYS)))
+        totals.update(dict.fromkeys(SUBSIDY_KEYS))
+        issues.add("COMPENSATION_PARTIAL")
     currencies = (
         session.exec(
             select(col(B.currency))

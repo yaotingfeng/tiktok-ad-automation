@@ -144,6 +144,9 @@ _OPERATION_CAPABILITIES: dict[str, Capability] = {
     ),
     # 报表端点按独立操作登记，确保每个同步页、异步任务状态和下载请求
     # 都重新通过同一冻结路由与共享额度门禁。
+    "changelog.create": "read",
+    "changelog.check": "read",
+    "changelog.download": "read",
     "reports.integrated": "read",
     "reports.bc": "read",
     "reports.material_breakdown": "read",
@@ -514,7 +517,9 @@ def open_tiktok_gateway(
         if deadline != task_deadline:
             raise DomainError("read_deadline_invalid", "调用期限与任务不一致")
         # 普通目录/素材子页与报表同样发送真实HTTP，不能因缺埋点误归为纯本地耗时。
-        diagnostic = operation.startswith(("materials.", "build.", "ads.", "reports."))
+        diagnostic = operation.startswith(
+            ("materials.", "build.", "ads.", "reports.", "changelog.")
+        )
         fields = {
             "tenant_id": str(context.tenant_id),
             "bc_id": route.bc_id,
@@ -761,6 +766,9 @@ def _sdk_report_send(client, request_scope, deadline, *, request_check=None):
 
     def send(operation, advertiser_id, arguments):
         if operation not in {
+            "changelog.create",
+            "changelog.check",
+            "changelog.download",
             "reports.integrated",
             "reports.bc",
             "reports.material_breakdown",
@@ -778,6 +786,24 @@ def _sdk_report_send(client, request_scope, deadline, *, request_check=None):
             # 仅在准入与冻结授权核验通过后计数；平台返回限流仍是一次已发送请求。
             sender.request_count += 1
             args = dict(arguments)
+            if operation.startswith("changelog."):
+                # 锁定SDK尚无生成方法，使用同一官方ApiClient及同一请求准入。
+                action = operation.split(".")[1]
+                method = "POST" if action == "create" else "GET"
+                return client.call_api(
+                    f"/open_api/v1.3/changelog/task/{action}/",
+                    method,
+                    query_params=list(args.items()) if method == "GET" else [],
+                    header_params={
+                        "Access-Token": token,
+                        "Content-Type": "application/json",
+                    },
+                    body=args if method == "POST" else None,
+                    response_type="InlineResponse200",
+                    auth_settings=[],
+                    _return_http_data_only=True,
+                    _request_timeout=timeout,
+                )
             if operation == "materials.get_videos":
                 return sdk.FileApi(client).ad_video_info(
                     args.pop("advertiser_id"),

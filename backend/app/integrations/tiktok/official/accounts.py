@@ -52,6 +52,11 @@ def _strict_sdk_envelope(
     def deserialize(response: Any, response_type: Any) -> Any:
         try:
             if len(response.data) > 8 * 1024 * 1024:
+                if operation == "changelog.download":
+                    # 日志也服从SDK有界回包；超限交持久需求拆分，而非重试同一大窗口。
+                    raise DomainError(
+                        "operation_log_export_too_large", "日志导出超过SDK回包上限"
+                    )
                 raise ValueError("oversized provider response")
             raw = json.loads(response.data)
         except ValueError, TypeError, AttributeError, RecursionError:

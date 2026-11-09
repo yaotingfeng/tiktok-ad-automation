@@ -13,6 +13,9 @@ LEVELS = {
 
 # 多种业务入口可能调用同一物理接口，必须复用相同额度桶。
 SDK_ENDPOINTS = {
+    "changelog.create": "POST /open_api/v1.3/changelog/task/create/",
+    "changelog.check": "GET /open_api/v1.3/changelog/task/check/",
+    "changelog.download": "GET /open_api/v1.3/changelog/task/download/",
     "/open_api/v1.3/oauth2/access_token/": "POST /open_api/v1.3/oauth2/access_token/",
     "music.get": "GET /open_api/v1.3/file/music/get/",
     "materials.get_videos": "GET /open_api/v1.3/file/video/ad/info/",

@@ -8,6 +8,7 @@ from datetime import date
 from typing import Any
 
 from app.core.errors import DomainError
+from app.integrations.tiktok.adapters.sdk_change_log_reader import SdkChangeLogReader
 from app.integrations.tiktok.contracts.report_reader import (
     RawReportPage,
     page_from_data,
@@ -39,7 +40,9 @@ def _check_accounts(ids: tuple[str, ...]) -> None:
         raise DomainError("report_query_invalid", "一次报表请求须带 1–5 个不同账户")
 
 
-class SdkReportReader:
+
+
+class SdkReportReader(SdkChangeLogReader):
     def __init__(self, *, send: Send) -> None:
         self._send = send
 

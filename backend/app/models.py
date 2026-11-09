@@ -180,3 +180,5 @@ from app.modules.reporting.read_models import (  # noqa: E402
     models as reporting_read_models,  # noqa: E402, F401
 )
 from app.modules.sync_control import models as sync_control_models  # noqa: E402, F401
+
+from app.modules.operation_logs import models as operation_log_models  # noqa: E402, F401

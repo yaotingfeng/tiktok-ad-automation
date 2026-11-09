@@ -98,6 +98,14 @@ class TransactionBoundaryReader:
             child.execution_generation = self.generation
         return self.job
 
+    def external(self, call: Callable[[], Any]) -> Any:
+        """私有归档也不跨网络持有DB锁；回读后重验原执行围栏。"""
+        self._check()
+        self.session.commit()
+        result = call()
+        self._check()
+        return result
+
     def __getattr__(self, name: str) -> Any:
         method = getattr(self.reader, name)
         if not callable(method):

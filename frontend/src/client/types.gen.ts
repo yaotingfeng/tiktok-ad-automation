@@ -2662,6 +2662,10 @@ export type EvidenceInput = {
      */
     eligible?: boolean | null;
     /**
+     * Evidence Revision
+     */
+    evidence_revision?: string | null;
+    /**
      * Source
      */
     source: string;
@@ -2671,6 +2675,18 @@ export type EvidenceInput = {
  * EvidencePublic
  */
 export type EvidencePublic = {
+    /**
+     * Evidence Revision
+     */
+    evidence_revision?: string | null;
+    /**
+     * Status
+     */
+    status?: string;
+    /**
+     * Reasons
+     */
+    reasons?: Array<string>;
     /**
      * Bid
      */

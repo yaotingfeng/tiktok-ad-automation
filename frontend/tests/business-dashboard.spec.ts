@@ -127,7 +127,14 @@ async function boundary(
         evidence.push(body)
         return reply({ saved: true })
       }
-      return reply({ bid: null, eligible: null, source: "" })
+      return reply({
+        bid: null,
+        eligible: null,
+        source: "",
+        evidence_revision: "a".repeat(64),
+        status: "UNKNOWN",
+        reasons: ["BID_CHAIN_AMBIGUOUS"],
+      })
     }
     if (path.endsWith("/rebuild")) return reply({ run_ids: [PROVIDER] }, 202)
     if (path.endsWith("/runs")) return reply([])
@@ -244,7 +251,7 @@ for (const role of ["viewer", "operator"] as const) {
   })
 }
 
-test("系列赔付按指定当地日登记历史依据", async ({ page }) => {
+test("系列赔付按指定当地日绑定当前自动依据更正", async ({ page }) => {
   const calls = await boundary(page)
   await page.goto(`/tenants/${TENANT}/business?bc_id=${BC}`)
   await page.getByRole("radio", { name: "广告系列", exact: true }).click()
@@ -267,6 +274,7 @@ test("系列赔付按指定当地日登记历史依据", async ({ page }) => {
     bid: "1.06",
     eligible: true,
     source: "测试历史配置与操作核验记录",
+    evidence_revision: "a".repeat(64),
   })
 })
 
@@ -615,4 +623,58 @@ test("已有7%比例修改日期时保留精确输入", async ({ page }) => {
     start_date: "2026-08-01",
     end_date: "2026-09-30",
   })
+})
+
+test("赔付依据缺失时显示小计且不可无版本覆盖", async ({ page }) => {
+  await boundary(page)
+  await page.route("**/business/query", (route) =>
+    route.fulfill({
+      json: {
+        rows: [
+          {
+            key: "campaign-test",
+            name: "测试系列",
+            provider_name: "嘉书",
+            advertiser_id: "acc-1",
+            campaign_id: "campaign-1",
+            values,
+          },
+        ],
+        totals: values,
+        total: 1,
+        run_ids: [PROVIDER],
+        currency: "USD",
+        currencies: ["USD"],
+        end_date: "2026-11-03",
+        issues: ["COMPENSATION_PARTIAL", "COMPENSATION_QUALIFICATION_PENDING"],
+        missing_dates: [],
+        pending: false,
+      },
+    }),
+  )
+  await page.route("**/business/evidence?**", (route) =>
+    route.fulfill({
+      json: {
+        bid: null,
+        eligible: null,
+        source: "",
+        evidence_revision: null,
+        status: "UNKNOWN",
+        reasons: [],
+      },
+    }),
+  )
+  await page.goto(`/tenants/${TENANT}/business?bc_id=${BC}`)
+  await expect(page.getByText("预计赔付小计", { exact: true })).toBeVisible()
+  await page.getByRole("radio", { name: "广告系列", exact: true }).click()
+  await page.getByRole("button", { name: "测试系列操作", exact: true }).click()
+  await page.getByRole("menuitem", { name: "赔付依据", exact: true }).click()
+  await expect(
+    page.getByRole("button", { name: "保存依据", exact: true }),
+  ).toBeDisabled()
+  await expect(
+    page.getByText("自动依据正在补齐，取得依据后可提交本次更正。", {
+      exact: true,
+    }),
+  ).toBeVisible()
 })

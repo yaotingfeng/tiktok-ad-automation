@@ -130,12 +130,41 @@ def source_snapshot(
         "policy_restricted": len(readable) != len(relevant),
         "revision": scope.revision,
         "policy": "2026-Q3-Q4-user-confirmed-20261104",
-        "calculation_revision": 3,
+        "calculation_revision": 4,
         "identity_catalog": catalog_snapshot(session, scope.tenant_id),
         "rate_schedules": rate_snapshot(session, scope.tenant_id, scope.bc_id),
     }
+    from app.modules.business.models import BusinessEvidence
+    from app.modules.operation_logs.evidence import frozen_sources
+
+    snapshot["operation_logs"] = frozen_sources(
+        session, scope.tenant_id, readable, start, end
+    )
+    manual = (
+        session.exec(
+            select(BusinessEvidence).where(
+                BusinessEvidence.tenant_id == scope.tenant_id,
+                BusinessEvidence.bc_id == scope.bc_id,
+                col(BusinessEvidence.advertiser_id).in_(readable),
+                BusinessEvidence.stat_date >= start,
+                BusinessEvidence.stat_date <= end,
+            )
+        ).all()
+        if readable
+        else []
+    )
+    snapshot["manual_evidence"] = {
+        f"{m.advertiser_id}/{m.campaign_id}/{m.stat_date}": {
+            "bid": str(m.bid) if m.bid is not None else None,
+            "eligible": m.eligible,
+            "source": m.source,
+            "evidence_revision": m.evidence_revision,
+        }
+        for m in manual
+    }
+    semantic = {**snapshot, "operation_logs": snapshot["operation_logs"]["signature"]}
     signature = hashlib.sha256(
-        json.dumps(snapshot, sort_keys=True).encode()
+        json.dumps(semantic, sort_keys=True).encode()
     ).hexdigest()
     return snapshot, signature
 

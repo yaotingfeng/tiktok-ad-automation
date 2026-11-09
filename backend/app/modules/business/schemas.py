@@ -147,10 +147,14 @@ class EvidenceInput(Input):
     stat_date: date
     bid: Decimal | None = Field(default=None, gt=0)
     eligible: bool | None = None
+    evidence_revision: str | None = Field(default=None, min_length=64, max_length=64)
     source: str = Field(min_length=1, max_length=1000)
 
 
 class EvidencePublic(BaseModel):
+    evidence_revision: str | None = None
+    status: str = "UNKNOWN"
+    reasons: list[str] = Field(default_factory=list)
     bid: Decimal | None = None
     eligible: bool | None = None
     source: str = ""

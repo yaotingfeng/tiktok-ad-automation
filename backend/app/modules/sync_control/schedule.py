@@ -27,6 +27,7 @@ from app.modules.sync_control.models import (
 def report_endpoint(kind: str) -> str:
     return sdk_endpoint(
         {
+            "operation_log": "changelog.create",
             "material_day": "reports.material_breakdown",
             "material_links": "reports.material_overview",
         }.get(kind, "reports.integrated")

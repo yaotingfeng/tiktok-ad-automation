@@ -30,6 +30,8 @@ from app.modules.reporting.filters import _like_literal
 
 
 def nullable_sum(column: Any) -> Any:
+    if getattr(column, "key", None) == "compensation":
+        return func.sum(column)
     return case((func.count(column) < func.count(), None), else_=func.sum(column))
 
 

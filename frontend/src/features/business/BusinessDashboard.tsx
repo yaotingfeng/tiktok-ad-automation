@@ -429,7 +429,15 @@ function Dashboard({
       },
       ...MONEY_COLUMNS.map(([key, title]) => ({
         id: key,
-        header: () => heading(title, key, true),
+        header: () =>
+          heading(
+            key === "compensation" &&
+              data?.issues?.includes("COMPENSATION_PARTIAL")
+              ? `${title}小计`
+              : title,
+            key,
+            true,
+          ),
         cell: ({
           row: { original: r },
         }: {
@@ -441,7 +449,7 @@ function Dashboard({
         ),
       })),
     ],
-    [filters.dimension, manage, heading],
+    [filters.dimension, manage, heading, data?.issues],
   )
   const totals = data?.totals ?? {}
   const page = Math.floor((filters.offset ?? 0) / (filters.limit ?? 50)) + 1

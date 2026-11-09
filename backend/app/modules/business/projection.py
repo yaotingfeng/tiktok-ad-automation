@@ -3,6 +3,7 @@
 from collections import defaultdict
 from collections.abc import Iterator
 from datetime import UTC, date, datetime, time, timedelta
+from decimal import Decimal
 from typing import Any
 from uuid import UUID
 from zoneinfo import ZoneInfo
@@ -44,7 +45,6 @@ from app.modules.business.identity import (
 )
 from app.modules.business.models import (
     BusinessDay,
-    BusinessEvidence,
     BusinessMember,
     BusinessPublication,
     BusinessRun,
@@ -171,7 +171,7 @@ def request_rebuild(
     if scope.published_revision == scope.revision and any(
         old
         and (
-            old.get("calculation_revision") != 3
+            old.get("calculation_revision") != 4
             or old.get("identity_catalog") != catalog
         )
         for old in (
@@ -380,22 +380,9 @@ def _base_page(session: Session, run: BusinessRun) -> None:
         )
         for key, schedule in run.inputs["rate_schedules"].items()
     }
-    evidence = {
-        (r.advertiser_id, r.campaign_id): r
-        for r in session.exec(
-            select(BusinessEvidence).where(
-                col(BusinessEvidence.tenant_id) == run.tenant_id,
-                col(BusinessEvidence.bc_id) == run.bc_id,
-                col(BusinessEvidence.stat_date) == run.cursor,
-                tuple_(
-                    col(BusinessEvidence.advertiser_id),
-                    col(BusinessEvidence.campaign_id),
-                ).in_(pairs),
-            )
-        ).all()
-    }
     rows = []
     catalog = run.inputs.get("identity_catalog", {"providers": [], "dramas": []})
+    evidence_cache: dict[Any, Any] = {}
     for f in facts:
         mapping = mappings.get((f.advertiser_id, f.campaign_id)) or identify_campaign(
             f.campaign_name or "", catalog
@@ -425,16 +412,47 @@ def _base_page(session: Session, run: BusinessRun) -> None:
             values.update(provider_share=None, net_revenue=None, business_revenue=None)
         if mapping and mapping["drama_id"] is None:
             issues.append("DRAMA_FROM_REPORT_NAME")
-        ev = evidence.get((f.advertiser_id, f.campaign_id))
-        compensation = compensation_amount(
-            f.spend,
-            f.revenue_d0,
-            ev.bid if ev else None,
-            f.ad_impression_events,
-            ev.eligible if ev else None,
+        from app.modules.operation_logs.evidence import build_evidence
+
+        auto = build_evidence(
+            session,
+            tenant_id=run.tenant_id,
+            advertiser_id=f.advertiser_id,
+            campaign_id=f.campaign_id,
+            day=f.stat_date,
+            timezone=f.timezone,
+            frozen=run.inputs.get("operation_logs", {}),
+            spend=f.spend,
+            events=f.ad_impression_events,
+            revenue=f.revenue_d0,
+            cache=evidence_cache,
+            report_revision=run.inputs.get("states", {})
+            .get(f"{f.advertiser_id}/{f.stat_date}", {})
+            .get("version"),
         )
+        result = auto.data
+        bid = Decimal(result["bid"]) if result["bid"] is not None else None
+        compensation = (
+            Decimal(result["amount"]) if result["amount"] is not None else None
+        )
+        eligible = False if result["status"] == "ZERO" else None
+        source = f"official-operation-evidence:{auto.id}:{auto.digest}"
+        manual = run.inputs.get("manual_evidence", {}).get(
+            f"{f.advertiser_id}/{f.campaign_id}/{f.stat_date}"
+        )
+        if manual and manual.get("evidence_revision") == auto.digest:
+            bid = Decimal(manual["bid"]) if manual["bid"] is not None else bid
+            eligible = manual["eligible"]
+            compensation = compensation_amount(
+                f.spend, f.revenue_d0, bid, f.ad_impression_events, eligible
+            )
+            source = f"admin-correction:{auto.id}:{auto.digest}"
+        elif manual:
+            issues.append("COMPENSATION_MANUAL_CONFLICT")
         if compensation is None:
             issues.append("COMPENSATION_EVIDENCE_MISSING")
+        elif result["status"] == "ESTIMATED_PENDING":
+            issues.append("COMPENSATION_QUALIFICATION_PENDING")
         rows.append(
             dict(
                 run_id=run.id,
@@ -450,9 +468,9 @@ def _base_page(session: Session, run: BusinessRun) -> None:
                 iaa_events=f.ad_impression_events,
                 provider_rate=provider_rate,
                 rebate_rate=rebate_rate,
-                compensation_bid=ev.bid if ev else None,
-                compensation_eligible=ev.eligible if ev else None,
-                compensation_source=ev.source if ev else None,
+                compensation_bid=bid,
+                compensation_eligible=eligible,
+                compensation_source=source,
                 **identity,
                 **values,
                 compensation=compensation,
@@ -646,7 +664,9 @@ def _aggregate_day(session: Session, run: BusinessRun) -> None:
                 literal(""),
                 literal(""),
                 *[
-                    case(
+                    func.sum(getattr(B, k))
+                    if k == "compensation"
+                    else case(
                         (func.count(getattr(B, k)) < func.count(), None),
                         else_=func.sum(getattr(B, k)),
                     )
@@ -827,7 +847,7 @@ def advance_run(session: Session, run_id: UUID, *, now: datetime | None = None) 
         or scope.actor_id != run.actor_id
         or (
             run.phase != "SNAPSHOT"
-            and frozen_metadata(session, run.id).get("calculation_revision") != 3
+            and frozen_metadata(session, run.id).get("calculation_revision") != 4
         )
     ):
         run.status = "SUPERSEDED"

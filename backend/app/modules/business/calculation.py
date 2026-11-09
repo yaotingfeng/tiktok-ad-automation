@@ -69,7 +69,7 @@ def compensation_amount(
     events: Decimal | None,
     eligible: bool | None,
 ) -> Decimal | None:
-    if eligible is False or spend == 0:
+    if eligible is False or spend == 0 or events is not None and events < 300:
         return ZERO
     if eligible is None or any(v is None for v in (spend, revenue_d0, bid, events)):
         return None

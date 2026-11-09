@@ -19,7 +19,7 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { ManagementSheet } from "@/features/tenants/ManagementSheet"
-import { businessKey } from "./queries"
+import { businessKey, EVIDENCE_REASON_LABELS } from "./queries"
 
 export function EvidenceEditor({
   tenantId,
@@ -95,6 +95,7 @@ export function EvidenceEditor({
           bid: bid || null,
           eligible: verified === "unknown" ? null : verified === "eligible",
           source,
+          evidence_revision: current.data?.evidence_revision ?? null,
         },
       })
       await client.invalidateQueries({ queryKey: businessKey(tenantId) })
@@ -108,7 +109,7 @@ export function EvidenceEditor({
   return (
     <ManagementSheet
       title="赔付核算依据"
-      description={`${row.name} · 按系列和账户当地日期分别登记。`}
+      description={`${row.name} · 自动按账户当地日期核算；人工更正只适用于当前依据版本。`}
       dirty={!!baseline && JSON.stringify([bid, verified, source]) !== baseline}
       pending={pending}
       onClose={onClose}
@@ -116,12 +117,24 @@ export function EvidenceEditor({
         <Button
           type="submit"
           form="business-evidence-form"
-          disabled={pending || current.isFetching || current.isError}
+          disabled={
+            pending ||
+            current.isFetching ||
+            current.isError ||
+            !current.data?.evidence_revision
+          }
         >
           保存依据
         </Button>
       }
     >
+      {!current.data?.evidence_revision && !current.isFetching && (
+        <Alert>
+          <AlertDescription>
+            自动依据正在补齐，取得依据后可提交本次更正。
+          </AlertDescription>
+        </Alert>
+      )}
       <form
         id="business-evidence-form"
         onSubmit={(e) => {
@@ -153,6 +166,15 @@ export function EvidenceEditor({
               onChange={(e) => setDay(e.target.value)}
             />
           </Field>
+          {current.data?.reasons?.length ? (
+            <FieldDescription>
+              {current.data.reasons
+                .map(
+                  (reason) => EVIDENCE_REASON_LABELS[reason] ?? "仍有待核依据",
+                )
+                .join("；")}
+            </FieldDescription>
+          ) : null}
           <Field>
             <FieldLabel htmlFor="business-evidence-bid">
               当日最低 ROAS 出价

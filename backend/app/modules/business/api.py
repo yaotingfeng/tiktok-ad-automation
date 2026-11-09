@@ -340,10 +340,32 @@ def read_evidence(
         campaign_id=campaign_id,
         stat_date=stat_date,
     )
-    return (
-        EvidencePublic(bid=row.bid, eligible=row.eligible, source=row.source)
-        if row
-        else EvidencePublic()
+    from app.modules.business.evidence import auto_is_current, latest_auto
+
+    auto = latest_auto(
+        session,
+        tenant_id=tenant_id,
+        advertiser_id=advertiser_id,
+        campaign_id=campaign_id,
+        stat_date=stat_date,
+        bc_id=bc_id,
+    )
+    if auto is None:
+        return (
+            EvidencePublic(bid=row.bid, eligible=row.eligible, source=row.source)
+            if row
+            else EvidencePublic()
+        )
+    current = auto_is_current(session, auto)
+    return EvidencePublic(
+        bid=row.bid
+        if row and row.evidence_revision == auto.digest
+        else auto.data.get("bid"),
+        eligible=row.eligible if row and row.evidence_revision == auto.digest else None,
+        source=row.source if row else "官方操作日志与实际配置观察",
+        evidence_revision=auto.digest if current else None,
+        status=auto.data["status"] if current else "UPDATING",
+        reasons=auto.data["reasons"],
     )
 
 
@@ -356,6 +378,28 @@ def evidence(
     )
     if body.advertiser_id not in scope_accounts(session, context, body.bc_id):
         raise HTTPException(403, "当前BC未授权账户")
+    from app.modules.business.evidence import auto_is_current, latest_auto
+
+    auto = latest_auto(
+        session,
+        tenant_id=tenant_id,
+        advertiser_id=body.advertiser_id,
+        campaign_id=body.campaign_id,
+        stat_date=body.stat_date,
+        bc_id=body.bc_id,
+    )
+    if body.evidence_revision is not None:
+        if (
+            auto is None
+            or auto.digest != body.evidence_revision
+            or not auto_is_current(session, auto)
+        ):
+            raise HTTPException(409, "自动依据已变化，请刷新后重新更正")
+    previous = session.get(
+        BusinessEvidence,
+        (tenant_id, body.bc_id, body.advertiser_id, body.campaign_id, body.stat_date),
+    )
+    previous_audit = previous.model_dump(mode="json") if previous else None
     row = BusinessEvidence(**body.model_dump(), tenant_id=tenant_id, actor_id=user.id)
     session.merge(row)
     bump_scopes(session, tenant_id, body.bc_id)
@@ -368,6 +412,8 @@ def evidence(
             details={
                 "bc_id": body.bc_id,
                 "source": body.source,
+                "previous": previous_audit,
+                "evidence_revision": body.evidence_revision,
                 "bid": str(body.bid),
                 "eligible": body.eligible,
             },
