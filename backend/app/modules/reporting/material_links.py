@@ -538,7 +538,9 @@ AD_FILTER_LIMIT = 200
 
 
 @diagnostics.timed("links_locate_post")
-def _locate_post_step(state, *, read_ad_posts, first, last):
+def _locate_post_step(
+    state, *, read_ad_posts, first, last, positive_page_sufficient=None
+):
     """单帖二分路径与当前查询页持久化；每步最多一次平台读取。
 
     右半可继续缩小候选，但最终单广告必须正向读取。栈仅保留尚未定位的路径，避免把每次完整
@@ -589,7 +591,15 @@ def _locate_post_step(state, *, read_ad_posts, first, last):
         row_identity_key(row) == material_identity_key(state["mid"], state["mtype"])
         for row in result.rows
     )
-    if result.next_page is not None:
+    # 完整集合才可证明缺失；命中本身已是正向证据。长排队后观察起点已过
+    # 缓存期限时，读完余页也不能再复用，不为完整缓存继续耗费无用分页。
+    # 新鲜查询仍完整读取，保留多帖子共享缓存；最终owner仍须单广告正向命中。
+    stop_positive = (
+        query["found"]
+        and positive_page_sufficient is not None
+        and positive_page_sufficient()
+    )
+    if result.next_page is not None and not stop_positive:
         query["page"] = result.next_page
         state["query"] = query
         return False, None
@@ -913,8 +923,15 @@ def refresh_material_links(
                 return result
 
             complete, owner = _locate_post_step(
-                current, read_ad_posts=read_and_share, first=first, last=last
+                current,
+                read_ad_posts=read_and_share,
+                first=first,
+                last=last,
+                positive_page_sufficient=query_reader.pending_cache_expired,
             )
+            if "query" not in current:
+                # 提前结束的部分页不能留作完整缓存，也不能遮住下一子集的分页。
+                query_reader.cache.pop("pending", None)
             if complete:
                 if owner is not None:
                     _upsert_links(
