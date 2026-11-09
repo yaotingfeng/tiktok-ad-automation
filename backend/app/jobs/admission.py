@@ -22,9 +22,9 @@ from redis.exceptions import RedisError
 
 from app.core.config import settings
 from app.core.errors import DomainError
+from app.jobs.provider_cooldown import RELEASE_WITH_PROBE_RECOVERY
 
 _ADMISSION_SCRIPT = Path(__file__).with_suffix(".lua").read_text()
-_RELEASE_SCRIPT = "for i=1,#KEYS do redis.call('ZREM',KEYS[i],ARGV[1]) end return 1"
 _ENDPOINT_OVERRIDES = frozenset(
     {
         "endpoint_max_inflight",
@@ -228,12 +228,23 @@ def release_call(
     tenant_id: UUID,
     advertiser_id: str,
     lease_id: UUID,
+    successful: bool = False,
+    lease_ms: int | None = None,
 ) -> None:
-    """Release inflight leases only. RedisError is handled separately by caller."""
-    # 只释放并发租约，不返还已经消耗的请求次数。
-    keys = admission_keys(app_scope, endpoint, tenant_id, advertiser_id)[2:6]
+    """释放并发租约；已确认的新轮成功同时恢复未知限流探测，不返还请求次数。"""
+    buckets = admission_keys(app_scope, endpoint, tenant_id, advertiser_id)
+    keys = buckets[2:6]
     keys += [f"{key}:{kind}" for kind in ("live", "background") for key in keys]
-    redis_client.eval(_RELEASE_SCRIPT, len(keys), *keys, str(lease_id))
+    cooldown = buckets[1] + ":cooldown"
+    keys.extend((cooldown, cooldown + ":probe"))
+    redis_client.eval(
+        RELEASE_WITH_PROBE_RECOVERY,
+        len(keys),
+        *keys,
+        str(lease_id),
+        int(successful),
+        lease_ms or 0,
+    )
 
 
 @contextmanager
@@ -285,7 +296,7 @@ def admitted_scope(
         error = denied_error(admission.retry_after_ms)
         cast(Any, error).admission_reason = admission.reason
         raise error
-    interrupted = False
+    interrupted, successful = False, False
     try:
         yield
     except SystemExit, KeyboardInterrupt, SoftTimeLimitExceeded:
@@ -324,6 +335,9 @@ def admitted_scope(
             except RedisError, DomainError:
                 logging.getLogger(__name__).warning("admission_metric_failed")
         raise
+    else:
+        # 仅请求作用域正常完成才承认成功；业务/平台错误和SDK中断不能恢复探测。
+        successful = True
     finally:
         # 进程终止不证明远端调用结束，保留原租约至过期；正常释放也不解除业务 UNKNOWN 围栏。
         if not interrupted:
@@ -334,7 +348,12 @@ def admitted_scope(
                     else nullcontext(redis_client)
                 )
                 with cleanup as cleanup_client:
-                    release(cleanup_client, **scope)
+                    release(
+                        cleanup_client,
+                        **scope,
+                        successful=successful,
+                        lease_ms=policy.lease_ms,
+                    )
             except RedisError, DomainError:
                 logging.getLogger(__name__).warning(
                     "admission_release_failed",

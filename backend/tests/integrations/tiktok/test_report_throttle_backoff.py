@@ -247,3 +247,89 @@ def test_real_expiry_allows_next_probe_without_worker_sleep(redis_client, report
         with _scope(redis_client, report_scope):
             raise _unknown()
     assert 9900 <= caught.value.retry_after_ms <= 10100
+
+
+def test_success_after_cooldown_recovers_probe_without_extra_redis_round_trip(
+    redis_client, report_scope
+):
+    with pytest.raises(AccountAdmissionDeferred):
+        with _scope(redis_client, report_scope):
+            raise _unknown()
+    cooldown = _cooldown(report_scope)
+    redis_client.delete(cooldown)  # 模拟这次冷却到期，不删除探测轮次。
+    sleep(0.005)
+
+    class CountedRedis:
+        def __init__(self):
+            self.evals = 0
+
+        def __getattr__(self, name):
+            return getattr(redis_client, name)
+
+        def eval(self, *args):
+            self.evals += 1
+            return redis_client.eval(*args)
+
+    counted = CountedRedis()
+    with _scope(counted, report_scope):
+        pass
+    assert counted.evals == 2  # 原准入+释放；成功恢复不能增加第三次Redis往返。
+    assert not redis_client.exists(cooldown + ":probe")
+    assert not redis_client.exists(cooldown)
+    with pytest.raises(AccountAdmissionDeferred) as caught:
+        with _scope(redis_client, report_scope):
+            raise _unknown()
+    assert 4900 <= caught.value.retry_after_ms <= 5100
+    keys = admission_keys(**report_scope)
+    assert redis_client.zcard(keys[1]) == 3
+    assert all(redis_client.zcard(key) == 0 for key in keys[2:6])
+
+
+@pytest.mark.parametrize(
+    "guard", ["old", "equal", "missing", "expired", "cooldown", "failure", "interrupt"]
+)
+def test_success_recovery_requires_new_live_lease_and_no_current_cooldown(
+    redis_client, report_scope, guard
+):
+    from billiard.exceptions import SoftTimeLimitExceeded
+
+    with pytest.raises(AccountAdmissionDeferred):
+        with _scope(redis_client, report_scope):
+            raise _unknown()
+    cooldown = _cooldown(report_scope)
+    probe = cooldown + ":probe"
+    redis_client.delete(cooldown)
+    sleep(0.005)
+    keys = admission_keys(**report_scope)
+    request = _scope(redis_client, report_scope)
+    request.__enter__()
+    [(lease, expires)] = redis_client.zrange(keys[2], 0, -1, withscores=True)
+    started = int(expires) - _policy().lease_ms
+    if guard in {"old", "equal"}:
+        redis_client.hset(probe, "cutoff", started + (1 if guard == "old" else 0))
+    elif guard == "missing":
+        redis_client.zrem(keys[2], lease)
+    elif guard == "expired":
+        seconds, micros = redis_client.time()
+        redis_client.zadd(keys[2], {lease: seconds * 1000 + micros // 1000 - 1})
+        redis_client.hset(probe, "cutoff", started - 120000)
+    elif guard == "cooldown":
+        seconds, micros = redis_client.time()
+        redis_client.set(cooldown, seconds * 1000 + micros // 1000 + 60000, px=60000)
+    before = redis_client.hgetall(probe)
+    if guard in {"failure", "interrupt"}:
+        error = (
+            RuntimeError("request failed")
+            if guard == "failure"
+            else SoftTimeLimitExceeded()
+        )
+        assert request.__exit__(type(error), error, None) is False
+    else:
+        request.__exit__(None, None, None)
+    assert redis_client.hgetall(probe) == before
+    if guard == "cooldown":
+        assert redis_client.pttl(cooldown) > 59000
+    if guard == "interrupt":
+        assert redis_client.zscore(keys[2], lease) == expires
+    else:
+        assert all(redis_client.zcard(key) == 0 for key in keys[2:6])
