@@ -338,7 +338,22 @@ def test_four_consumers_preserve_success_rate_with_bounded_prefetch(
                     )
                 ).all()
                 assert sum(row.observed_units for row in ledgers) == len(trace)
-                assert all(row.closed for row in ledgers)
+                # 纯本地发布不登记HTTP producer：只允许已完成目录的零预留/零实发
+                # 行保持无producer；任何真实HTTP或未知费用行仍必须正常闭合。
+                assert all(
+                    row.closed
+                    or (
+                        row.directory_run_id is not None
+                        and row.reserved_units
+                        == row.observed_units
+                        == row.charged_units
+                        == 0
+                        and not row.producers
+                        and audit.get(AdDirectoryRun, row.directory_run_id).status
+                        == "COMPLETE"
+                    )
+                    for row in ledgers
+                )
             results[label] = {
                 "http_success": len(trace),
                 "seconds": duration,
