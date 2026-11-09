@@ -104,26 +104,25 @@ def material_child_scope(
             raise _invalid()
         # 校验范围之前不把调用方尚未核验的运行变更刷入数据库。
         with session.no_autoflush:
-            if include_materials:
-                context = session.get(AdDirectoryPage, (run.id, MATERIAL_CONTEXT_PAGE))
-            else:
-                # 发布只需冻结父链。大素材桥逐500行校验，不把整个context JSON解码。
-                row = (
-                    session.connection()
-                    .execute(
-                        text("""
+            # 领取也不能急切解码整个冻结桥：十万条素材的JSON/值对象构造会
+            # 使持锁事务连续空闲超过10秒。先读窄元数据，再以500行游标逐批
+            # 取回并校验完整素材；读取保留值对象，发布仅校验，不放宽事务预算。
+            row = (
+                session.connection()
+                .execute(
+                    text("""
                     SELECT tenant_id,advertiser_id,coverage,complete,next_page,published_version,
                         items <> '[]'::jsonb AS items,materials <> '[]'::jsonb AS materials,
                         evidence #- '{material_child_v1,materials}' AS evidence,
                         jsonb_typeof(evidence->'material_child_v1'->'materials')='array' AS valid_materials
                     FROM ad_directory_page WHERE run_id=:run AND page=:page
                 """),
-                        {"run": run.id, "page": MATERIAL_CONTEXT_PAGE},
-                    )
-                    .mappings()
-                    .one_or_none()
+                    {"run": run.id, "page": MATERIAL_CONTEXT_PAGE},
                 )
-                context = SimpleNamespace(**row) if row is not None else None
+                .mappings()
+                .one_or_none()
+            )
+            context = SimpleNamespace(**row) if row is not None else None
         if (
             context is None
             or context.tenant_id != run.tenant_id
@@ -136,7 +135,7 @@ def material_child_scope(
             or context.materials
         ):
             raise _invalid()
-        if not include_materials and not context.valid_materials:
+        if not context.valid_materials:
             raise _invalid()
         state = context.evidence[MATERIAL_CHILD_KEY]
         if (
@@ -167,31 +166,31 @@ def material_child_scope(
             for ad, group, observed in state["owners"]
         )
         refs = {ad.ref for ad in ads}
-        if include_materials:
-            materials = tuple(_usage(value) for value in state["materials"])
-        else:
-            result = session.connection().execute(
-                text("""
+        collected = []
+        result = session.connection().execute(
+            text("""
                 SELECT value FROM ad_directory_page p CROSS JOIN LATERAL
                     jsonb_array_elements(p.evidence->'material_child_v1'->'materials') x(value)
                 WHERE p.run_id=:run AND p.page=:page
             """).execution_options(yield_per=500),
-                {"run": run.id, "page": MATERIAL_CONTEXT_PAGE},
-            )
-            try:
-                for row in result:
-                    if _usage(row[0]).use_ref.ad_ref not in refs:
-                        raise _invalid()
-            finally:
-                result.close()
-            materials = ()
+            {"run": run.id, "page": MATERIAL_CONTEXT_PAGE},
+        )
+        try:
+            for row in result:
+                material = _usage(row[0])
+                if material.use_ref.ad_ref not in refs:
+                    raise _invalid()
+                if include_materials:
+                    collected.append(material)
+        finally:
+            result.close()
+        materials = tuple(collected)
         if (
             not ads
             or len(refs) != len(ads)
             or len({ad.parent_ref.remote_id for ad in ads if ad.parent_ref})
             > _MAX_GROUPS
             or set(run.query.get("parent_ids", ())) != {ref.remote_id for ref in refs}
-            or any(material.use_ref.ad_ref not in refs for material in materials)
         ):
             raise _invalid()
         return ads, materials

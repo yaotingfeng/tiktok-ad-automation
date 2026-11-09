@@ -4629,3 +4629,8 @@ a6a95dd1及aa0f43b7均已双端推送、全11角色/0101/配置/精确digest验�
 ## 2026-11-09 读取期限恢复
 
 S已完成规范WAIT恢复：严格父/head篱笆、1秒due、3秒恢复事务、页与收费事实保留；真实15重点通过，相关72项通过，独立审查无阻断。待生产发布，见 [记录](validation/2026-11-09-directory-read-deadline-recovery.md)。P b7ac4a74已上线11角色，08:07积压14015，SQL优化固定cohort683秒完成1002，仍在继续处理。
+
+
+## 2026-11-09 素材冻结桥读取分批
+
+V将include_materials读取改为窄元数据+500行服务端游标，完整校验不变；真实idle10旧红新绿3项、相关69项与quantum整文件11项通过。最终对象仍O(N)，未改unknown commit处理或45/10预算。待发布，见 [记录](validation/2026-11-09-material-child-read-streaming.md)。S f674c81a已完成11角色生产验收并恢复CI；09:14仍有11804积压，继续处理报告与经营控制面。
