@@ -5,6 +5,7 @@ from time import monotonic, sleep
 from traceback import format_exception
 from uuid import uuid4
 
+import psycopg
 import pytest
 from sqlalchemy import text
 
@@ -50,6 +51,39 @@ def test_database_statement_is_bounded_and_error_is_sanitized():
     assert "synthetic-private-marker" not in str(failure.value)
     assert failure.value.__suppress_context__
     assert "synthetic-private-marker" not in "".join(format_exception(failure.value))
+
+
+def test_query_deadlines_shrink_with_one_configuration_roundtrip(monkeypatch):
+    from app.integrations.tiktok import bounded_resources
+
+    configure = []
+
+    class RecordingCursor(psycopg.Cursor):
+        def execute(self, query, params=None, **kwargs):
+            if isinstance(query, str) and (
+                "SET LOCAL" in query or "set_config(" in query
+            ):
+                configure.append(query)
+            return super().execute(query, params, **kwargs)
+
+    create = bounded_resources.create_engine
+
+    def observed_engine(*args, **kwargs):
+        kwargs["connect_args"]["cursor_factory"] = RecordingCursor
+        return create(*args, **kwargs)
+
+    monkeypatch.setattr(bounded_resources, "create_engine", observed_engine)
+    with bounded_session(engine, task_deadline=deadline()) as session:
+        query = text(
+            "SELECT current_setting('statement_timeout')::interval, "
+            "current_setting('lock_timeout')::interval"
+        )
+        before = session.execute(query).one()
+        sleep(0.03)
+        after = session.execute(query).one()
+        assert before[0] == before[1] and after[0] == after[1]
+        assert timedelta(0) < after[0] < before[0]
+    assert len(configure) == 2  # 两个真实查询各一次往返，不重复设置超时。
 
 
 def test_expired_callback_budget_never_enters_database_or_redis(redis_client):
