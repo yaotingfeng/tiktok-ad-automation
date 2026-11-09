@@ -12,7 +12,6 @@ from app.modules.strategies.copy_pool import CopyChoice
 from app.modules.strategies.schemas import (
     MAX_FIXED_ADS_PER_GROUP,
     MAX_FIXED_GROUP_COUNT,
-    MAX_TOTAL_PLANNED_ADS,
     StrategyConfig,
 )
 
@@ -89,7 +88,6 @@ def _structure_sizes(count: int, config: StrategyConfig) -> tuple[tuple[int, ...
         fixed_limit=MAX_FIXED_GROUP_COUNT,
     )
     groups: list[tuple[int, ...]] = []
-    total = 0
     for size in group_sizes:
         ads = _sizes(
             size,
@@ -99,11 +97,6 @@ def _structure_sizes(count: int, config: StrategyConfig) -> tuple[tuple[int, ...
             maximum=config.max_materials_per_ad,
             fixed_limit=MAX_FIXED_ADS_PER_GROUP,
         )
-        total += len(ads) * config.creative_count
-        if total > MAX_TOTAL_PLANNED_ADS:
-            raise DomainError(
-                "configuration_invalid", "策略展开广告数量超过本地安全上限"
-            )
         if any(value > MAX_UNITS_PER_AD for value in ads):
             raise DomainError("creative_count_exceeded", "单广告最多 50 个创意单元")
         groups.append(ads)
@@ -113,7 +106,7 @@ def _structure_sizes(count: int, config: StrategyConfig) -> tuple[tuple[int, ...
 def estimate_batch_structure(
     unit_counts: Iterable[int], *, account_count: int, config: StrategyConfig
 ) -> StructureEstimate:
-    """在账户笛卡尔积/广告对象分配前校验整批；不读取图片成员，不倍增预算。"""
+    """按结构计算整批数量和预算；不读取图片成员，不倍增预算。"""
     if type(account_count) is not int or account_count < 0:
         raise ValueError("Invalid account count")
     if account_count == 0:
@@ -130,12 +123,10 @@ def estimate_batch_structure(
         ads += (
             sum(len(group) for group in sizes) * config.creative_count * account_count
         )
-        if ads > MAX_TOTAL_PLANNED_ADS:
-            raise DomainError(
-                "configuration_invalid", "全批预计广告超过 10,000 条，请拆批"
-            )
+        # 不按最终广告总数拒绝策略或整批；单广告素材与固定结构边界仍在
+        # _structure_sizes 校验，实际发送继续受既有准入、并发和限流保护。
     budget_units = groups if config.budget_strategy == "ADGROUP" else campaigns
-    # Money 最多 38 位，再乘工程上限，不能受 Decimal 默认 28 位精度截断。
+    # Money 最多 38 位，数量乘法也需要预留精度，不能受 Decimal 默认 28 位精度截断。
     with localcontext() as arithmetic:
         arithmetic.prec = 50
         budget = config.budget * budget_units

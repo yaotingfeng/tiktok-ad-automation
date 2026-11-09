@@ -20,7 +20,6 @@ from app.modules.strategies.naming import DEFAULT_NAME_TEMPLATE
 # 单次预览保留明确的工程边界，避免恶意或误填整数导致无界 tuple 分配。
 MAX_FIXED_GROUP_COUNT = 100
 MAX_FIXED_ADS_PER_GROUP = 100
-MAX_TOTAL_PLANNED_ADS = 10_000
 
 
 def exact_decimal(value: Any) -> Any:

@@ -67,15 +67,18 @@ def test_planner_reuses_shared_materials_per_group_and_copies_per_base_ad():
     assert {ad.base_ad_no for ad in groups[0].ads} == {1, 2}
 
 
-def test_planner_rejects_oversized_total_creative_expansion_before_allocating():
-    config = strategy(group_count=100, ads_per_group=100, creative_count=100)
+def test_planner_preserves_twenty_thousand_ads_without_total_count_ceiling():
+    config = strategy(group_count=20, ads_per_group=20, creative_count=50)
     materials = [Material(uuid4())]
     pool = tuple(
-        CopyChoice(copy_id=uuid4(), text=f"copy-{index}") for index in range(100)
+        CopyChoice(copy_id=uuid4(), text=f"copy-{index}") for index in range(50)
     )
 
-    with pytest.raises(DomainError, match="策略展开广告数量"):
-        plan_structure(materials, config=config, pool=pool, seed=7)
+    groups = plan_structure(materials, config=config, pool=pool, seed=7)
+    assert len(groups) == 20
+    assert all(len(group.ads) == 20 for group in groups)
+    assert all(len(ad.copies) == 50 for group in groups for ad in group.ads)
+    assert sum(len(ad.copies) for group in groups for ad in group.ads) == 20_000
 
 
 def test_planner_deduplicates_material_rows_before_allocating():
@@ -279,7 +282,7 @@ def test_material_limit_uses_frozen_scene_limit():
     assert not material_limit_exceeded([10], 10)
 
 
-def test_batch_limit_counts_all_dramas_accounts_and_copy_versions():
+def test_batch_estimate_counts_all_dramas_accounts_and_copy_versions_without_ceiling():
     from app.modules.strategies.structure import estimate_batch_structure
 
     config = strategy(group_count=2, ads_per_group=2, creative_count=3)
@@ -296,8 +299,13 @@ def test_batch_limit_counts_all_dramas_accounts_and_copy_versions():
         config=config.model_copy(update={"budget_strategy": "ADGROUP"}),
     )
     assert grouped.daily_budget_sum == config.budget * 40
-    with pytest.raises(DomainError, match="拆批"):
-        estimate_batch_structure([10] * 100, account_count=100, config=config)
+    large = estimate_batch_structure([10] * 100, account_count=100, config=config)
+    assert (large.campaign_count, large.adgroup_count, large.ad_count) == (
+        10_000,
+        20_000,
+        120_000,
+    )
+    assert large.daily_budget_sum == config.budget * 10_000
 
 
 def test_video_content_rejects_music_and_pending_status():
@@ -353,6 +361,19 @@ def test_estimate_endpoint_uses_server_planner_and_bounds_counts(client, context
         "daily_budget_sum": "1000",
         "dramas": [[[6, 6]]],
     }
+    large_config = strategy(group_count=20, ads_per_group=20, creative_count=50)
+    large = client.post(
+        path,
+        json={
+            "config": large_config.model_dump(mode="json"),
+            "unit_counts": [23],
+            "account_count": 1,
+        },
+        headers=headers(context),
+    )
+    assert large.status_code == 200, large.text
+    assert large.json()["ad_count"] == 20_000
+    assert large.json()["adgroup_count"] == 20
     result = client.post(
         path, json={**body, "unit_counts": [100_001]}, headers=headers(context)
     )
