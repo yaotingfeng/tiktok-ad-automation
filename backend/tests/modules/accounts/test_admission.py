@@ -66,6 +66,7 @@ def test_each_actual_call_uses_app_scope_and_fresh_lease(context, monkeypatch, p
     assert arguments[0]["lease_id"] != arguments[1]["lease_id"]
     assert [call.kwargs for call in release.call_args_list] == [
         {key: value for key, value in call.items() if key not in {"policy", "workload"}}
+        | {"successful": True, "lease_ms": policy.lease_ms}
         for call in arguments
     ]
 

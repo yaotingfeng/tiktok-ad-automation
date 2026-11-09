@@ -3,6 +3,25 @@
 from typing import Any
 from uuid import UUID
 
+# 与释放租约同一次Lua执行：先验证成功所属轮次，再清理原12个inflight集合。
+# 后两个键是冷却字符串与探测hash，不能参加ZREM；真实冷却永远不由成功请求删除。
+RELEASE_WITH_PROBE_RECOVERY = """
+if ARGV[2] == '1' and tonumber(ARGV[3]) > 0 then
+    local stamp = redis.call('TIME')
+    local now = tonumber(stamp[1])*1000 + math.floor(tonumber(stamp[2])/1000)
+    local score = tonumber(redis.call('ZSCORE',KEYS[1],ARGV[1]))
+    local cutoff = tonumber(redis.call('HGET',KEYS[14],'cutoff'))
+    local cooldown = tonumber(redis.call('GET',KEYS[13])) or 0
+    -- 旧在途/同毫秒/缺失或过期租约都不能证明探测已恢复；另一请求的新冷却优先。
+    if score and score > now and cutoff and score-tonumber(ARGV[3]) > cutoff
+       and cooldown <= now then
+        redis.call('DEL',KEYS[14])
+    end
+end
+for i=1,12 do redis.call('ZREM',KEYS[i],ARGV[1]) end
+return 1
+"""
+
 _RECORD = """
 local stamp = redis.call('TIME')
 local now = tonumber(stamp[1])*1000 + math.floor(tonumber(stamp[2])/1000)
