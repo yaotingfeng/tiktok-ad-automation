@@ -244,6 +244,7 @@ class _LedgerObserver:
         self.lock = Lock()
         self.counts = {primary.physical_endpoint: 0}
         self.ledger_ids = {primary.physical_endpoint: primary.id}
+        self.acknowledged: dict[str, tuple[int, bool]] = {}
         self.finished = False
 
     def attempt(self, endpoint: str) -> None:
@@ -266,12 +267,22 @@ class _LedgerObserver:
 
         with self.lock:
             counts = dict(self.counts)
+            finished = self.finished
+        # 一个producer只记已提交的累计快照；重复flush不应再等待调度器结算的行锁。
+        # 新接口与新增发送仍逐项登记，失败事务绝不能提前推进确认水位。
+        pending = {
+            endpoint: total
+            for endpoint, total in counts.items()
+            if self.acknowledged.get(endpoint) != (total, finished)
+        }
+        if not pending:
+            return
         committed_ids = dict(self.ledger_ids)
         try:
             with Session(self.engine) as session, session.begin():
                 session.connection().execute(text("SET LOCAL lock_timeout='500ms'"))
                 session.connection().execute(text("SET LOCAL statement_timeout='2s'"))
-                for endpoint, total in counts.items():
+                for endpoint, total in pending.items():
                     identity = committed_ids.get(endpoint)
                     if identity is None:
                         reference = next(
@@ -322,10 +333,13 @@ class _LedgerObserver:
                         identity,
                         self.producer_id,
                         total_units=total,
-                        closed=self.finished,
+                        closed=finished,
                     )
             # UUID缓存只有在提交完成后才可见；回滚后下一次flush必须重新UPSERT。
             self.ledger_ids = committed_ids
+            self.acknowledged.update(
+                {endpoint: (total, finished) for endpoint, total in pending.items()}
+            )
         except Exception:
             if required:
                 raise  # 首次producer未持久化时禁止HTTP，原head租约保留给规范恢复。

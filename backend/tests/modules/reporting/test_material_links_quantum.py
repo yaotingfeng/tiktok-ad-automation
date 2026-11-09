@@ -65,7 +65,13 @@ def quantum_case(committed_sync_seed, redis_client, monkeypatch, request):  # no
             actor_id=seed.actor_id,
         )
         db.commit()
-        run = claim_jobs(db, now=datetime.now(UTC) + timedelta(seconds=1), limit=1)[0]
+        # 默认由旧调度器发三步grant；新consumer不能扩大原预留或未知成本。
+        with monkeypatch.context() as legacy_dispatcher:
+            if not mode.get("production_budget"):
+                legacy_dispatcher.setattr(jobs, "MATERIAL_LINK_STEPS_PER_QUANTUM", 3)
+            run = claim_jobs(db, now=datetime.now(UTC) + timedelta(seconds=1), limit=1)[
+                0
+            ]
         db.commit()
         token, generation, engine = run.claim_token, run.claim_generation, db.get_bind()
     return SimpleNamespace(
@@ -181,6 +187,24 @@ def test_new_grant_commits_three_pages_and_releases_once(quantum_case, monkeypat
         assert head.lease_token is None and head.active
         ledger = _ledger(db, case)
         assert ledger.observed_units == 3 and ledger.closed
+
+
+@pytest.mark.parametrize("quantum_case", [{"production_budget": True}], indirect=True)
+def test_ready_link_grant_advances_ten_pages_before_one_refill(
+    quantum_case, monkeypatch
+):
+    case = quantum_case
+    with case.factory() as db:
+        assert _ledger(db, case).reserved_units == 10
+    seen, deadlines, tokens = _install_reader(monkeypatch, case, total_pages=20)
+    assert _invoke(case) == "WAITING"
+    assert seen == list(range(1, 11))
+    assert len(deadlines) == 1 and len(set(tokens)) == 1 and case.refills == [True]
+    with case.factory() as db:
+        run = db.get(ReportSyncJob, case.identity)
+        assert run.progress["next_page"] == 11 and run.request_count == 10
+        assert run.claim_token is None
+        assert _ledger(db, case).observed_units == 10 and _ledger(db, case).closed
 
 
 @pytest.mark.parametrize("budget", [1, 0, None])
@@ -302,6 +326,9 @@ def test_successor_or_route_change_between_pages_stops_quantum(
             assert run.error_code == "route_binding_changed" and run.claim_token is None
 
 
+@pytest.mark.parametrize(
+    "quantum_case", [{}, {"production_budget": True}], indirect=True
+)
 def test_absolute_quantum_deadline_yields_after_committed_step(
     quantum_case, monkeypatch
 ):
