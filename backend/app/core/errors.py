@@ -3,6 +3,7 @@ from fastapi.responses import JSONResponse
 
 # Register exact business codes here; never infer status from provider text.
 ERROR_HTTP_STATUS: dict[str, int] = {
+    "targeting_minis_unsupported": 422,
     "image_refresh_required": 409,
     "image_target_unavailable": 409,
     "image_content_changed": 409,
@@ -348,6 +349,7 @@ ERROR_HTTP_STATUS: dict[str, int] = {
 # Public messages are application-owned. DomainError.message may contain raw
 # integration details, so it must never become an HTTP response or log field.
 ERROR_PUBLIC_MESSAGES: dict[str, str] = {
+    "targeting_minis_unsupported": "小程序自动定向仅支持18岁以上或25岁以上、不限性别，请重新选择受众条件。",
     "link_config_invalid": "取链参数无效，请检查起播集、卡点集、免费集数、跳转集或支付模板",
     "link_config_template_required": "付费或混合变现应用需要支付模板，请在版权方连接的推广应用中设置",
     "link_episode_out_of_range": "跳转集或免费集数超出该剧可选范围，请单独调整参数",

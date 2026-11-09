@@ -158,6 +158,8 @@ export const configFingerprint = (config: StrategyConfig_Output) =>
       config.campaign_name_template ?? DEFAULT_NAME_TEMPLATE,
   })
 export const issueMessages: Record<string, string> = {
+  targeting_minis_unsupported:
+    "小程序自动定向仅支持18岁以上或25岁以上、不限性别，请重新选择。",
   configuration_invalid: "整体策略配置无效，请检查各项生成规则和互斥字段。",
   copy_pool_exhausted: "创意数量超过有效且不重复的英文文案数。",
   copy_pool_not_found: "引用的文案池版本不可用。",

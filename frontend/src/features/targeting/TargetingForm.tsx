@@ -48,6 +48,26 @@ const genderLabels = {
   GENDER_MALE: "男性",
   GENDER_FEMALE: "女性",
 }
+// 策略仍保留历史年龄集合；页面仅提供与Minis最低年龄完整等价的选择。
+const over25: Targeting["age_groups"] = [
+  "AGE_25_34",
+  "AGE_35_44",
+  "AGE_45_54",
+  "AGE_55_100",
+]
+export function minimumAge(value: Targeting): "18" | "25" | "LEGACY" {
+  const ages = new Set(value.age_groups)
+  if (
+    !ages.size ||
+    (ages.size === 5 &&
+      Object.keys(ageLabels).every((a) =>
+        ages.has(a as Targeting["age_groups"][number]),
+      ))
+  )
+    return "18"
+  if (ages.size === 4 && over25.every((a) => ages.has(a))) return "25"
+  return "LEGACY"
+}
 // 官方 Language Code 枚举（2026-09-28）。
 const languageCodes: Targeting["languages"] = [
   "ar",
@@ -93,9 +113,13 @@ const languageCodes: Targeting["languages"] = [
   "zh-Hant",
 ]
 export function targetingError(value: Targeting) {
-  return value.region_mode === "SELECTED" && !value.region_codes.length
-    ? "请至少选择一个国家。"
-    : undefined
+  if (value.region_mode === "SELECTED" && !value.region_codes.length)
+    return "请至少选择一个国家。"
+  if (minimumAge(value) === "LEGACY")
+    return "旧年龄条件不适用于小程序自动定向，请重新选择最低年龄。"
+  if (value.gender !== "GENDER_UNLIMITED")
+    return "小程序自动定向不支持严格性别限制，请改为不限性别。"
+  return undefined
 }
 export function TargetingSummary({
   value,
@@ -113,8 +137,11 @@ export function TargetingSummary({
         ? selected.map(countryName).join("、") || "待核实"
         : "全部共同可投地区"}{" "}
       · 语言：{v.languages.map(languageName).join("、") || "不主动限制"} ·
-      年龄：{v.age_groups.map((x) => ageLabels[x]).join("、") || "不主动限制"} ·
-      性别：{genderLabels[v.gender]}
+      最低年龄：
+      {minimumAge(v) === "LEGACY"
+        ? `旧年龄条件（${v.age_groups.map((x) => ageLabels[x]).join("、")}，需重新选择）`
+        : `${minimumAge(v)} 岁以上`}{" "}
+      · 性别：{genderLabels[v.gender]}
     </p>
   )
 }
@@ -287,44 +314,58 @@ export function TargetingForm({
         disabled={disabled}
         onChange={(v) => update({ languages: v as Targeting["languages"] })}
       />
-      <Choices
-        label="年龄"
-        values={value.age_groups}
-        options={Object.entries(ageLabels).map(([code, label]) => ({
-          code,
-          label,
-        }))}
-        disabled={disabled}
-        onChange={(v) => update({ age_groups: v as Targeting["age_groups"] })}
-      />
-      <FieldDescription>
-        语言、年龄不选择表示不主动限制；平台自身限制仍适用。当前小程序投放不支持
-        13–17 岁。
-      </FieldDescription>
-      <Field>
-        <FieldLabel htmlFor={`${id}-gender`}>性别</FieldLabel>
+      <Field data-invalid={minimumAge(value) === "LEGACY"}>
+        <FieldLabel htmlFor={`${id}-minimum-age`}>最低年龄</FieldLabel>
         <Select
-          value={value.gender}
+          value={minimumAge(value)}
           disabled={disabled}
-          onValueChange={(v) => update({ gender: v as Targeting["gender"] })}
+          onValueChange={(v) =>
+            update({ age_groups: v === "25" ? [...over25] : [] })
+          }
         >
-          <SelectTrigger id={`${id}-gender`} aria-label="性别">
+          <SelectTrigger
+            id={`${id}-minimum-age`}
+            aria-label="最低年龄"
+            aria-invalid={minimumAge(value) === "LEGACY"}
+          >
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
             <SelectGroup>
-              {Object.entries(genderLabels).map(([code, label]) => (
-                <SelectItem key={code} value={code}>
-                  {label}
+              {minimumAge(value) === "LEGACY" && (
+                <SelectItem value="LEGACY" disabled>
+                  旧年龄条件，需重新选择
                 </SelectItem>
-              ))}
+              )}
+              <SelectItem value="18">18 岁以上</SelectItem>
+              <SelectItem value="25">25 岁以上</SelectItem>
             </SelectGroup>
           </SelectContent>
         </Select>
+        <FieldDescription>
+          小程序使用自动定向，支持最低年龄控制；语言不选择表示不限。
+        </FieldDescription>
       </Field>
-      <FieldDescription>
-        已选条件按严格限制提交，不作为允许平台扩大范围的受众建议。
-      </FieldDescription>
+      {value.gender !== "GENDER_UNLIMITED" ? (
+        <Field>
+          <FieldLabel>旧性别条件：{genderLabels[value.gender]}</FieldLabel>
+          <FieldDescription>
+            当前模式不支持严格性别限制，需明确改为不限性别后保存。
+          </FieldDescription>
+          <Button
+            type="button"
+            variant="outline"
+            disabled={disabled}
+            onClick={() => update({ gender: "GENDER_UNLIMITED" })}
+          >
+            改为不限性别
+          </Button>
+        </Field>
+      ) : (
+        <FieldDescription>
+          性别不限；国家、语言和最低年龄按自动定向受众控制提交。
+        </FieldDescription>
+      )}
     </FieldGroup>
   )
 }

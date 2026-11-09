@@ -327,6 +327,7 @@ def _generate_preview(
     ).one()
     estimate_batch_structure(unit_counts, account_count=account_count, config=config)
     targeting = effective_targeting(session, context, draft)
+    targeting.automatic_minimum_age()
     directory = draft_directory(session, context=context, draft_id=draft.id)
     if directory.state != "READY":
         raise DomainError(

@@ -2503,14 +2503,20 @@ test("本次定向选择共同国家并保存，可恢复策略默认", async ({
     page.getByRole("checkbox", { name: "英国", exact: true }),
   ).toHaveCount(0)
   await page.getByRole("checkbox", { name: "美国", exact: true }).check()
-  await page.getByRole("checkbox", { name: "25–34 岁", exact: true }).check()
+  await page.getByRole("combobox", { name: "最低年龄", exact: true }).click()
+  await page.getByRole("option", { name: "25 岁以上", exact: true }).click()
   await page.getByRole("button", { name: "保存本次定向", exact: true }).click()
   await expect(page.getByText("本次已修改", { exact: true })).toBeVisible()
   const saved = api.requests.find(
     (r) => r.method === "PATCH" && r.path.endsWith("/targeting"),
   )
   expect(saved?.body.targeting_override.region_codes).toEqual(["US"])
-  expect(saved?.body.targeting_override.age_groups).toEqual(["AGE_25_34"])
+  expect(saved?.body.targeting_override.age_groups).toEqual([
+    "AGE_25_34",
+    "AGE_35_44",
+    "AGE_45_54",
+    "AGE_55_100",
+  ])
   await page.getByRole("button", { name: "恢复策略默认", exact: true }).click()
   await expect(page.getByText("策略默认", { exact: true })).toBeVisible()
   expect(
@@ -2601,7 +2607,7 @@ test("预览展示冻结定向，而非当前策略配置", async ({ page }) => 
     page.getByText("受众定向 · 严格限制", { exact: true }),
   ).toBeVisible()
   await expect(
-    page.getByText(/国家：美国.*语言：英语.*年龄：25–34 岁.*性别：女性/),
+    page.getByText(/国家：美国.*语言：英语.*旧年龄条件.*25–34 岁.*性别：女性/),
   ).toBeVisible()
   await expect(
     page.getByText(/预算策略：组预算；竞价策略：最高价值/),

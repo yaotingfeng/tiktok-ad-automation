@@ -36,6 +36,8 @@ def save_targeting(
             )
         if draft.status != "READY":
             raise DomainError("draft_not_ready", "请等待当前草稿准备完成")
+        if body.targeting_override is not None:
+            body.targeting_override.automatic_minimum_age()
         value = (
             body.targeting_override.model_dump(mode="json")
             if body.targeting_override is not None

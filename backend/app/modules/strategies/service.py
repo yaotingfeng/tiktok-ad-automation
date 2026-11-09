@@ -150,6 +150,10 @@ def validate_strategy(
         return issues
     errors = []
     try:
+        config.targeting.automatic_minimum_age()
+    except DomainError as error:
+        errors.append(ValidationIssue(field="targeting", code=error.code))
+    try:
         copies = get_copies(
             session, context=context, version_id=config.copy_pool_version
         )

@@ -37,7 +37,13 @@ class _CampaignBody(CampaignCreate):
     name: Id = Field(alias="campaign_name")
 
 
-TARGETING_FIELDS = ("location_ids", "languages", "age_groups", "gender")
+TARGETING_FIELDS = (
+    "location_ids",
+    "languages",
+    "age_groups",
+    "gender",
+    "spc_audience_age",
+)
 
 
 class _Targeting(FrozenModel):
@@ -45,6 +51,7 @@ class _Targeting(FrozenModel):
     languages: tuple[Language, ...] | None = Field(default=None, min_length=1)
     age_groups: tuple[AgeGroup, ...] | None = Field(default=None, min_length=1)
     gender: Gender | None = None
+    spc_audience_age: Literal["OVER_EIGHTEEN", "OVER_TWENTY_FIVE"] | None = None
 
 
 class _AdGroupBody(AdGroupCreate):
@@ -381,6 +388,15 @@ def create_arguments(
     ):
         raise RemoteCallError(
             "invalid_build_request", effect="NOT_SENT", evidence=CallEvidence()
+        )
+    # 历史MANUAL请求仍可解码和回读，但任何发送通道都不能再次提交不支持的条件。
+    if isinstance(intent, AdGroupCreate) and (
+        intent.targeting_optimization_mode == "MANUAL"
+        or intent.age_groups is not None
+        or intent.gender not in (None, "GENDER_UNLIMITED")
+    ):
+        raise RemoteCallError(
+            "targeting_minis_unsupported", effect="NOT_SENT", evidence=CallEvidence()
         )
     body = encode_intent(intent)
     for field in ("budget", "roas_bid"):

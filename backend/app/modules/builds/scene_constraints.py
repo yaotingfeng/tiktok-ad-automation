@@ -6,7 +6,7 @@ limits its English copy pool to 1..100 characters; it is not a TikTok quota.
 
 from typing import Any
 
-REVISION = "minis-unit-constraints-2026-11-05-v7"
+REVISION = "minis-unit-constraints-2026-11-09-v8"
 PLATFORM_COPY_LENGTH_LIMIT: int | None = None
 COPY_LENGTH_LIMIT = 100
 COPY_LENGTH_MEASUREMENT = "characters"

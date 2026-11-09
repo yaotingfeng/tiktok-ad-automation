@@ -242,6 +242,8 @@ export const reasonLabels: Record<string, string> = {
   account_ownership_conflict: "账户归属存在冲突",
   account_metadata_incomplete: "账户信息尚未完善",
   scene_link_unavailable: "链接或应用资产尚不可用",
+  targeting_minis_unsupported:
+    "小程序自动定向仅支持18岁以上或25岁以上、不限性别，请重新选择。",
   targeting_regions_unavailable: "所选国家不在本批共同可投范围，请调整定向。",
   targeting_regions_unverified: "共同可投国家尚未核实，请重新准备。",
   preview_targeting_outdated: "定向规则已更新，请重新生成预览。",

@@ -5,6 +5,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from app.core.errors import DomainError
+
 # 官方 smart_plus/adgroup/create 文档与枚举，核实于 2026-09-28。
 # AGE_13_17 仅支持 APP_INSTALL/APP_RETARGETING，不属于本工具的 Minis 场景。
 AgeGroup = Literal["AGE_18_24", "AGE_25_34", "AGE_35_44", "AGE_45_54", "AGE_55_100"]
@@ -73,6 +75,24 @@ class AudienceTargeting(BaseModel):
         if (self.region_mode == "SELECTED") != bool(self.region_codes):
             raise ValueError("指定国家不能为空；全部可投模式不得携带国家选择")
         return self
+
+    def automatic_minimum_age(self) -> Literal["OVER_EIGHTEEN", "OVER_TWENTY_FIVE"]:
+        """保留历史选择供展示；只将语义完整等价的成人年龄集合编译为最低年龄。"""
+        if self.gender != "GENDER_UNLIMITED":
+            raise DomainError(
+                "targeting_minis_unsupported",
+                "小程序自动定向不支持严格性别限制，请重新选择不限性别",
+            )
+        ages = set(self.age_groups)
+        over_25 = {"AGE_25_34", "AGE_35_44", "AGE_45_54", "AGE_55_100"}
+        if not ages or ages == over_25 | {"AGE_18_24"}:
+            return "OVER_EIGHTEEN"
+        if ages == over_25:
+            return "OVER_TWENTY_FIVE"
+        raise DomainError(
+            "targeting_minis_unsupported",
+            "小程序自动定向仅支持18岁以上或25岁以上，请重新选择最低年龄",
+        )
 
 
 class TargetingChange(BaseModel):

@@ -157,6 +157,7 @@ class AdGroupObservedFacts(FrozenModel):
     languages: tuple[Language, ...] | None = Field(default=None, min_length=1)
     age_groups: tuple[AgeGroup, ...] | None = Field(default=None, min_length=1)
     gender: Gender | None = None
+    spc_audience_age: Literal["OVER_EIGHTEEN", "OVER_TWENTY_FIVE"] | None = None
     targeting_optimization_mode: Literal["MANUAL", "AUTOMATIC"] | None = None
 
     @field_validator("languages", "age_groups")
@@ -249,10 +250,7 @@ class AdGroupCreate(AdGroupObservedFacts):
     @model_validator(mode="after")
     def require_strict_targeting(self) -> Self:
         if (
-            any(
-                value is not None
-                for value in (self.languages, self.age_groups, self.gender)
-            )
+            any(value is not None for value in (self.age_groups, self.gender))
             and self.targeting_optimization_mode != "MANUAL"
         ):
             raise ValueError("自定义定向必须显式使用 MANUAL，避免平台忽略用户选择")

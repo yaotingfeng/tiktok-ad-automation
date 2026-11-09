@@ -2,6 +2,8 @@
 
 from dataclasses import replace
 
+from app.core.errors import DomainError
+
 from .scene_schemas import SceneContext
 from .targeting_schemas import AudienceTargeting
 
@@ -26,25 +28,18 @@ def apply_targeting(
     ):
         reasons.append("targeting_regions_unavailable")
     group = dict(scene.adgroup_fields)
-    # Minis 默认的不限性别/年龄/语言定向不发送这些冗余字段。
-    # 用户选择额外限制时明确发送 MANUAL，保留原始定向意图；
-    # 不再用本地未核验标记提前阻断，实际支持范围由创建接口返回。
-    restrictive = (
-        bool(selected.languages)
-        or bool(selected.age_groups)
-        or selected.gender != "GENDER_UNLIMITED"
-    )
-    if restrictive:
-        group["targeting_optimization_mode"] = "MANUAL"
+    # 专用Mini Dramas Non-Catalog合同只允许自动模式；语言控制不触发MANUAL。
+    # 旧精细年龄/性别条件必须明确修正，不能悄悄扩大受众后继续创建。
+    try:
+        minimum_age = selected.automatic_minimum_age()
+    except DomainError:
+        reasons.append("targeting_minis_unsupported")
+        minimum_age = None
+    group["targeting_optimization_mode"] = "AUTOMATIC"
     group["targeting_spec"] = {
         "location_ids": sorted(mapping[code] for code in countries if code in mapping),
-        **(
-            {"gender": selected.gender}
-            if selected.gender != "GENDER_UNLIMITED"
-            else {}
-        ),
         **({"languages": list(selected.languages)} if selected.languages else {}),
-        **({"age_groups": list(selected.age_groups)} if selected.age_groups else {}),
+        **({"spc_audience_age": minimum_age} if minimum_age else {}),
     }
     return replace(
         scene,

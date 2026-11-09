@@ -1425,9 +1425,7 @@ for (const viewport of [
   })
 }
 
-test("策略无 BC 和历史搭建时可选择国家并保存年龄、语言和性别", async ({
-  page,
-}) => {
+test("策略无 BC 时可保存自动定向最低年龄和语言", async ({ page }) => {
   const api = await boundary(page)
   await page.goto(editUrl)
   await expect(page.getByText("受众定向", { exact: true })).toBeVisible()
@@ -1441,10 +1439,12 @@ test("策略无 BC 和历史搭建时可选择国家并保存年龄、语言和�
   await expect(
     page.getByRole("checkbox", { name: "印度", exact: true }),
   ).toHaveCount(0)
-  await page.getByRole("checkbox", { name: "25–34 岁", exact: true }).check()
+  await page.getByRole("combobox", { name: "最低年龄", exact: true }).click()
+  await page.getByRole("option", { name: "25 岁以上", exact: true }).click()
   await page.getByRole("checkbox", { name: "英语", exact: true }).check()
-  await page.getByRole("combobox", { name: "性别", exact: true }).click()
-  await page.getByRole("option", { name: "女性", exact: true }).click()
+  await expect(
+    page.getByRole("combobox", { name: "性别", exact: true }),
+  ).toHaveCount(0)
   await expect(page.getByRole("checkbox", { name: /13.*17/ })).toHaveCount(0)
   await page.getByRole("button", { name: "保存为新版本", exact: true }).click()
   await expect(page.getByText("已保存 v2", { exact: true })).toBeVisible()
@@ -1455,8 +1455,8 @@ test("策略无 BC 和历史搭建时可选择国家并保存年龄、语言和�
     region_mode: "SELECTED",
     region_codes: ["CA", "US"],
     languages: ["en"],
-    age_groups: ["AGE_25_34"],
-    gender: "GENDER_FEMALE",
+    age_groups: ["AGE_25_34", "AGE_35_44", "AGE_45_54", "AGE_55_100"],
+    gender: "GENDER_UNLIMITED",
   })
   await page.reload()
   await expect(
@@ -1873,4 +1873,35 @@ test("多张编辑表单的标签互不覆盖，关闭当前脏标签确认后�
   await page.getByRole("tab", { name: "投放策略 · 详情", exact: true }).click()
   await expect(page.getByLabel("日预算", { exact: true })).toHaveValue("321.00")
   expect(errors).toEqual([])
+})
+
+test("旧精细年龄与性别条件必须明确修正才能保存", async ({ page }) => {
+  const api = await boundary(page)
+  api.records[0].config.targeting = {
+    region_mode: "ALL_AVAILABLE",
+    region_codes: [],
+    languages: ["en"],
+    age_groups: ["AGE_25_34"],
+    gender: "GENDER_FEMALE",
+  }
+  await page.goto(editUrl)
+  await expect(
+    page.getByRole("button", { name: "保存为新版本", exact: true }),
+  ).toBeDisabled()
+  await expect(page.getByText(/旧年龄条件/).first()).toBeVisible()
+  await page.getByRole("combobox", { name: "最低年龄", exact: true }).click()
+  await page.getByRole("option", { name: "25 岁以上", exact: true }).click()
+  await page.getByRole("button", { name: "改为不限性别", exact: true }).click()
+  await page.getByRole("button", { name: "保存为新版本", exact: true }).click()
+  await expect(page.getByText("已保存 v2", { exact: true })).toBeVisible()
+  const saved = api.requests.find(
+    (r) => r.method === "POST" && r.path.endsWith("/versions"),
+  )
+  expect(saved?.body.config.targeting).toEqual({
+    region_mode: "ALL_AVAILABLE",
+    region_codes: [],
+    languages: ["en"],
+    age_groups: ["AGE_25_34", "AGE_35_44", "AGE_45_54", "AGE_55_100"],
+    gender: "GENDER_UNLIMITED",
+  })
 })

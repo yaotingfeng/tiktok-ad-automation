@@ -16,8 +16,8 @@ def chosen(**updates):
         "region_mode": "SELECTED",
         "region_codes": ["US", "CA"],
         "languages": ["en"],
-        "age_groups": ["AGE_25_34", "AGE_35_44"],
-        "gender": "GENDER_FEMALE",
+        "age_groups": ["AGE_25_34", "AGE_35_44", "AGE_45_54", "AGE_55_100"],
+        "gender": "GENDER_UNLIMITED",
         **updates,
     }
 
@@ -76,20 +76,23 @@ def group_body():
     }
 
 
-def test_both_channels_preserve_strict_targeting_and_canonical_sets():
-    from app.modules.builds.request_compiler import create_arguments, decode_intent
+def test_legacy_manual_is_canonical_for_readback_but_rejected_before_send():
+    from app.core.errors import DomainError
+    from app.modules.builds.request_compiler import (
+        create_arguments,
+        decode_intent,
+        encode_intent,
+    )
 
     intent = decode_intent("ADGROUP", group_body())
+    assert encode_intent(intent)["targeting_spec"]["age_groups"] == [
+        "AGE_25_34",
+        "AGE_35_44",
+    ]
     for channel in ("OFFICIAL_API", "OFFICIAL_MCP"):
-        _, body = create_arguments(attempt_id=uuid4(), intent=intent, channel=channel)
-        assert body["targeting_optimization_mode"] == "MANUAL"
-        assert body["targeting_spec"] == {
-            "location_ids": ["1", "2"],
-            "languages": ["en"],
-            "age_groups": ["AGE_25_34", "AGE_35_44"],
-            "gender": "GENDER_FEMALE",
-        }
-        assert "suggestion_audience_enabled" not in body
+        with pytest.raises(DomainError) as error:
+            create_arguments(attempt_id=uuid4(), intent=intent, channel=channel)
+        assert error.value.code == "targeting_minis_unsupported"
 
 
 def test_custom_fields_cannot_silently_use_automatic_default():
@@ -155,15 +158,15 @@ def test_targeting_resolves_only_the_common_country_ids_and_blocks_unavailable()
     )
     result = targeting.apply_targeting(scene, AudienceTargeting(), ["US"])
     assert result.adgroup_fields["targeting_spec"]["location_ids"] == ("1",)
-    assert "targeting_optimization_mode" not in result.adgroup_fields
+    assert result.adgroup_fields["targeting_optimization_mode"] == "AUTOMATIC"
     assert "gender" not in result.adgroup_fields["targeting_spec"]
     restricted = targeting.apply_targeting(
         scene,
         AudienceTargeting(gender="GENDER_FEMALE"),
         ["US"],
     )
-    assert restricted.adgroup_fields["targeting_optimization_mode"] == "MANUAL"
-    assert restricted.adgroup_fields["targeting_spec"]["gender"] == "GENDER_FEMALE"
+    assert not restricted.supported
+    assert "targeting_minis_unsupported" in restricted.reason_codes
     bad = targeting.apply_targeting(
         scene, AudienceTargeting(**chosen(region_codes=["GB"])), ["US"]
     )
@@ -181,11 +184,8 @@ def test_targeting_resolves_only_the_common_country_ids_and_blocks_unavailable()
         AudienceTargeting(gender="GENDER_FEMALE"),
         ["US"],
     )
-    # 旧快照中的自动模式标记不再阻断用户明确选择的手动定向。
-    assert minis_automatic_only.supported
-    assert "targeting_manual_unverified" not in minis_automatic_only.reason_codes
-    assert minis_automatic_only.adgroup_fields["targeting_optimization_mode"] == "MANUAL"
-    assert minis_automatic_only.adgroup_fields["targeting_spec"]["gender"] == "GENDER_FEMALE"
+    assert not minis_automatic_only.supported
+    assert "targeting_minis_unsupported" in minis_automatic_only.reason_codes
 
 
 def test_new_preview_freezes_effective_targeting(session, context, prepared):
@@ -212,8 +212,8 @@ def test_new_preview_freezes_effective_targeting(session, context, prepared):
     ).all()
     assert units
     assert all(
-        u.scene_snapshot["adgroup_fields"]["targeting_spec"]["gender"]
-        == "GENDER_FEMALE"
+        u.scene_snapshot["adgroup_fields"]["targeting_spec"]["spc_audience_age"]
+        == "OVER_TWENTY_FIVE"
         for u in units
     )
     assert all(
