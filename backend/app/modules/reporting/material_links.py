@@ -791,8 +791,10 @@ def refresh_material_links(
             end,
             overview_ad_ids,
         )
+    started_scan = False
     if unlinked and not cached:
         if "scan_evidence_ids" not in progress:
+            started_scan = True
             # 0038在途任务的旧否定结果未绑定证据范围，不能直接签为0039的新负缓存。
             # 已持久映射和概览分页仍有效；只重做尚未找到归属的旧候选搜索。
             progress.pop("checked_ids", None)
@@ -859,7 +861,13 @@ def refresh_material_links(
             or not _unlinked(session, tenant_id, advertiser_id, start=start, end=end)
         )
     if unlinked and not cached:
-        stale = _unlinked(session, tenant_id, advertiser_id, start=start, end=end)
+        # 首次登记基线后必须重读：并发补入的新日期事实已包含在签名里，
+        # 候选范围也须覆盖它。已有基线续步复用入口结果，避免重复聚合。
+        stale = (
+            _unlinked(session, tenant_id, advertiser_id, start=start, end=end)
+            if started_scan
+            else unlinked
+        )
         checked = set(progress.get("checked_ids", []))
         # 有消耗的缺口先定位，零消耗历史继续保留；在途二分游标不因排序改变而丢失。
         remaining = [mid for mid in stale if mid not in checked]

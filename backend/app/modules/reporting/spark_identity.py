@@ -4,11 +4,11 @@ import hashlib
 import json
 from datetime import UTC, datetime
 
-from sqlalchemy import text
+from sqlalchemy import Date, bindparam, text
 
 from app.modules.reporting import diagnostics
 from app.modules.reporting.material_value import (
-    TYPED_MATERIAL_WINDOW_VALUES_SQL,
+    TYPED_CANDIDATE_MATERIAL_WINDOW_VALUES_SQL,
     material_value_parameters,
     valuable_material_condition,
 )
@@ -61,20 +61,33 @@ def _scope(configuration):
 def pending_spark_links(session, job):
     """已有归属且本轮尚未核验内容的帖子；完成扫描不代表这些读取已经执行。"""
     checked = set(job.progress.get("spark_identity_checked", []))
+    # 先固定缺桥接集合，空集合不读金额事实；LATERAL 只聚合去重素材键。
+    # 金额结果必须物化一次，避免被后续 EXISTS 内联后按每个 owner 重算。
+    # 本任务只有一个必填日期窗口；正净额已蕴含同租户/账户/类型的窗口内事实存在。
+    # 冻结的粗日期边界由 Date 安全渲染，让 generic plan 也能正确估算分区范围；
+    # 账户、素材及精确窗口数组仍绑定，不手工拼接业务参数。
     return (
         session.connection()
         .execute(
             text(f"""
-        WITH material_values AS ({TYPED_MATERIAL_WINDOW_VALUES_SQL}), missing AS MATERIALIZED (
-          SELECT l.main_material_id,l.ad_remote_id FROM material_post_link l
+        WITH missing_base AS MATERIALIZED (
+          SELECT l.tenant_id,l.advertiser_id,l.main_material_id,l.main_material_type,l.ad_remote_id
+          FROM material_post_link l
           WHERE l.tenant_id=:t AND l.advertiser_id=:a
-            AND {valuable_material_condition("l", typed=True)}
             AND l.main_material_type='VIDEO_SPARK_ADS'
             AND NULLIF(l.ad_material_id,'') IS NULL
-            AND NULLIF(l.platform_material_id,'') IS NULL
-            AND EXISTS (SELECT 1 FROM material_report_day d WHERE d.tenant_id=l.tenant_id
-              AND d.advertiser_id=l.advertiser_id AND d.main_material_id=l.main_material_id
-              AND d.main_material_type='VIDEO_SPARK_ADS' AND d.stat_date BETWEEN :start AND :end)),
+            AND NULLIF(l.platform_material_id,'') IS NULL),
+        material_values AS MATERIALIZED (
+          SELECT value.* FROM (
+            SELECT DISTINCT advertiser_id,main_material_id,main_material_type
+            FROM missing_base
+          ) material_candidate CROSS JOIN LATERAL (
+            {TYPED_CANDIDATE_MATERIAL_WINDOW_VALUES_SQL}
+            OFFSET 0
+          ) value),
+        missing AS MATERIALIZED (
+          SELECT l.main_material_id,l.ad_remote_id FROM missing_base l
+          WHERE {valuable_material_condition("l", typed=True)}),
         scopes AS MATERIALIZED (
           SELECT owners.ad_remote_id, {IDENTITY_SIGNATURE_SQL} AS identity_signature
           FROM (SELECT DISTINCT ad_remote_id FROM missing) owners
@@ -84,7 +97,10 @@ def pending_spark_links(session, job):
         FROM missing m JOIN scopes s ON s.ad_remote_id=m.ad_remote_id
         WHERE NOT (jsonb_build_array(m.main_material_id,m.ad_remote_id,s.identity_signature)::text=ANY(:checked))
         ORDER BY m.ad_remote_id,m.main_material_id LIMIT 50
-    """),
+    """).bindparams(
+                bindparam("value_scan_start", type_=Date, literal_execute=True),
+                bindparam("value_scan_end", type_=Date, literal_execute=True),
+            ),
             {
                 **material_value_parameters(
                     job.tenant_id,
@@ -92,8 +108,6 @@ def pending_spark_links(session, job):
                 ),
                 "t": job.tenant_id,
                 "a": job.advertiser_ids[0],
-                "start": job.start_date,
-                "end": job.end_date,
                 "checked": sorted(checked),
             },
         )
