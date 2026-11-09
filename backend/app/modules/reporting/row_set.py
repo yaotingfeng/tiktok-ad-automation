@@ -78,6 +78,7 @@ _FACT_TABLE = {
     "ad": ("ad_report_day", "ad_id"),
 }
 _FACT_META = {
+    "account_report_day": ("campaign_id", "campaign_name"),
     "campaign_report_day": ("campaign_id", "campaign_name"),
     "ad_report_day": (
         "campaign_id",
@@ -120,6 +121,7 @@ class SnapshotTotals:
     incomplete_dates: tuple[str, ...]
     complete: bool
     naming_campaigns: tuple[tuple[str, str], ...]
+    account_versions: tuple[UUID, ...] = ()
 
 
 class _Params:
@@ -230,7 +232,7 @@ def _facts_cte(
     group = ", ".join([adv, rid, *(identity(f"t.{c}") for c in extra_group), currency])
     extra_select = "".join(f", {identity(f't.{c}')} AS {c}" for c in extra_group)
     metric_sums = _metric_sums("t")
-    if table in {"adgroup_report_day", "material_entity_day"}:
+    if table in {"account_report_day", "adgroup_report_day", "material_entity_day"}:
         # 素材D3/D30在成员桶恒为UNSUPPORTED；不为最终必然丢弃的值
         # 建立SUM/BOOL_OR聚合状态，列合同仍保留NULL。
         metric_sums = ", ".join(
@@ -251,8 +253,10 @@ def _facts_cte(
     )"""
 
 
-def _common_ctes(cov_kind: str) -> str:
-    if cov_kind == "material_day":
+def _common_ctes(cov_kind: str, *, account: bool = False) -> str:
+    if account:
+        state = "SELECT tenant_id,advertiser_id,stat_date,status FROM account_report_day_state"
+    elif cov_kind == "material_day":
         state = """SELECT tenant_id,advertiser_id,bucket AS stat_date,derived_status AS status
             FROM read_bucket_state WHERE kind='material_day' AND derived_revision>0"""
     else:
@@ -577,6 +581,8 @@ def _dimension_rows(
     # 账户页的余额只参与余额排序，版权方只参与文字/命名筛选；展示由页补全读取。
     # ent 被成员与指标多次消费，会物化所有选择列，不能依赖外层投影消除无用查询。
     account_projection = bool(_search_terms(filters) or filters.naming_status)
+    if dim == "account" and not account_projection:
+        table = "account_report_day"
     if dim == "account":
         idn = "idn AS (SELECT adv, adv AS rid FROM acc)"
         balance_columns = "NULL::numeric AS balance, NULL::text AS balance_currency"
@@ -713,9 +719,9 @@ def _dimension_rows(
         ctes.append("""members AS (
             SELECT e.adv || ':account:' || e.adv AS row_key, e.adv, e.rid FROM ent e
         )""")
-        ctes.append(f"""account_refs AS (
-            SELECT o.adv, jsonb_agg({_ref_json("o.adv", "'campaign'", "o.rid")} ORDER BY o.rid COLLATE "C") AS refs
-            FROM obj o WHERE o.kind = 'campaign' GROUP BY o.adv
+        ctes.append("""account_refs AS (
+            SELECT advertiser_id AS adv,version_id FROM account_membership_current
+            WHERE tenant_id=:tenant AND advertiser_id=ANY(:advs)
         )""")
         ctes.append("""base AS (
             SELECT e.adv || ':account:' || e.adv AS row_key, e.name, e.name AS account_name,
@@ -725,8 +731,8 @@ def _dimension_rows(
                 e.balance, e.balance_currency,
                 ARRAY[e.adv || ':account:' || e.adv, e.adv] AS ids,
                 concat_ws(' ', e.adv || ':account:' || e.adv, e.adv, e.name, e.provider_label) AS haystack,
-                -- 账户行冻结其下全部系列，供跨页选择展开；列表响应不返回。
-                COALESCE(ar.refs, '[]'::jsonb) AS refs,
+                -- 成员在同步事务中预存；快照只固定UUID，选择/导出展开原版本。
+                '[]'::jsonb AS refs, ar.version_id AS account_membership_version_id,
                 '[]'::jsonb AS material_uses
             FROM ent e LEFT JOIN account_refs ar ON ar.adv = e.adv
         )""")
@@ -784,7 +790,7 @@ def _dimension_rows(
             FROM ent e
         )""")
     ctes.append(_member_buckets("members", unsupported=frozenset()))
-    return ",\n".join([_common_ctes("ad_day"), *ctes]), "base"
+    return ",\n".join([_common_ctes("ad_day", account=dim == "account"), *ctes]), "base"
 
 
 _USE_COLUMNS = """u.id, u.advertiser_id AS adv, u.ad_remote_id, u.platform_material_id,
@@ -1026,6 +1032,8 @@ def _ctes(
     # fr会被排序、汇总、coverage多次引用并物化；只冻结真正需要的列，
     # 否则未筛选/排序的名称与展示关联也会被强制计算到全部候选。
     retained = ["r.row_key", "r.refs", "r.material_uses"]
+    if filters.dimension == "account":
+        retained.append("r.account_membership_version_id")
     if filters.sort_by in NAME_SORT_FIELDS | CONFIG_SORT_FIELDS:
         retained.append(f"r.{filters.sort_by}")
         if filters.sort_by == "balance":
@@ -1045,8 +1053,13 @@ def _ctes(
             conditions.append(metric)
         buckets = f",\n{_row_buckets()}"
         filtered = f"fr AS (SELECT {projection} FROM {base} r WHERE {' AND '.join(conditions) or 'TRUE'})"
+    version = (
+        "r.account_membership_version_id"
+        if filters.dimension == "account"
+        else "NULL::uuid AS account_membership_version_id"
+    )
     ordered = f"""ordered AS (
-        SELECT r.row_key, r.refs, r.material_uses,
+        SELECT r.row_key, r.refs, r.material_uses, {version},
             (row_number() OVER (ORDER BY {_order_by(filters)}) - 1)::int AS seq
         FROM fr r LEFT JOIN rv v ON v.row_key = r.row_key
     )"""
@@ -1083,12 +1096,35 @@ def ordered_members(
     ctes, params = _ctes(
         filters, tenant_id=tenant_id, advertisers=advertisers, bc_id=bc_id
     )
-    rows = session.connection().execute(
-        text(f"{ctes} SELECT row_key, refs, material_uses FROM ordered ORDER BY seq"),
-        params,
+    rows = (
+        session.connection()
+        .execute(
+            text(
+                f"{ctes} SELECT row_key, refs, material_uses,account_membership_version_id FROM ordered ORDER BY seq"
+            ),
+            params,
+        )
+        .all()
     )
+    versions = {}
+    if filters.dimension == "account":
+        from app.modules.reporting.account_memberships import load_account_versions
+
+        versions = load_account_versions(
+            session,
+            tenant_id=tenant_id,
+            advertisers=advertisers,
+            version_ids=[r.account_membership_version_id for r in rows],
+        )
     return tuple(
-        SnapshotMember(r.row_key, tuple(r.refs), tuple(r.material_uses)) for r in rows
+        SnapshotMember(
+            r.row_key,
+            tuple(
+                versions[r.account_membership_version_id].refs if versions else r.refs
+            ),
+            tuple(r.material_uses),
+        )
+        for r in rows
     )
 
 
@@ -1117,12 +1153,24 @@ def insert_snapshot_rows(
         if filters.dimension == "material"
         else "SELECT tenant_id,advertiser_id,report_kind,stat_date,status FROM report_sync_state"
     )
+    if filters.dimension == "account":
+        coverage_source = "SELECT tenant_id,advertiser_id,'ad_day' AS report_kind,stat_date,status FROM account_report_day_state"
+    campaigns = (
+        "ARRAY[]::text[][]"
+        if filters.dimension == "account"
+        else "(SELECT COALESCE(array_agg(DISTINCT ARRAY[r ->> 'advertiser_id', r ->> 'remote_id']), ARRAY[]::text[][]) FROM fr, jsonb_array_elements(fr.refs) r WHERE r ->> 'kind' = 'campaign')"
+    )
+    account_versions = (
+        "(SELECT COALESCE(array_agg(account_membership_version_id),ARRAY[]::uuid[]) FROM fr)"
+        if filters.dimension == "account"
+        else "ARRAY[]::uuid[]"
+    )
     statement = f"""{ctes},
     ins AS (
         INSERT INTO query_snapshot_row (snapshot_id, row_key, stable_sequence, dimension, display, refs,
-            material_uses, metric_buckets, capabilities, directory_versions, membership_digest)
+            material_uses, metric_buckets, capabilities, directory_versions, membership_digest,account_membership_version_id)
         SELECT :snapshot_id, row_key, seq, :dimension, '{{}}'::jsonb, refs, material_uses,
-            '[]'::jsonb, '{{}}'::jsonb, '{{}}'::jsonb, ''
+            '[]'::jsonb, '{{}}'::jsonb, '{{}}'::jsonb, '',account_membership_version_id
         FROM ordered
         RETURNING 1
     ),
@@ -1138,8 +1186,8 @@ def insert_snapshot_rows(
            WHERE NOT EXISTS (SELECT 1 FROM ({coverage_source}) s WHERE s.tenant_id = :tenant
                AND s.advertiser_id = b.adv AND s.report_kind = '{"material_day" if filters.dimension == "material" else "ad_day"}'
                AND s.stat_date = d.day::date AND s.status = 'COMPLETE')) AS bad_dates,
-        (SELECT COALESCE(array_agg(DISTINCT ARRAY[r ->> 'advertiser_id', r ->> 'remote_id']), ARRAY[]::text[][])
-           FROM fr, jsonb_array_elements(fr.refs) r WHERE r ->> 'kind' = 'campaign') AS campaigns
+        {campaigns} AS campaigns,
+        {account_versions} AS account_versions
     """
     row = session.connection().execute(text(statement), params).one()
     bad_dates: Sequence[date] = row.bad_dates
@@ -1150,4 +1198,5 @@ def insert_snapshot_rows(
         incomplete_dates=tuple(day.isoformat() for day in bad_dates),
         complete=not row.bad_advs,
         naming_campaigns=tuple((a, c) for a, c in row.campaigns),
+        account_versions=tuple(row.account_versions),
     )

@@ -17,6 +17,10 @@ from sqlmodel import Session, col, select
 
 from app.core.context import TenantContext
 from app.integrations.tiktok.contracts.ads import EntityRef, MaterialUseRef
+from app.modules.reporting.account_memberships import (
+    expanded_naming_versions,
+    snapshot_account_versions,
+)
 from app.modules.reporting.filters import authorized_grants
 from app.modules.reporting.queries import frozen_row
 from app.modules.reporting.query_models import (
@@ -137,10 +141,12 @@ def freeze_selection(
     uses: list[MaterialUseRef] = []
     seen_refs: set[tuple[Any, ...]] = set()
     seen_uses: set[tuple[Any, ...]] = set()
+    versions = snapshot_account_versions(session, snapshot=snapshot, rows=rows)
     for row in selected:
-        public = frozen_row(row)
-        # Account refs were expanded when the query snapshot was created; reading
-        # current AdObject rows here would admit campaigns added after the snapshot.
+        public = frozen_row(
+            row, refs=versions[row.row_key].refs if row.row_key in versions else None
+        )
+        # 账户只展开快照固定的不可变版本；读取当前目录会混入快照之后新增的系列。
         row_refs = list(public.refs)
         for ref in row_refs:
             key = (ref.tenant_id, ref.advertiser_id, ref.kind, ref.remote_id)
@@ -148,7 +154,7 @@ def freeze_selection(
                 seen_refs.add(key)
                 refs.append(ref)
         for use in public.material_uses:
-            key = (
+            use_key = (
                 use.ad_ref.tenant_id,
                 use.ad_ref.advertiser_id,
                 use.ad_ref.remote_id,
@@ -156,8 +162,8 @@ def freeze_selection(
                 use.ad_material_id,
                 use.material_type,
             )
-            if key not in seen_uses:
-                seen_uses.add(key)
+            if use_key not in seen_uses:
+                seen_uses.add(use_key)
                 uses.append(use)
     refs_tuple, uses_tuple = tuple(refs), tuple(uses)
     now = datetime.now(UTC)
@@ -170,7 +176,9 @@ def freeze_selection(
         filters=snapshot.filters,
         filter_digest=snapshot.filter_digest,
         publication_versions=snapshot.publication_versions,
-        naming_versions=snapshot.naming_versions,
+        naming_versions=expanded_naming_versions(
+            snapshot=snapshot, versions=versions.values()
+        ),
         expires_at=min(snapshot.expires_at, now + timedelta(minutes=15)),
         snapshot_id=snapshot.id,
         refs=[

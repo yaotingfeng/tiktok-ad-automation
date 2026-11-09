@@ -36,10 +36,18 @@ def test_account_snapshot_skips_unused_balance_and_name_projection(
         bc_id=case.bc_id,
     )
     connection = case.session.connection()
-    query = ctes + " SELECT row_key,refs,material_uses FROM ordered ORDER BY seq"
+    query = (
+        ctes
+        + " SELECT row_key,refs,material_uses,account_membership_version_id FROM ordered ORDER BY seq"
+    )
     rows = connection.execute(text(query), params).all()
     assert len(rows) == 1
-    assert [item["remote_id"] for item in rows[0].refs] == [ref.remote_id]
+    assert rows[0].refs == []
+    payload = connection.execute(
+        text("SELECT refs FROM account_membership_version WHERE id=:version"),
+        {"version": rows[0].account_membership_version_id},
+    ).scalar_one()
+    assert [item["remote_id"] for item in payload] == [ref.remote_id]
     plan = connection.execute(
         text("EXPLAIN (ANALYZE,BUFFERS,FORMAT JSON) " + query), params
     ).scalar_one()[0]["Plan"]
@@ -50,6 +58,8 @@ def test_account_snapshot_skips_unused_balance_and_name_projection(
     }
     assert "account_balance_observation" not in reads
     assert "campaign_name_current" not in reads
+    assert "ad_entity_read" not in reads
+    assert "campaign_report_day" not in reads
 
 
 @pytest.mark.parametrize("sort_by", ["spend", "balance"])

@@ -2,7 +2,8 @@
 
 from datetime import UTC, date, datetime
 from decimal import Decimal
-from uuid import UUID
+from typing import Any
+from uuid import UUID, uuid4
 
 from sqlalchemy import (
     BigInteger,
@@ -116,6 +117,55 @@ class CampaignNameCurrent(SQLModel, table=True):
     observed_at: datetime = Field(sa_type=AwareDateTime)
 
 
+class AccountMembershipVersion(SQLModel, table=True):
+    """不可变成员证据；退休后仍由存活快照的外键保护。"""
+
+    __tablename__ = "account_membership_version"
+    __table_args__ = (
+        ForeignKeyConstraint(["tenant_id"], ["tenant.id"], ondelete="CASCADE"),
+        UniqueConstraint(
+            "tenant_id", "advertiser_id", "id", name="uq_account_membership_scope"
+        ),
+        Index(
+            "ix_account_membership_retired",
+            "retired_at",
+            postgresql_where=text("retired_at IS NOT NULL"),
+        ),
+    )
+    id: UUID = Field(default_factory=uuid4, primary_key=True)
+    tenant_id: UUID
+    advertiser_id: str = Field(max_length=128)
+    refs: list[dict[str, Any]] = Field(
+        default_factory=list, sa_type=JSONB, nullable=False
+    )
+    naming_versions: dict[str, int] = Field(
+        default_factory=dict, sa_type=JSONB, nullable=False
+    )
+    created_at: datetime = Field(
+        default_factory=lambda: datetime.now(UTC), sa_type=AwareDateTime
+    )
+    retired_at: datetime | None = Field(default=None, sa_type=AwareDateTime)
+
+
+class AccountMembershipCurrent(SQLModel, table=True):
+    __tablename__ = "account_membership_current"
+    __table_args__ = (
+        account_reference(),
+        Index("ix_account_membership_current_version", "version_id"),
+        ForeignKeyConstraint(
+            ["tenant_id", "advertiser_id", "version_id"],
+            [
+                "account_membership_version.tenant_id",
+                "account_membership_version.advertiser_id",
+                "account_membership_version.id",
+            ],
+        ),
+    )
+    tenant_id: UUID = Field(primary_key=True)
+    advertiser_id: str = Field(primary_key=True, max_length=128)
+    version_id: UUID
+
+
 class CurrentAdMaterial(SQLModel, table=True):
     __tablename__ = "current_ad_material"
     __table_args__ = (
@@ -189,6 +239,33 @@ class AdgroupReportDay(_ReadDay, table=True):
     campaign_id: str | None = Field(default=None, max_length=64)
     campaign_name: str | None = None
     adgroup_name: str | None = None
+
+
+class AccountReportDay(_ReadDay, table=True):
+    __tablename__ = "account_report_day"
+    __table_args__ = (
+        account_reference(),
+        Index(
+            "ix_account_report_day_period", "tenant_id", "stat_date", "advertiser_id"
+        ),
+    )
+
+
+class AccountReportDayState(SQLModel, table=True):
+    __tablename__ = "account_report_day_state"
+    __table_args__ = (
+        account_reference(),
+        Index(
+            "ix_account_report_state_period", "tenant_id", "stat_date", "advertiser_id"
+        ),
+    )
+    tenant_id: UUID = Field(primary_key=True)
+    advertiser_id: str = Field(primary_key=True, max_length=128)
+    stat_date: date = Field(primary_key=True)
+    revision: int = Field(default=0, sa_type=BigInteger)
+    status: str | None = Field(default=None, max_length=16)
+    observed_at: datetime | None = Field(default=None, sa_type=AwareDateTime)
+    last_success_at: datetime | None = Field(default=None, sa_type=AwareDateTime)
 
 
 class MaterialEntityDay(_ReadDay, table=True):

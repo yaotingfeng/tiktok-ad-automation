@@ -136,6 +136,11 @@ class QuerySnapshotRow(SQLModel, table=True):
         ForeignKeyConstraint(
             ["snapshot_id"], ["query_snapshot.id"], ondelete="CASCADE"
         ),
+        CheckConstraint(
+            "(dimension='account' AND account_membership_version_id IS NOT NULL AND refs='[]'::jsonb) OR "
+            "(dimension<>'account' AND account_membership_version_id IS NULL)",
+            name="ck_snapshot_account_membership",
+        ),
         CheckConstraint("stable_sequence >= 0", name="ck_query_snapshot_row_sequence"),
         CheckConstraint(
             "dimension IN ('account','campaign','adgroup','ad','material','drama')",
@@ -147,12 +152,20 @@ class QuerySnapshotRow(SQLModel, table=True):
             "stable_sequence",
             unique=True,
         ),
+        Index(
+            "ix_query_snapshot_row_account_membership_version_id",
+            "account_membership_version_id",
+            postgresql_where=text("account_membership_version_id IS NOT NULL"),
+        ),
     )
     # 复合主键自身提供 snapshot + row_key 索引。
     snapshot_id: UUID = Field(primary_key=True)
     row_key: str = Field(primary_key=True, max_length=512)
     stable_sequence: int
     dimension: str = Field(max_length=32)
+    account_membership_version_id: UUID | None = Field(
+        default=None, foreign_key="account_membership_version.id"
+    )
     display: dict[str, Any] = Field(default_factory=dict, sa_type=JSONB, nullable=False)
     refs: list[dict[str, Any]] = Field(
         default_factory=list, sa_type=JSONB, nullable=False

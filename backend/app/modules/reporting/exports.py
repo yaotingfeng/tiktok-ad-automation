@@ -26,9 +26,14 @@ from app.core.config import settings
 from app.core.context import TenantContext
 from app.modules.accounts.models import TenantBC
 from app.modules.materials.storage import make_s3
+from app.modules.reporting.account_memberships import (
+    expanded_naming_versions,
+    snapshot_account_versions,
+)
 from app.modules.reporting.dimension_query import materialize_rows
 from app.modules.reporting.filters import authorized_grants
 from app.modules.reporting.query_models import (
+    QuerySnapshot,
     QuerySnapshotRow,
     ReportExport,
     read_snapshot,
@@ -106,24 +111,30 @@ def _scope_check(
 
 
 def _rows_for_snapshot(
-    session: Session, snapshot_id: UUID, total: int
-) -> list[dict[str, Any]]:
+    session: Session, snapshot: QuerySnapshot
+) -> tuple[list[dict[str, Any]], dict[str, int]]:
     """冻结快照成员与顺序；行内容在后台生成时按批补全，避免大快照阻塞请求。"""
     rows = session.exec(
         select(QuerySnapshotRow)
-        .where(QuerySnapshotRow.snapshot_id == snapshot_id)
+        .where(QuerySnapshotRow.snapshot_id == snapshot.id)
         .order_by(col(QuerySnapshotRow.stable_sequence), col(QuerySnapshotRow.row_key))
     ).all()
-    if len(rows) != total:
+    if len(rows) != snapshot.total:
         raise HTTPException(409, detail="query_snapshot_incomplete")
-    return [
+    versions = snapshot_account_versions(session, snapshot=snapshot, rows=rows)
+    frozen_rows = [
         {
             "row_key": row.row_key,
-            "refs": list(row.refs),
+            "refs": list(
+                versions[row.row_key].refs if row.row_key in versions else row.refs
+            ),
             "material_uses": list(row.material_uses),
         }
         for row in rows
     ]
+    return frozen_rows, expanded_naming_versions(
+        snapshot=snapshot, versions=versions.values()
+    )
 
 
 def create_export(
@@ -162,7 +173,8 @@ def create_export(
     )
     if snapshot.actor_id != context.actor_id:
         raise HTTPException(404, detail="query_snapshot_not_found")
-    frozen_rows = _rows_for_snapshot(session, snapshot.id, snapshot.total)
+    # 导出复制完整成员和名称证据，后续生成不再依赖短期成员版本或快照存活。
+    frozen_rows, naming_versions = _rows_for_snapshot(session, snapshot)
     now = datetime.now(UTC)
     row = ReportExport(
         id=uuid4(),
@@ -173,7 +185,7 @@ def create_export(
         filters=dict(snapshot.filters),
         filter_digest=snapshot.filter_digest,
         publication_versions=dict(snapshot.publication_versions),
-        naming_versions=dict(snapshot.naming_versions),
+        naming_versions=naming_versions,
         snapshot_id=snapshot.id,
         idempotency_key=idempotency_key.strip(),
         status="QUEUED",

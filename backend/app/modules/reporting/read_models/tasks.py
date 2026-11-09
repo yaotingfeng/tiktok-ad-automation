@@ -8,6 +8,7 @@ from sqlmodel import Session
 
 from app.core.db import engine
 from app.jobs.celery_app import celery_app
+from app.modules.reporting.account_memberships import prune_account_memberships
 from app.modules.reporting.query_reuse import prune_query_reuse
 from app.modules.reporting.read_models.projector import rebuild_pending
 
@@ -29,6 +30,7 @@ def project_read_models() -> int:
     completed = 0
     with Session(engine) as session:
         prune_query_reuse(session)
+        prune_account_memberships(session)
         session.commit()
     # 由墙钟预算让出publisher，不再因25个轻量桶提前结束并空等下一次Beat。
     # 仍逐桶提交，后续失败不撤销已完成桶，也不扩大单事务锁范围。

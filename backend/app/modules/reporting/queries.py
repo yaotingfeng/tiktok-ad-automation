@@ -23,6 +23,7 @@ from app.core.context import TenantContext
 from app.core.db import engine
 from app.modules.accounts.models import TenantBC
 from app.modules.reporting import query_diagnostics
+from app.modules.reporting.account_memberships import snapshot_account_versions
 from app.modules.reporting.dimension_query import (
     materialize_rows,
     metric_vector,
@@ -43,6 +44,10 @@ from app.modules.reporting.query_reuse import (
 from app.modules.reporting.read_models.coverage import (
     projected_states,
     projection_coverage,
+)
+from app.modules.reporting.read_models.models import (
+    AccountMembershipCurrent,
+    AccountReportDayState,
 )
 from app.modules.reporting.row_set import (
     MATERIAL_UNSUPPORTED,
@@ -84,15 +89,25 @@ def _decode_cursor(value: str) -> dict[str, Any]:
         raise HTTPException(404, detail="query_cursor_not_found") from exc
 
 
-def frozen_member(row: QuerySnapshotRow) -> SnapshotMember:
+def frozen_member(
+    row: QuerySnapshotRow, *, refs: list[dict[str, Any]] | None = None
+) -> SnapshotMember:
     """快照行只冻结成员与顺序；展示和指标由 materialize_rows 按需补全。"""
-    return SnapshotMember(row.row_key, tuple(row.refs), tuple(row.material_uses))
+    return SnapshotMember(
+        row.row_key, tuple(row.refs if refs is None else refs), tuple(row.material_uses)
+    )
 
 
-def frozen_row(row: QuerySnapshotRow) -> ReportRow:
+def frozen_row(
+    row: QuerySnapshotRow, *, refs: list[dict[str, Any]] | None = None
+) -> ReportRow:
     """冻结选择只消费快照创建时的管理身份（账户行为当时的全部系列）。"""
     return ReportRow.model_validate(
-        {"row_key": row.row_key, "refs": row.refs, "material_uses": row.material_uses}
+        {
+            "row_key": row.row_key,
+            "refs": row.refs if refs is None else refs,
+            "material_uses": row.material_uses,
+        }
     )
 
 
@@ -181,14 +196,29 @@ def _build_snapshot(
         raise HTTPException(403, detail="report_scope_forbidden")
     allowed_ids = sorted({item.advertiser_id for item in grants})
     query_diagnostics.count("account_count", len(allowed_ids))
+    if filters.dimension == "account":
+        head_count = session.exec(
+            select(func.count())
+            .select_from(AccountMembershipCurrent)
+            .where(
+                AccountMembershipCurrent.tenant_id == context.tenant_id,
+                col(AccountMembershipCurrent.advertiser_id).in_(allowed_ids),
+            )
+        ).one()
+        # 迁移/同事务触发器保证每户有指针；缺失时明确失败，不漏掉账户或临时扫描目录。
+        if head_count != len(allowed_ids):
+            raise HTTPException(409, detail="query_membership_unavailable")
     now = datetime.now(UTC)
     publication_versions = {"reporting": 1}
+    state_model = (
+        AccountReportDayState if filters.dimension == "account" else ReportSyncState
+    )
     updated = session.exec(
-        select(func.max(ReportSyncState.last_success_at)).where(
-            ReportSyncState.tenant_id == context.tenant_id,
-            col(ReportSyncState.advertiser_id).in_(allowed_ids),
-            ReportSyncState.stat_date >= filters.start_date,
-            ReportSyncState.stat_date <= filters.end_date,
+        select(func.max(state_model.last_success_at)).where(
+            state_model.tenant_id == context.tenant_id,
+            col(state_model.advertiser_id).in_(allowed_ids),
+            state_model.stat_date >= filters.start_date,
+            state_model.stat_date <= filters.end_date,
         )
     ).one()
     if updated is not None:
@@ -220,8 +250,15 @@ def _build_snapshot(
         bc_id=bc_id,
         filters=filters,
     )
-    snapshot.naming_versions = snapshot_naming_versions(
-        session, tenant_id=context.tenant_id, campaigns=totals.naming_campaigns
+    snapshot.naming_versions = (
+        {
+            "directory": 1,
+            **{f"account-version:{version}": 1 for version in totals.account_versions},
+        }
+        if filters.dimension == "account"
+        else snapshot_naming_versions(
+            session, tenant_id=context.tenant_id, campaigns=totals.naming_campaigns
+        )
     )
     snapshot.total = totals.total
     snapshot.summary = _summary(totals, dimension=filters.dimension)
@@ -282,11 +319,18 @@ def _read_page(
         after_sequence=after,
         limit=limit,
     )
+    versions = snapshot_account_versions(session, snapshot=snapshot, rows=rows)
     items = materialize_rows(
         session,
         tenant_id=context.tenant_id,
         filters=filters,
-        members=[frozen_member(row) for row in rows],
+        members=[
+            frozen_member(
+                row,
+                refs=versions[row.row_key].refs if row.row_key in versions else None,
+            )
+            for row in rows
+        ],
         advertisers=snapshot.advertiser_ids,
     )
     if filters.dimension == "account":
@@ -317,19 +361,25 @@ def _read_page(
         raw_observed = metrics_coverage["metrics_observed_at"]
         observed = datetime.fromisoformat(raw_observed) if raw_observed else None
     else:
+        state_model = (
+            AccountReportDayState if filters.dimension == "account" else ReportSyncState
+        )
+        conditions = (
+            []
+            if filters.dimension == "account"
+            else [ReportSyncState.report_kind == "ad_day"]
+        )
         observed = session.exec(
             select(
                 func.max(
-                    func.coalesce(
-                        ReportSyncState.observed_at, ReportSyncState.last_success_at
-                    )
+                    func.coalesce(state_model.observed_at, state_model.last_success_at)
                 )
             ).where(
-                ReportSyncState.tenant_id == context.tenant_id,
-                col(ReportSyncState.advertiser_id).in_(snapshot.advertiser_ids),
-                ReportSyncState.report_kind == "ad_day",
-                ReportSyncState.stat_date >= filters.start_date,
-                ReportSyncState.stat_date <= filters.end_date,
+                state_model.tenant_id == context.tenant_id,
+                col(state_model.advertiser_id).in_(snapshot.advertiser_ids),
+                *conditions,
+                state_model.stat_date >= filters.start_date,
+                state_model.stat_date <= filters.end_date,
             )
         ).one()
     return AdsQueryPage(
