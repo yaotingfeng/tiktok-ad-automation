@@ -371,6 +371,23 @@ def _execute_directory_step(
             if work.resume_token is None or result != "CONTINUE":
                 return result
     except DomainError as error:
+        if (
+            not publish_only
+            and work.failure_fence is not None
+            and (
+                error.code
+                in {"tiktok_call_deadline_exceeded", "read_deadline_exceeded"}
+                or error.code == "tiktok_local_resources_unavailable"
+                and error.retryable is True
+            )
+        ):
+            return _defer_directory_read(
+                database_engine=database_engine,
+                context=context,
+                run_id=run_id,
+                work=work,
+                error_code=error.code,
+            )
         if work.failure_fence is None or error.code not in {
             "route_binding_changed",
             "route_authorization_changed",
@@ -502,6 +519,80 @@ def _execute_directory_step(
                 logger.warning(
                     "directory queued reservation release deferred", exc_info=True
                 )
+
+
+def _defer_directory_read(
+    *,
+    database_engine: Any,
+    context: TenantContext,
+    run_id: UUID,
+    work: _CommittedDirectoryWork,
+    error_code: str,
+) -> str:
+    from app.modules.sync_control.directory_demand import directory_outcome
+    from app.modules.sync_control.models import SyncExecutionScope, SyncSchedule
+
+    # 只归还已提交的本次读取资格。平台响应/契约错误不进入这里，也不把
+    # 已发送请求改成NOT_SENT；已暂存页和费用收据仍由原流程保留与结算。
+    if work.head_fence is None:
+        return "WAIT"
+    # 读取已接近45秒总期限，收尾不能再等待20秒锁并越过Celery软期限。
+    # 父锁竞争立即退出；头仍完整加锁核验，3秒内未完成则整体回滚。
+    with _directory_session(
+        database_engine, deadline=datetime.now(UTC) + timedelta(seconds=3)
+    ) as session:
+        run = session.exec(
+            select(AdDirectoryRun)
+            .where(
+                AdDirectoryRun.id == run_id,
+                AdDirectoryRun.tenant_id == context.tenant_id,
+            )
+            .with_for_update(skip_locked=True)
+        ).one_or_none()
+        if (
+            run is None
+            or run.actor_id != context.actor_id
+            or (run.claim_generation, run.owner_epoch, run.claim_token)
+            != work.failure_fence
+            or run.published_version is not None
+            or run.status in {"COMPLETE", "FAILED", "CANCELLED", "STALE"}
+        ):
+            return "WAIT"
+        heads = session.exec(
+            select(SyncSchedule)
+            .join(
+                SyncExecutionScope,
+                col(SyncExecutionScope.scope_id) == col(SyncSchedule.scope_id),
+            )
+            .where(
+                SyncExecutionScope.directory_run_id == run.id,
+                SyncSchedule.tenant_id == run.tenant_id,
+            )
+            .order_by(col(SyncSchedule.scope_id), col(SyncSchedule.work_class))
+            .with_for_update(of=SyncSchedule)
+        ).all()
+        # 后继grant可能已签发但尚未领取父任务；必须在改父代数前锁头复验，
+        # 不能仅让outcome跳过新头却把新消息的父代数作废。
+        if any(
+            head.lease_token is not None
+            and (
+                head.lease_token != work.head_fence[0]
+                or head.lease_execution_id != run.id
+                or head.lease_execution_generation != run.claim_generation
+            )
+            for head in heads
+        ):
+            return "WAIT"
+        run.status, run.error_code = "WAITING_REMOTE", error_code
+        run.next_attempt_at = datetime.now(UTC) + timedelta(seconds=1)
+        # 先按旧代数清原grant并更新due，再换代；旧页消息不能重用新资格。
+        directory_outcome(session, run, expected_lease_token=work.head_fence[0])
+        run.claim_generation += 1
+        run.claim_token = run.claimed_until = None
+        session.commit()
+        work.resume_token = None
+        work.refill = True
+    return "WAIT"
 
 
 def _run_directory_step(
