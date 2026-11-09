@@ -195,10 +195,10 @@ def test_five_page_quantum_only_loads_frozen_context_at_entry(material_case):
         assert case.run(case.child_id, generation) == "CONTINUE"
     finally:
         event.remove(case.engine, "before_cursor_execute", before)
-    # 过期核验与完整载入都各读一次窄metadata及素材游标，后四页复用。
-    assert len(seen) == 4
-    assert sum("jsonb_array_elements" in statement for statement in seen) == 2
-    assert sum("AS valid_materials" in statement for statement in seen) == 2
+    # 完整校验与读取共用一次窄metadata及素材游标，后四页复用。
+    assert len(seen) == 2
+    assert sum("jsonb_array_elements" in statement for statement in seen) == 1
+    assert sum("AS valid_materials" in statement for statement in seen) == 1
     assert len(business_calls(case.wire, "OFFICIAL_API")) == 6
     with Session(case.engine) as db:
         child = db.get(AdDirectoryRun, case.child_id)
@@ -305,14 +305,14 @@ def test_new_quantum_reloads_context(material_case):
         assert case.run(case.child_id, second) == "CONTINUE"
     finally:
         event.remove(case.engine, "before_cursor_execute", before)
-    assert len(seen) == 4
-    assert sum("jsonb_array_elements" in statement for statement in seen) == 2
-    assert sum("AS valid_materials" in statement for statement in seen) == 2
+    assert len(seen) == 2
+    assert sum("jsonb_array_elements" in statement for statement in seen) == 1
+    assert sum("AS valid_materials" in statement for statement in seen) == 1
     assert len(business_calls(case.wire, "OFFICIAL_API")) == 8
 
 
 @pytest.mark.parametrize("gateway_case", ["OFFICIAL_API"], indirect=True)
-def test_initially_superseded_child_does_not_eagerly_load_bridge(
+def test_initially_superseded_child_validates_once_without_http(
     material_case, monkeypatch
 ):
     case = material_case
@@ -323,12 +323,18 @@ def test_initially_superseded_child_does_not_eagerly_load_bridge(
             ad.observed_at = datetime.now(UTC) + timedelta(seconds=1)
             db.add(ad)
 
-    def unexpected(*_args, **_kwargs):
-        pytest.fail("stale entry must not eagerly load material scope")
+    original = tasks.material_child_scope
+    scopes = []
 
-    monkeypatch.setattr(tasks, "material_child_scope", unexpected)
+    def observed(*args, **kwargs):
+        result = original(*args, **kwargs)
+        scopes.append(result)
+        return result
+
+    monkeypatch.setattr(tasks, "material_child_scope", observed)
     generation = case.claim(case.child_id)
     case.run(case.child_id, generation)
+    assert len(scopes) == 1 and len(scopes[0][1]) == 2
     assert len(business_calls(case.wire, "OFFICIAL_API")) == 1
     with Session(case.engine) as db:
         assert db.get(AdDirectoryRun, case.child_id).status == "STALE"

@@ -46,3 +46,20 @@ W 实际 active 样本中 8 个目录任务均为素材子任务，7 个含 36,0
 独立源审补强：`owners/entries` 改为 `init=False`，只能在构造时从源元组完整推导；禁止通过构造或 `dataclasses.replace` 注入派生索引，替换源素材必须重新验证。补充伪造空索引隐藏歧义及外来尾部桥的构造拒绝回归。Ruff、format、diff 检查通过。严格 mypy 在旧 `ads_read.py` 存在 33 项错误，本次为 32 项；按错误文本去除行号逐项比较，无新增错误（原未参数化 tuple 错误随索引类型细化消失），不声明全量类型检查通过。
 
 最终合同补强后：新文件 **16 PASSED / 14.51 秒**；同时原 context 文件 11 项均通过（上一轮合计 25 PASS / 2 个异常类型断言失败，Python 3.14 的 `replace(init=False字段)` 实际抛 `TypeError`，已纠正断言并重跑全部 16 项）。没有把这两个测试断言错误归为产品故障。
+
+## 第二次修复：消除同量子重复 DTO 构造
+
+第一修复本地提交 `8c96e5aa` 后，进一步确认普通素材读取的首次过期核验调用 `material_child_scope(include_materials=False)`，仍会完整 `_usage` 构造后丢弃；稍后读取又完整构造并保留。因此调整普通读取入口：原 terminal 标量提前到过期核验前，仅非 publisher、无末页且本量子未载入时，完整流式校验并保留一次 DTO，再把同一冻结 owner 集合交给原过期检查。后续逐页新鲜度、fingerprint、gen/token/head/route 及 HTTP 围栏不变。
+
+末页和 publisher 不走保留路径，仍完整流式验证而不保留素材 DTO。初始已过期的普通素材任务现在暂存 N 条 DTO 再结束，这是明确的内存变化；没有取消尾部校验或放宽任何超时。素材 DTO 构造从每量子 2N 降至 N；窄 metadata 与素材 stream 共 4 次 SQL 降至 2 次，其中素材 stream 从 2 次降至 1 次。索引缓存仍在 claim 提交之后创建。
+
+严格旧红：冻结两个素材桥、远端 7 页分两个量子的新增用例，旧实现首量子 `_usage` 实际 4 次而预期 2 次，**1 FAILED**。新实现每量子恰好 2 次，两个量子累计 4 次。
+
+最终四文件真实 PostgreSQL/Redis针对性回归 **79 PASSED / 56.00 秒**，包括：
+
+- 新量子重新验证、完整 DTO 构造计数与 SQL stream 次数；初始过期仍验证一次且不发送 HTTP。
+- 第 502 条素材跨租户损坏，在正常和初始已过期两种状态都拒绝，覆盖第二批 FETCH 的尾部。
+- 已有末页旧 read 返回 WAIT，publisher 完整校验但不保留 DTO，不增加 HTTP。
+- 原 owner、冻结范围、代数、head 更换、末页发布恢复、精确桥和发布回归。
+
+本次 `tasks.py` 单文件严格 mypy 通过；Ruff、format、diff 检查通过；独立源审无 Critical/Important。第二次修改仍未提交或上线，由主执行者统一处理。
