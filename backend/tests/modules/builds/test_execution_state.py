@@ -305,9 +305,9 @@ def test_ad_disable_receipt_without_status_waits_for_readback(session, attempt):
         "ad_name": "ad-user-test",
         "operation_status": "DISABLE",
     }
-    step.request_body_digest = hashlib.sha256(json.dumps(
-        step.request_body, sort_keys=True, separators=(",", ":")
-    ).encode()).hexdigest()
+    step.request_body_digest = hashlib.sha256(
+        json.dumps(step.request_body, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
     step.phase = "REQUEST_ARMED"
     session.flush()
     result = CreatedObject(
