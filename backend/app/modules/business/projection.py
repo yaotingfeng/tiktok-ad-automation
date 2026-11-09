@@ -57,10 +57,13 @@ from app.modules.business.prefix import (
     PREPARATION_PHASES,
     SNAPSHOT_LOCK,
     advance_prefix,
+    advance_rebase,
     begin_prefix,
+    begin_rebase,
     frozen_accounts,
     frozen_metadata,
     narrow_runs,
+    rebase_dirty_start,
 )
 from app.modules.business.source import (
     discover_exact_mappings,
@@ -711,6 +714,78 @@ def _freeze_candidate(
     return run.status == "SUPERSEDED"
 
 
+def _verify_candidate(
+    session: Session,
+    run: BusinessRun,
+    scope: BusinessScope,
+    now: datetime,
+    allowed: list[str],
+) -> bool:
+    # 初次冻结与最终核验共用单例，不能让多个fork同时展开大型季度快照。
+    if not session.execute(
+        text("SELECT pg_try_advisory_xact_lock(:key)"), {"key": SNAPSHOT_LOCK}
+    ).scalar_one():
+        return False
+    session.refresh(run, attribute_names=["inputs"])
+    if not isinstance(run.inputs.get("accounts"), dict) or not set(
+        run.inputs["accounts"]
+    ) <= set(allowed):
+        run.status = "SUPERSEDED"
+        return True
+    snapshot, signature = source_snapshot(
+        session, scope, run.quarter, run.end_date, now
+    )
+    if signature != run.source_signature:
+        dirty = rebase_dirty_start(run, snapshot)
+        if dirty is None:
+            run.status = "SUPERSEDED"
+            return True
+        if dirty <= run.end_date:
+            begin_rebase(run, snapshot, signature, dirty)
+            session.add(run)
+            session.flush()
+            return False
+        # cutoff元数据变更但没有任何账户日覆盖资格变化，直接保存真实快照。
+        run.inputs = {
+            **snapshot,
+            "dirty_start": run.inputs["dirty_start"],
+            "after": None,
+        }
+        run.source_signature = signature
+    missing = sorted(
+        {
+            d
+            for a in run.inputs["accounts"]
+            for d in _days(run.quarter, run.end_date)
+            if not _source_complete(run, a, d)
+        }
+    )
+    run.coverage = {
+        **run.coverage,
+        "missing_dates": [d.isoformat() for d in missing],
+        "policy_restricted": run.inputs.get("policy_restricted", False),
+    }
+    run.status, run.finished_at = "COMPLETE", now
+    statement = pg_insert(BusinessPublication).values(
+        tenant_id=run.tenant_id,
+        bc_id=run.bc_id,
+        quarter=run.quarter,
+        run_id=run.id,
+    )
+    session.execute(
+        statement.on_conflict_do_update(
+            index_elements=["tenant_id", "bc_id", "quarter"],
+            set_={"run_id": run.id},
+        )
+    )
+    from app.modules.business.publication import publish_ready_manifest
+
+    publish_ready_manifest(session, scope)
+    session.add(run)
+    session.flush()
+    return True
+
+
 def advance_run(session: Session, run_id: UUID, *, now: datetime | None = None) -> bool:
     now = now or datetime.now(UTC)
     identity = session.exec(narrow_runs().where(col(BusinessRun.id) == run_id)).first()
@@ -759,11 +834,18 @@ def advance_run(session: Session, run_id: UUID, *, now: datetime | None = None) 
         raise ValueError("未知经营核算阶段")
     if run.phase == "SNAPSHOT":
         return _freeze_candidate(session, run, scope, now)
+    if run.phase == "VERIFY":
+        return _verify_candidate(session, run, scope, now, allowed)
     if not frozen_accounts(session, run.id) <= set(allowed):
         run.status = "SUPERSEDED"
         session.add(run)
         return True
     run.status = "RUNNING"
+    if run.phase == "REBASE":
+        advance_rebase(session, run, batch=BASE_BATCH)
+        session.add(run)
+        session.flush()
+        return False
     if run.phase in PREPARATION_PHASES:
         advance_prefix(session, run, batch=BASE_BATCH)
         session.add(run)
@@ -784,41 +866,8 @@ def advance_run(session: Session, run_id: UUID, *, now: datetime | None = None) 
         _aggregate_day(session, run)
         run.cursor += timedelta(days=1)
     else:
-        _scope_lock(session, context, run.bc_id)
-        session.refresh(scope)
-        _, signature = source_snapshot(session, scope, run.quarter, run.end_date, now)
-        if signature != run.source_signature or scope.revision != run.scope_revision:
-            run.status = "SUPERSEDED"
-        else:
-            missing = sorted(
-                {
-                    d
-                    for a in run.inputs["accounts"]
-                    for d in _days(run.quarter, run.end_date)
-                    if not _source_complete(run, a, d)
-                }
-            )
-            run.coverage = {
-                **run.coverage,
-                "missing_dates": [d.isoformat() for d in missing],
-                "policy_restricted": run.inputs.get("policy_restricted", False),
-            }
-            run.status, run.finished_at = "COMPLETE", now
-            statement = pg_insert(BusinessPublication).values(
-                tenant_id=run.tenant_id,
-                bc_id=run.bc_id,
-                quarter=run.quarter,
-                run_id=run.id,
-            )
-            session.execute(
-                statement.on_conflict_do_update(
-                    index_elements=["tenant_id", "bc_id", "quarter"],
-                    set_={"run_id": run.id},
-                )
-            )
-            from app.modules.business.publication import publish_ready_manifest
-
-            publish_ready_manifest(session, scope)
+        # 最终重型来源核验独立占一个18秒工作单元，不挤入剩余3秒量子。
+        run.phase = "VERIFY"
     session.add(run)
     session.flush()
     return run.status in {"COMPLETE", "SUPERSEDED", "FAILED"}

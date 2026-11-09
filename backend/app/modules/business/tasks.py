@@ -23,7 +23,12 @@ from app.modules.accounts.models import TenantBC
 from app.modules.business.calculation import quarter_start
 from app.modules.business.configuration import scope_accounts
 from app.modules.business.models import BusinessRun, BusinessScope
-from app.modules.business.prefix import PREPARATION_PHASES, narrow_runs, repair_windows
+from app.modules.business.prefix import (
+    HEAVY_PHASES,
+    PREPARATION_PHASES,
+    narrow_runs,
+    repair_windows,
+)
 from app.modules.business.projection import (
     _source_complete,
     advance_run,
@@ -230,7 +235,7 @@ def _work_session() -> Iterator[Session]:
 @celery_app.task(name="business.work", soft_time_limit=25, time_limit=30)  # type: ignore[untyped-decorator]
 def work_business() -> int:
     completed, deadline = 0, monotonic() + 3
-    snapshot_attempted = False
+    heavy_attempted = False
     while monotonic() < deadline:
         run_id = None
         phase = None
@@ -258,12 +263,12 @@ def work_business() -> int:
                 if chosen is None:
                     break
                 run_id, phase = chosen
-                snapshot_attempted = phase == "SNAPSHOT"
+                heavy_attempted = phase in HEAVY_PHASES
                 if phase in PREPARATION_PHASES:
                     # 重型冻结单独占一个有界工作单元，普通准备/复制共享本轮3秒。
                     seconds = (
                         18.0
-                        if phase == "SNAPSHOT"
+                        if phase in HEAVY_PHASES
                         else max(0.0, deadline - monotonic())
                     )
                     with query_budget(session, seconds=seconds):
@@ -272,7 +277,7 @@ def work_business() -> int:
                     done = advance_run(session, run_id)
                 session.commit()
                 completed += int(done)
-                if phase == "SNAPSHOT":
+                if phase in HEAVY_PHASES:
                     break
         except SoftTimeLimitExceeded:
             raise
@@ -298,7 +303,7 @@ def work_business() -> int:
                         session.add(run)
                         session.commit()
             break
-    if snapshot_attempted:
+    if heavy_attempted:
         return completed
     from app.modules.business.exports import process_pending_export
 
