@@ -321,7 +321,7 @@ def _generate_preview(
         get_version(session, context=context, version_id=draft.strategy_version_id),
         draft.structure_override,
     )
-    # 在账户广告展开前按当前有效单元计数，避免整批乘法绕过单策略上限。
+    # 在账户广告展开前按当前有效单元检查结构；最终广告总数不设本地上限。
     unit_counts = session.exec(
         select(func.count(col(DraftCreativeUnit.id)))
         .where(
