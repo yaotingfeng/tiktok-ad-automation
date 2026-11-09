@@ -7,6 +7,7 @@ from app.integrations.tiktok.contracts.common import (
     CallEvidence,
     McpBusinessResponse,
     RemoteCallError,
+    safe_identifier,
 )
 
 ID_KEYS = {
@@ -15,14 +16,6 @@ ID_KEYS = {
     "AD": "smart_plus_ad_id",
     "CTA": "creative_portfolio_id",
 }
-
-
-def safe_identifier(value: object) -> str | None:
-    return (
-        value
-        if isinstance(value, str) and re.fullmatch(r"[A-Za-z0-9_.:-]{1,128}", value)
-        else None
-    )
 
 
 def created_result(*, kind: BuildKind, response: McpBusinessResponse) -> CreatedObject:
@@ -45,7 +38,7 @@ def created_result(*, kind: BuildKind, response: McpBusinessResponse) -> Created
     )
 
 
-_SDK_NO_EFFECT_REJECTIONS = {
+NO_EFFECT_REJECTIONS = {
     # TikTok 对 Smart+ 广告组返回 40002 时表示请求参数不被接受，
     # 该请求不会生成广告组；必须把它交给有界业务拒绝重试，而不是伪装成
     # “创建结果未知”再排队做永远无法确认的远端回读。
@@ -56,7 +49,9 @@ _SDK_NO_EFFECT_REJECTIONS = {
 
 def known_no_effect_rejection(kind: str, remote_code: object) -> bool:
     """Return whether a saved business code proves that no object was created."""
-    return type(remote_code) is int and remote_code in _SDK_NO_EFFECT_REJECTIONS.get(kind, ())
+    return type(remote_code) is int and remote_code in NO_EFFECT_REJECTIONS.get(
+        kind, ()
+    )
 
 
 def sdk_creation_envelope(
@@ -66,8 +61,11 @@ def sdk_creation_envelope(
     evidence = (
         CallEvidence(
             request_id=safe_identifier(raw.get("request_id")),
-            # 只保留严格整数错误码；非零回执仍需按 UNKNOWN 核查，不能重发。
+            # 只保留严格整数业务码及脱敏文案；是否确认拒绝由下方分类决定。
             remote_code=code if type(code) is int and code != 0 else None,
+            remote_message=raw.get("message")
+            if type(code) is int and code != 0
+            else None,
         )
         if isinstance(raw, dict)
         else CallEvidence()
@@ -75,7 +73,7 @@ def sdk_creation_envelope(
     if (
         isinstance(raw, dict)
         and type(raw.get("code")) is int
-        and raw["code"] in _SDK_NO_EFFECT_REJECTIONS.get(kind or "", ())
+        and raw["code"] in NO_EFFECT_REJECTIONS.get(kind or "", ())
     ):
         raise RemoteCallError(
             "tiktok_business_error", effect="REJECTED_NO_EFFECT", evidence=evidence

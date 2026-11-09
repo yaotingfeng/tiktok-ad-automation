@@ -175,7 +175,8 @@ def test_cursor_survives_new_adapter_and_binds_every_route_dimension(music_sdk):
         advertiser_id="123", keyword="sunshine", cursor=None, budget=budget
     )
     cursor = first.next_cursor
-    assert cursor and "sunshine" not in cursor and "123" not in cursor
+    # 短账号数字可能自然出现在十六进制摘要中；下方换账号实测游标绑定。
+    assert cursor and "sunshine" not in cursor
     for field, value in {
         "tenant_id": uuid4(),
         "bc_id": "bc-other",

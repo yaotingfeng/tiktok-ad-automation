@@ -4,8 +4,12 @@ from datetime import datetime
 from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from app.integrations.tiktok.contracts.common import (
+    safe_identifier,
+    safe_remote_message,
+)
 from app.integrations.tiktok.contracts.context import FrozenTikTokRoute
 from app.modules.builds.preview_schemas import FrozenUnit
 from app.modules.builds.route_schemas import ExecutionRoutePublic
@@ -36,6 +40,9 @@ class Recovery(BaseModel):
 
 
 class SubmissionView(BaseModel):
+    reused: ObjectCounts = Field(default_factory=ObjectCounts)
+    continuation_source_ids: list[UUID] = Field(default_factory=list)
+    continued_by_submission_ids: list[UUID] = Field(default_factory=list)
     corrected_ad_count: int = 0
     execution_route: ExecutionRoutePublic | None = None
     recovery_mode: Literal["ORIGINAL_READ", "REAUTHORIZE_READ", "BLOCKED"] = "BLOCKED"
@@ -170,6 +177,25 @@ class EvidencePublic(BaseModel):
     attempt: int
     conclusion: str
     observed_at: datetime
+    remote_code: int | None = None
+    remote_message: str | None = None
+    request_id: str | None = None
+
+    @field_validator("remote_code", mode="before")
+    @classmethod
+    def validated_remote_code(cls, value: object) -> int | None:
+        return value if type(value) is int and value != 0 else None
+
+    @field_validator("remote_message", mode="before")
+    @classmethod
+    def sanitized_remote_message(cls, value: object) -> str | None:
+        # 历史 JSON 也必须经过同一脱敏边界，不能假设旧回执已经清理过。
+        return safe_remote_message(value)
+
+    @field_validator("request_id", mode="before")
+    @classmethod
+    def validated_request_id(cls, value: object) -> str | None:
+        return safe_identifier(value)
 
 
 class SubmissionMetadata(BaseModel):
