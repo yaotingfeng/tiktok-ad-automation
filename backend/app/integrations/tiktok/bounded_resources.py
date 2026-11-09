@@ -76,8 +76,12 @@ def bounded_session(
     ) -> None:
         # 多次权限查询共享同一期限，不在每条 SQL 上重新给完整预算。
         limit = max(1, int(_remaining(local_deadline) * 1000))
-        cursor.execute(f"SET LOCAL statement_timeout = {limit}")
-        cursor.execute(f"SET LOCAL lock_timeout = {limit}")
+        # 同一绝对期限的两项设置合并一次往返；仍逐查询重算，不缓存权限或预算。
+        cursor.execute(
+            "SELECT set_config('statement_timeout', %s, true), "
+            "set_config('lock_timeout', %s, true)",
+            (str(limit), str(limit)),
+        )
 
     failed = False
     try:
