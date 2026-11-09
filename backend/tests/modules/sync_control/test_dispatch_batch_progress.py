@@ -1,6 +1,7 @@
 """真实PG/Redis验证预算回滚后的跨唤醒进展，不调用平台接口。"""
 
 import os
+from datetime import UTC, datetime
 
 import pytest
 from redis import Redis
@@ -132,7 +133,7 @@ def test_hint_write_failure_preserves_commits_and_rollbacks(
         )
 
 
-def test_repeated_budget_exhaustion_commits_single_claim_progress(
+def test_repeated_short_budgets_commit_progress_without_global_penalty(
     committed_sync_seed, redis_client, monkeypatch
 ):
     seed, factory = committed_sync_seed
@@ -184,11 +185,85 @@ def test_repeated_budget_exhaustion_commits_single_claim_progress(
                 members.update(redis_client.zrange(key, 0, -1))
         assert members == tokens
 
-    assert job_tasks._dispatch_pending(engine, now, budget_seconds=0.8) == 0
-    assert_consistent(0)
+    # 短片从首轮就单条提交；无需先整批回滚、再永久压低后续完整唤醒。
     committed = 0
-    for _ in range(3):
+    key = f"sync:dispatch-batch:v1:{job_tasks.settings.TIKTOK_APP_ID}:report"
+    for _ in range(6):
         claimed = job_tasks._dispatch_pending(engine, now, budget_seconds=0.8)
         assert claimed > 0, "重复唤醒必须能提交进展，不能再次撤销同一前缀"
         committed += claimed
         assert_consistent(committed)
+        assert redis_client.get(key) is None
+        if committed == len(jobs):
+            break
+    assert committed == len(jobs)
+
+
+@pytest.mark.parametrize("budget,should_reduce", [(0.4, False), (4, True)])
+@pytest.mark.usefixtures("committed_sync_seed")
+def test_only_full_dispatch_budget_timeout_reduces_global_batch(
+    redis_client,
+    monkeypatch,
+    budget,
+    should_reduce,
+):
+    from app.modules.reporting.query_budget import QueryBudgetExceeded
+
+    monkeypatch.setattr(job_tasks.settings, "REDIS_URL", os.environ["TEST_REDIS_URL"])
+    key = f"sync:dispatch-batch:v1:{job_tasks.settings.TIKTOK_APP_ID}:report"
+    job_tasks._update_dispatch_batch_hint(redis_client, key, limit=4)
+    before = redis_client.get(key)
+    redis_client.pexpire(key, 60_000)
+
+    def blocked(session, *_args, **_kwargs):
+        session.execute(text("SELECT pg_sleep(6)"))
+        raise QueryBudgetExceeded()
+
+    monkeypatch.setattr(job_tasks, "_dispatch_report_jobs", blocked)
+    assert (
+        job_tasks._dispatch_pending(engine, datetime.now(UTC), budget_seconds=budget)
+        == 0
+    )
+    if should_reduce:
+        assert job_tasks._dispatch_batch_hint(redis_client, key)[1] == 1
+        assert redis_client.get(key) != before and redis_client.pttl(key) > 60_000
+    else:
+        assert redis_client.get(key) == before and 0 < redis_client.pttl(key) <= 60_000
+
+
+def test_short_dispatch_slice_commits_one_without_global_batch_penalty(
+    committed_sync_seed,
+    redis_client,
+    monkeypatch,
+):
+    seed, factory = committed_sync_seed
+    monkeypatch.setattr(job_tasks.settings, "REDIS_URL", os.environ["TEST_REDIS_URL"])
+    jobs, now = seed_jobs(factory, seed, 2)
+    key = f"sync:dispatch-batch:v1:{job_tasks.settings.TIKTOK_APP_ID}:report"
+    job_tasks._update_dispatch_batch_hint(redis_client, key, limit=4)
+    before = redis_client.get(key)
+    original = dispatcher.reserve_execution_cost
+
+    def slow_claim(session, **kwargs):
+        session.execute(text("SELECT pg_sleep(0.25)"))
+        return original(session, **kwargs)
+
+    monkeypatch.setattr(dispatcher, "reserve_execution_cost", slow_claim)
+    assert job_tasks._dispatch_pending(engine, now, budget_seconds=0.4) == 1
+    assert redis_client.get(key) == before
+    with factory() as db:
+        assert (
+            sum(
+                db.get(ReportSyncJob, identity).status == "RUNNING" for identity in jobs
+            )
+            == 1
+        )
+        for model in (PendingDispatch, SyncCostLedger):
+            assert (
+                len(
+                    db.exec(
+                        select(model).where(model.tenant_id == seed.tenant_id)
+                    ).all()
+                )
+                == 1
+            )

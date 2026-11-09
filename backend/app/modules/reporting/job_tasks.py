@@ -66,6 +66,8 @@ REPORT_DISPATCH_WINDOW = 36
 # 按小批摊销窗口/租户发现，批间提交释放锁；不能一次锁住整个候补窗口。
 DISPATCH_COMMIT_BATCH = 4
 DISPATCH_LARGE_COMMIT_BATCH = 8
+# 与后轮放大到八条使用相同预算门槛；短时间片不能作为全局降批样本。
+DISPATCH_BATCH_SAMPLE_SECONDS = 2.0
 # 只记录扫描批量提示，不持有业务租约；空闲后自动恢复正常批量。
 DISPATCH_BATCH_HINT_TTL = 300
 # 一轮周期目录分批推进；此游标不占用账户筛选或规则相位的进度键。
@@ -985,10 +987,14 @@ def _dispatch_pending(
                     hint_limit,
                     (
                         DISPATCH_LARGE_COMMIT_BATCH
-                        if round_index > 0 and remaining > 2
+                        if round_index > 0 and remaining > DISPATCH_BATCH_SAMPLE_SECONDS
                         else DISPATCH_COMMIT_BATCH
                     ),
                 )
+                if family != "balance" and remaining < DISPATCH_BATCH_SAMPLE_SECONDS:
+                    # 尾部/规划余量只尝试单条，避免四条整批回滚；本轮不足
+                    # 不代表下一次完整唤醒也只能领取一条。
+                    batch_limit = 1
                 try:
                     # 每类派发独立提交：后续查询耗尽总预算不能撤销前面已领取的
                     # 工作。租约、成本和outbox仍同事务；异常同步撤销Redis占位。
@@ -1037,7 +1043,10 @@ def _dispatch_pending(
                 except (DBAPIError, QueryBudgetExceeded) as error:
                     if not _planning_budget_error(error):
                         raise
-                    if family != "balance":
+                    if (
+                        family != "balance"
+                        and remaining >= DISPATCH_BATCH_SAMPLE_SECONDS
+                    ):
                         _update_dispatch_batch_hint(redis, hint_key)
                     logger.info(
                         "sync dispatch yielded: family=%s committed=%s", family, count
