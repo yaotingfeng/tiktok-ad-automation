@@ -567,17 +567,22 @@ def _locate_post_step(
     query = state.get("query", {"page": 1, "found": False})
     result = read_ad_posts(tuple(query_ads), first, last, query["page"])
     if result.total_number >= 20_000:
-        if len(ads) == 1:
+        if len(query_ads) == 1:
             raise DomainError(
                 "report_truncation_risk", "报表行数达到平台上限，可能被截断"
             )
-        # 大候选集合可能触及平台结果上限；拆为独立未确认子集，不能据截断页推导缺失。
+        # 截断页不能证明缺失。LIFO 先完整搜索左侧；仅在左侧查空后才会
+        # 处理右侧，此时父阳性才条件性地传给右侧。嵌套拆分也不能丢掉
+        # 该约束，否则全部子集查空时会把快照矛盾误签成否定证据。
         state.pop("query", None)
         stack.pop()
         middle = len(ads) // 2
         stack.extend(
             [
-                {"ads": ads[middle:], "confirmed": False},
+                {
+                    "ads": ads[middle:],
+                    "confirmed": node["confirmed"] or query.get("found", False),
+                },
                 {"ads": ads[:middle], "confirmed": False},
             ]
         )
@@ -908,7 +913,9 @@ def refresh_material_links(
             )
 
             def read_and_share(ads, first_day, last_day, page_number):
-                result = query_reader(ads, first_day, last_day, page_number)
+                result = query_reader(
+                    ads, first_day, last_day, page_number, positive_target=target
+                )
                 if len(ads) == 1:
                     # 单广告响应已经证明整页帖子的归属，不再为每个帖子重复读取相同报表。
                     mids = {row_identity_key(row) for row in result.rows}

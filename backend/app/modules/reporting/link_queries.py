@@ -1,7 +1,8 @@
-"""任务内复用旧帖定位查询；只缓存完整集合，部分页不能证明帖子不存在。"""
+"""任务内复用完整定位集合；过期成员仅作阳性线索，不能证明帖子不存在。"""
 
 import hashlib
 import json
+from datetime import date
 from typing import Any
 
 from app.core.errors import DomainError
@@ -55,24 +56,50 @@ class QueryMembershipReader:
         self.targets = set(cache.setdefault("targets", []))
         self.entries = cache.setdefault("entries", {})
         for key, value in list(self.entries.items()):
-            if self.now - value["at"] >= CACHE_SECONDS:
+            # 旧阳性只帮助尚未完成的目标缩小广告集合；无剩余目标的过期
+            # 条目及时回收。保留原观察时间，绝不将其续期成新鲜否定证据。
+            if self.now - value["at"] >= CACHE_SECONDS and not targets.intersection(
+                value["members"]
+            ):
                 del self.entries[key]
+        # 完整缓存与分页续点沿用各自总量预算，不能因合法大续点清空小缓存。
+        self._trim(
+            MAX_STATE_BYTES if cache.get("pending") is not None else MAX_CACHE_BYTES
+        )
 
     def pending_cache_expired(self) -> bool:
         """过期的未完查询即使读完也不能复用为完整成员缓存；不续期观察起点。"""
         pending = self.cache.get("pending")
         return pending is not None and self.now - pending["at"] >= CACHE_SECONDS
 
-    def __call__(self, ads, first, last, page):
+    def __call__(
+        self,
+        ads: tuple[str, ...],
+        first: date,
+        last: date,
+        page: int,
+        *,
+        positive_target: str | None = None,
+    ) -> RawReportPage:
         key = hashlib.sha256(
             json.dumps([sorted(ads), str(first), str(last)]).encode()
         ).hexdigest()
-        # 长分页可能刚在本 reader 中完成；完整集合仍从第一页观察起点计时，
-        # 不能仅靠构造时清缓存，把刚完成的旧负证据当成新的五分钟命中。
-        if key in self.entries and self.now - self.entries[key]["at"] >= CACHE_SECONDS:
-            del self.entries[key]
-        if page == 1 and key in self.entries:
-            members = self.entries[key]["members"]
+        entry = self.entries.get(key)
+        members: list[str] | None = None
+        if page == 1 and entry is not None:
+            # 长分页刚完成的集合也从第一页起计时；仅新鲜完整集合可证明阴性。
+            if self.now - entry["at"] < CACHE_SECONDS:
+                members = entry["members"]
+            elif (
+                len(ads) > 1
+                and positive_target is not None
+                and positive_target in self.targets
+                and positive_target in entry["members"]
+            ):
+                # 仅返回当前 typed 目标的历史阳性，不扩散为其他目标的阴性，
+                # 不动 pending/at；最终单广告归属仍必须取得新鲜正向证据。
+                members = [positive_target]
+        if members is not None:
             return RawReportPage(
                 tuple(
                     {
@@ -87,7 +114,7 @@ class QueryMembershipReader:
                 1 if members else 0,
                 len(members),
             )
-        result = self.read(ads, first, last, page)
+        result: RawReportPage = self.read(ads, first, last, page)
         if result.total_number >= 20_000:
             self.cache.pop("pending", None)
             return result  # 由定位器拆广告子集；截断结果绝不缓存成完整集合。
@@ -144,7 +171,7 @@ class QueryMembershipReader:
                 self._trim(MAX_CACHE_BYTES)
         return result
 
-    def _trim(self, maximum):
+    def _trim(self, maximum: int) -> None:
         while self.entries and (
             len(self.entries) > MAX_ENTRIES
             or len(json.dumps(self.cache).encode()) > maximum
