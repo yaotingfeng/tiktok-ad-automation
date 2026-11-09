@@ -200,3 +200,38 @@ def test_standard_status_cannot_supply_missing_minimum_age():
                 evidence=CallEvidence(),
             ),
         )
+
+
+@pytest.mark.parametrize("mode,blocked", [(None, False), ("MANUAL", True)])
+def test_legacy_automatic_scene_defaults_preserve_inflight_intent(
+    monkeypatch, mode, blocked
+):
+    from types import SimpleNamespace
+
+    from app.modules.builds import execution
+
+    original = apply_targeting(scene(), AudienceTargeting(), ["BR"]).to_snapshot()
+    original["adgroup_fields"].pop("targeting_optimization_mode")
+    original["adgroup_fields"]["targeting_spec"].pop("spc_audience_age")
+    if mode:
+        original["adgroup_fields"]["targeting_optimization_mode"] = mode
+    frozen = SimpleNamespace(
+        scene_snapshot=original,
+        bc_id="bc",
+        advertiser_id="100",
+        link_id=uuid4(),
+        preview_id=uuid4(),
+        media_kind="VIDEO",
+        budget_strategy="SERIES",
+        bid_strategy="TARGET_ROAS",
+    )
+    monkeypatch.setattr(execution, "read_scene_context", lambda *a, **k: scene())
+    monkeypatch.setattr(execution, "load_preview_route", lambda *a, **k: None)
+    if blocked:
+        with pytest.raises(DomainError) as error:
+            execution._current_scene(None, None, frozen)
+        assert error.value.code == "scene_intent_changed"
+    else:
+        execution._current_scene(None, None, frozen)
+        assert "targeting_optimization_mode" not in original["adgroup_fields"]
+    assert "spc_audience_age" not in original["adgroup_fields"]["targeting_spec"]

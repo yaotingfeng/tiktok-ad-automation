@@ -213,6 +213,19 @@ def _current_scene(
             item = dict(item)
             if item.get("optimization_event") == "IMPRESSION_LEVEL_AD_REVENUE":
                 item.setdefault("vbo_window", "ZERO_DAY")
+            # 仅在比较时规范化平台原本的自动/18+默认值，避免更新后误伤
+            # 正在执行的旧默认预览；不修改原快照、请求正文或MANUAL语义。
+            if item.get("targeting_optimization_mode") in (None, "AUTOMATIC"):
+                item["targeting_optimization_mode"] = "AUTOMATIC"
+                target = item.get("targeting_spec")
+                if (
+                    isinstance(target, dict)
+                    and not target.get("age_groups")
+                    and target.get("gender") in (None, "GENDER_UNLIMITED")
+                ):
+                    target = dict(target)
+                    target.setdefault("spc_audience_age", "OVER_EIGHTEEN")
+                    item["targeting_spec"] = target
         return item
 
     if any(
