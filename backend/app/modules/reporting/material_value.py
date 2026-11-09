@@ -13,10 +13,22 @@ VIDEO_REPORT_TYPES = ("VIDEO_SPARK_ADS", "VIDEO_NON_SPARK_ADS")
 
 # 先按每个窗口、账户、帖子合计，再判正值；不能逐日筛正数后相加，也不能用
 # 重叠窗口重复累计金额。规则包含多个窗口时，任一窗口有价值就必须保护身份缺口。
-def _window_values_sql(*, typed: bool = False) -> str:
+def _window_values_sql(*, typed: bool = False, candidate: bool = False) -> str:
     # 补链须区分素材命名空间；既有视频规则仍使用原跨日净额合同。
+    if candidate and not typed:
+        raise ValueError("material candidate requires typed values")
     type_column = ", main_material_type" if typed else ""
     fact_type = ", f.main_material_type" if typed else ""
+    # 仅供内部 LATERAL 的去重候选使用；过滤素材键后仍保留完整窗口净额，
+    # 不能先筛正金额，也不能因同素材对应多个广告而重复累计事实。
+    candidate_condition = (
+        """
+        AND f.advertiser_id=material_candidate.advertiser_id
+        AND f.main_material_id=material_candidate.main_material_id
+        AND f.main_material_type=material_candidate.main_material_type"""
+        if candidate
+        else ""
+    )
     return f"""
     SELECT advertiser_id, main_material_id{type_column}, bool_or(has_value) AS has_value
     FROM (
@@ -28,7 +40,7 @@ def _window_values_sql(*, typed: bool = False) -> str:
         AND (CAST(:value_material_types AS text[]) IS NULL OR f.main_material_type=ANY(CAST(:value_material_types AS text[])))
         AND f.stat_date>=COALESCE(CAST(:value_scan_start AS date), '-infinity'::date)
         AND f.stat_date<=COALESCE(CAST(:value_scan_end AS date), 'infinity'::date)
-        AND (w.s IS NULL OR f.stat_date>=w.s) AND (w.e IS NULL OR f.stat_date<=w.e)
+        AND (w.s IS NULL OR f.stat_date>=w.s) AND (w.e IS NULL OR f.stat_date<=w.e){candidate_condition}
       GROUP BY w.ordinality,f.advertiser_id,f.main_material_id{fact_type}
     ) per_window GROUP BY advertiser_id,main_material_id{type_column}
 """
@@ -36,6 +48,9 @@ def _window_values_sql(*, typed: bool = False) -> str:
 
 MATERIAL_WINDOW_VALUES_SQL = _window_values_sql()
 TYPED_MATERIAL_WINDOW_VALUES_SQL = _window_values_sql(typed=True)
+TYPED_CANDIDATE_MATERIAL_WINDOW_VALUES_SQL = _window_values_sql(
+    typed=True, candidate=True
+)
 
 
 def material_value_parameters(
