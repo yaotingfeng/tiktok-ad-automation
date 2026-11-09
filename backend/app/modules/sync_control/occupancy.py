@@ -5,7 +5,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
 from typing import Any, cast
-from uuid import UUID, uuid4
+from uuid import UUID
 
 from redis import Redis
 from redis.exceptions import RedisError
@@ -80,7 +80,11 @@ def reserve_for_send(
         if scope != state["scope"]:
             release_dispatch(redis, reservation_id=reservation, **state["scope"])
     else:
-        reservation = str(uuid4())
+        # 首次发送已经把本消息从queued交接到真实inflight；同一有界量子的续页
+        # 不再是排队消息。再次预留会让其他尚未发送的占位虚扣可用频率，导致
+        # 真实额度有余量却提前结束量子。每页仍由admitted_scope调用原原子Lua，
+        # 检查实际QPS/QPM/QPD、并发和平台冷却；不删除别人的queued凭据。
+        return None, None
     ready = reserve_dispatch(redis, reservation_id=reservation, policy=policy, **scope)
     return reservation, ready
 
