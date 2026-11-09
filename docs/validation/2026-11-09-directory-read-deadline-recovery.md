@@ -1,6 +1,6 @@
 # 2026-11-09 读取期限结束后归还资格
 
-状态：代码与独立审查完成，待精确生产发布。
+状态：已以 S `f674c81a` 发布并完成11角色生产验收，当前 `0549cd42` 已继承该修复。本地提交 `d9da8210` 与 `f674c81a` 的补丁相同；本次修复读取期限结束后的资格归还，不代表同步队列已清零。
 
 生产5分钟日志复现 tiktok_call_deadline_exceeded / read_deadline_exceeded。原读取任务已结束，却仅释放Redis queued；PG父claim90秒、head grant240秒仍保留，后续领取还须等待head到期及Beat/公平轮转。
 
