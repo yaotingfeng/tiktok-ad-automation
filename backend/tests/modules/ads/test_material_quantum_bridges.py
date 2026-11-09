@@ -302,3 +302,97 @@ def test_derived_index_cannot_be_forged_or_hide_foreign_tail(bridge_case):
         PreparedMaterialBridges(ads, invalid_materials)
     with pytest.raises(DomainError):
         replace(prepared, materials=invalid_materials)
+
+
+@pytest.mark.parametrize("gateway_case", ["OFFICIAL_API"], indirect=True)
+@pytest.mark.parametrize("material_case", [6002], indirect=True)
+def test_each_quantum_constructs_frozen_material_dtos_once(material_case, monkeypatch):
+    from app.modules.ads import material_directory_children
+
+    case = material_case
+    original = material_directory_children._usage
+    constructed = 0
+
+    def usage(value):
+        nonlocal constructed
+        constructed += 1
+        return original(value)
+
+    monkeypatch.setattr(material_directory_children, "_usage", usage)
+    # Fixture冻结两个主响应素材桥；6002条远端结果分为5+2页两个量子。
+    for quantum in (1, 2):
+        assert case.run(case.child_id, case.claim(case.child_id)) == "CONTINUE"
+        assert constructed == 2 * quantum
+
+
+@pytest.mark.parametrize("gateway_case", ["OFFICIAL_API"], indirect=True)
+def test_terminal_read_and_publisher_do_not_retain_frozen_materials(
+    material_case, monkeypatch
+):
+    from app.modules.ads import material_directory_children
+    from tests.integrations.tiktok.gateway_support import business_calls
+
+    case = material_case
+    generation = case.claim(case.child_id)
+    assert case.run(case.child_id, generation) == "CONTINUE"
+    calls = len(business_calls(case.wire, "OFFICIAL_API"))
+    original = material_directory_children.material_child_scope
+    modes = []
+
+    def checked(*args, **kwargs):
+        modes.append(kwargs.get("include_materials", True))
+        scope = original(*args, **kwargs)
+        assert not scope[1]
+        return scope
+
+    def unexpected(*_args, **_kwargs):
+        pytest.fail("terminal/publisher must not prepare retained material scope")
+
+    monkeypatch.setattr(material_directory_children, "material_child_scope", checked)
+    monkeypatch.setattr(tasks, "material_child_scope", unexpected)
+    assert case.run(case.child_id, generation) == "WAIT"
+    assert modes == []
+    assert case.run(case.child_id, generation, publish_only=True) == "READY"
+    assert modes and not any(modes)
+    assert len(business_calls(case.wire, "OFFICIAL_API")) == calls
+
+
+@pytest.mark.parametrize("gateway_case", ["OFFICIAL_API"], indirect=True)
+@pytest.mark.parametrize("stale", [False, True])
+def test_entry_validates_foreign_tail_before_stale_or_http(material_case, stale):
+    from copy import deepcopy
+    from datetime import UTC, datetime, timedelta
+    from uuid import uuid4
+
+    from sqlmodel import Session, select
+
+    from app.core.errors import DomainError
+    from app.modules.ads.material_directory_children import MATERIAL_CONTEXT_PAGE
+    from app.modules.ads.models import AdObject
+    from app.modules.ads.sync_models import AdDirectoryPage
+    from tests.integrations.tiktok.gateway_support import business_calls
+
+    case = material_case
+    with Session(case.engine) as db, db.begin():
+        context = db.get(AdDirectoryPage, (case.child_id, MATERIAL_CONTEXT_PAGE))
+        evidence = deepcopy(context.evidence)
+        materials = evidence["material_child_v1"]["materials"]
+        evidence["material_child_v1"]["materials"] = [
+            deepcopy(materials[0]) for _ in range(501)
+        ] + [deepcopy(materials[-1])]
+        evidence["material_child_v1"]["materials"][-1]["use_ref"]["ad_ref"][
+            "tenant_id"
+        ] = str(uuid4())
+        context.evidence = evidence
+        db.add(context)
+        if stale:
+            for ad in db.exec(
+                select(AdObject).where(AdObject.tenant_id == case.context.tenant_id)
+            ).all():
+                ad.observed_at = datetime.now(UTC) + timedelta(seconds=1)
+                db.add(ad)
+    generation = case.claim(case.child_id)
+    with pytest.raises(DomainError) as error:
+        case.run(case.child_id, generation)
+    assert error.value.code == "directory_scope_mismatch"
+    assert len(business_calls(case.wire, "OFFICIAL_API")) == 1

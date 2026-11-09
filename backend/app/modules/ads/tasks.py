@@ -796,6 +796,21 @@ def _run_directory_step(
         if run.next_page == 1:
             run.observed_at = now
         directory_fence(session, run, claim_token=claim_token, claim=True)
+        terminal = session.exec(
+            select(AdDirectoryPage.page)
+            .where(
+                AdDirectoryPage.run_id == run_id,
+                col(AdDirectoryPage.complete).is_(True),
+            )
+            .limit(1)
+        ).first()
+        if not publish_only and terminal is None and work.material_scope is None:
+            # 普通读取先完整stream校验并保留DTO，再用同一冻结owner判断新鲜度；
+            # 避免过期检查先构造并丢弃N条DTO，随后读取又构造同一批。
+            # 末页/publisher仍走原只校验不保留素材的路径，不扩大发布内存。
+            work.material_scope = material_child_scope(session, run)
+            if work.material_scope is not None:
+                work.material_fingerprint = _material_fingerprint(run)
         # 冻结上下文只复用本任务已校验的值；当前owner观察仍每页查库，不能缓存。
         superseded = (
             directory_run_superseded(
@@ -806,14 +821,6 @@ def _run_directory_step(
         )
         if superseded:
             return _finish_superseded_directory(session, run, work)
-        terminal = session.exec(
-            select(AdDirectoryPage.page)
-            .where(
-                AdDirectoryPage.run_id == run_id,
-                col(AdDirectoryPage.complete).is_(True),
-            )
-            .limit(1)
-        ).first()
         if terminal is not None:
             # 末页已持久化：独占一次任务期限做本地发布，恢复时也不再读远端。
             try:
@@ -844,12 +851,6 @@ def _run_directory_step(
         if publish_only:
             raise DomainError("directory_incomplete", "目录发布缺少已暂存末页")
         material_scope = work.material_scope
-        if material_scope is None:
-            material_scope = material_child_scope(session, run)
-            if material_scope is not None:
-                # 首次先完成streaming过期判定，避免给已过期的大任务急切载入全部桥。
-                work.material_scope = material_scope
-                work.material_fingerprint = _material_fingerprint(run)
         query_data = dict(run.query)
         query_data.pop(MATERIAL_CHILD_KEY, None)
         query_data.pop(PERIODIC_KEY, None)
