@@ -1,8 +1,9 @@
 """经营准备阶段的小元数据与原子分页；大冻结JSON只在数据库内比较。"""
 
-from datetime import date, timedelta
+from datetime import date, datetime, time, timedelta
 from typing import Any, cast
 from uuid import UUID
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import Table, inspect, text
 from sqlalchemy.exc import DBAPIError
@@ -18,9 +19,159 @@ from app.modules.business.models import (
 )
 from app.modules.reporting.query_budget import QueryBudgetExceeded, query_budget
 
-PREPARATION_PHASES = frozenset({"SNAPSHOT", "PREFIX_CHECK", "COPY_DAY", "COPY_SUMMARY"})
+HEAVY_PHASES = frozenset({"SNAPSHOT", "VERIFY"})
+PREPARATION_PHASES = HEAVY_PHASES | {
+    "PREFIX_CHECK",
+    "COPY_DAY",
+    "COPY_SUMMARY",
+    "REBASE",
+}
 KNOWN_PHASES = PREPARATION_PHASES | {"BASE", "SUBSIDY"}
 SNAPSHOT_LOCK = 7348061992109
+
+
+def rebase_dirty_start(run: BusinessRun, snapshot: dict[str, Any]) -> date | None:
+    """只复用逐日冻结状态完全相同的前缀；None表示结构/旧证据不可复用。"""
+    old = run.inputs
+    ignored = {"states", "accounts", "dirty_start", "after"}
+    if (
+        not isinstance(old, dict)
+        or {k: v for k, v in old.items() if k not in ignored}
+        != {k: v for k, v in snapshot.items() if k not in ignored}
+        or not all(
+            isinstance(s.get(k), dict)
+            for s in (old, snapshot)
+            for k in ("accounts", "states")
+        )
+        or old["accounts"].keys() != snapshot["accounts"].keys()
+    ):
+        return None
+    dirty = run.end_date + timedelta(days=1)
+    try:
+        for advertiser, meta in old["accounts"].items():
+            current = snapshot["accounts"][advertiser]
+            if not isinstance(meta, dict) or not isinstance(current, dict):
+                return None
+            if {k: v for k, v in meta.items() if k != "complete_through"} != {
+                k: v for k, v in current.items() if k != "complete_through"
+            }:
+                return None
+            before = date.fromisoformat(meta["complete_through"])
+            after = date.fromisoformat(current["complete_through"])
+            if before != after:
+                # cutoff变化只有在账户/完整观测资格成立时改变计算结果。
+                day = max(
+                    run.quarter,
+                    min(before, after) + timedelta(days=1),
+                    date.fromisoformat(meta["start"]),
+                )
+                stop = min(
+                    run.end_date,
+                    max(before, after),
+                    date.fromisoformat(meta["end"]) if meta["end"] else run.end_date,
+                )
+                while day <= stop:
+                    key = f"{advertiser}/{day}"
+                    state = snapshot["states"].get(key)
+                    if (
+                        state
+                        and state["status"] == "COMPLETE"
+                        and datetime.fromisoformat(state["observed"])
+                        >= datetime.combine(
+                            day + timedelta(days=1),
+                            time.min,
+                            ZoneInfo(meta["timezone"]),
+                        )
+                    ):
+                        dirty = min(dirty, day)
+                    day += timedelta(days=1)
+        # 不把185k状态额外复制成集合/JSON；旧、新各遍历一次，任何版本字段都比较。
+        for states, other in (
+            (old["states"], snapshot["states"]),
+            (snapshot["states"], old["states"]),
+        ):
+            for key, state in states.items():
+                advertiser, _, day_text = key.rpartition("/")
+                day = date.fromisoformat(day_text)
+                if (
+                    advertiser not in snapshot["accounts"]
+                    or not run.quarter <= day <= run.end_date
+                    or not isinstance(state, dict)
+                    or not {"status", "version", "count", "updated", "observed"}
+                    <= state.keys()
+                    or state["status"] not in {"COMPLETE", "STALE", "FAILED"}
+                    or type(state["version"]) is not int
+                    or type(state["count"]) is not int
+                    or datetime.fromisoformat(state["updated"]).tzinfo is None
+                    or datetime.fromisoformat(state["observed"]).tzinfo is None
+                ):
+                    return None
+                if state != other.get(key):
+                    dirty = min(dirty, day)
+    except KeyError, TypeError, ValueError, AttributeError:
+        return None
+    return dirty
+
+
+def begin_rebase(
+    run: BusinessRun, snapshot: dict[str, Any], signature: str, dirty: date
+) -> None:
+    """新真实快照与待清理范围同事务落盘；正式版本仍指向旧完整结果。"""
+    previous = run.coverage.get("_rebase", {})
+    run.inputs = {**snapshot, "dirty_start": dirty.isoformat(), "after": None}
+    run.source_signature = signature
+    run.phase, run.base_after = "REBASE", None
+    run.coverage = {
+        "subsidy_unknown": {
+            k: v
+            for k, v in run.coverage.get("subsidy_unknown", {}).items()
+            if date.fromisoformat(v["from"]) < dirty
+        },
+        "_rebase": {
+            "dirty": dirty.isoformat(),
+            "stage": "day",
+            "rounds": int(previous.get("rounds", 0)) + 1,
+            "day_deleted": int(previous.get("day_deleted", 0)),
+            "summary_deleted": int(previous.get("summary_deleted", 0)),
+        },
+    }
+
+
+def advance_rebase(session: Session, run: BusinessRun, *, batch: int = 500) -> None:
+    progress = dict(run.coverage["_rebase"])
+    model = BusinessDay if progress["stage"] == "day" else BusinessSummaryDay
+    table = cast(Table, inspect(model).local_table)
+    keys = [c.name for c in table.primary_key.columns if c.name != "run_id"]
+    # 每次删除最前一页，已提交的删除本身就是keyset进度；重放不会跳过剩余行。
+    deleted = session.execute(
+        text(f"""
+        WITH page AS MATERIALIZED (
+          SELECT {",".join(keys)} FROM {table.name}
+          WHERE run_id=:run AND tenant_id=:tenant AND bc_id=:bc AND stat_date>=:dirty
+          ORDER BY {",".join(keys)} LIMIT :batch
+        ), removed AS (
+          DELETE FROM {table.name} target USING page
+          WHERE target.run_id=:run AND target.tenant_id=:tenant AND target.bc_id=:bc
+            AND {" AND ".join("target." + k + "=page." + k for k in keys)} RETURNING 1
+        ) SELECT count(*) FROM removed
+        """),
+        {
+            "run": run.id,
+            "tenant": run.tenant_id,
+            "bc": run.bc_id,
+            "dirty": date.fromisoformat(progress["dirty"]),
+            "batch": min(batch, 500),
+        },
+    ).scalar_one()
+    counter = "day_deleted" if model is BusinessDay else "summary_deleted"
+    progress[counter] += deleted
+    if deleted < min(batch, 500):
+        if model is BusinessDay:
+            progress["stage"] = "summary"
+        else:
+            progress["stage"] = "recompute"
+            run.phase, run.cursor = "BASE", date.fromisoformat(progress["dirty"])
+    run.coverage = {**run.coverage, "_rebase": progress}
 
 
 def narrow_runs() -> SelectOfScalar[BusinessRun]:
