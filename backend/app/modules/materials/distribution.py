@@ -2292,7 +2292,7 @@ def repair_material_dispatches(session: Session, *, limit: int = 100) -> int:
     message after a grace period; never manufacture revisions or touch pending
     broker backoff. Eligibility is filtered in SQL before applying the row limit.
     """
-    from sqlalchemy import String, and_, cast, func, or_, text
+    from sqlalchemy import String, and_, cast, func, literal, or_, text
     from sqlalchemy import select as sa_select
     from sqlalchemy.exc import OperationalError
 
@@ -2486,6 +2486,36 @@ def repair_material_dispatches(session: Session, *, limit: int = 100) -> int:
         .cte("repair_target_identities")
         .prefix_with("MATERIALIZED")
     )
+    target_id = cast(target_identities.c.id, String)
+    operation_id = cast(target_identities.c.operation_id, String)
+    target_key = (
+        literal("material-target:")
+        + target_id
+        + ":"
+        + operation_id
+        + ":"
+        + target_identities.c.revision
+        + ":"
+    )
+    recovery_key = (
+        literal("material-target-recover:")
+        + target_id
+        + ":"
+        + cast(target_identities.c.attempt_token, String)
+    )
+    observe_key = literal("material-target-observe:") + target_id
+    # 与_target_dispatch的七种既有消息键一致：按tenant/task_key唯一索引探测，
+    # 不再为当前代逐条过滤同一operation的数千条历史消息。键只缩小搜索范围，
+    # 下方原tenant/operation/distribution、claim/revision、到期与来源资格仍全量复验。
+    target_keys = (
+        target_key + "prepare",
+        target_key + "verify",
+        target_key + "verify:read:" + operation_id,
+        recovery_key,
+        recovery_key + ":read:" + operation_id,
+        observe_key,
+        observe_key + ":read:" + operation_id + ":" + target_identities.c.revision,
+    )
     target_candidates = (
         select(PendingDispatch.id)
         .join(
@@ -2502,6 +2532,7 @@ def repair_material_dispatches(session: Session, *, limit: int = 100) -> int:
         )
         .where(
             *due,
+            col(PendingDispatch.task_key).in_(target_keys),
             col(PendingDispatch.task_name).in_(
                 ["materials.prepare_target", "materials.verify_target"]
             ),
