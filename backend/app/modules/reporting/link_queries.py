@@ -99,6 +99,18 @@ class QueryMembershipReader:
                 # 仅返回当前 typed 目标的历史阳性，不扩散为其他目标的阴性，
                 # 不动 pending/at；最终单广告归属仍必须取得新鲜正向证据。
                 members = [positive_target]
+        if (
+            members is None
+            and page == 1
+            and len(ads) > 1
+            and positive_target is not None
+            and positive_target in self.targets
+            and positive_target
+            in self.entries.get("positive:" + key, {}).get("members", ())
+        ):
+            # 部分页只证明该目标曾命中当前精确广告/日期集合；不返回其他目标的
+            # 缺失，也不代替最终单广告核实，不接管正在进行的后续页。
+            members = [positive_target]
         if members is not None:
             return RawReportPage(
                 tuple(
@@ -155,6 +167,13 @@ class QueryMembershipReader:
         if result.next_page is not None:
             pending["next_page"] = result.next_page
             self.cache["pending"] = pending
+            if len(ads) > 1 and pending["members"]:
+                # 原entry结构不变，仅独立命名阳性键；旧读取器只查裸SHA，
+                # 因而不能把未完成分页误当完整集合。旧校验/容量淘汰同样可用。
+                self.entries["positive:" + key] = {
+                    "at": pending["at"],
+                    "members": list(pending["members"]),
+                }
             self._trim(MAX_STATE_BYTES)
             if len(json.dumps(self.cache).encode()) > MAX_STATE_BYTES:
                 raise DomainError(
@@ -162,6 +181,7 @@ class QueryMembershipReader:
                 )
         else:
             self.cache.pop("pending", None)
+            self.entries.pop("positive:" + key, None)
             if self.targets:
                 self.entries[key] = {
                     "at": pending["at"],
@@ -172,6 +192,8 @@ class QueryMembershipReader:
         return result
 
     def _trim(self, maximum: int) -> None:
+        # positive:前缀不会与查询SHA碰撞；旧消费者不命中它，但原淘汰逻辑
+        # 会正常计入并回收，与完整集合共享原128条及512KiB/2MiB总预算。
         while self.entries and (
             len(self.entries) > MAX_ENTRIES
             or len(json.dumps(self.cache).encode()) > maximum

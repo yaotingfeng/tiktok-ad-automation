@@ -144,3 +144,16 @@ a81aeb78030b22d5a85f6305ddf0c908f29d1e31完成全部11角色精确digest `sha256
 下一处聚焦每条权限SQL前两个独立SET LOCAL往返：bounded_session仍每次独占连接、每条查询按原绝对deadline算limit，仅将statement_timeout/lock_timeout用参数化SELECT set_config(...true),set_config(...true)在一次数据库调用设置。保留两次授权、新鲜事实读取及全部期限；不缓存权限，不改变准入/重试。真实PG新反例原2条业务查询实际配置4次，修复后2次，实际timeout相同且递减；原statement阻塞/失败脱敏、回滚及Redis独立期限等相关58 passed/12.08秒。两文件Ruff/格式/diff通过，源严格mypy通过，独立审查无阻断。尚不能推导整体生产提速倍数。
 
 本轮继续按用户要求快速同schema镜像切换，无生产测试/完整accept；只改bounded_resources源及测试/文档，原配置、0101/并发/退出宽限不变，CAS并发4、Beat最后、K8s和实际digest结果确认后解锁/恢复CI，真实积压另行观察。
+
+
+## c34b快速切换与部分分页阳性复用
+
+c34b60418777b94a775b3a9f7d7a159125e656b7、digest sha256:5b3870acebc3cf5fa1f34203c7dd03cb3f10dd48496fe95892f79b7fc744872e完成11角色正常宽限/Ready、原spec除镜像外全等及实际imageID、原配置确认，Beat最后、锁释放/CI恢复；约3分28秒。未执行生产测试/完整accept/备份恢复演练。17:29:05–17:34:05 UTC实际300.66秒素材准入1470，约4.889/秒，平台拒绝12次，仍无明显均值改善。
+
+16重任务只读样本发现：257目标的未完查询已见73个typed阳性、744目标已见100、807目标已见249；当前目标提前结束时原locator删除pending，其他已见成员随之丢失。新方案只保留这些已校验行的阳性，可帮助随后目标缩小同广告/日期集合，不得证明缺失或替代单广告归属。
+
+最终实现不新增持久JSON字段：原entries以positive:SHA命名单独保存{at,members}。裸64hex查询SHA不可能与前缀键碰撞；旧读取器只查裸SHA，所以不会把部分证据当完整集合，旧validator接受原键和值结构、旧trim能同样计入并回收。新鲜完整裸SHA（包括空结果）优先，hint只在第一页/多广告/精确typed目标存在时返回当前目标一项；后续页、单广告及未命中仍真实读取，完整查询结束删除同scope hint。观察时间不续期，仍共用原128条/512KiB完整状态及2MiB在途总预算。
+
+最初独立positive_members字段草案在本地审查发现旧validator严格白名单及旧版本无法淘汰未知字段的容量问题，已彻底删除，未发布。前缀方案不改变原validator/消息/DB合同，可混合正常快速更新，无上一轮双停门禁。原confirmed矛盾保护保持：旧阳性与最终数据矛盾必须report_snapshot_changed，不能写owner或负扫描。
+
+真实PG新增RED2 failed/5 passed，最终相关98 passed/16.84秒；覆盖部分阳性路径真实读取3→1且最终单广告真实执行、最终全空矛盾无owner/负事实、页2、类型/日期/新目标隔离、新鲜完整阴性优先、共享容量及原严格续点validator。两文件Ruff/格式/diff通过；mypy单源与c34基线相同2个既有未注解诊断，无新增。独立审查无Critical/Important。单路径节省不推导整体倍数；继续快速发版并直接观察固定旧任务完成。
