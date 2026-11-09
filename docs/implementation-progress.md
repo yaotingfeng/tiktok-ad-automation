@@ -1,3 +1,7 @@
+## 2026-11-09 Y读取优化上线、Z重复父清理完成，积压仍待继续
+
+18b19574双端推送并全11角色生产验收，原CPU3/后台12/typed12/12及配置/四开关/schema0101保持。590个精确同范围旧补链父经原canonical锁时守卫取消、78跳过；独立RO无旧PENDING/承接缺口/未知，维护锁释放CI恢复，不把取消计完成。11:05仍9118积压；合法续步复用和target精确键修复已本地通过待下一轮，来源长历史尚未解决。详见[本轮生产记录](validation/2026-11-09-material-read-and-compaction-production.md)。
+
 ## 2026-11-09 W同步流水线已发布，积压观察继续
 
 精确应用60302e3f已双端推送、全11角色验收、解锁并恢复CI。Reporting先消费者零Pod升级、forward-only持久化，后台正常排空、Beat最后；126项精确候选回归通过。业务有界阶段、links按实际grant最多3步、素材500行游标均上线；配置/额度/资源/schema0101保持，无新备份/恢复演练。10:03仍11151积压，不能宣称清空或持续满额。详见[本轮生产记录](validation/2026-11-09-sync-prefix-quantum-streaming-production.md)。
