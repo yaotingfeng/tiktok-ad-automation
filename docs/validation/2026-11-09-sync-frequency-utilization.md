@@ -157,3 +157,16 @@ c34b60418777b94a775b3a9f7d7a159125e656b7、digest sha256:5b3870acebc3cf5fa1f3420
 最初独立positive_members字段草案在本地审查发现旧validator严格白名单及旧版本无法淘汰未知字段的容量问题，已彻底删除，未发布。前缀方案不改变原validator/消息/DB合同，可混合正常快速更新，无上一轮双停门禁。原confirmed矛盾保护保持：旧阳性与最终数据矛盾必须report_snapshot_changed，不能写owner或负扫描。
 
 真实PG新增RED2 failed/5 passed，最终相关98 passed/16.84秒；覆盖部分阳性路径真实读取3→1且最终单广告真实执行、最终全空矛盾无owner/负事实、页2、类型/日期/新目标隔离、新鲜完整阴性优先、共享容量及原严格续点validator。两文件Ruff/格式/diff通过；mypy单源与c34基线相同2个既有未注解诊断，无新增。独立审查无Critical/Important。单路径节省不推导整体倍数；继续快速发版并直接观察固定旧任务完成。
+
+
+## 35a快速发布与短片批量隔离
+
+35a2b42e34e655f974bd8c6de86792fa38d6bab6、digest sha256:2f11704501b4f93d0dcc19b76ec0a3d026bd1cf39c9a46286a8ac36cb6ebedb1已完成11角色镜像/spec与配置保持/Ready及imageID确认，Beat最后，锁释放/CI恢复；耗时154秒。未执行发布内生产测试/完整验收/备份恢复演练。17:40:34–17:45:35 UTC实际300.60秒素材准入1546，约5.143/秒，平台拒绝9。固定旧集合17:40:35关联COMPLETE106，17:46:28为109，18:05:24为120，FAILED6/CANCELLED8分列；仍未达到10QPS或清零。01:40全量快照报表5270（关联4799）、目录1384，比01:06分别少447/505；固定旧关联84→106真实完成22，另4取消不算完成。新代码真实保留99条部分阳性样本已观察，但没有将单路径节省写成全局倍数。
+
+只读全namespace Deployment盘点未见第二套TKADA，ad-manager环境名为Meta相关，未读取其秘密。历史staging配置APP_ID相同/Redis不同，但文档记载已停止，缺当前SSH入口，不能断言仍占用额度。开发者应用实际档位已向用户异步询问，浏览器不可连接；保持现有BASIC10而不猜测提额。
+
+生产调度诊断3次budget2以及后续budget1/2正常入口调用可能影响自适应hint，不能把其后hint1称为未干预基线。两次EOF无完成包均弃用输出，不重放原mutation；后续更短正常入口调用得到2次全局锁冲突、1次claim_limit1/余量10/available36。锁冲突不写hint，不单据此认定均值瓶颈。API Ready/重启0已确认，非OOM；没有删除/抬高生产hint。
+
+代码另有可独立验证的放大器：生产planning入口会传入低至0.2秒余量，任意尾部预算错误都会把report/directory全局hint写1并续期300秒。最小修复复用原8批门槛2秒：进入family前remaining<2只在本轮试单条；仅remaining>=2的预算异常有全局降批资格。成功CAS恢复、完整预算错误分类、各类事务/费用/占位回滚不变；2秒为既有启发阈值，不称实测固定耗时。
+
+真实PG/Redis新回归正确RED2 failed/1 passed（初稿漏import产生NameError已修，不当作行为RED）；0.4秒pg_sleep6超时保hint4和原TTL，4秒真实超时仍降1/TTL300；0.4秒单条睡0.25旧4批回滚0、新局部单条提交1。原0.8秒测试旧首轮0断言已被新行为2提交推翻，改为从首轮每次>0、所有head/token/ledger/outbox/Redis一致性断言保留、六个任务最终全部提交且无全局hint，未弱化回滚保护。相关47 passed/13.24秒；Ruff/格式/diff通过；mypy与35a基线同87项既有诊断（归一错误位置及引用行号）无新增；独立审查无阻断。仅job_tasks源及测试/文档，继续同schema快速CAS切换，无发布内生产测试。
