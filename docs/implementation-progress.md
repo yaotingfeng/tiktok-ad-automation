@@ -4634,3 +4634,8 @@ S已完成规范WAIT恢复：严格父/head篱笆、1秒due、3秒恢复事务�
 ## 2026-11-09 素材冻结桥读取分批
 
 V将include_materials读取改为窄元数据+500行服务端游标，完整校验不变；真实idle10旧红新绿3项、相关69项与quantum整文件11项通过。最终对象仍O(N)，未改unknown commit处理或45/10预算。待发布，见 [记录](validation/2026-11-09-material-child-read-streaming.md)。S f674c81a已完成11角色生产验收并恢复CI；09:14仍有11804积压，继续处理报告与经营控制面。
+
+
+## 2026-11-09 经营核算有界准备
+
+T采用SNAPSHOT/前缀比较/两表分页复制，Control不再构造大输入或同步复制；完整后原子发布，旧正式结果保持可读。业务80项与最终3边界通过，34.56MB规模实测、独立审查通过。待按Reporting消费者先行、旧fork全退出、forward-only专门方案发布，见 [记录](validation/2026-11-09-business-prefix-progress.md)。

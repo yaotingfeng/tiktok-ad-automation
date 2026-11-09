@@ -420,6 +420,12 @@ def test_new_complete_day_reuses_prior_daily_projection(session, business_case):
         now=now,
     )[0]
     assert newer.id != old.id
+    # 前缀准备已转交可恢复Worker，API返回时不再同步复制整季度。
+    for _ in range(5):
+        if newer.phase == "BASE":
+            break
+        advance_run(session, newer.id, now=now)
+    session.refresh(newer, attribute_names=["inputs"])
     assert newer.inputs["dirty_start"] == "2026-11-04"
     for _ in range(10):
         if advance_run(session, newer.id, now=now):

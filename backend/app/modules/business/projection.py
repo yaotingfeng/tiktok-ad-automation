@@ -3,6 +3,7 @@
 from collections import defaultdict
 from collections.abc import Iterator
 from datetime import UTC, date, datetime, time, timedelta
+from typing import Any
 from uuid import UUID
 from zoneinfo import ZoneInfo
 
@@ -14,7 +15,6 @@ from sqlalchemy import (
     cast,
     func,
     insert,
-    inspect,
     literal,
     or_,
     text,
@@ -52,6 +52,16 @@ from app.modules.business.models import (
     BusinessScope,
     BusinessSummaryDay,
 )
+from app.modules.business.prefix import (
+    KNOWN_PHASES,
+    PREPARATION_PHASES,
+    SNAPSHOT_LOCK,
+    advance_prefix,
+    begin_prefix,
+    frozen_accounts,
+    frozen_metadata,
+    narrow_runs,
+)
 from app.modules.business.source import (
     discover_exact_mappings,
     mapping_catalog,
@@ -88,6 +98,8 @@ def request_rebuild(
     start_date: date,
     end_date: date,
     now: datetime | None = None,
+    defer_snapshot: bool = False,
+    coalesce_pending: bool = False,
 ) -> list[BusinessRun]:
     now = now or datetime.now(UTC)
     allowed = scope_accounts(session, context, bc_id)
@@ -156,17 +168,18 @@ def request_rebuild(
     if scope.published_revision == scope.revision and any(
         old
         and (
-            old.inputs.get("calculation_revision") != 2
-            or old.inputs.get("identity_catalog") != catalog
+            old.get("calculation_revision") != 2
+            or old.get("identity_catalog") != catalog
         )
         for old in (
-            session.get(BusinessRun, UUID(value))
+            frozen_metadata(session, UUID(value))
             for value in scope.published_runs.values()
         )
     ):
         scope.revision += 1
         session.add(scope)
     results = []
+    snapshot: dict[str, Any]
     targets = {}
     quarter = quarter_start(start_date)
     while quarter <= end_date:
@@ -178,7 +191,9 @@ def request_rebuild(
     ):
         # 同一配置修订的已发布季度一起准备，避免跨季度查询混用新旧费率。
         for key, run_id in scope.published_runs.items():
-            old = session.get(BusinessRun, UUID(run_id))
+            old = session.exec(
+                narrow_runs().where(col(BusinessRun.id) == UUID(run_id))
+            ).first()
             if old is not None:
                 day = date.fromisoformat(key)
                 targets[day] = max(targets.get(day, old.end_date), old.end_date)
@@ -187,7 +202,11 @@ def request_rebuild(
             BusinessPublication, (scope.tenant_id, bc_id, quarter)
         )
         published = (
-            session.get(BusinessRun, publication.run_id) if publication else None
+            session.exec(
+                narrow_runs().where(col(BusinessRun.id) == publication.run_id)
+            ).first()
+            if publication
+            else None
         )
         if published is not None:
             # 查询较短区间不得让同季度发布指针倒退，丢掉已生成的后续日期。
@@ -202,9 +221,29 @@ def request_rebuild(
         ).one()
         if pending_end is not None:
             stop = max(stop, pending_end)
-        snapshot, signature = source_snapshot(session, scope, quarter, stop, now)
-        # 已加载的发布版本含大JSON；候选检查只查身份，get复用同事务身份映射，
-        # 避免仅为验证签名再次传输并解码完整inputs/coverage。
+        if coalesce_pending:
+            pending = session.exec(
+                narrow_runs()
+                .where(
+                    col(BusinessRun.tenant_id) == scope.tenant_id,
+                    col(BusinessRun.bc_id) == bc_id,
+                    col(BusinessRun.quarter) == quarter,
+                    col(BusinessRun.scope_revision) == scope.revision,
+                    col(BusinessRun.actor_id) == context.actor_id,
+                    col(BusinessRun.status).in_(["QUEUED", "RUNNING"]),
+                )
+                .order_by(col(BusinessRun.created_at).desc())
+                .limit(1)
+            ).first()
+            if pending is not None:
+                # 定时检查继续已有冻结工作；更长区间留待其结束后的下一次检查。
+                results.append(pending)
+                continue
+        if defer_snapshot:
+            snapshot, signature = {}, ""
+        else:
+            snapshot, signature = source_snapshot(session, scope, quarter, stop, now)
+        # 候选匹配只查身份；不为签名/修订判断传输完整inputs。
         candidate_id = session.exec(
             select(col(BusinessRun.id))
             .where(
@@ -214,7 +253,10 @@ def request_rebuild(
                 col(BusinessRun.end_date) == stop,
                 col(BusinessRun.source_signature) == signature,
                 or_(
-                    col(BusinessRun.status).in_(["QUEUED", "RUNNING"]),
+                    and_(
+                        col(BusinessRun.status).in_(["QUEUED", "RUNNING"]),
+                        col(BusinessRun.actor_id) == context.actor_id,
+                    ),
                     and_(
                         col(BusinessRun.status) == "COMPLETE",
                         col(BusinessRun.id)
@@ -225,11 +267,17 @@ def request_rebuild(
             .order_by(col(BusinessRun.created_at).desc())
             .limit(1)
         ).first()
-        candidate = session.get(BusinessRun, candidate_id) if candidate_id else None
+        candidate = (
+            session.exec(
+                narrow_runs().where(col(BusinessRun.id) == candidate_id)
+            ).first()
+            if candidate_id and not defer_snapshot
+            else None
+        )
         if candidate is None:
             # 每个季度最多一份候选；失效候选保留证据但不能再发布。
             old_candidates = session.exec(
-                select(BusinessRun).where(
+                narrow_runs().where(
                     col(BusinessRun.tenant_id) == scope.tenant_id,
                     col(BusinessRun.bc_id) == bc_id,
                     col(BusinessRun.quarter) == quarter,
@@ -247,88 +295,18 @@ def request_rebuild(
                 end_date=stop,
                 cursor=quarter,
                 scope_revision=scope.revision,
-                inputs=snapshot,
+                inputs={**snapshot, "dirty_start": quarter.isoformat(), "after": None}
+                if not defer_snapshot
+                else {},
+                phase="SNAPSHOT" if defer_snapshot else "BASE",
                 source_signature=signature,
             )
             session.add(candidate)
             session.flush()
-            _reuse_prefix(session, candidate)
+            if not defer_snapshot:
+                begin_prefix(session, candidate)
         results.append(candidate)
     return results
-
-
-def _reuse_prefix(session: Session, run: BusinessRun) -> None:
-    publication = session.get(
-        BusinessPublication, (run.tenant_id, run.bc_id, run.quarter)
-    )
-    old = session.get(BusinessRun, publication.run_id) if publication else None
-    dirty = run.quarter
-    if (
-        old
-        and old.scope_revision == run.scope_revision
-        and old.inputs.get("calculation_revision")
-        == run.inputs.get("calculation_revision")
-        and old.inputs.get("identity_catalog") == run.inputs.get("identity_catalog")
-        and {
-            a: {k: v for k, v in meta.items() if k != "complete_through"}
-            for a, meta in old.inputs["accounts"].items()
-        }
-        == {
-            a: {k: v for k, v in meta.items() if k != "complete_through"}
-            for a, meta in run.inputs["accounts"].items()
-        }
-    ):
-        dirty = run.quarter
-        while dirty <= min(old.end_date, run.end_date):
-            suffix = f"/{dirty.isoformat()}"
-            before = {
-                k: v for k, v in old.inputs["states"].items() if k.endswith(suffix)
-            }
-            after = {
-                k: v for k, v in run.inputs["states"].items() if k.endswith(suffix)
-            }
-            if before != after or any(
-                _source_complete(old, a, dirty) != _source_complete(run, a, dirty)
-                for a in run.inputs["accounts"]
-            ):
-                break
-            dirty += timedelta(days=1)
-        run.coverage = {
-            "subsidy_unknown": {
-                key: value
-                for key, value in old.coverage.get("subsidy_unknown", {}).items()
-                if date.fromisoformat(value["from"]) < dirty
-            }
-        }
-        columns = list(inspect(BusinessDay).local_table.columns)
-        values = [literal(run.id) if c.name == "run_id" else c for c in columns]
-        session.execute(
-            insert(BusinessDay).from_select(
-                [c.name for c in columns],
-                select(*values).where(
-                    col(BusinessDay.run_id) == old.id,
-                    col(BusinessDay.stat_date) < dirty,
-                    col(BusinessDay.stat_date) <= run.end_date,
-                ),
-            )
-        )
-        summary_columns = list(inspect(BusinessSummaryDay).local_table.columns)
-        summary_values = [
-            literal(run.id) if c.name == "run_id" else c for c in summary_columns
-        ]
-        session.execute(
-            insert(BusinessSummaryDay).from_select(
-                [c.name for c in summary_columns],
-                sa_select(*summary_values).where(
-                    col(BusinessSummaryDay.run_id) == old.id,
-                    col(BusinessSummaryDay.stat_date) < dirty,
-                    col(BusinessSummaryDay.stat_date) <= run.end_date,
-                ),
-            )
-        )
-    run.cursor = dirty
-    run.inputs = {**run.inputs, "dirty_start": dirty.isoformat(), "after": None}
-    session.add(run)
 
 
 def _source_complete(run: BusinessRun, advertiser: str, day: date) -> bool:
@@ -688,9 +666,54 @@ def _aggregate_day(session: Session, run: BusinessRun) -> None:
         session.execute(insert(BusinessSummaryDay).from_select(columns, statement))
 
 
+def _freeze_candidate(
+    session: Session, run: BusinessRun, scope: BusinessScope, now: datetime
+) -> bool:
+    # 多个Reporting fork只允许一个重型冻结；锁随事务退出，失败不会留Redis孤锁。
+    if not session.execute(
+        text("SELECT pg_try_advisory_xact_lock(:key)"), {"key": SNAPSHOT_LOCK}
+    ).scalar_one():
+        return False
+    snapshot, signature = source_snapshot(
+        session, scope, run.quarter, run.end_date, now
+    )
+    publication = session.get(
+        BusinessPublication, (run.tenant_id, run.bc_id, run.quarter)
+    )
+    previous = (
+        session.exec(
+            narrow_runs().where(col(BusinessRun.id) == publication.run_id)
+        ).first()
+        if publication
+        else None
+    )
+    # 轻占位未带事实；未变输入只能退役，不能伪造COMPLETE后切换空发布。
+    if (
+        previous is not None
+        and previous.status == "COMPLETE"
+        and previous.source_signature == signature
+        and previous.scope_revision == run.scope_revision
+        and previous.end_date == run.end_date
+    ):
+        run.status = "SUPERSEDED"
+        run.source_signature = signature
+    else:
+        run.inputs = {**snapshot, "dirty_start": run.quarter.isoformat(), "after": None}
+        run.source_signature = signature
+        run.status = "RUNNING"
+        begin_prefix(session, run)
+    # 补源仍沿原额度/队列合同，移到已有冻结输入的Worker，Control不反解大JSON。
+    from app.modules.business.tasks import _request_missing_sources
+
+    _request_missing_sources(session, scope, [run], now, snapshots={run.id: snapshot})
+    session.add(run)
+    session.flush()
+    return run.status == "SUPERSEDED"
+
+
 def advance_run(session: Session, run_id: UUID, *, now: datetime | None = None) -> bool:
     now = now or datetime.now(UTC)
-    identity = session.get(BusinessRun, run_id)
+    identity = session.exec(narrow_runs().where(col(BusinessRun.id) == run_id)).first()
     if identity is None:
         return True
     # 与配置/规划一致的BC→运行锁顺序，避免发布与候选替换互相等待。
@@ -705,7 +728,7 @@ def advance_run(session: Session, run_id: UUID, *, now: datetime | None = None) 
     if parent is None:
         return False
     run = session.exec(
-        select(BusinessRun)
+        narrow_runs()
         .where(col(BusinessRun.id) == run_id)
         .with_for_update(skip_locked=True)
     ).first()
@@ -720,7 +743,11 @@ def advance_run(session: Session, run_id: UUID, *, now: datetime | None = None) 
         .with_for_update()
         .execution_options(populate_existing=True)
     ).first()
-    if scope is None or scope.revision != run.scope_revision:
+    if (
+        scope is None
+        or scope.revision != run.scope_revision
+        or scope.actor_id != run.actor_id
+    ):
         run.status = "SUPERSEDED"
         session.add(run)
         return True
@@ -728,11 +755,22 @@ def advance_run(session: Session, run_id: UUID, *, now: datetime | None = None) 
         tenant_id=run.tenant_id, actor_id=run.actor_id, role="operator"
     )
     allowed = scope_accounts(session, context, run.bc_id)
-    if not set(run.inputs["accounts"]) <= set(allowed):
+    if run.phase not in KNOWN_PHASES:
+        raise ValueError("未知经营核算阶段")
+    if run.phase == "SNAPSHOT":
+        return _freeze_candidate(session, run, scope, now)
+    if not frozen_accounts(session, run.id) <= set(allowed):
         run.status = "SUPERSEDED"
         session.add(run)
         return True
     run.status = "RUNNING"
+    if run.phase in PREPARATION_PHASES:
+        advance_prefix(session, run, batch=BASE_BATCH)
+        session.add(run)
+        session.flush()
+        return run.status == "SUPERSEDED"
+    # 只有原有计算阶段需要完整冻结输入；准备和复制阶段禁止隐式加载。
+    session.refresh(run, attribute_names=["inputs"])
     if run.phase == "BASE":
         if run.cursor <= run.end_date:
             _base_page(session, run)
@@ -741,7 +779,7 @@ def advance_run(session: Session, run_id: UUID, *, now: datetime | None = None) 
                 "SUBSIDY",
                 date.fromisoformat(run.inputs["dirty_start"]),
             )
-    elif run.cursor <= run.end_date:
+    elif run.phase == "SUBSIDY" and run.cursor <= run.end_date:
         _subsidy_day(session, run)
         _aggregate_day(session, run)
         run.cursor += timedelta(days=1)
