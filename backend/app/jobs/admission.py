@@ -272,21 +272,16 @@ def admitted_scope(
         "lease_id": lease_id,
     }
     options = {"rate_group": rate_group} if rate_group is not None else {}
-    from app.modules.sync_control.occupancy import reserve_for_send
+    from app.modules.sync_control.occupancy import handoff_for_send
 
-    reservation, ready = reserve_for_send(
+    reservation = handoff_for_send(
         redis_client,
-        policy=policy,
         app_scope=app_scope,
         endpoint=endpoint,
         tenant_id=tenant_id,
         advertiser_id=advertiser_id,
         rate_group=rate_group,
     )
-    if ready is not None and ready.capacity_hint == 0:
-        error = denied_error(ready.retry_after_ms)
-        cast(Any, error).admission_reason = ready.reason
-        raise error
     if reservation is not None:
         options["dispatch_reservation_id"] = reservation
     admission = admit(

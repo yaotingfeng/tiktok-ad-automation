@@ -68,25 +68,29 @@ def dispatch_context(
             _CURRENT.reset(token)
 
 
-def reserve_for_send(
-    redis: Redis, *, policy: AdmissionPolicy, **scope: Any
-) -> tuple[str | None, EndpointReadiness | None]:
+def handoff_for_send(redis: Redis, **scope: Any) -> str | None:
     state = _CURRENT.get()
     if state is None:
-        return None, None
+        return None
     if state["first"]:
         state["first"] = False
-        reservation = state["reservation_id"]
-        if scope != state["scope"]:
-            release_dispatch(redis, reservation_id=reservation, **state["scope"])
+        reservation = cast(str, state["reservation_id"])
+        if scope == state["scope"]:
+            # 派发时已有本消息的queued票，首发只需交给真实admit原子移除。
+            # 重新申请会扣其他尚未发送的票；续页消耗真实额度后，即使仍有
+            # 余量也可能让已有票首发被CAPACITY挡回。原Lua继续逐项核验
+            # 真实频率/分钟/日额、并发及平台冷却，不把排队票当发送授权。
+            return reservation
+        release_dispatch(redis, reservation_id=reservation, **state["scope"])
+        # 首个真实接口与派发主接口不同时，当前消息仍已占执行槽，
+        # 无需在目标接口重新排队；目标真实准入逐次守住所有硬限制。
+        return None
     else:
         # 首次发送已经把本消息从queued交接到真实inflight；同一有界量子的续页
         # 不再是排队消息。再次预留会让其他尚未发送的占位虚扣可用频率，导致
         # 真实额度有余量却提前结束量子。每页仍由admitted_scope调用原原子Lua，
         # 检查实际QPS/QPM/QPD、并发和平台冷却；不删除别人的queued凭据。
-        return None, None
-    ready = reserve_dispatch(redis, reservation_id=reservation, policy=policy, **scope)
-    return reservation, ready
+        return None
 
 
 _RESERVE = _OBSERVE.replace(
