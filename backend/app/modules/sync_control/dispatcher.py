@@ -579,6 +579,7 @@ def _dispatch_due(
                 cursor.last_dispatched_at = now
                 from app.modules.reporting.jobs import (
                     MATERIAL_BACKFILL_PAGES_PER_STEP,
+                    MATERIAL_LINK_STEPS_PER_QUANTUM,
                     MATERIAL_PAGES_PER_STEP,
                 )
 
@@ -589,6 +590,8 @@ def _dispatch_due(
                         else MATERIAL_PAGES_PER_STEP
                     )
                     if job.kind == "material_day"
+                    else MATERIAL_LINK_STEPS_PER_QUANTUM
+                    if job.kind == "material_links" and category == "links"
                     else 1
                 )
                 assert work_class is not None

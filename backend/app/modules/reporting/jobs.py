@@ -66,6 +66,8 @@ MATERIAL_SPLIT_ROWS = 5_000
 MAX_PROVIDER_RETRIES = 5
 MATERIAL_SNAPSHOT_RETRY_SECONDS = (5, 10, 20, 30, 60)
 MATERIAL_LINK_SNAPSHOT_RECOVERY_DELAY = timedelta(minutes=5)
+MATERIAL_LINK_STEPS_PER_QUANTUM = 3
+MATERIAL_LINK_QUANTUM_SECONDS = 20
 LEASE = timedelta(seconds=240)
 _CONTRACT_ERRORS = frozenset(
     {
@@ -911,6 +913,62 @@ def _admission_delay(
     return delays[attempts - 1] + randint(0, 1000)
 
 
+def material_link_granted_steps(session: Session, job: ReportSyncJob) -> int:
+    """步骤上限来自原代主端点预留；部署升级不能给旧的一步grant增权。"""
+    if job.kind != "material_links" or job.execution_pool != "background":
+        return 1
+    from app.modules.sync_control.models import SyncCostLedger
+    from app.modules.sync_control.schedule import report_endpoint
+
+    reserved = session.exec(
+        select(SyncCostLedger.reserved_units).where(
+            SyncCostLedger.tenant_id == job.tenant_id,
+            SyncCostLedger.report_job_id == job.id,
+            SyncCostLedger.generation == job.claim_generation,
+            SyncCostLedger.physical_endpoint == report_endpoint(job.kind),
+        )
+    ).one_or_none()
+    return min(MATERIAL_LINK_STEPS_PER_QUANTUM, reserved or 0)
+
+
+def _check_link_grant(session: Session, job: ReportSyncJob, token: UUID) -> None:
+    from app.modules.sync_control.models import (
+        SyncExecutionScope,
+        SyncRequirement,
+        SyncSchedule,
+    )
+
+    heads = session.exec(
+        select(SyncSchedule)
+        .join(
+            SyncExecutionScope,
+            col(SyncExecutionScope.scope_id) == col(SyncSchedule.scope_id),
+        )
+        .join(
+            SyncRequirement,
+            col(SyncRequirement.id) == col(SyncExecutionScope.requirement_id),
+        )
+        .where(
+            SyncExecutionScope.report_job_id == job.id,
+            SyncSchedule.tenant_id == job.tenant_id,
+            SyncSchedule.work_class == SyncRequirement.source,
+        )
+        .order_by(col(SyncSchedule.scope_id), col(SyncSchedule.work_class))
+        .with_for_update(of=SyncSchedule)
+        .execution_options(populate_existing=True)
+    ).all()
+    now = datetime.now(UTC)
+    if not heads or any(
+        head.lease_token != token
+        or head.lease_execution_id != job.id
+        or head.lease_execution_generation != job.claim_generation
+        or head.leased_until is None
+        or head.leased_until <= now
+        for head in heads
+    ):
+        raise ExecutionLost()
+
+
 @diagnostics.timed("execute")
 def execute_job(
     session_factory: Callable[[], Session],
@@ -918,6 +976,9 @@ def execute_job(
     job_id: UUID,
     claim_token: UUID,
     reader: ReportReader,
+    max_steps: int = 1,
+    quantum_deadline: datetime | None = None,
+    grant_token: UUID | None = None,
 ) -> str:
     with session_factory() as session:
         job = session.exec(
@@ -927,12 +988,38 @@ def execute_job(
             return "FAILED"  # 旧领取者：不得改写新领取的任务
         boundary = TransactionBoundaryReader(session, job, reader)
         counted = _CountingReader(boundary)
+        committed_count = 0
         try:
             # 网络读取不持业务事务；只在发布器内串行同桶替换并核验观测水位。
             # 关闭expire避免commit后访问冻结job属性隐式打开跨HTTP事务。
             session.expire_on_commit = False
             boundary._check()
-            more = _run(session, job, counted) is None
+            if grant_token is not None:
+                _check_link_grant(session, job, grant_token)
+            steps = min(max_steps, material_link_granted_steps(session, job))
+            if grant_token is None or quantum_deadline is None:
+                steps = min(1, steps)
+            more = True
+            for step in range(steps):
+                if grant_token is not None:
+                    _check_link_grant(session, job, grant_token)
+                if (
+                    quantum_deadline is not None
+                    and (quantum_deadline - datetime.now(UTC)).total_seconds() < 3
+                ):
+                    break
+                more = _run(session, job, counted) is None
+                if grant_token is not None:
+                    _check_link_grant(session, job, grant_token)
+                if not more or step + 1 >= steps or counted.count >= steps:
+                    break
+                # 每个已验证小步独立落库；保持原RUNNING/token/head资格，不能
+                # 先outcome清租约再靠旧消息自行续领。后步错误只回滚本步。
+                boundary._check()
+                job.request_count += counted.count - committed_count
+                session.commit()
+                committed_count = counted.count
+                boundary._check()
             with diagnostics.stage("job_finalize"):
                 _clear_completed_throttle(job, counted)
                 if (
@@ -1000,6 +1087,12 @@ def execute_job(
             job = session.get(ReportSyncJob, job_id, with_for_update=True)
             if job is None or job.claim_token != claim_token or job.status != "RUNNING":
                 return "FAILED"
+            if grant_token is not None:
+                try:
+                    _check_link_grant(session, job, grant_token)
+                except ExecutionLost:
+                    session.rollback()
+                    return "FAILED"
             job.status, job.error_code = "WAITING", "admission_deferred"
             delay = _admission_delay(job, counted, deferred)
             now = datetime.now(UTC)
@@ -1018,8 +1111,14 @@ def execute_job(
             job = session.get(ReportSyncJob, job_id, with_for_update=True)
             if job is None or job.claim_token != claim_token or job.status != "RUNNING":
                 return "FAILED"
+            if grant_token is not None:
+                try:
+                    _check_link_grant(session, job, grant_token)
+                except ExecutionLost:
+                    session.rollback()
+                    return "FAILED"
             result = _handle_error(session, job, error)
-        job.request_count += counted.count
+        job.request_count += counted.count - committed_count
         from app.modules.sync_control.schedule import record_report_outcome
 
         record_report_outcome(session, job)

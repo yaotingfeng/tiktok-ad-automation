@@ -1113,6 +1113,14 @@ def run_job_step(*, database_engine, redis_client, job_id, claim_token):
 
 
 def _run_job_step(*, database_engine, redis_client, job_id, claim_token):
+    from app.modules.reporting.jobs import (
+        MATERIAL_LINK_QUANTUM_SECONDS,
+        _check_link_grant,
+        material_link_granted_steps,
+    )
+    from app.modules.sync_control.executions import ExecutionLost
+
+    entered_at = datetime.now(UTC)
     queued_token = claim_token
     with diagnostics.stage("step_prepare"):
         with Session(database_engine, expire_on_commit=False) as session:
@@ -1155,35 +1163,70 @@ def _run_job_step(*, database_engine, redis_client, job_id, claim_token):
                 return "FAILED"
             workload = report_workload(session, job, now=now)
             before = job.request_count
-            # 原子消费queued身份：同代重投即使趁HTTP已释放DB锁，也不能成为第二消费者。
-            # 私有token只用于worker/发布围栏，原queued token仍用于真实准入交接及精确释放。
-            job.claim_token = claim_token = uuid4()
-            # 排队等待不侵占实际读取期限，避免刚开始执行就被扫描器换代。
-            job.claimed_until = now + LEASE
-            with diagnostics.stage("claim_commit"):
+            max_steps = material_link_granted_steps(session, job)
+            quantum = (
+                job.kind == "material_links" and job.execution_pool == "background"
+            )
+            if max_steps == 0:
+                from app.modules.sync_control.schedule import record_report_outcome
+
+                try:
+                    _check_link_grant(session, job, queued_token)
+                except ExecutionLost:
+                    return "FAILED"
+                # 没有持久预留就没有额外读取资格；规范交回而非空占240秒。
+                # 不补造ledger、不退款，下一次canonical领取会签发新代预算。
+                job.status, job.due_at = "WAITING", now + timedelta(seconds=1)
+                record_report_outcome(session, job)
+                job.claim_token = job.claimed_until = None
                 session.commit()
+            else:
+                # 原子消费queued身份：同代重投不能成为第二消费者。
+                job.claim_token = claim_token = uuid4()
+                job.claimed_until = now + LEASE
+                with diagnostics.stage("claim_commit"):
+                    session.commit()
 
     def factory():
         return Session(database_engine)
 
     with _report_refill_after(database_engine, redis_client, job):
+        if max_steps == 0:
+            diagnostics.committed("WAITING")
+            return "WAITING"
+        deadline = now + timedelta(seconds=170)
+        if quantum:
+            deadline = min(
+                deadline, entered_at + timedelta(seconds=MATERIAL_LINK_QUANTUM_SECONDS)
+            )
         try:
             with _reader_for(
                 database_engine=database_engine,
                 redis_client=redis_client,
                 plan=job.model_copy(update={"claim_token": queued_token}),
-                deadline=now + timedelta(seconds=170),
+                deadline=deadline,
                 workload=workload,
             ) as reader:
                 if reader is None:
                     raise DomainError("api_binding_required", "报表需要 API 绑定")
                 result = execute_job(
-                    factory, job_id=job_id, claim_token=claim_token, reader=reader
+                    factory,
+                    job_id=job_id,
+                    claim_token=claim_token,
+                    reader=reader,
+                    max_steps=max_steps,
+                    quantum_deadline=deadline if quantum else None,
+                    grant_token=queued_token if quantum else None,
                 )
         except AccountAdmissionDeferred as error:
             with factory() as session:
                 current = session.get(ReportSyncJob, job_id, with_for_update=True)
                 if current is not None and current.claim_token == claim_token:
+                    if quantum:
+                        try:
+                            _check_link_grant(session, current, queued_token)
+                        except ExecutionLost:
+                            return "FAILED"
                     current.status = "WAITING"
                     current.error_code = "admission_deferred"
                     current.due_at = now + timedelta(
@@ -1201,6 +1244,11 @@ def _run_job_step(*, database_engine, redis_client, job_id, claim_token):
             with factory() as session:
                 current = session.get(ReportSyncJob, job_id, with_for_update=True)
                 if current is not None and current.claim_token == claim_token:
+                    if quantum:
+                        try:
+                            _check_link_grant(session, current, queued_token)
+                        except ExecutionLost:
+                            return "FAILED"
                     _failed(session, current, error.code)
                     with diagnostics.stage("job_commit"):
                         session.commit()
@@ -1407,9 +1455,15 @@ def _cleanup_category(session, *, category, now, cursors):
         )
 
         count, position = retire_covered_directories(
-            session, now=now, cursor=cursors.get(category),
-            scan_limit=cursors.get("_limits", {}).get(category, {}).get("scan", CLEANUP_SCAN_ROWS),
-            batch_limit=cursors.get("_limits", {}).get(category, {}).get("batch", CLEANUP_BATCH_ROWS),
+            session,
+            now=now,
+            cursor=cursors.get(category),
+            scan_limit=cursors.get("_limits", {})
+            .get(category, {})
+            .get("scan", CLEANUP_SCAN_ROWS),
+            batch_limit=cursors.get("_limits", {})
+            .get(category, {})
+            .get("batch", CLEANUP_BATCH_ROWS),
         )
         cursors[category] = position
         if position is None and not count:
@@ -1420,9 +1474,15 @@ def _cleanup_category(session, *, category, now, cursors):
         from app.modules.sync_control.report_retirement import retire_covered_reports
 
         count, position = retire_covered_reports(
-            session, now=now, cursor=cursors.get(category),
-            scan_limit=cursors.get("_limits", {}).get(category, {}).get("scan", CLEANUP_SCAN_ROWS),
-            batch_limit=cursors.get("_limits", {}).get(category, {}).get("batch", CLEANUP_BATCH_ROWS),
+            session,
+            now=now,
+            cursor=cursors.get(category),
+            scan_limit=cursors.get("_limits", {})
+            .get(category, {})
+            .get("scan", CLEANUP_SCAN_ROWS),
+            batch_limit=cursors.get("_limits", {})
+            .get(category, {})
+            .get("batch", CLEANUP_BATCH_ROWS),
         )
         cursors[category] = position
         if position is None and not count:

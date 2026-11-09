@@ -11,6 +11,7 @@ from sqlmodel import Session, col, select
 
 from app.core.context import TenantContext
 from app.integrations.tiktok.contracts.context import FrozenTikTokRoute
+from app.integrations.tiktok.sdk import SDK_SCOPE_INTERRUPTS
 from app.modules.accounts.routing import verify_route
 from app.modules.reporting.store_models import (
     ReportSyncJob,
@@ -113,6 +114,10 @@ class TransactionBoundaryReader:
             self.session.commit()
             try:
                 result = fetch_page(method, arguments)
+            except SDK_SCOPE_INTERRUPTS:
+                # 中断可能仍有已发送请求；不能让失租检查覆盖中断并把unknown成本闭合。
+                # 原样退出，不接受返回、不改业务状态，由外层保留未知发送收据。
+                raise
             except BaseException:
                 # 错误同样必须先核验围栏；旧worker不能把新worker改成WAITING/FAILED。
                 self._check()
