@@ -296,3 +296,19 @@ class MaterialEntityDay(_ReadDay, table=True):
         default_factory=dict,
         sa_column=Column(JSONB, nullable=False, server_default=text("'{}'::jsonb")),
     )
+
+
+# 先定义共享日指标基类，再注册分离的读模型；不依赖app.models的导入顺序。
+from app.modules.reporting.read_models.entity_metrics import (  # noqa: E402
+    EntityMetricDay,  # noqa: F401
+)
+from app.modules.reporting.read_models.evidence import (  # noqa: E402,F401
+    QuerySnapshotEvidence,
+    QuerySnapshotNameVersion,
+    ReportEvidenceVersion,
+    ReportNameScopeCurrent,
+)
+from app.modules.reporting.read_models.material_memberships import (  # noqa: E402,F401
+    MaterialAccountMemberCurrent,
+    MaterialAdMemberCurrent,
+)

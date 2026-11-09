@@ -23,7 +23,6 @@ from app.core.context import TenantContext
 from app.core.db import engine
 from app.modules.accounts.models import TenantBC
 from app.modules.reporting import query_diagnostics
-from app.modules.reporting.account_memberships import snapshot_account_versions
 from app.modules.reporting.dimension_query import (
     materialize_rows,
     metric_vector,
@@ -31,7 +30,6 @@ from app.modules.reporting.dimension_query import (
 from app.modules.reporting.filters import authorized_grants, compile_filter
 from app.modules.reporting.query_models import (
     QuerySnapshot,
-    QuerySnapshotRow,
     read_snapshot,
     read_snapshot_rows,
 )
@@ -41,17 +39,13 @@ from app.modules.reporting.query_reuse import (
     query_key,
     reuse_in_transaction,
 )
-from app.modules.reporting.read_models.coverage import (
-    projected_states,
-    projection_coverage,
-)
+from app.modules.reporting.read_models.coverage import read_projection_coverage
 from app.modules.reporting.read_models.models import (
     AccountMembershipCurrent,
     AccountReportDayState,
 )
 from app.modules.reporting.row_set import (
     MATERIAL_UNSUPPORTED,
-    SnapshotMember,
     SnapshotTotals,
     insert_snapshot_rows,
 )
@@ -59,8 +53,8 @@ from app.modules.reporting.schemas import (
     AdsQueryPage,
     QuerySnapshotPublic,
     ReportingFilter,
-    ReportRow,
 )
+from app.modules.reporting.snapshot_members import pin_snapshot_names, snapshot_members
 from app.modules.reporting.store_models import METRIC_COLUMNS, ReportSyncState
 from app.modules.tenants.permissions import require_tenant
 
@@ -87,28 +81,6 @@ def _decode_cursor(value: str) -> dict[str, Any]:
         return payload
     except (ValueError, TypeError, UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise HTTPException(404, detail="query_cursor_not_found") from exc
-
-
-def frozen_member(
-    row: QuerySnapshotRow, *, refs: list[dict[str, Any]] | None = None
-) -> SnapshotMember:
-    """快照行只冻结成员与顺序；展示和指标由 materialize_rows 按需补全。"""
-    return SnapshotMember(
-        row.row_key, tuple(row.refs if refs is None else refs), tuple(row.material_uses)
-    )
-
-
-def frozen_row(
-    row: QuerySnapshotRow, *, refs: list[dict[str, Any]] | None = None
-) -> ReportRow:
-    """冻结选择只消费快照创建时的管理身份（账户行为当时的全部系列）。"""
-    return ReportRow.model_validate(
-        {
-            "row_key": row.row_key,
-            "refs": row.refs if refs is None else refs,
-            "material_uses": row.material_uses,
-        }
-    )
 
 
 def _summary(totals: SnapshotTotals, *, dimension: str) -> dict[str, Any]:
@@ -256,9 +228,7 @@ def _build_snapshot(
             **{f"account-version:{version}": 1 for version in totals.account_versions},
         }
         if filters.dimension == "account"
-        else snapshot_naming_versions(
-            session, tenant_id=context.tenant_id, campaigns=totals.naming_campaigns
-        )
+        else pin_snapshot_names(session, snapshot=snapshot)
     )
     snapshot.total = totals.total
     snapshot.summary = _summary(totals, dimension=filters.dimension)
@@ -269,14 +239,13 @@ def _build_snapshot(
         "rows": totals.total,
     }
     if filters.dimension == "material":
-        _, states = projected_states(
+        projected = read_projection_coverage(
             session,
             tenant_id=context.tenant_id,
             advertisers=allowed_ids,
             start=filters.start_date,
             end=filters.end_date,
         )
-        projected = projection_coverage(states)
         snapshot.coverage = {
             **snapshot.coverage,
             "projection": projected,
@@ -319,18 +288,14 @@ def _read_page(
         after_sequence=after,
         limit=limit,
     )
-    versions = snapshot_account_versions(session, snapshot=snapshot, rows=rows)
+    # 分页会话与构建RR连接独立；同样只在本次读事务禁用一次性LLVM编译。
+    session.connection().execute(text("SET LOCAL jit = off"))
+    members = snapshot_members(session, snapshot=snapshot, rows=rows)
     items = materialize_rows(
         session,
         tenant_id=context.tenant_id,
         filters=filters,
-        members=[
-            frozen_member(
-                row,
-                refs=versions[row.row_key].refs if row.row_key in versions else None,
-            )
-            for row in rows
-        ],
+        members=[members[row.row_key] for row in rows],
         advertisers=snapshot.advertiser_ids,
     )
     if filters.dimension == "account":
@@ -350,14 +315,13 @@ def _read_page(
         )
     metrics_coverage = {}
     if filters.dimension == "material":
-        _, states = projected_states(
+        metrics_coverage = read_projection_coverage(
             session,
             tenant_id=context.tenant_id,
             advertisers=snapshot.advertiser_ids,
             start=filters.start_date,
             end=filters.end_date,
         )
-        metrics_coverage = projection_coverage(states)
         raw_observed = metrics_coverage["metrics_observed_at"]
         observed = datetime.fromisoformat(raw_observed) if raw_observed else None
     else:

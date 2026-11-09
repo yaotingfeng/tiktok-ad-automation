@@ -26,10 +26,6 @@ from app.core.config import settings
 from app.core.context import TenantContext
 from app.modules.accounts.models import TenantBC
 from app.modules.materials.storage import make_s3
-from app.modules.reporting.account_memberships import (
-    expanded_naming_versions,
-    snapshot_account_versions,
-)
 from app.modules.reporting.dimension_query import materialize_rows
 from app.modules.reporting.filters import authorized_grants
 from app.modules.reporting.query_models import (
@@ -40,6 +36,7 @@ from app.modules.reporting.query_models import (
 )
 from app.modules.reporting.row_set import SnapshotMember
 from app.modules.reporting.schemas import ExportPublic, ReportingFilter
+from app.modules.reporting.snapshot_members import snapshot_members, snapshot_names
 from app.modules.tenants.permissions import require_tenant
 
 _EXPORT_PREFIX = "report-exports"
@@ -121,19 +118,17 @@ def _rows_for_snapshot(
     ).all()
     if len(rows) != snapshot.total:
         raise HTTPException(409, detail="query_snapshot_incomplete")
-    versions = snapshot_account_versions(session, snapshot=snapshot, rows=rows)
+    members = snapshot_members(session, snapshot=snapshot, rows=rows)
     frozen_rows = [
         {
             "row_key": row.row_key,
-            "refs": list(
-                versions[row.row_key].refs if row.row_key in versions else row.refs
-            ),
-            "material_uses": list(row.material_uses),
+            "refs": list(members[row.row_key].refs),
+            "material_uses": list(members[row.row_key].material_uses),
         }
         for row in rows
     ]
-    return frozen_rows, expanded_naming_versions(
-        snapshot=snapshot, versions=versions.values()
+    return frozen_rows, snapshot_names(
+        session, snapshot=snapshot, rows=rows, members=members
     )
 
 

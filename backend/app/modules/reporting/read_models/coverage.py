@@ -3,14 +3,69 @@
 import hashlib
 import json
 from collections.abc import Sequence
-from datetime import date
-from typing import Any
+from datetime import date, datetime
+from typing import Any, Protocol, cast
 from uuid import UUID
 
+from sqlalchemy import select as sql_select
 from sqlmodel import Session, col, select
 
 from app.modules.reporting.read_models.models import ReadBucketState
 from app.modules.reporting.store_models import ReportSyncState
+
+
+class ProjectionCoverageRow(Protocol):
+    """覆盖与digest只依赖这五列；ORM对象和窄列Row均遵守同一读取合同。"""
+
+    @property
+    def advertiser_id(self) -> str: ...
+
+    @property
+    def bucket(self) -> date: ...
+
+    @property
+    def source_revision(self) -> int: ...
+
+    @property
+    def derived_revision(self) -> int: ...
+
+    @property
+    def derived_observed_at(self) -> datetime | None: ...
+
+
+def read_projection_coverage(
+    session: Session,
+    *,
+    tenant_id: UUID,
+    advertisers: Sequence[str],
+    start: date,
+    end: date,
+    kind: str = "material_day",
+) -> dict[str, Any]:
+    """全局覆盖读取窄列，不构建并未使用的同步状态或SQLModel对象。"""
+    if not advertisers:
+        return projection_coverage([])
+    rows = (
+        session.connection()
+        .execute(
+            sql_select(
+                col(ReadBucketState.advertiser_id),
+                col(ReadBucketState.bucket),
+                col(ReadBucketState.source_revision),
+                col(ReadBucketState.derived_revision),
+                col(ReadBucketState.derived_observed_at),
+            ).where(
+                col(ReadBucketState.tenant_id) == tenant_id,
+                col(ReadBucketState.advertiser_id).in_(advertisers),
+                col(ReadBucketState.kind) == kind,
+                col(ReadBucketState.bucket) >= start,
+                col(ReadBucketState.bucket) <= end,
+            )
+        )
+        .all()
+    )
+    # SQL列名和类型与Protocol逐项对应；保留driver的日期/时区解码及原digest序列化。
+    return projection_coverage(cast(Sequence[ProjectionCoverageRow], rows))
 
 
 def projected_states(
@@ -47,7 +102,7 @@ def projected_states(
     return states, rows
 
 
-def projection_coverage(rows: Sequence[ReadBucketState]) -> dict[str, Any]:
+def projection_coverage(rows: Sequence[ProjectionCoverageRow]) -> dict[str, Any]:
     dirty = [row for row in rows if row.source_revision > row.derived_revision]
     missing = [
         row for row in rows if row.derived_revision == 0 and row.source_revision > 0

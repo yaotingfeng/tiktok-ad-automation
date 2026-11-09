@@ -676,14 +676,22 @@ def materialize_rows(
             session, tenant_id=tenant_id, advertisers=advertisers
         ):
             balances.setdefault(observation.advertiser_id, observation)
-    # 覆盖状态只取决于账户集合与日期：按账户集合缓存，避免每行重复扫描同步状态。
+    # 当前页面所有非素材维度共用ad_day覆盖；预索引一次，后续单账户或剧行
+    # 只遍历自身日期，避免N个账户各重扫整个页面的N×日期×报表种类状态。
+    states_by_adv: dict[str, list[ReportSyncState]] = defaultdict(list)
+    for state in states:
+        if state.report_kind == "ad_day":
+            states_by_adv[state.advertiser_id].append(state)
+    # 覆盖状态只取决于账户集合与日期，同一账户集合复用计算结果。
     coverage_cache: dict[frozenset[str], dict[str, Any]] = {}
 
     def coverage_for(members: Collection[str]) -> dict[str, Any]:
         cache_key = frozenset(members)
         if cache_key not in coverage_cache:
             coverage_cache[cache_key] = _coverage(
-                states, advertisers=cache_key, filters=filters
+                [state for adv in cache_key for state in states_by_adv[adv]],
+                advertisers=cache_key,
+                filters=filters,
             )
         return dict(coverage_cache[cache_key])
 
@@ -701,6 +709,8 @@ def materialize_rows(
     result = []
     for member in members:
         rows: list[ReportRow] = []
+        drama_vectors: list[tuple[str, tuple[MetricVector, ...]]] = []
+        drama_versions: dict[str, int] = {}
         statuses: list[str | None] = []
         providers: list[str] = []
         for adv, rid in identities[member.row_key]:
@@ -718,25 +728,38 @@ def materialize_rows(
                 if isinstance(campaign_id, str)
                 else None
             )
-            rows.append(
-                _member_row(
-                    kind=kind,
-                    filters=filters,
-                    accounts=accounts,
-                    objects=objects,
-                    adv=adv,
-                    rid=rid,
-                    entity=entity,
-                    items=items,
-                    projection=projection,
-                    balance=balances.get(adv),
-                    reconciliations=[
-                        r for r in reconciliations if r.advertiser_id == adv
-                    ],
-                    empty_values=empty_values_for(adv),
-                    carousel=carousels.get((adv, rid)),
+            if filters.dimension == "drama" and rows:
+                # 剧行只展示首成员信息；后续成员无需构建层级display与完整ReportRow。
+                # 指标仍走相同fact_vector/空值规则，避免节省对象时改变部分合计口径。
+                drama_vectors.append(
+                    (adv, _member_vectors(items, empty_values_for(adv), accounts, adv))
                 )
-            )
+                if entity:
+                    # 原_member_row只记录成员自身目录版本，不增加其父级版本。
+                    drama_versions[f"{adv}:{rid}"] = entity.published_version
+            else:
+                rows.append(
+                    _member_row(
+                        kind=kind,
+                        filters=filters,
+                        accounts=accounts,
+                        objects=objects,
+                        adv=adv,
+                        rid=rid,
+                        entity=entity,
+                        items=items,
+                        projection=projection,
+                        balance=balances.get(adv),
+                        reconciliations=[
+                            r for r in reconciliations if r.advertiser_id == adv
+                        ],
+                        empty_values=empty_values_for(adv),
+                        carousel=carousels.get((adv, rid)),
+                    )
+                )
+                if filters.dimension == "drama":
+                    drama_vectors.append((adv, rows[-1].metric_buckets))
+                    drama_versions.update(rows[-1].directory_versions)
             statuses.append(entity.operation_status if entity else None)
             if projection and projection.provider_label:
                 providers.append(projection.provider_label)
@@ -749,14 +772,21 @@ def materialize_rows(
                 "refs": refs,
                 # 行内合并与汇总同一规则：覆盖不完整账户贡献的列标 PARTIAL。
                 "metric_buckets": merge_metric_buckets(
-                    (r.metric_buckets, r.display.get("advertiser_id") in incomplete_ids)
-                    for r in rows
+                    ((vectors, adv in incomplete_ids) for adv, vectors in drama_vectors)
+                    if filters.dimension == "drama"
+                    else (
+                        (
+                            r.metric_buckets,
+                            r.display.get("advertiser_id") in incomplete_ids,
+                        )
+                        for r in rows
+                    )
                 ),
                 "coverage": coverage,
                 "membership_digest": ref_digest(refs),
-                "directory_versions": {
-                    k: v for r in rows for k, v in r.directory_versions.items()
-                },
+                "directory_versions": drama_versions
+                if filters.dimension == "drama"
+                else {k: v for r in rows for k, v in r.directory_versions.items()},
             }
         )
         if filters.dimension == "drama":
@@ -805,6 +835,22 @@ def _page_objects(
             if parent and obj.parent_remote_id:
                 wanted.setdefault(parent, set()).add(obj.parent_remote_id)
     return objects
+
+
+def _member_vectors(
+    items: Sequence[Mapping[str, Any] | RowMapping],
+    empty_values: Mapping[str, Decimal | None],
+    accounts: Mapping[str, AdvertiserAccount],
+    advertiser_id: str,
+) -> tuple[MetricVector, ...]:
+    """完整成员展示与剧行轻量成员共用同一指标构造口径。"""
+    return tuple(fact_vector(item) for item in items) or (
+        metric_vector(
+            empty_values,
+            currency=accounts[advertiser_id].currency,
+            timezone=accounts[advertiser_id].timezone,
+        ),
+    )
 
 
 def _member_row(
@@ -912,13 +958,7 @@ def _member_row(
             metric_scope="AD",
             creative_linkage="COMPLETE" if carousel.complete else "INCOMPLETE",
         )
-    vectors = tuple(fact_vector(item) for item in items) or (
-        metric_vector(
-            empty_values,
-            currency=accounts[adv].currency,
-            timezone=accounts[adv].timezone,
-        ),
-    )
+    vectors = _member_vectors(items, empty_values, accounts, adv)
     return ReportRow(
         row_key=f"{adv}:{kind}:{rid}",
         carousel_creatives=carousel.identities if carousel else (),

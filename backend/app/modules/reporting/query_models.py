@@ -138,7 +138,7 @@ class QuerySnapshotRow(SQLModel, table=True):
         ),
         CheckConstraint(
             "(dimension='account' AND account_membership_version_id IS NOT NULL AND refs='[]'::jsonb) OR "
-            "(dimension<>'account' AND account_membership_version_id IS NULL)",
+            "(dimension<>'account' AND account_membership_version_id IS NULL AND refs='[]'::jsonb AND material_uses='[]'::jsonb)",
             name="ck_snapshot_account_membership",
         ),
         CheckConstraint("stable_sequence >= 0", name="ck_query_snapshot_row_sequence"),
@@ -163,6 +163,10 @@ class QuerySnapshotRow(SQLModel, table=True):
     row_key: str = Field(primary_key=True, max_length=512)
     stable_sequence: int
     dimension: str = Field(max_length=32)
+    member_keys: list[list[str]] = Field(
+        default_factory=list, sa_type=JSONB, nullable=False
+    )
+    member_count: int = 0
     account_membership_version_id: UUID | None = Field(
         default=None, foreign_key="account_membership_version.id"
     )
@@ -262,6 +266,15 @@ class ReportExport(FrozenQueryScope, table=True):
     )
 
 
+def is_transaction_cleanup(statement: str) -> bool:
+    """清理保存点必须绕过取消/预算hook，尤其SQL报错后不能先执行SET。"""
+    return (
+        statement.lstrip()
+        .upper()
+        .startswith(("ROLLBACK TO SAVEPOINT ", "RELEASE SAVEPOINT "))
+    )
+
+
 @contextmanager
 def snapshot_transaction(
     engine: Engine,
@@ -282,9 +295,12 @@ def snapshot_transaction(
         if before_begin is not None:
             before_begin(connection)
         with connection.begin():
-            connection.execute(text("SET LOCAL statement_timeout = '30s'"))
+            # 报表包含大量CTE但每次只执行一次；实测LLVM编译额外占约1秒，
+            # 仅本读事务关闭JIT，不改变连接池后续业务或服务器全局参数。
             connection.execute(
-                text("SET LOCAL idle_in_transaction_session_timeout = '30s'")
+                text("""SELECT set_config('statement_timeout','30s',true),
+                set_config('idle_in_transaction_session_timeout','30s',true),
+                set_config('jit','off',true)""")
             )
 
             def remaining_budget(
@@ -295,7 +311,7 @@ def snapshot_transaction(
                 _context: Any,
                 _many: bool,
             ) -> None:
-                if deadline is None:
+                if deadline is None or is_transaction_cleanup(_statement):
                     return
                 remaining = deadline - monotonic()
                 if remaining <= 0:

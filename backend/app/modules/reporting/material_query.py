@@ -36,7 +36,7 @@ from app.modules.reporting.read_models.material_names import material_names_sql
 from app.modules.reporting.read_models.models import (
     CurrentAdMaterial as AdMaterialReference,
 )
-from app.modules.reporting.read_models.models import MaterialEntityDay
+from app.modules.reporting.read_models.models import MaterialEntityDay, ReadBucketState
 from app.modules.reporting.row_set import (
     MATERIAL_UNSUPPORTED,
     SnapshotMember,
@@ -140,16 +140,31 @@ def materialize_material_rows(
         if row_key in keys:
             posts_by_row[row_key].add(identity)
             facts[identity].append(item)
+    # 素材金额仍在原授权scope内读取；展示覆盖只加载本页实际关系账户。
+    # 冻结使用位置必须参与：当前目录删除后旧快照仍保留当时使用位置。
+    page_scope = sorted(
+        set(scope)
+        & (
+            {item["advertiser_id"] for item in data}
+            | {usage.advertiser_id for usage in usages}
+            | {ref["advertiser_id"] for member in members for ref in member.refs}
+            | {
+                use["ad_ref"]["advertiser_id"]
+                for member in members
+                for use in member.material_uses
+            }
+        )
+    )
     accounts = {
         a.advertiser_id: a
         for a in scoped_rows(
-            session, AdvertiserAccount, tenant_id=tenant_id, advertisers=scope
+            session, AdvertiserAccount, tenant_id=tenant_id, advertisers=page_scope
         )
     }
     states, projection_states = projected_states(
         session,
         tenant_id=tenant_id,
-        advertisers=scope,
+        advertisers=page_scope,
         start=filters.start_date,
         end=filters.end_date,
     )
@@ -157,12 +172,15 @@ def materialize_material_rows(
     states_by_adv: dict[str, list[ReportSyncState]] = defaultdict(list)
     for state in states:
         states_by_adv[state.advertiser_id].append(state)
+    projections_by_adv: dict[str, list[ReadBucketState]] = defaultdict(list)
+    for projection_state in projection_states:
+        projections_by_adv[projection_state.advertiser_id].append(projection_state)
     incomplete_by_adv = {
         adv: _coverage(
             states_by_adv[adv], advertisers={adv}, filters=filters, kind="material_day"
         )["status"]
         not in COMPLETE_COVERAGE_STATUSES
-        for adv in scope
+        for adv in page_scope
     }
     empty_by_adv = {
         adv: empty_metric_values(
@@ -190,7 +208,7 @@ def materialize_material_rows(
             kind="material_day",
         )
         coverage["projection"] = projection_coverage(
-            [state for state in projection_states if state.advertiser_id in row_advs]
+            [state for adv in row_advs for state in projections_by_adv[adv]]
         )
         uses = tuple(_use(item) for item in member.material_uses)
         if not uses:

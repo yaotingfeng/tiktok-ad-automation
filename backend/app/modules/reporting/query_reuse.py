@@ -26,6 +26,7 @@ from app.modules.reporting.filters import authorized_grants
 from app.modules.reporting.query_models import (
     QuerySnapshot,
     QuerySnapshotBuild,
+    is_transaction_cleanup,
     read_snapshot,
     snapshot_transaction,
 )
@@ -332,8 +333,15 @@ class QueryCancellation:
     def private_query(self, session: Session) -> Iterator[None]:
         connection = session.connection()
 
-        def before_sql(*_args: object) -> None:
-            if self.event.is_set():
+        def before_sql(
+            _connection: Connection,
+            _cursor: Any,
+            statement: str,
+            _parameters: Any,
+            _context: Any,
+            _many: bool,
+        ) -> None:
+            if not is_transaction_cleanup(statement) and self.event.is_set():
                 raise HTTPException(499, detail="query_cancelled")
 
         with self._lock:

@@ -1,7 +1,6 @@
 """共享不可变账户成员版本；授权由调用方现有快照范围校验提供。"""
 
-from collections.abc import Collection, Iterable, Sequence
-from typing import TYPE_CHECKING
+from collections.abc import Collection
 from uuid import UUID
 
 from fastapi import HTTPException
@@ -9,9 +8,6 @@ from sqlalchemy import text
 from sqlmodel import Session, col, select
 
 from app.modules.reporting.read_models.models import AccountMembershipVersion
-
-if TYPE_CHECKING:
-    from app.modules.reporting.query_models import QuerySnapshot, QuerySnapshotRow
 
 
 def load_account_versions(
@@ -35,44 +31,6 @@ def load_account_versions(
     if set(result) != wanted:
         raise HTTPException(409, detail="query_membership_unavailable")
     return result
-
-
-def snapshot_account_versions(
-    session: Session, *, snapshot: QuerySnapshot, rows: Sequence[QuerySnapshotRow]
-) -> dict[str, AccountMembershipVersion]:
-    account_rows = [row for row in rows if row.dimension == "account"]
-    if any(row.account_membership_version_id is None for row in account_rows):
-        raise HTTPException(409, detail="query_membership_unavailable")
-    versions = load_account_versions(
-        session,
-        tenant_id=snapshot.tenant_id,
-        advertisers=snapshot.advertiser_ids,
-        version_ids=[
-            row.account_membership_version_id
-            for row in account_rows
-            if row.account_membership_version_id
-        ],
-    )
-    result = {}
-    for row in account_rows:
-        assert row.account_membership_version_id is not None
-        version = versions[row.account_membership_version_id]
-        expected_key = f"{version.advertiser_id}:account:{version.advertiser_id}"
-        if row.row_key != expected_key:
-            raise HTTPException(409, detail="query_membership_unavailable")
-        result[row.row_key] = version
-    return result
-
-
-def expanded_naming_versions(
-    *, snapshot: QuerySnapshot, versions: Iterable[AccountMembershipVersion]
-) -> dict[str, int]:
-    if snapshot.filters.get("dimension") != "account":
-        return dict(snapshot.naming_versions)
-    names = {"directory": 1}
-    for version in versions:
-        names.update(version.naming_versions)
-    return names
 
 
 def prune_account_memberships(session: Session, *, limit: int = 100) -> None:
