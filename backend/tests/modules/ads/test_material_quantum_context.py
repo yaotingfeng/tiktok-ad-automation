@@ -195,7 +195,10 @@ def test_five_page_quantum_only_loads_frozen_context_at_entry(material_case):
         assert case.run(case.child_id, generation) == "CONTINUE"
     finally:
         event.remove(case.engine, "before_cursor_execute", before)
-    assert len(seen) == 3  # 首次streaming核验2次、完整载入1次，后四页复用。
+    # 过期核验与完整载入都各读一次窄metadata及素材游标，后四页复用。
+    assert len(seen) == 4
+    assert sum("jsonb_array_elements" in statement for statement in seen) == 2
+    assert sum("AS valid_materials" in statement for statement in seen) == 2
     assert len(business_calls(case.wire, "OFFICIAL_API")) == 6
     with Session(case.engine) as db:
         child = db.get(AdDirectoryRun, case.child_id)
@@ -302,7 +305,9 @@ def test_new_quantum_reloads_context(material_case):
         assert case.run(case.child_id, second) == "CONTINUE"
     finally:
         event.remove(case.engine, "before_cursor_execute", before)
-    assert len(seen) == 3
+    assert len(seen) == 4
+    assert sum("jsonb_array_elements" in statement for statement in seen) == 2
+    assert sum("AS valid_materials" in statement for statement in seen) == 2
     assert len(business_calls(case.wire, "OFFICIAL_API")) == 8
 
 
