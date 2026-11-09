@@ -391,11 +391,12 @@ class SDKMusicOperations:
                 raw,
                 page=page,
                 headers=headers,
-                recommendation=search_type == "SEARCH_BY_RECOMMEND",
+                variable_page_size=search_type
+                in {"SEARCH_BY_RECOMMEND", "SEARCH_BY_MUSIC_ID"},
             )
 
     def _parse(
-        self, raw: bytes, *, page: int, headers: Any, recommendation: bool = False
+        self, raw: bytes, *, page: int, headers: Any, variable_page_size: bool = False
     ) -> MaterialPage[MusicItem]:
         evidence = CallEvidence()
         try:
@@ -438,10 +439,10 @@ class SDKMusicOperations:
                 info["page"] != page
                 or type(info["page"]) is not int
                 or type(info["page_size"]) is not int
-                # 推荐接口可将请求的 100 收窄为实际候选数（真实回执为 98）；
-                # 搜索/按ID读取仍校验请求页大小，推荐保留实际分页事实。
+                # 推荐和按ID读取均可收窄页大小（真实回执分别为98、1）。
+                # 保留实际分页事实及后续完整计数校验；关键词搜索仍为请求页大小。
                 or not 1 <= info["page_size"] <= _PAGE_SIZE
-                or not recommendation
+                or not variable_page_size
                 and info["page_size"] != _PAGE_SIZE
                 or type(info["total_number"]) is not int
             ):
