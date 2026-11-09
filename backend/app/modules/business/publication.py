@@ -13,6 +13,7 @@ def cohort_signature(run: BusinessRun) -> str:
         {
             "calculation_revision": run.inputs.get("calculation_revision"),
             "identity_catalog": run.inputs.get("identity_catalog"),
+            "rate_schedules": run.inputs.get("rate_schedules"),
         },
         sort_keys=True,
         separators=(",", ":"),

@@ -27,6 +27,8 @@ async function boundary(
   await automationBoundary(page, { role })
   const queries: Record<string, unknown>[] = []
   const rates: Record<string, unknown>[] = []
+  const previews: Record<string, unknown>[] = []
+  let schedule = { revision: 0, periods: [] as Record<string, unknown>[] }
   const evidence: Record<string, unknown>[] = []
   await page.route("**/api/**/business/**", async (route) => {
     const path = new URL(route.request().url()).pathname
@@ -88,12 +90,37 @@ async function boundary(
         pending: false,
       })
     }
+    if (path.endsWith("/rates/preview")) {
+      previews.push(body)
+      return reply({
+        revision: schedule.revision,
+        before: schedule.periods,
+        periods: [
+          {
+            start_date: body.start_date,
+            end_date: body.end_date ?? null,
+            rate: body.rate ?? null,
+          },
+        ],
+      })
+    }
+    if (path.endsWith("/rates/history"))
+      return reply({ items: [], has_more: false })
     if (path.endsWith("/rates")) {
       if (route.request().method() === "POST") {
         rates.push(body)
-        return reply({ id: PROVIDER, revision: 1, ...body })
+        schedule = {
+          revision: schedule.revision + 1,
+          periods: [
+            {
+              start_date: body.start_date,
+              end_date: body.end_date ?? null,
+              rate: body.rate ?? null,
+            },
+          ],
+        }
       }
-      return reply([])
+      return reply(schedule)
     }
     if (path.endsWith("/evidence")) {
       if (route.request().method() === "PUT") {
@@ -122,7 +149,7 @@ async function boundary(
       })
     return reply({ detail: path }, 404)
   })
-  return { queries, rates, evidence }
+  return { queries, rates, previews, evidence }
 }
 
 test("经营看板五卡与三个补贴情景独立展示", async ({ page }) => {
@@ -169,13 +196,17 @@ test("返点默认0且按生效日保存，小屏保持页面可用", async ({ p
     page.getByRole("spinbutton", { name: "其他返点比例（%）" }),
   ).toHaveValue("0")
   await page.getByRole("spinbutton", { name: "其他返点比例（%）" }).fill("10.8")
-  await page.getByLabel("生效日期", { exact: true }).fill("2026-10-10")
-  await page.getByRole("button", { name: "保存比例", exact: true }).click()
+  await page
+    .getByRole("dialog")
+    .getByLabel("开始日期", { exact: true })
+    .fill("2026-10-10")
+  await page.getByRole("button", { name: "预览调整", exact: true }).click()
+  await page.getByRole("button", { name: "确认保存", exact: true }).click()
   await expect.poll(() => calls.rates.length).toBe(1)
   expect(calls.rates[0]).toMatchObject({
     kind: "rebate",
     scope_id: BC,
-    effective_date: "2026-10-10",
+    start_date: "2026-10-10",
     rate: "0.108",
   })
   await expect
@@ -271,13 +302,17 @@ test("版权方连接中独立保存抽成，不触发凭据验证", async ({ pa
     page.getByRole("spinbutton", { name: "版权方抽成比例（%）" }),
   ).toHaveValue("0")
   await page.getByRole("spinbutton", { name: "版权方抽成比例（%）" }).fill("8")
-  await page.getByLabel("生效日期", { exact: true }).fill("2026-10-01")
-  await page.getByRole("button", { name: "保存比例", exact: true }).click()
+  await page
+    .getByRole("dialog")
+    .getByLabel("开始日期", { exact: true })
+    .fill("2026-10-01")
+  await page.getByRole("button", { name: "预览调整", exact: true }).click()
+  await page.getByRole("button", { name: "确认保存", exact: true }).click()
   await expect.poll(() => calls.rates.length).toBe(1)
   expect(calls.rates[0]).toMatchObject({
     kind: "provider",
     scope_id: PROVIDER,
-    effective_date: "2026-10-01",
+    start_date: "2026-10-01",
     rate: "0.08",
   })
   expect(verifications).toEqual([])
@@ -326,5 +361,258 @@ test("13寸屏幕保留列表空间，说明按需查看且列可排序", async 
   await page.screenshot({
     path: test.info().outputPath("dashboard-13inch.png"),
     fullPage: true,
+  })
+})
+
+test("比例先预览再保存，返回修改和取消不写入", async ({ page }) => {
+  const calls = await boundary(page)
+  await page.goto(`/tenants/${TENANT}/business?bc_id=${BC}`)
+  await page.getByRole("button", { name: "经营设置", exact: true }).click()
+  await page
+    .getByRole("dialog")
+    .getByLabel("开始日期", { exact: true })
+    .fill("2026-08-01")
+  await page.getByLabel("其他返点比例（%）").fill("6")
+  await page.getByLabel("持续有效", { exact: true }).uncheck()
+  await page
+    .getByRole("dialog")
+    .getByLabel("结束日期", { exact: true })
+    .fill("2026-09-30")
+  await page.getByRole("button", { name: "预览调整", exact: true }).click()
+  await expect(
+    page.getByRole("heading", { name: "保存后的时间段" }),
+  ).toBeVisible()
+  expect(calls.rates).toHaveLength(0)
+  await expect(page.getByText("2026-09-30", { exact: true })).toBeVisible()
+  await page.getByRole("button", { name: "返回修改", exact: true }).click()
+  await expect(
+    page.getByRole("dialog").getByLabel("结束日期", { exact: true }),
+  ).toHaveValue("2026-09-30")
+  await page.getByRole("button", { name: "预览调整", exact: true }).click()
+  await page.getByRole("button", { name: "确认保存", exact: true }).click()
+  await expect.poll(() => calls.rates.length).toBe(1)
+  expect(calls.rates[0]).toMatchObject({
+    expected_revision: 0,
+    start_date: "2026-08-01",
+    end_date: "2026-09-30",
+    rate: "0.06",
+  })
+})
+
+test("结束时间段默认接续到下一配置之前", async ({ page }) => {
+  await boundary(page)
+  await page.route("**/business/rates?**", (route) =>
+    route.fulfill({
+      json: {
+        revision: 2,
+        periods: [
+          { start_date: "2026-08-01", end_date: "2026-09-30", rate: "0.06" },
+          { start_date: "2026-10-01", end_date: null, rate: "0.04" },
+        ],
+      },
+    }),
+  )
+  await page.goto(`/tenants/${TENANT}/business?bc_id=${BC}`)
+  await page.getByRole("button", { name: "经营设置", exact: true }).click()
+  const row = page.getByRole("row").filter({ hasText: "2026-08-01" })
+  await row.getByRole("button", { name: "结束", exact: true }).click()
+  await page.getByLabel("截止日期", { exact: true }).fill("2026-08-31")
+  await page.getByLabel("同时设置接续比例").check()
+  await expect(page.getByLabel("接续结束日期", { exact: true })).toHaveValue(
+    "2026-09-30",
+  )
+  await expect(page.getByLabel("接续比例持续有效")).not.toBeChecked()
+  await page.getByLabel("接续比例（%）").fill("5")
+  await page.getByRole("button", { name: "预览调整", exact: true }).click()
+  await expect(
+    page.getByRole("button", { name: "确认保存", exact: true }),
+  ).toBeVisible()
+})
+
+test("修改时间段保留原段标识，预览明确待配置空档", async ({ page }) => {
+  await boundary(page)
+  const original = [{ start_date: "2026-08-01", end_date: null, rate: "0.06" }]
+  let operation: Record<string, unknown> = {}
+  await page.route("**/business/rates**", async (route) => {
+    const url = new URL(route.request().url())
+    if (url.pathname.endsWith("/rates") && route.request().method() === "GET")
+      return route.fulfill({ json: { revision: 1, periods: original } })
+    if (url.pathname.endsWith("/preview")) {
+      operation = route.request().postDataJSON()
+      return route.fulfill({
+        json: {
+          revision: 1,
+          before: original,
+          periods: [
+            { start_date: "2026-08-01", end_date: "2026-08-14", rate: null },
+            { start_date: "2026-08-15", end_date: "2026-08-31", rate: "0.05" },
+            { start_date: "2026-09-01", end_date: null, rate: null },
+          ],
+        },
+      })
+    }
+    return route.fallback()
+  })
+  await page.goto(`/tenants/${TENANT}/business?bc_id=${BC}`)
+  await page.getByRole("button", { name: "经营设置", exact: true }).click()
+  const dialog = page.getByRole("dialog")
+  await dialog.getByRole("button", { name: "修改", exact: true }).click()
+  await dialog.getByLabel("开始日期", { exact: true }).fill("2026-08-15")
+  await dialog.getByLabel("持续有效", { exact: true }).uncheck()
+  await dialog.getByLabel("结束日期", { exact: true }).fill("2026-08-31")
+  await dialog.getByLabel("其他返点比例（%）").fill("5")
+  await dialog.getByRole("button", { name: "预览调整", exact: true }).click()
+  await expect(
+    dialog.getByText("存在待配置时间段", { exact: true }),
+  ).toBeVisible()
+  expect(operation).toMatchObject({
+    action: "edit",
+    target_start_date: "2026-08-01",
+    start_date: "2026-08-15",
+    end_date: "2026-08-31",
+    rate: "0.05",
+    expected_revision: 1,
+  })
+  await page.screenshot({
+    path: test.info().outputPath("rate-edit-preview.png"),
+    fullPage: true,
+  })
+  await page.setViewportSize({ width: 390, height: 844 })
+  await expect(
+    dialog.getByRole("button", { name: "确认保存", exact: true }),
+  ).toBeVisible()
+  await expect
+    .poll(() =>
+      page.evaluate(() => document.documentElement.scrollWidth <= innerWidth),
+    )
+    .toBe(true)
+  await page.screenshot({
+    path: test.info().outputPath("rate-edit-preview-mobile.png"),
+    fullPage: true,
+  })
+})
+
+test("并发修改后保留输入，刷新修订再预览保存", async ({ page }) => {
+  await boundary(page)
+  let revision = 1
+  let attempts = 0
+  const previews: Record<string, unknown>[] = []
+  await page.route("**/business/rates**", async (route) => {
+    const url = new URL(route.request().url())
+    const periods = [{ start_date: "2026-10-01", end_date: null, rate: "0.04" }]
+    if (url.pathname.endsWith("/rates") && route.request().method() === "GET")
+      return route.fulfill({ json: { revision, periods } })
+    if (url.pathname.endsWith("/preview")) {
+      previews.push(route.request().postDataJSON())
+      return route.fulfill({
+        json: {
+          revision,
+          before: periods,
+          periods: [{ start_date: "2026-08-01", end_date: null, rate: "0.06" }],
+        },
+      })
+    }
+    if (
+      url.pathname.endsWith("/rates") &&
+      route.request().method() === "POST"
+    ) {
+      attempts++
+      if (attempts === 1) {
+        revision = 2
+        return route.fulfill({
+          status: 409,
+          json: { detail: "比例配置已被修改" },
+        })
+      }
+      return route.fulfill({ json: { revision: 3, periods } })
+    }
+    return route.fallback()
+  })
+  await page.goto(`/tenants/${TENANT}/business?bc_id=${BC}`)
+  await page.getByRole("button", { name: "经营设置", exact: true }).click()
+  const dialog = page.getByRole("dialog")
+  await dialog.getByLabel("开始日期", { exact: true }).fill("2026-08-01")
+  await dialog.getByLabel("其他返点比例（%）").fill("6")
+  await dialog.getByRole("button", { name: "预览调整", exact: true }).click()
+  await dialog.getByRole("button", { name: "确认保存", exact: true }).click()
+  await expect(dialog.getByRole("alert")).toContainText("你的输入已保留")
+  await expect(dialog.getByLabel("其他返点比例（%）")).toHaveValue("6")
+  await expect(dialog.getByLabel("开始日期", { exact: true })).toHaveValue(
+    "2026-08-01",
+  )
+  await dialog.getByRole("button", { name: "预览调整", exact: true }).click()
+  expect(previews.map((p) => p.expected_revision)).toEqual([1, 2])
+  await dialog.getByRole("button", { name: "确认保存", exact: true }).click()
+  await expect(dialog).toHaveCount(0)
+})
+
+test("修改记录展示操作人和调整前后日程", async ({ page }) => {
+  await boundary(page)
+  await page.route("**/business/rates/history?**", (route) =>
+    route.fulfill({
+      json: {
+        items: [
+          {
+            id: PROVIDER,
+            revision: 2,
+            actor_id: PROVIDER,
+            actor_name: "结算管理员",
+            created_at: "2026-11-09T08:00:00Z",
+            note: "三季度达量优惠",
+            legacy: false,
+            previous_periods: [
+              { start_date: "2026-08-01", end_date: null, rate: "0.1" },
+            ],
+            periods: [
+              {
+                start_date: "2026-08-01",
+                end_date: "2026-09-30",
+                rate: "0.06",
+              },
+              { start_date: "2026-10-01", end_date: null, rate: null },
+            ],
+          },
+        ],
+        has_more: false,
+      },
+    }),
+  )
+  await page.goto(`/tenants/${TENANT}/business?bc_id=${BC}`)
+  await page.getByRole("button", { name: "经营设置", exact: true }).click()
+  await page.getByRole("button", { name: "查看修改记录" }).click()
+  await page.getByText(/修订 2 ·/).click()
+  await expect(
+    page.getByText("操作人：结算管理员", { exact: true }),
+  ).toBeVisible()
+  await expect(page.getByText("三季度达量优惠", { exact: true })).toBeVisible()
+  await expect(page.getByText("调整前", { exact: true })).toBeVisible()
+  await expect(page.getByText("调整后", { exact: true })).toBeVisible()
+})
+
+test("已有7%比例修改日期时保留精确输入", async ({ page }) => {
+  const calls = await boundary(page)
+  await page.route("**/business/rates?**", (route) =>
+    route.fulfill({
+      json: {
+        revision: 1,
+        periods: [{ start_date: "2026-08-01", end_date: null, rate: "0.07" }],
+      },
+    }),
+  )
+  await page.goto(`/tenants/${TENANT}/business?bc_id=${BC}`)
+  await page.getByRole("button", { name: "经营设置", exact: true }).click()
+  const dialog = page.getByRole("dialog")
+  await dialog.getByRole("button", { name: "修改", exact: true }).click()
+  await expect(dialog.getByLabel("其他返点比例（%）")).toHaveValue("7")
+  await dialog.getByLabel("持续有效", { exact: true }).uncheck()
+  await dialog.getByLabel("结束日期", { exact: true }).fill("2026-09-30")
+  await dialog.getByRole("button", { name: "预览调整", exact: true }).click()
+  await expect(
+    dialog.getByRole("heading", { name: "保存后的时间段" }),
+  ).toBeVisible()
+  expect(calls.previews[0]).toMatchObject({
+    rate: "0.07",
+    start_date: "2026-08-01",
+    end_date: "2026-09-30",
   })
 })

@@ -108,6 +108,41 @@ class BusinessRate(SQLModel, table=True):
     created_at: datetime = Field(default_factory=utcnow, sa_type=AwareDateTime)
 
 
+class BusinessRateSchedule(SQLModel, table=True):
+    """每次编辑保存完整不可变日程；旧BusinessRate仅保留为迁移前历史。"""
+
+    __tablename__ = "business_rate_schedule"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["tenant_id", "provider_id"],
+            ["provider_connection.tenant_id", "provider_connection.id"],
+        ),
+        bc_fk(),
+        CheckConstraint(
+            "(kind='provider' AND provider_id IS NOT NULL AND bc_id IS NULL) OR (kind='rebate' AND bc_id IS NOT NULL AND provider_id IS NULL)",
+            name="ck_rate_schedule_scope",
+        ),
+        UniqueConstraint(
+            "tenant_id",
+            "kind",
+            "scope_id",
+            "revision",
+            name="uq_rate_schedule_revision",
+        ),
+    )
+    id: UUID = Field(default_factory=uuid4, primary_key=True)
+    tenant_id: UUID = Field(foreign_key="tenant.id")
+    kind: str = Field(max_length=16)
+    scope_id: str = Field(max_length=128)
+    provider_id: UUID | None = None
+    bc_id: str | None = Field(default=None, max_length=128)
+    revision: int
+    periods: list[dict[str, Any]] = Field(default_factory=list, sa_type=JSONB)
+    operation: dict[str, Any] = Field(default_factory=dict, sa_type=JSONB)
+    actor_id: UUID = Field(foreign_key="user.id")
+    created_at: datetime = Field(default_factory=utcnow, sa_type=AwareDateTime)
+
+
 class BusinessMapping(SQLModel, table=True):
     __tablename__ = "business_mapping"
     __table_args__ = (
@@ -259,7 +294,7 @@ class BusinessDay(BusinessAmounts, table=True):
     revenue_d0: Decimal | None = Field(default=None, sa_type=Numeric)
     iaa_events: Decimal | None = Field(default=None, sa_type=Numeric)
     provider_rate: Decimal | None = Field(default=None, sa_type=Numeric)
-    rebate_rate: Decimal = Field(default=Decimal(0), sa_type=Numeric)
+    rebate_rate: Decimal | None = Field(default=Decimal(0), sa_type=Numeric)
     compensation_bid: Decimal | None = Field(default=None, sa_type=Numeric)
     compensation_eligible: bool | None = None
     compensation_source: str | None = None

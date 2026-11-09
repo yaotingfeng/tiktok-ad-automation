@@ -83,7 +83,8 @@ def test_frozen_run_ids_survive_new_publication(session, business_case):
         context=c.context,
         kind="rebate",
         scope_id=c.bc_id,
-        effective_date=date(2026, 11, 1),
+        expected_revision=0,
+        start_date=date(2026, 11, 1),
         rate=D("0.06"),
     )
     build(session, c)

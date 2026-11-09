@@ -3,6 +3,7 @@ from decimal import Decimal as D
 from uuid import uuid4
 
 import pytest
+from fastapi import HTTPException
 
 from app.core.errors import DomainError
 
@@ -20,7 +21,8 @@ def test_rate_versions_defaults_and_effective_dates(session, business_case):
         context=c.context,
         kind="provider",
         scope_id=str(c.provider.id),
-        effective_date=date(2026, 10, 1),
+        expected_revision=0,
+        start_date=date(2026, 10, 1),
         rate=D("0.08"),
     )
     save_rate(
@@ -28,7 +30,8 @@ def test_rate_versions_defaults_and_effective_dates(session, business_case):
         context=c.context,
         kind="provider",
         scope_id=str(c.provider.id),
-        effective_date=date(2026, 11, 1),
+        expected_revision=1,
+        start_date=date(2026, 11, 1),
         rate=D("0.07"),
     )
     assert rate_on(
@@ -42,7 +45,8 @@ def test_rate_versions_defaults_and_effective_dates(session, business_case):
         context=c.context,
         kind="provider",
         scope_id=str(c.provider.id),
-        effective_date=date(2026, 11, 1),
+        expected_revision=2,
+        start_date=date(2026, 11, 1),
         rate=D("0.06"),
     )
     assert rate_on(
@@ -54,13 +58,14 @@ def test_rate_rejects_unknown_connection_and_out_of_range(session, business_case
     from app.modules.business.configuration import save_rate
 
     c = business_case
-    with pytest.raises(DomainError):
+    with pytest.raises(HTTPException):
         save_rate(
             session,
             context=c.context,
             kind="provider",
             scope_id=str(uuid4()),
-            effective_date=c.day,
+            expected_revision=0,
+            start_date=c.day,
             rate=D("0.08"),
         )
     with pytest.raises(ValueError):
@@ -69,7 +74,8 @@ def test_rate_rejects_unknown_connection_and_out_of_range(session, business_case
             context=c.context,
             kind="provider",
             scope_id=str(c.provider.id),
-            effective_date=c.day,
+            expected_revision=0,
+            start_date=c.day,
             rate=D("1.1"),
         )
 

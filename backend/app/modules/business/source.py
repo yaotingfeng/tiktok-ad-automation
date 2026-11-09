@@ -15,7 +15,7 @@ from app.core.context import TenantContext
 from app.modules.accounts.models import AdvertiserAccount
 from app.modules.builds.execution_models import ExecutionStep
 from app.modules.builds.preview_models import BuildUnit
-from app.modules.business.configuration import scope_accounts
+from app.modules.business.configuration import rate_snapshot, scope_accounts
 from app.modules.business.identity import catalog_snapshot
 from app.modules.business.models import BusinessMapping, BusinessMember, BusinessScope
 from app.modules.providers.models import ProviderConnection, ProviderDrama
@@ -130,8 +130,9 @@ def source_snapshot(
         "policy_restricted": len(readable) != len(relevant),
         "revision": scope.revision,
         "policy": "2026-Q3-Q4-user-confirmed-20261104",
-        "calculation_revision": 2,
+        "calculation_revision": 3,
         "identity_catalog": catalog_snapshot(session, scope.tenant_id),
+        "rate_schedules": rate_snapshot(session, scope.tenant_id, scope.bc_id),
     }
     signature = hashlib.sha256(
         json.dumps(snapshot, sort_keys=True).encode()

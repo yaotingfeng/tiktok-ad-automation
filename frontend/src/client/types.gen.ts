@@ -7339,6 +7339,62 @@ export type QuerySnapshotPublic = {
 };
 
 /**
+ * RateHistoryItem
+ */
+export type RateHistoryItem = {
+    /**
+     * Id
+     */
+    id: string;
+    /**
+     * Revision
+     */
+    revision: number;
+    /**
+     * Actor Id
+     */
+    actor_id: string;
+    /**
+     * Actor Name
+     */
+    actor_name?: string;
+    /**
+     * Created At
+     */
+    created_at: string;
+    /**
+     * Note
+     */
+    note: string;
+    /**
+     * Periods
+     */
+    periods: Array<RatePeriod>;
+    /**
+     * Previous Periods
+     */
+    previous_periods: Array<RatePeriod>;
+    /**
+     * Legacy
+     */
+    legacy?: boolean;
+};
+
+/**
+ * RateHistoryPublic
+ */
+export type RateHistoryPublic = {
+    /**
+     * Items
+     */
+    items: Array<RateHistoryItem>;
+    /**
+     * Has More
+     */
+    has_more: boolean;
+};
+
+/**
  * RateInput
  */
 export type RateInput = {
@@ -7351,13 +7407,77 @@ export type RateInput = {
      */
     scope_id: string;
     /**
-     * Effective Date
+     * Action
      */
-    effective_date: string;
+    action?: 'set' | 'edit' | 'end';
+    /**
+     * Start Date
+     */
+    start_date: string;
+    /**
+     * End Date
+     */
+    end_date?: string | null;
     /**
      * Rate
      */
-    rate: number | string;
+    rate?: number | string | null;
+    /**
+     * Target Start Date
+     */
+    target_start_date?: string | null;
+    /**
+     * Successor Rate
+     */
+    successor_rate?: number | string | null;
+    /**
+     * Successor End Date
+     */
+    successor_end_date?: string | null;
+    /**
+     * Note
+     */
+    note?: string;
+    /**
+     * Expected Revision
+     */
+    expected_revision: number;
+};
+
+/**
+ * RatePeriod
+ */
+export type RatePeriod = {
+    /**
+     * Start Date
+     */
+    start_date: string;
+    /**
+     * End Date
+     */
+    end_date?: string | null;
+    /**
+     * Rate
+     */
+    rate?: string | null;
+};
+
+/**
+ * RatePreviewPublic
+ */
+export type RatePreviewPublic = {
+    /**
+     * Revision
+     */
+    revision: number;
+    /**
+     * Before
+     */
+    before: Array<RatePeriod>;
+    /**
+     * Periods
+     */
+    periods: Array<RatePeriod>;
 };
 
 /**
@@ -7365,29 +7485,13 @@ export type RateInput = {
  */
 export type RatePublic = {
     /**
-     * Id
-     */
-    id: string;
-    /**
-     * Kind
-     */
-    kind: string;
-    /**
-     * Scope Id
-     */
-    scope_id: string;
-    /**
-     * Effective Date
-     */
-    effective_date: string;
-    /**
-     * Rate
-     */
-    rate: string;
-    /**
      * Revision
      */
     revision: number;
+    /**
+     * Periods
+     */
+    periods: Array<RatePeriod>;
 };
 
 /**
@@ -15405,11 +15509,9 @@ export type businessRatesError = businessRatesErrors[keyof businessRatesErrors];
 
 export type businessRatesResponses = {
     /**
-     * Response Business-Rates
-     *
      * Successful Response
      */
-    200: Array<RatePublic>;
+    200: RatePublic;
 };
 
 export type businessRatesResponse = businessRatesResponses[keyof businessRatesResponses];
@@ -15443,6 +15545,83 @@ export type businessSetRateResponses = {
 };
 
 export type businessSetRateResponse = businessSetRateResponses[keyof businessSetRateResponses];
+
+export type businessPreviewRateData = {
+    body: RateInput;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+    };
+    query?: never;
+    url: '/api/tenants/{tenant_id}/business/rates/preview';
+};
+
+export type businessPreviewRateErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type businessPreviewRateError = businessPreviewRateErrors[keyof businessPreviewRateErrors];
+
+export type businessPreviewRateResponses = {
+    /**
+     * Successful Response
+     */
+    200: RatePreviewPublic;
+};
+
+export type businessPreviewRateResponse = businessPreviewRateResponses[keyof businessPreviewRateResponses];
+
+export type businessRateHistoryData = {
+    body?: never;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+    };
+    query: {
+        /**
+         * Kind
+         */
+        kind: string;
+        /**
+         * Scope Id
+         */
+        scope_id: string;
+        /**
+         * Offset
+         */
+        offset?: number;
+        /**
+         * Limit
+         */
+        limit?: number;
+    };
+    url: '/api/tenants/{tenant_id}/business/rates/history';
+};
+
+export type businessRateHistoryErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type businessRateHistoryError = businessRateHistoryErrors[keyof businessRateHistoryErrors];
+
+export type businessRateHistoryResponses = {
+    /**
+     * Successful Response
+     */
+    200: RateHistoryPublic;
+};
+
+export type businessRateHistoryResponse = businessRateHistoryResponses[keyof businessRateHistoryResponses];
 
 export type businessMappingData = {
     body: MappingInput;

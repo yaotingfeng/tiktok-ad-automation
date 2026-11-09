@@ -193,7 +193,8 @@ def frozen_metadata(session: Session, run_id: UUID) -> dict[str, Any]:
     row = (
         session.execute(
             text("""SELECT inputs->'calculation_revision' calculation_revision,
-                       inputs->'identity_catalog' identity_catalog
+                       inputs->'identity_catalog' identity_catalog,
+                       inputs->'rate_schedules' rate_schedules
                 FROM business_run WHERE id=:run"""),
             {"run": run_id},
         )
@@ -262,12 +263,12 @@ def _dirty_start(
         text("""
         WITH meta AS MATERIALIZED (
           SELECT id,inputs->'calculation_revision' calculation,
-                 inputs->'identity_catalog' catalog,
+                 inputs->'identity_catalog' catalog, inputs->'rate_schedules' rates,
                  (SELECT jsonb_object_agg(key,value-'complete_through')
                   FROM jsonb_each(inputs->'accounts')) accounts
           FROM business_run WHERE id IN (:old,:new)
         ) SELECT a.calculation=b.calculation AND a.catalog=b.catalog
-                 AND a.accounts=b.accounts
+                 AND a.accounts=b.accounts AND a.rates IS NOT DISTINCT FROM b.rates
           FROM meta a,meta b WHERE a.id=:old AND b.id=:new
         """),
         params,

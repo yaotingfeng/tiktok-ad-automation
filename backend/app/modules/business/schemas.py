@@ -5,26 +5,54 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from app.modules.business.rate_periods import RateOperation, RatePeriod
+
 
 class Input(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
-class RateInput(Input):
+class RateScope(Input):
     kind: Literal["provider", "rebate"]
     scope_id: str = Field(min_length=1, max_length=128)
-    effective_date: date
-    rate: Decimal = Field(ge=0, le=1, max_digits=12, decimal_places=8)
+
+    @model_validator(mode="after")
+    def canonical_scope(self) -> Self:
+        if self.kind == "provider":
+            self.scope_id = str(UUID(self.scope_id))
+        return self
+
+
+class RateInput(RateOperation, RateScope):
+    expected_revision: int = Field(ge=0)
 
 
 class RatePublic(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
-    id: UUID
-    kind: str
-    scope_id: str
-    effective_date: date
-    rate: Decimal
     revision: int
+    periods: list[RatePeriod]
+
+
+class RatePreviewPublic(BaseModel):
+    revision: int
+    before: list[RatePeriod]
+    periods: list[RatePeriod]
+
+
+class RateHistoryItem(BaseModel):
+    id: UUID
+    revision: int
+    actor_id: UUID
+    actor_name: str = ""
+    created_at: datetime
+    note: str
+    periods: list[RatePeriod]
+    previous_periods: list[RatePeriod]
+    legacy: bool = False
+
+
+class RateHistoryPublic(BaseModel):
+    items: list[RateHistoryItem]
+    has_more: bool
 
 
 class MappingInput(Input):

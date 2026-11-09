@@ -177,7 +177,8 @@ def test_retroactive_fee_publishes_one_coherent_multi_quarter_manifest(
         context=c.context,
         kind="rebate",
         scope_id=c.bc_id,
-        effective_date=date(2026, 9, 30),
+        expected_revision=0,
+        start_date=date(2026, 9, 30),
         rate=Decimal("0.1"),
     )
     candidates = request_rebuild(

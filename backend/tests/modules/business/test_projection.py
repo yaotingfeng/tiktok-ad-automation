@@ -84,7 +84,8 @@ def test_quarter_tier_delta_and_cumulative_series_allocation(session, business_c
         context=c.context,
         kind="provider",
         scope_id=str(c.provider.id),
-        effective_date=date(2026, 10, 1),
+        expected_revision=0,
+        start_date=date(2026, 10, 1),
         rate=D("0.08"),
     )
     run = build(session, c)[0]
@@ -143,7 +144,8 @@ def test_configuration_change_fences_old_run_and_duplicate_delivery(
         context=c.context,
         kind="rebate",
         scope_id=c.bc_id,
-        effective_date=date(2026, 10, 1),
+        expected_revision=0,
+        start_date=date(2026, 10, 1),
         rate=D("0.06"),
     )
     assert advance_run(session, run.id, now=now)

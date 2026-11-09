@@ -1,6 +1,5 @@
 """经营API：请求只查投影或受理后台任务，不在页面请求中重算历史。"""
 
-from collections.abc import Sequence
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
 from uuid import UUID
@@ -8,15 +7,18 @@ from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import StreamingResponse
-from sqlalchemy import or_
+from sqlalchemy import func, or_
 from sqlmodel import col, select
 
 from app.api.deps import CurrentUser, SessionDep
+from app.core.context import TenantContext
+from app.models import User
 from app.modules.accounts.models import AdvertiserAccount
 from app.modules.business.configuration import (
     bump_scopes,
+    change_rate,
+    read_rate_schedule,
     save_mapping,
-    save_rate,
     scope_accounts,
 )
 from app.modules.business.exports import check_export, create_export, export_chunks
@@ -24,11 +26,13 @@ from app.modules.business.models import (
     BusinessEvidence,
     BusinessMember,
     BusinessRate,
+    BusinessRateSchedule,
     BusinessRun,
     BusinessScope,
 )
 from app.modules.business.projection import request_rebuild
 from app.modules.business.queries import query_dashboard
+from app.modules.business.rate_periods import RatePeriod
 from app.modules.business.schemas import (
     DashboardFilter,
     DashboardPublic,
@@ -37,8 +41,12 @@ from app.modules.business.schemas import (
     ExportPublic,
     MappingInput,
     MemberInput,
+    RateHistoryItem,
+    RateHistoryPublic,
     RateInput,
+    RatePreviewPublic,
     RatePublic,
+    RateScope,
     RebuildInput,
 )
 from app.modules.providers.models import ProviderConnection, ProviderDrama
@@ -160,34 +168,141 @@ def dramas(
     ]
 
 
-@router.get("/rates", response_model=list[RatePublic])
+def _rate_context(
+    session: SessionDep, user: CurrentUser, tenant_id: UUID, kind: str, scope_id: str
+) -> tuple[TenantContext, RateScope]:
+    context = require_tenant(
+        session, actor_id=user.id, tenant_id=tenant_id, action="manage"
+    )
+    try:
+        scope = RateScope.model_validate({"kind": kind, "scope_id": scope_id})
+    except ValueError:
+        raise HTTPException(422, "比例作用域无效") from None
+    return context, scope
+
+
+@router.get("/rates", response_model=RatePublic)
 def rates(
     tenant_id: UUID, kind: str, scope_id: str, session: SessionDep, user: CurrentUser
-) -> Sequence[BusinessRate]:
-    require_tenant(session, actor_id=user.id, tenant_id=tenant_id, action="manage")
-    return session.exec(
-        select(BusinessRate)
-        .where(
-            col(BusinessRate.tenant_id) == tenant_id,
-            col(BusinessRate.kind) == kind,
-            col(BusinessRate.scope_id) == scope_id,
-        )
-        .order_by(
-            col(BusinessRate.effective_date).desc(), col(BusinessRate.revision).desc()
-        )
-    ).all()
+) -> RatePublic:
+    context, scope = _rate_context(session, user, tenant_id, kind, scope_id)
+    return read_rate_schedule(session, context=context, **scope.model_dump())
+
+
+@router.post("/rates/preview", response_model=RatePreviewPublic)
+def preview_rate(
+    tenant_id: UUID, body: RateInput, session: SessionDep, user: CurrentUser
+) -> RatePreviewPublic:
+    context = require_tenant(
+        session, actor_id=user.id, tenant_id=tenant_id, action="manage"
+    )
+    return change_rate(session, context=context, body=body, save=False)
 
 
 @router.post("/rates", response_model=RatePublic)
 def set_rate(
     tenant_id: UUID, body: RateInput, session: SessionDep, user: CurrentUser
-) -> BusinessRate:
+) -> RatePublic:
     context = require_tenant(
         session, actor_id=user.id, tenant_id=tenant_id, action="manage"
     )
-    row = save_rate(session, context=context, **body.model_dump())
+    result = change_rate(session, context=context, body=body, save=True)
     session.commit()
-    return row
+    return RatePublic(revision=result.revision, periods=result.periods)
+
+
+@router.get("/rates/history", response_model=RateHistoryPublic)
+def rate_history(
+    tenant_id: UUID,
+    kind: str,
+    scope_id: str,
+    session: SessionDep,
+    user: CurrentUser,
+    offset: int = Query(default=0, ge=0, le=1000000),
+    limit: int = Query(default=20, ge=1, le=100),
+) -> RateHistoryPublic:
+    context, scope = _rate_context(session, user, tenant_id, kind, scope_id)
+    read_rate_schedule(session, context=context, **scope.model_dump())
+    common = [
+        col(BusinessRateSchedule.tenant_id) == tenant_id,
+        col(BusinessRateSchedule.kind) == scope.kind,
+        col(BusinessRateSchedule.scope_id) == scope.scope_id,
+    ]
+    active = [*common, BusinessRateSchedule.operation["action"].astext != "migration"]
+    count = session.exec(
+        select(func.count()).select_from(BusinessRateSchedule).where(*active)
+    ).one()
+    rows = session.exec(
+        select(BusinessRateSchedule)
+        .where(*active)
+        .order_by(col(BusinessRateSchedule.revision).desc())
+        .offset(offset)
+        .limit(limit + 1)
+    ).all()
+    items = []
+    for row in rows:
+        previous = session.exec(
+            select(BusinessRateSchedule)
+            .where(*common, col(BusinessRateSchedule.revision) < row.revision)
+            .order_by(col(BusinessRateSchedule.revision).desc())
+            .limit(1)
+        ).first()
+        items.append(
+            RateHistoryItem(
+                id=row.id,
+                revision=row.revision,
+                actor_id=row.actor_id,
+                created_at=row.created_at,
+                note=row.operation.get("note", ""),
+                periods=[RatePeriod.model_validate(p) for p in row.periods],
+                previous_periods=[
+                    RatePeriod.model_validate(p) for p in previous.periods
+                ]
+                if previous
+                else [],
+            )
+        )
+    if len(items) <= limit:
+        legacy = session.exec(
+            select(BusinessRate)
+            .where(
+                col(BusinessRate.tenant_id) == tenant_id,
+                col(BusinessRate.kind) == scope.kind,
+                col(BusinessRate.scope_id) == scope.scope_id,
+            )
+            .order_by(col(BusinessRate.revision).desc())
+            .offset(max(0, offset - count))
+            .limit(limit + 1 - len(items))
+        ).all()
+        items.extend(
+            RateHistoryItem(
+                id=r.id,
+                revision=r.revision,
+                actor_id=r.actor_id,
+                created_at=r.created_at,
+                note="旧版生效日期记录",
+                periods=[RatePeriod(start_date=r.effective_date, rate=r.rate)],
+                previous_periods=[],
+                legacy=True,
+            )
+            for r in legacy
+        )
+    visible = items[:limit]
+    actors = (
+        {
+            actor.id: actor.username
+            for actor in session.exec(
+                select(User).where(
+                    col(User.id).in_({item.actor_id for item in visible})
+                )
+            ).all()
+        }
+        if visible
+        else {}
+    )
+    for item in visible:
+        item.actor_name = actors.get(item.actor_id, "未知操作人")
+    return RateHistoryPublic(items=visible, has_more=len(items) > limit)
 
 
 @router.put("/mapping")

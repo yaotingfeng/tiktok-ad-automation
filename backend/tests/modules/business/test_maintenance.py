@@ -36,7 +36,8 @@ def test_cleanup_preserves_current_and_unexpired_export_versions(
         context=c.context,
         kind="rebate",
         scope_id=c.bc_id,
-        effective_date=date(2026, 10, 1),
+        expected_revision=0,
+        start_date=date(2026, 10, 1),
         rate=Decimal("0.06"),
     )
     current = build(session, c)[0]

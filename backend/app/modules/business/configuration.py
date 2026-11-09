@@ -2,10 +2,11 @@
 
 from datetime import date
 from decimal import Decimal
+from typing import Any
 from uuid import UUID
 
 from fastapi import HTTPException
-from sqlalchemy import func, update
+from sqlalchemy import update
 from sqlmodel import Session, col, select
 
 from app.core.context import TenantContext
@@ -13,10 +14,17 @@ from app.core.errors import DomainError
 from app.modules.accounts.models import TenantBC
 from app.modules.business.models import (
     BusinessMapping,
-    BusinessRate,
+    BusinessRateSchedule,
     BusinessScope,
     utcnow,
 )
+from app.modules.business.rate_periods import (
+    RateOperation,
+    RatePeriod,
+    period_rate,
+    transform_periods,
+)
+from app.modules.business.schemas import RateInput, RatePreviewPublic, RatePublic
 from app.modules.providers.models import ProviderConnection, ProviderDrama
 from app.modules.reporting.filters import authorized_grants
 from app.modules.tenants.models import AuditEvent
@@ -51,109 +59,151 @@ def bump_scopes(session: Session, tenant_id: UUID, bc_id: str | None = None) -> 
     )
 
 
-def rate_on(
-    session: Session, tenant_id: UUID, kind: str, scope_id: str, day: date
-) -> Decimal:
-    row = session.exec(
-        select(BusinessRate)
-        .where(
-            col(BusinessRate.tenant_id) == tenant_id,
-            col(BusinessRate.kind) == kind,
-            col(BusinessRate.scope_id) == scope_id,
-            col(BusinessRate.effective_date) <= day,
-        )
-        .order_by(
-            col(BusinessRate.effective_date).desc(), col(BusinessRate.revision).desc()
-        )
-        .limit(1)
-    ).first()
-    return row.rate if row else Decimal(0)
-
-
-def save_rate(
+def _rate_parent(
     session: Session,
-    *,
     context: TenantContext,
     kind: str,
     scope_id: str,
-    effective_date: date,
-    rate: Decimal,
-) -> BusinessRate:
+    *,
+    lock: bool = False,
+) -> None:
     require_tenant(
         session, actor_id=context.actor_id, tenant_id=context.tenant_id, action="manage"
     )
-    if not rate.is_finite() or not 0 <= rate <= 1:
-        raise ValueError("比例必须在0到1之间")
-    parent: ProviderConnection | TenantBC | None
-    provider_id = None
-    bc_id = None
+    statement: Any
     if kind == "provider":
         try:
             provider_id = UUID(scope_id)
         except ValueError:
-            raise DomainError("provider_request_invalid", "版权方编号无效") from None
-        parent = session.exec(
-            select(ProviderConnection)
-            .where(
-                col(ProviderConnection.tenant_id) == context.tenant_id,
-                col(ProviderConnection.id) == provider_id,
-            )
-            .with_for_update()
-        ).first()
+            raise HTTPException(422, "版权方编号无效") from None
+        statement = select(ProviderConnection).where(
+            col(ProviderConnection.tenant_id) == context.tenant_id,
+            col(ProviderConnection.id) == provider_id,
+        )
     elif kind == "rebate":
-        bc_id = scope_id
-        parent = session.exec(
-            select(TenantBC)
-            .where(
-                col(TenantBC.tenant_id) == context.tenant_id,
-                col(TenantBC.bc_id) == bc_id,
-            )
-            .with_for_update(key_share=True)
-        ).first()
+        statement = select(TenantBC).where(
+            col(TenantBC.tenant_id) == context.tenant_id,
+            col(TenantBC.bc_id) == scope_id,
+            col(TenantBC.ownership_conflict) == False,  # noqa: E712
+        )
     else:
-        raise ValueError("未知费率类别")
-    if parent is None:
-        raise DomainError("resource_not_found", "当前租户配置对象不存在")
-    revision = (
-        session.exec(
-            select(func.coalesce(func.max(col(BusinessRate.revision)), 0)).where(
-                col(BusinessRate.tenant_id) == context.tenant_id,
-                col(BusinessRate.kind) == kind,
-                col(BusinessRate.scope_id) == scope_id,
-            )
-        ).one()
-        + 1
+        raise HTTPException(422, "未知费率类别")
+    if lock:
+        statement = statement.with_for_update(key_share=True)
+    if session.exec(statement).first() is None:
+        raise HTTPException(404, "当前租户配置对象不存在或不可访问")
+
+
+def latest_rate_schedule(
+    session: Session, tenant_id: UUID, kind: str, scope_id: str
+) -> BusinessRateSchedule | None:
+    return session.exec(
+        select(BusinessRateSchedule)
+        .where(
+            col(BusinessRateSchedule.tenant_id) == tenant_id,
+            col(BusinessRateSchedule.kind) == kind,
+            col(BusinessRateSchedule.scope_id) == scope_id,
+        )
+        .order_by(col(BusinessRateSchedule.revision).desc())
+        .limit(1)
+    ).first()
+
+
+def read_rate_schedule(
+    session: Session, *, context: TenantContext, kind: str, scope_id: str
+) -> RatePublic:
+    _rate_parent(session, context, kind, scope_id)
+    row = latest_rate_schedule(session, context.tenant_id, kind, scope_id)
+    return RatePublic(
+        revision=row.revision if row else 0,
+        periods=[RatePeriod.model_validate(p) for p in row.periods] if row else [],
     )
-    row = BusinessRate(
-        tenant_id=context.tenant_id,
-        actor_id=context.actor_id,
-        kind=kind,
-        scope_id=scope_id,
-        provider_id=provider_id,
-        bc_id=bc_id,
-        effective_date=effective_date,
-        rate=rate,
-        revision=revision,
+
+
+def rate_on(
+    session: Session, tenant_id: UUID, kind: str, scope_id: str, day: date
+) -> Decimal | None:
+    row = latest_rate_schedule(session, tenant_id, kind, scope_id)
+    return period_rate(
+        [RatePeriod.model_validate(p) for p in row.periods] if row else [], day
     )
-    session.add(row)
-    bump_scopes(session, context.tenant_id, bc_id)
-    session.add(
-        AuditEvent(
+
+
+def rate_snapshot(session: Session, tenant_id: UUID, bc_id: str) -> dict[str, Any]:
+    rows = session.exec(
+        select(BusinessRateSchedule)
+        .where(
+            col(BusinessRateSchedule.tenant_id) == tenant_id,
+            (col(BusinessRateSchedule.kind) == "provider")
+            | (col(BusinessRateSchedule.bc_id) == bc_id),
+        )
+        .distinct(col(BusinessRateSchedule.kind), col(BusinessRateSchedule.scope_id))
+        .order_by(
+            col(BusinessRateSchedule.kind),
+            col(BusinessRateSchedule.scope_id),
+            col(BusinessRateSchedule.revision).desc(),
+        )
+    ).all()
+    return {
+        f"{r.kind}:{r.scope_id}": {"revision": r.revision, "periods": r.periods}
+        for r in rows
+    }
+
+
+def change_rate(
+    session: Session, *, context: TenantContext, body: RateInput, save: bool
+) -> RatePreviewPublic:
+    _rate_parent(session, context, body.kind, body.scope_id, lock=save)
+    row = latest_rate_schedule(session, context.tenant_id, body.kind, body.scope_id)
+    revision = row.revision if row else 0
+    if body.expected_revision != revision:
+        raise HTTPException(409, "比例配置已被修改，请刷新并重新预览")
+    before = [RatePeriod.model_validate(p) for p in row.periods] if row else []
+    operation = RateOperation.model_validate(
+        body.model_dump(exclude={"kind", "scope_id", "expected_revision"})
+    )
+    try:
+        periods = transform_periods(before, operation)
+    except ValueError as error:
+        raise HTTPException(422, str(error)) from None
+    if save:
+        row = BusinessRateSchedule(
             tenant_id=context.tenant_id,
             actor_id=context.actor_id,
-            action="business.rate.update",
-            target_id=str(row.id),
-            details={
-                "kind": kind,
-                "scope_id": scope_id,
-                "effective_date": effective_date.isoformat(),
-                "rate": str(rate),
-                "revision": revision,
-            },
+            kind=body.kind,
+            scope_id=body.scope_id,
+            provider_id=UUID(body.scope_id) if body.kind == "provider" else None,
+            bc_id=body.scope_id if body.kind == "rebate" else None,
+            revision=revision + 1,
+            periods=[p.model_dump(mode="json") for p in periods],
+            operation=operation.model_dump(mode="json"),
         )
-    )
-    session.flush()
-    return row
+        session.add(row)
+        bump_scopes(session, context.tenant_id, row.bc_id)
+        session.add(
+            AuditEvent(
+                tenant_id=context.tenant_id,
+                actor_id=context.actor_id,
+                action="business.rate.update",
+                target_id=str(row.id),
+                details={
+                    "kind": body.kind,
+                    "scope_id": body.scope_id,
+                    "revision": row.revision,
+                    "before": [p.model_dump(mode="json") for p in before],
+                    "after": row.periods,
+                    "operation": row.operation,
+                },
+            )
+        )
+        session.flush()
+        revision += 1
+    return RatePreviewPublic(revision=revision, before=before, periods=periods)
+
+
+def save_rate(session: Session, *, context: TenantContext, **values: Any) -> RatePublic:
+    result = change_rate(session, context=context, body=RateInput(**values), save=True)
+    return RatePublic(revision=result.revision, periods=result.periods)
 
 
 def save_mapping(

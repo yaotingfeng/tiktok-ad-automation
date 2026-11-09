@@ -3,6 +3,9 @@ from types import SimpleNamespace
 
 import pytest
 
+from app.api.deps import get_current_user
+from app.main import app
+from app.models import User
 from app.modules.providers.models import (
     ProviderApplication,
     ProviderConnection,
@@ -51,3 +54,16 @@ def business_case(session, base_report_case):
         advertiser_id="report-account",
         day=date(2026, 11, 3),
     )
+
+
+@pytest.fixture
+def business_client(client, session, business_case):
+    previous = app.dependency_overrides.copy()
+    app.dependency_overrides[get_current_user] = lambda: session.get(
+        User, business_case.context.actor_id
+    )
+    try:
+        yield client
+    finally:
+        app.dependency_overrides.clear()
+        app.dependency_overrides.update(previous)

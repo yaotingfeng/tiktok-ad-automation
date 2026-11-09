@@ -57,6 +57,10 @@ export const optionsQuery = (tenantId: string, bcId: string) => ({
 })
 
 export const ISSUE_LABELS: Record<string, string> = {
+  PROVIDER_RATE_MISSING:
+    "部分日期的版权方抽成待配置，请在对应版权方的抽成设置中补齐；相关经营金额暂不核算",
+  REBATE_RATE_MISSING:
+    "部分日期的其他返点待配置，请在经营设置中补齐时间段；相关经营金额暂不核算",
   DRAMA_UNMAPPED:
     "部分系列的版权方标签无对应连接或存在歧义，相关经营收入暂不核算",
   DRAMA_IDENTITY_CONFLICT:

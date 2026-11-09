@@ -20,14 +20,17 @@ AMOUNT_KEYS = (
 def business_amounts(
     spend: Decimal | None,
     revenue: Decimal | None,
-    share: Decimal,
-    rebate: Decimal,
+    share: Decimal | None,
+    rebate: Decimal | None,
 ) -> dict[str, Decimal | None]:
-    if not ZERO <= share <= 1 or not ZERO <= rebate <= 1:
+    if any(
+        r is not None and (not r.is_finite() or not ZERO <= r <= 1)
+        for r in (share, rebate)
+    ):
         raise ValueError("比例必须在0到1之间")
-    deduction = None if revenue is None else revenue * share
-    net = None if revenue is None else revenue * (1 - share)
-    returned = None if spend is None else spend * rebate
+    deduction = None if revenue is None or share is None else revenue * share
+    net = None if revenue is None or share is None else revenue * (1 - share)
+    returned = None if spend is None or rebate is None else spend * rebate
     return {
         "spend": spend,
         "revenue": revenue,

@@ -2,23 +2,7 @@ from datetime import date
 
 import pytest
 
-from app.api.deps import get_current_user
-from app.main import app
-from app.models import User
 from app.modules.tenants.models import TenantMembership
-
-
-@pytest.fixture
-def business_client(client, session, business_case):
-    previous = app.dependency_overrides.copy()
-    app.dependency_overrides[get_current_user] = lambda: session.get(
-        User, business_case.context.actor_id
-    )
-    try:
-        yield client
-    finally:
-        app.dependency_overrides.clear()
-        app.dependency_overrides.update(previous)
 
 
 def test_api_admin_rate_validation_and_tenant_boundary(
@@ -29,12 +13,13 @@ def test_api_admin_rate_validation_and_tenant_boundary(
     body = {
         "kind": "provider",
         "scope_id": str(c.provider.id),
-        "effective_date": "2026-10-01",
+        "expected_revision": 0,
+        "start_date": "2026-10-01",
         "rate": "0.08",
     }
     result = business_client.post(f"{base}/rates", json=body)
     assert result.status_code == 200
-    assert result.json()["rate"] == "0.08"
+    assert result.json()["periods"][0]["rate"] == "0.08"
     assert (
         business_client.post(f"{base}/rates", json={**body, "rate": "1.08"}).status_code
         == 422
@@ -82,7 +67,8 @@ def test_non_admin_cannot_read_or_change_business(
             json={
                 "kind": "rebate",
                 "scope_id": c.bc_id,
-                "effective_date": "2026-10-01",
+                "expected_revision": 0,
+                "start_date": "2026-10-01",
                 "rate": "0.1",
             },
         ).status_code

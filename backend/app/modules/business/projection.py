@@ -47,7 +47,6 @@ from app.modules.business.models import (
     BusinessEvidence,
     BusinessMember,
     BusinessPublication,
-    BusinessRate,
     BusinessRun,
     BusinessScope,
     BusinessSummaryDay,
@@ -65,6 +64,7 @@ from app.modules.business.prefix import (
     narrow_runs,
     rebase_dirty_start,
 )
+from app.modules.business.rate_periods import RatePeriod, period_rate
 from app.modules.business.source import (
     discover_exact_mappings,
     mapping_catalog,
@@ -171,7 +171,7 @@ def request_rebuild(
     if scope.published_revision == scope.revision and any(
         old
         and (
-            old.get("calculation_revision") != 2
+            old.get("calculation_revision") != 3
             or old.get("identity_catalog") != catalog
         )
         for old in (
@@ -373,15 +373,13 @@ def _base_page(session: Session, run: BusinessRun) -> None:
         return
     pairs = [(f.advertiser_id, f.campaign_id) for f in facts]
     mappings = mapping_catalog(session, run.tenant_id, run.bc_id, pairs)
-    rates = session.exec(
-        select(BusinessRate)
-        .where(
-            col(BusinessRate.tenant_id) == run.tenant_id,
-            col(BusinessRate.effective_date) <= run.cursor,
+    # 只读取本任务冻结的完整日程，不能在逐日处理中混入刚修改的配置。
+    effective = {
+        key: period_rate(
+            [RatePeriod.model_validate(p) for p in schedule["periods"]], run.cursor
         )
-        .order_by(col(BusinessRate.effective_date), col(BusinessRate.revision))
-    ).all()
-    effective = {(r.kind, r.scope_id): r.rate for r in rates}
+        for key, schedule in run.inputs["rate_schedules"].items()
+    }
     evidence = {
         (r.advertiser_id, r.campaign_id): r
         for r in session.exec(
@@ -409,13 +407,19 @@ def _base_page(session: Session, run: BusinessRun) -> None:
             "provider_id": None,
             "provider_name": "待归属",
         }
-        values = business_amounts(
-            f.spend,
-            f.revenue_total,
-            effective.get(("provider", str(identity["provider_id"])), ZERO),
-            effective.get(("rebate", run.bc_id), ZERO),
+        # 同一份解析结果同时用于金额与冻结明细，避免证据费率与金额口径分离。
+        provider_rate = (
+            effective.get(f"provider:{identity['provider_id']}", ZERO)
+            if identity["provider_id"] is not None
+            else None
         )
+        rebate_rate = effective.get(f"rebate:{run.bc_id}", ZERO)
+        values = business_amounts(f.spend, f.revenue_total, provider_rate, rebate_rate)
         issues = []
+        if identity["provider_id"] is not None and provider_rate is None:
+            issues.append("PROVIDER_RATE_MISSING")
+        if rebate_rate is None:
+            issues.append("REBATE_RATE_MISSING")
         if identity["provider_id"] is None:
             issues.append("DRAMA_UNMAPPED")
             values.update(provider_share=None, net_revenue=None, business_revenue=None)
@@ -444,12 +448,8 @@ def _base_page(session: Session, run: BusinessRun) -> None:
                 timezone=f.timezone,
                 revenue_d0=f.revenue_d0,
                 iaa_events=f.ad_impression_events,
-                provider_rate=effective.get(
-                    ("provider", str(identity["provider_id"])), ZERO
-                )
-                if identity["provider_id"] is not None
-                else None,
-                rebate_rate=effective.get(("rebate", run.bc_id), ZERO),
+                provider_rate=provider_rate,
+                rebate_rate=rebate_rate,
                 compensation_bid=ev.bid if ev else None,
                 compensation_eligible=ev.eligible if ev else None,
                 compensation_source=ev.source if ev else None,
@@ -460,7 +460,10 @@ def _base_page(session: Session, run: BusinessRun) -> None:
             )
         )
     if rows:
-        session.execute(insert(BusinessDay), rows)
+        # ORM批量插入默认忽略None，会把待配置返点错误恢复成模型默认0。
+        session.execute(
+            insert(BusinessDay), rows, execution_options={"render_nulls": True}
+        )
         run.rows_count += len(rows)
     run.base_after = (
         [facts[-1].advertiser_id, facts[-1].campaign_id]
@@ -822,6 +825,10 @@ def advance_run(session: Session, run_id: UUID, *, now: datetime | None = None) 
         scope is None
         or scope.revision != run.scope_revision
         or scope.actor_id != run.actor_id
+        or (
+            run.phase != "SNAPSHOT"
+            and frozen_metadata(session, run.id).get("calculation_revision") != 3
+        )
     ):
         run.status = "SUPERSEDED"
         session.add(run)
