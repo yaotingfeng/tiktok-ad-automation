@@ -258,8 +258,13 @@ def test_campaign_batch_still_truncated_preserves_all_old_rows(committed_sync_se
     from uuid import uuid4
 
     from app.modules.reporting.publish import AccountMeta, publish_ad_day
+    from app.modules.sync_control.models import SyncExecutionScope, SyncRequirement
 
     seed, factory = committed_sync_seed
+    # 精确S已复现PG/Python时钟毫秒偏差；显式建立新意图晚于旧观测的前提，
+    # 不能依赖两种墙钟的调用先后，也不能放宽STALE断言掩盖失败保护错误。
+    observed_at = datetime(2026, 10, 6, tzinfo=UTC)
+    requested_at = observed_at + timedelta(seconds=1)
     with factory() as s:
         publish_ad_day(
             s,
@@ -269,34 +274,99 @@ def test_campaign_batch_still_truncated_preserves_all_old_rows(committed_sync_se
             start=D,
             end=D,
             rows=[ad_row("old", D)],
+            requested_at=observed_at,
+        )
+        state = s.get(ReportSyncState, (seed.tenant_id, "acc-1", "ad_day", D))
+        old_watermarks = (
+            state.publication_version,
+            state.observed_at,
+            state.last_success_at,
+            state.row_count,
+        )
+        old_rows = [
+            row.model_dump()
+            for row in s.exec(
+                select(AdReportDay).where(AdReportDay.tenant_id == seed.tenant_id)
+            ).all()
+        ]
+        enqueue_job(
+            s,
+            tenant_id=seed.tenant_id,
+            bc_id="bc-a",
+            kind="ad_day",
+            tier="hot",
+            advertiser_ids=["acc-1"],
+            start=D,
+            end=D,
+            frozen_route=_route(seed),
+            actor_id=seed.actor_id,
+            requested_at=requested_at,
         )
         s.commit()
-    job = _enqueue_and_claim(factory, seed)
+        job = claim_jobs(s, now=datetime.now(UTC) + timedelta(seconds=1), limit=1)[0]
+        s.commit()
+        before_requirements = {
+            row.id: (row.desired_revision, row.satisfied_revision)
+            for row in s.exec(
+                select(SyncRequirement)
+                .join(
+                    SyncExecutionScope,
+                    SyncExecutionScope.requirement_id == SyncRequirement.id,
+                )
+                .where(SyncExecutionScope.report_job_id == job.id)
+            ).all()
+        }
+        assert before_requirements and set(before_requirements.values()) == {(1, 0)}
+        assert request_time(job) == requested_at > observed_at
 
     class Reader(FakeReader):
         def campaign_day(self, **_kwargs):
             return RawReportPage(({"dimensions": {"campaign_id": "c1"}},), 1, 1, 1)
 
+    reader = Reader(total=lambda _a, _c: 20_000)
     assert (
         execute_job(
             factory,
             job_id=job.id,
             claim_token=job.claim_token,
-            reader=Reader(total=lambda _a, _c: 20_000),
+            reader=reader,
         )
         == "FAILED"
     )
+    assert reader.calls == [(("acc-1",), (), 1), (("acc-1",), ("c1",), 1)]
     with factory() as s:
-        assert [
-            r.ad_id
-            for r in s.exec(
-                select(AdReportDay).where(AdReportDay.tenant_id == seed.tenant_id)
-            ).all()
-        ] == ["old"]
+        rows = s.exec(
+            select(AdReportDay).where(AdReportDay.tenant_id == seed.tenant_id)
+        ).all()
+        assert [row.ad_id for row in rows] == ["old"]
+        assert [row.model_dump() for row in rows] == old_rows
+        state = s.get(ReportSyncState, (seed.tenant_id, "acc-1", "ad_day", D))
+        assert state.status == "STALE"
         assert (
-            s.get(ReportSyncState, (seed.tenant_id, "acc-1", "ad_day", D)).status
-            == "STALE"
-        )
+            state.publication_version,
+            state.observed_at,
+            state.last_success_at,
+            state.row_count,
+        ) == old_watermarks
+        assert s.get(ReportSyncJob, job.id).status == "FAILED"
+        after_requirements = {
+            row.id: (row.desired_revision, row.satisfied_revision)
+            for row in s.exec(
+                select(SyncRequirement)
+                .join(
+                    SyncExecutionScope,
+                    SyncExecutionScope.requirement_id == SyncRequirement.id,
+                )
+                .where(SyncExecutionScope.report_job_id == job.id)
+            ).all()
+        }
+        assert after_requirements == before_requirements
+        children = s.exec(
+            select(SyncExecutionScope).where(
+                SyncExecutionScope.report_job_id == job.id,
+            )
+        ).all()
+        assert children and all(child.published_version is None for child in children)
 
 
 def test_expired_lease_is_reclaimed_and_old_token_cannot_publish(committed_sync_seed):
