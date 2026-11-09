@@ -4633,3 +4633,13 @@ T采用SNAPSHOT/前缀比较/两表分页复制，Control不再构造大输入�
 ## 2026-11-09 后台关联报表连续小步
 
 U以不可变grant预算约束最多3步、固定20秒reader期限，逐步提交且一次收尾；缺账本/后继/未知中断组合已保护。最终30重点+9执行边界通过，独立审查无阻断；显式传输基准通过。完整生产S源码对照确认一个campaign截断旧测试失败非U引入，另行诊断。待联合精确发布，见 [记录](validation/2026-11-09-material-links-quantum.md)。
+## 2026-11-06：搭建失败显示平台错误说明
+
+- 问题：创建接口适配器原先只保留平台业务码和请求编号，丢弃 `message`；任务公开日志也没有投影这些字段，客户只能看到 `tiktok_business_error` 或后续广告的 `dependency_failed`。
+- 实现：官方 SDK 创建回执及 MCP 业务回执通过公共 `CallEvidence` 保存脱敏后的 `remote_message`，沿现有 `StepEvidence.summary` 入库；公开事件只增加 `remote_code`、`remote_message`、平台 `request_id` 三个可选字段，不公开整个 summary 或请求正文。无需数据库迁移。
+- 脱敏：共用 `safe_remote_message`，过滤常见令牌、密码、Cookie、签名链接及控制字符；拒绝非字符串及超过 8192 字符的输入，输出最多 1000 字符。公开投影复用同一规则处理历史 JSON，不假设历史记录已脱敏。
+- 客户入口：搭建任务 → 异常与待核实 → 查看原因；操作记录也直接显示错误文案、TikTok 错误码和请求编号。广告因前置失败时，在同租户、同任务内最多追溯广告组及系列两级失败祖先，记录保留原步骤身份及时间；不混入无关系列记录。
+- 行为边界：不改失败/UNKNOWN 分类、重试预算、广告参数或投放状态。历史已丢弃的文案无法补回；上线后新收到的失败回执才保存文案。本次不确认原 40002 的具体拒绝字段。
+- 验证：以最新主线 `67537f33` 为基线，在独立本地 PostgreSQL 中运行 `tests/integrations/tiktok/test_sdk_error_evidence.py`、`test_mcp_results.py`、`tests/modules/builds/test_execution_state.py`、`test_submission_queries.py`，206 passed（79.09s）；实际官方 SDK 仅连接本地 HTTP 替身。新增文案保留/持久化用例在初次修复前 4 failed，修复后通过。前端 `build-task-pages.spec.ts` 38 passed / 7 failed，新增错误展示用例通过；用未修改的 `67537f33` 前端源码重跑这 7 项仍全部失败，分别为 6 个背景色断言与 1 个恢复提示断言，未纳入本次修复。TypeScript/Vite 主应用及演示构建、相关 Python ruff/ty、前端 Biome 及差异空白检查通过。
+- DRY record：scope 为错误回执到任务页面；searched 为 TikTok contracts/adapters/MCP、core 错误处理、builds 证据保存及日志投影、现有页面和对应测试；reused 为 `CallEvidence`、`RemoteCallError`、`StepEvidence.summary`、现有分页与 `SubmissionEventsTable`，并把原 `safe_identifier` 移到公共合同供原调用方复用；remaining duplication 为两个信任边界调用同一脱敏函数，无独立脱敏规则。未找到能保留字段说明的现有脱敏方法。
+- 提交：原本地提交 `5f131329` 基于 `715349e1` 完成；按用户要求准备 PR 时，在独立工作树的 `codex/show-platform-errors` 分支将单个修复提交重放到最新主线 `67537f33`，保留主线的金额转换、网络诊断逻辑及完整进度记录。15 个文件属于同一条错误传递链（含生成类型、回归测试与进度记录），合为一次提交便于完整回退。未部署、未联调，未发送任何真实广告创建请求。
