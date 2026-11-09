@@ -1,11 +1,15 @@
 """广告目录只读合同；身份精确保留，授权由绑定上下文另行校验。"""
 
+from collections.abc import Mapping
 from copy import deepcopy
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from decimal import Decimal
+from types import MappingProxyType
 from typing import Any, Literal, Protocol
 from uuid import UUID
+
+from app.core.errors import DomainError
 
 from .accounts import require_id
 from .common import CallEvidence
@@ -151,6 +155,45 @@ class AdMaterialUsage:
 
 
 @dataclass(frozen=True)
+class PreparedMaterialBridges:
+    """单次读取量子的已验证索引；源元组身份防止跨冻结范围误复用。"""
+
+    ads: tuple[AdEntity, ...]
+    materials: tuple[AdMaterialUsage, ...]
+    owners: frozenset[EntityRef] = field(init=False)
+    entries: Mapping[
+        tuple[EntityRef, str, str, str], Mapping[MaterialUseRef, AdMaterialUsage]
+    ] = field(init=False)
+
+    def __post_init__(self) -> None:
+        # 派生字段不接受调用方注入；replace源元组也必须重做完整校验和建桥。
+        owners = frozenset(ad.ref for ad in self.ads)
+        bridges: dict[
+            tuple[EntityRef, str, str, str], dict[MaterialUseRef, AdMaterialUsage]
+        ] = {}
+        for original in self.materials:
+            use = original.use_ref
+            if use.ad_ref not in owners:
+                raise DomainError("directory_scope_mismatch", "素材补读超出冻结父身份")
+            for creative_id in original.creative_ids:
+                key = (
+                    use.ad_ref,
+                    use.platform_material_id,
+                    use.material_type,
+                    creative_id,
+                )
+                bridges.setdefault(key, {})[use] = original
+        object.__setattr__(self, "owners", owners)
+        object.__setattr__(
+            self,
+            "entries",
+            MappingProxyType(
+                {key: MappingProxyType(value) for key, value in bridges.items()}
+            ),
+        )
+
+
+@dataclass(frozen=True)
 class DirectoryQuery:
     advertiser_id: str
     kind: str
@@ -252,6 +295,7 @@ class AdsReadOperations(Protocol):
         *,
         ads: tuple[AdEntity, ...],
         materials: tuple[AdMaterialUsage, ...],
+        prepared: PreparedMaterialBridges | None = None,
     ) -> DirectoryPage: ...
 
     def read_balance(self, advertiser_id: str) -> AccountBalance: ...

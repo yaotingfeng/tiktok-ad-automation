@@ -23,10 +23,12 @@ from app.core.config import settings
 from app.core.context import TenantContext
 from app.core.db import engine
 from app.core.errors import DomainError
+from app.integrations.tiktok.adapters.ads_read import prepare_material_bridges
 from app.integrations.tiktok.contracts.ads import (
     AdEntity,
     AdMaterialUsage,
     DirectoryQuery,
+    PreparedMaterialBridges,
 )
 from app.integrations.tiktok.contracts.context import FrozenTikTokRoute
 from app.integrations.tiktok.gateway import open_tiktok_gateway
@@ -157,6 +159,7 @@ class _CommittedDirectoryWork:
         None
     )
     material_fingerprint: str | None = None
+    material_bridges: PreparedMaterialBridges | None = None
     publication_started: float = field(default_factory=monotonic)
     large_publication: bool = False
 
@@ -868,6 +871,10 @@ def _run_directory_step(
         session.commit()
         work.failure_fence = (run.claim_generation, run.owner_epoch, claim_token)
 
+    if material_scope is not None and work.material_bridges is None:
+        # 大索引只在领取已提交、数据库事务已退出后构造一次；同量子逐页仍检查
+        # 冻结fingerprint、当前owner、run/head/route围栏，新量子不沿用此缓存。
+        work.material_bridges = prepare_material_bridges(*material_scope)
     deadline = (
         work.read_deadline
         if work.read_limit > 1
@@ -898,7 +905,10 @@ def _run_directory_step(
         ):
             if material_scope is not None:
                 page = gateway.ads.read_material_page(
-                    query, ads=material_scope[0], materials=material_scope[1]
+                    query,
+                    ads=material_scope[0],
+                    materials=material_scope[1],
+                    prepared=work.material_bridges,
                 )
             elif primary_only:
                 page = gateway.ads.read_primary_page(query)
