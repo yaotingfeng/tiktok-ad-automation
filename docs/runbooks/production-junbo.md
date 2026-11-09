@@ -1,3 +1,7 @@
+## 2026-11-09 广告总量上限取消已上线
+
+应用 `0549cd4278abc2a2f653a85dcb403966a5b2e42c` 已推送公司 main/GitHub 并完成生产发布。11 角色/9 Worker/唯一 Beat、精确镜像摘要、实际配置/四开关、schema0101 均验收通过；后台实际12/typed12/prefetch12、publisher8进程/CPU4与原资源及正常退出宽限保持，发布锁已释放。xuyin“阿门 测试”原配置只读试算与实际规划均为1系列/20广告组/20,000广告，日预算USD500，跨2剧×3账户为120,000广告；未修改策略或提交真实广告。无DDL、新备份或恢复演练。 详见[本轮验证](../validation/2026-11-09-remove-ad-count-ceiling.md)。
+
 ## 2026-11-09 图片配乐修复已上线，单图/轮播验收通过
 
 当前应用4aa94de1e7143166091f3667b34c13b3b86cff41/schema0101，修复按音乐ID读取实际page_size1的误拦截。11角色/9Worker/唯一Beat、精确镜像/配置/四开关/DB池及线上源摘要验收，后台12/typed12/prefetch12及publisher8、资源保持，锁释放。W3RH真实工具任务已COMPLETED，单图及三图广告各1条；远端图片顺序/音乐与冻结意图一致，系列、广告组、两广告全部DISABLE。没有DDL、新备份/恢复演练或广告启用。后台容量碎片以原规格迁移两空闲本项目Worker收口，完整spec已恢复。见[最终验收](../validation/2026-11-09-carousel-music-production.md)。以下旧“当前”均为历史。
