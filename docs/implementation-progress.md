@@ -4772,3 +4772,9 @@ DRY record：scope为费率时间轴与核算证据；searched为旧save_rate/ra
 DRY：scope为报表最新余额读取；searched为dimension_query页补全、api同步状态、query_reuse余额版本及row_set排序；reused为原历史索引、当前授权集合、既有金额/覆盖/冻结合同；共享最新观测入口替换三份全历史DISTINCT ON，排序生成SQL仅保留需要的短探测。后续索引/预聚合另行评估，不混入本批。
 
 详见[验证与发布边界](validation/2026-11-09-report-large-data.md)及[实施计划](superpowers/plans/2026-11-09-report-large-data.md)。本轮只聚焦提交，不推送或部署。当前main含未上线0102及其他工作，发布前须明确范围，不能直接以无迁移修复发整个main。
+
+## 2026-11-09 每日操作日志与历史/T+1赔付（设计待确认，未实施）
+
+用户要求每日持久保存TikTok官方操作日志，复用已有日报，按同一规则核算历史和T+1赔付。完成[设计](superpowers/specs/2026-11-09-operation-log-compensation-design.md)：复用官方SDK和现有同步调度，异步导出分阶段恢复，原文/规范事件/覆盖持久化，可信配置锚点与日志还原每日最低ROAS及排除操作，条件预计与最终资格分开，来源修订驱动重算，原导出不变。历史按现有经营起点并分段补齐；T+1及最近7个完整日回刷为提出的默认。
+
+官方日志create及当前赔付政策已复核；锁定SDK未发现生成的changelog方法，设计限定由官方ApiClient.call_api接固定官方路径并经过原网关/准入，不能自建HTTP业务网关。check/download返回及真实空日志格式留作实施前合同验证，不伪称完成真实联调。独立设计审阅结论nothing important left；差异检查通过，无业务代码修改、真实日志导出、生产写入、推送或发布。当前其他会话的报表读模型工作保持不动。
