@@ -58,6 +58,11 @@ class QueryMembershipReader:
             if self.now - value["at"] >= CACHE_SECONDS:
                 del self.entries[key]
 
+    def pending_cache_expired(self) -> bool:
+        """过期的未完查询即使读完也不能复用为完整成员缓存；不续期观察起点。"""
+        pending = self.cache.get("pending")
+        return pending is not None and self.now - pending["at"] >= CACHE_SECONDS
+
     def __call__(self, ads, first, last, page):
         key = hashlib.sha256(
             json.dumps([sorted(ads), str(first), str(last)]).encode()
