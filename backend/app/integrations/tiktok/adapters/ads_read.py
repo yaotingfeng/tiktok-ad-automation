@@ -16,6 +16,7 @@ from app.integrations.tiktok.contracts.ads import (
     EntityKind,
     EntityRef,
     MaterialUseRef,
+    PreparedMaterialBridges,
 )
 from app.integrations.tiktok.contracts.carousel import decode_carousels
 from app.integrations.tiktok.contracts.common import CallEvidence, McpBusinessResponse
@@ -47,6 +48,13 @@ OPTIONAL_READ_FAILURES = frozenset(
 
 def invalid() -> DomainError:
     return DomainError("ads_response_invalid", "广告目录返回结构或身份不完整")
+
+
+def prepare_material_bridges(
+    ads: tuple[AdEntity, ...], materials: tuple[AdMaterialUsage, ...]
+) -> PreparedMaterialBridges:
+    """完整验证冻结素材并一次建桥；不持DB事务、不发送请求。"""
+    return PreparedMaterialBridges(ads, materials)
 
 
 def identifier(value: Any) -> str:
@@ -446,6 +454,7 @@ class AdsReadAdapter:
         *,
         ads: tuple[AdEntity, ...],
         materials: tuple[AdMaterialUsage, ...],
+        prepared: PreparedMaterialBridges | None = None,
     ) -> DirectoryPage:
         """一次只读一个素材子页；准入失败原样抛出，由持久运行保留页码。"""
         if (
@@ -473,27 +482,25 @@ class AdsReadAdapter:
                 or ad.parent_ref.advertiser_id != ad.ref.advertiser_id
                 for ad in ads
             )
-            or any(usage.use_ref.ad_ref not in owners for usage in materials)
             or query.parent_ids
             and set(query.parent_ids) != {ref.remote_id for ref in owners}
         ):
             raise DomainError("directory_scope_mismatch", "素材补读超出冻结父身份")
+        if prepared is None:
+            prepared = prepare_material_bridges(ads, materials)
+        elif (
+            not isinstance(prepared, PreparedMaterialBridges)
+            or prepared.ads is not ads
+            or prepared.materials is not materials
+            or prepared.owners != owners
+        ):
+            raise DomainError("directory_scope_mismatch", "素材索引不属于当前冻结范围")
         self._check_account(query.advertiser_id)
         items, usages, known, next_page, evidence = self._supplement_page(
             query, list(ads), page=query.page, page_size=query.page_size
         )
-        # 一次索引冻结桥，避免每个子页素材反复线性扫描数万主响应身份。
-        bridges: dict[tuple, dict[MaterialUseRef, AdMaterialUsage]] = {}
-        for original in materials:
-            use = original.use_ref
-            for creative_id in original.creative_ids:
-                key = (
-                    use.ad_ref,
-                    use.platform_material_id,
-                    use.material_type,
-                    creative_id,
-                )
-                bridges.setdefault(key, {})[use] = original
+        # 已提交领取后的同量子共用不可变索引；每页只查响应实际涉及的精确桥。
+        bridges = prepared.entries
         merged: dict[MaterialUseRef, AdMaterialUsage] = {}
         for usage in usages:
             use = usage.use_ref
