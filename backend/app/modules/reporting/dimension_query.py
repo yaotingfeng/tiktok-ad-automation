@@ -24,6 +24,7 @@ from app.modules.accounts.models import AdvertiserAccount
 from app.modules.ads.directory import directory_carousels
 from app.modules.ads.models import AdObject as CanonicalAdObject
 from app.modules.reporting import query_diagnostics
+from app.modules.reporting.balance_queries import latest_balance_observations
 from app.modules.reporting.filters import authorized_grants, compile_filter
 from app.modules.reporting.metric_catalog import DERIVED_RATIOS
 from app.modules.reporting.models import AccountBalanceObservation
@@ -671,18 +672,8 @@ def materialize_rows(
     )
     balances: dict[str, AccountBalanceObservation] = {}
     if kind == "account":
-        for observation in session.exec(
-            select(AccountBalanceObservation)
-            .where(
-                AccountBalanceObservation.tenant_id == tenant_id,
-                col(AccountBalanceObservation.advertiser_id).in_(advertisers),
-            )
-            .distinct(col(AccountBalanceObservation.advertiser_id))
-            .order_by(
-                col(AccountBalanceObservation.advertiser_id),
-                col(AccountBalanceObservation.observed_at).desc(),
-                col(AccountBalanceObservation.id).desc(),
-            )
+        for observation in latest_balance_observations(
+            session, tenant_id=tenant_id, advertisers=advertisers
         ):
             balances.setdefault(observation.advertiser_id, observation)
     # 覆盖状态只取决于账户集合与日期：按账户集合缓存，避免每行重复扫描同步状态。

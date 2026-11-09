@@ -32,6 +32,7 @@ from app.modules.reporting.ad_materials import (
     freeze_ad_material_selection,
     list_ad_materials,
 )
+from app.modules.reporting.balance_queries import latest_balance_observations
 from app.modules.reporting.detail import AdDetailPublic, get_ad_detail
 from app.modules.reporting.exports import (
     create_export,
@@ -41,7 +42,6 @@ from app.modules.reporting.exports import (
 )
 from app.modules.reporting.filters import authorized_grants
 from app.modules.reporting.metric_catalog import METRIC_CATALOG, table_label
-from app.modules.reporting.models import AccountBalanceObservation
 from app.modules.reporting.planner import (
     backfill_allowed,
     ensure_bc_plans,
@@ -718,19 +718,9 @@ def get_ad_sync_status_route(
     by_key = {
         (r.advertiser_id, r.stat_date): r for r in states if r.report_kind == "ad_day"
     }
-    balances = session.exec(
-        select(AccountBalanceObservation)
-        .where(
-            AccountBalanceObservation.tenant_id == tenant_id,
-            col(AccountBalanceObservation.advertiser_id).in_(allowed),
-        )
-        .distinct(col(AccountBalanceObservation.advertiser_id))
-        .order_by(
-            col(AccountBalanceObservation.advertiser_id),
-            col(AccountBalanceObservation.observed_at).desc(),
-            col(AccountBalanceObservation.id).desc(),
-        )
-    ).all()
+    balances = latest_balance_observations(
+        session, tenant_id=tenant_id, advertisers=allowed
+    )
     # 余额按独立观测版本刷新，不能继续展示旧快照中的金额。
     balance_version = [(b.advertiser_id, str(b.id)) for b in balances]
     # 启停/预算修改后先回读目录，可能尚无新的日报。目录发布必须独立推进版本，

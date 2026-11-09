@@ -574,24 +574,32 @@ def _dimension_rows(
     fact_meta = """fm AS (
         SELECT DISTINCT ON (adv, rid) * FROM facts ORDER BY adv, rid, currency
     )"""
+    # 账户页的余额只参与余额排序，版权方只参与文字/命名筛选；展示由页补全读取。
+    # ent 被成员与指标多次消费，会物化所有选择列，不能依赖外层投影消除无用查询。
+    account_projection = bool(_search_terms(filters) or filters.naming_status)
     if dim == "account":
         idn = "idn AS (SELECT adv, adv AS rid FROM acc)"
+        balance_columns = "NULL::numeric AS balance, NULL::text AS balance_currency"
+        balance_join = ""
+        if filters.sort_by == "balance":
+            balance_columns = "bal.amount AS balance, bal.currency AS balance_currency"
+            balance_join = """LEFT JOIN LATERAL (
+                SELECT CASE WHEN o.availability = 'AVAILABLE' THEN o.amount END AS amount, o.currency
+                FROM account_balance_observation o
+                WHERE o.tenant_id = :tenant AND o.advertiser_id = i.adv
+                ORDER BY o.observed_at DESC, o.id DESC LIMIT 1
+            ) bal ON TRUE"""
         ent = f"""ent AS (
             SELECT i.adv, i.rid, COALESCE(a.name, i.adv) AS name,
                 NULL::text AS campaign_id, NULL::text AS adgroup_id,
                 NULL::text AS campaign_name, NULL::text AS adgroup_name, NULL::text AS ad_name,
                 NULL::numeric AS target_roas, NULL::numeric AS campaign_budget,
                 NULL::numeric AS adgroup_budget,
-                bal.amount AS balance, bal.currency AS balance_currency, p.provider_label
+                {balance_columns}, p.provider_label
             FROM idn i JOIN acc a ON a.adv = i.adv
             LEFT JOIN fm ON fm.adv = i.adv AND fm.rid = i.rid
             LEFT JOIN proj p ON p.adv = i.adv AND p.cid = fm.f_campaign_id
-            LEFT JOIN LATERAL (
-                SELECT CASE WHEN o.availability = 'AVAILABLE' THEN o.amount END AS amount, o.currency
-                FROM account_balance_observation o
-                WHERE o.tenant_id = :tenant AND o.advertiser_id = i.adv
-                ORDER BY o.observed_at DESC, o.id DESC LIMIT 1
-            ) bal ON TRUE
+            {balance_join}
             LEFT JOIN obj e ON FALSE
             WHERE {where}
         )"""
@@ -670,9 +678,14 @@ def _dimension_rows(
         obj = _EMPTY_OBJ
     else:
         obj = f"obj AS NOT MATERIALIZED ({_obj_select('advertiser_id = ANY(:advs) AND kind = ANY(:kinds)')})"
-    # 账户维度按账户的首个事实系列取版权方，整租户读取（账户数有限、行数小）。
+    # 账户维度只在筛选需要时按首个事实系列取版权方；账户池可达数千个，
+    # 无搜索的默认首屏不能为整个租户读取系列名称与历史事实名称数组。
     if dim == "account":
-        proj = _proj_cte(full=True, fact_campaigns=None)
+        proj = (
+            _proj_cte(full=True, fact_campaigns=None)
+            if account_projection
+            else _EMPTY_PROJ
+        )
     elif metrics_only:
         proj = _EMPTY_PROJ
     else:
@@ -684,7 +697,11 @@ def _dimension_rows(
         )
     # 纯指标筛选/排序不消费历史展示字段。保留列合同但不聚合每条事实
     # 的名称数组，否则facts物化会强迫长日期范围排序及反复读取宽字段。
-    facts = _facts_cte(table, id_column, include_metadata=not metrics_only)
+    facts = _facts_cte(
+        table,
+        id_column,
+        include_metadata=account_projection if dim == "account" else not metrics_only,
+    )
     # 非递归 CTE 只能引用前面的 CTE：列出无数据对象时身份依赖完整目录，
     # 默认时目录按身份读取，身份需先算出。
     ctes = (

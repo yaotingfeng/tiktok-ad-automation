@@ -21,6 +21,7 @@ from sqlmodel import Session, col, select
 
 from app.core.context import TenantContext
 from app.modules.reporting import query_diagnostics
+from app.modules.reporting.balance_queries import latest_balance_observations
 from app.modules.reporting.filters import authorized_grants
 from app.modules.reporting.query_models import (
     QuerySnapshot,
@@ -130,14 +131,9 @@ def dependency_stamp(
     balances = []
     if filters.dimension == "account" and filters.sort_by == "balance":
         balances = [
-            tuple(r)
-            for r in session.connection().execute(
-                text("""
-            SELECT DISTINCT ON (advertiser_id) advertiser_id,id FROM account_balance_observation
-            WHERE tenant_id=:tenant AND advertiser_id=ANY(:advertisers)
-            ORDER BY advertiser_id,observed_at DESC,id DESC
-        """),
-                params,
+            (row.advertiser_id, row.id)
+            for row in latest_balance_observations(
+                session, tenant_id=context.tenant_id, advertisers=advertisers
             )
         ]
     return QueryDependencyStamp(
