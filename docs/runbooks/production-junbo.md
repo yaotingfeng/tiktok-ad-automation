@@ -1,3 +1,7 @@
+## 2026-11-09 Minis自动定向修复已上线
+
+当前应用bb3344ad6e587adc6941e3a3082e2facfb6f9103/schema0101。新预览固定自动模式、语言独立控制、18+/25+映射最低年龄，旧精细年龄/性别选择须修正，旧MANUAL不重发。旧默认自动在途语义保持，冻结请求不改写。11角色/9Worker/唯一Beat、精确镜像/配置/四开关/DB池/HTTPS与后台12/typed12/prefetch12、publisher8核验；许音18+英语、25+英语暂停态真实创建/回读匹配，无广告或启用。原资源/额度保持，发布锁已释放，无DDL、新备份/恢复演练；Jenkins已恢复原enabled且无active/queued构建。见[本轮验收](../validation/2026-11-09-minis-automatic-targeting.md)。以下旧“当前”均为历史。
+
 ## 2026-11-09 广告总量上限取消已上线
 
 应用 `0549cd4278abc2a2f653a85dcb403966a5b2e42c` 已推送公司 main/GitHub 并完成生产发布。11 角色/9 Worker/唯一 Beat、精确镜像摘要、实际配置/四开关、schema0101 均验收通过；后台实际12/typed12/prefetch12、publisher8进程/CPU4与原资源及正常退出宽限保持，发布锁已释放。xuyin“阿门 测试”原配置只读试算与实际规划均为1系列/20广告组/20,000广告，日预算USD500，跨2剧×3账户为120,000广告；未修改策略或提交真实广告。无DDL、新备份或恢复演练。 详见[本轮验证](../validation/2026-11-09-remove-ad-count-ceiling.md)。
