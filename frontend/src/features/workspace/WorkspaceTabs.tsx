@@ -130,6 +130,7 @@ function titleFor(path: string, groups: NavGroup[]) {
       : `${item.title} · ${path.endsWith("/new") ? "新建" : "详情"}`
   if (/\/build-drafts\//.test(path)) return "广告搭建 · 草稿"
   if (/\/build-previews\//.test(path)) return "广告搭建 · 预览"
+  if (/\/campaign-copies\//.test(path)) return "批量复制"
   return (
     (
       {

@@ -2,6 +2,7 @@ import hashlib
 import json
 from collections.abc import Callable, Iterable, Iterator
 from datetime import UTC, datetime
+from decimal import Decimal
 from time import monotonic
 from typing import Any, Literal, cast
 from uuid import UUID
@@ -65,6 +66,7 @@ from app.modules.builds.preview_schemas import (
     build_structure_summary,
     frozen_bid_strategy,
     generation_mode_label,
+    preview_daily_budget_sum,
 )
 from app.modules.builds.preview_validation import (
     final_ad_count_exceeded,
@@ -1417,6 +1419,7 @@ def get_preview_summary(
         .limit(20)
     ).all()
     return PreviewSummary(
+        copy_group_settings=preview.config.get("copy_group_settings", []),
         **continuation,
         can_refresh_continuation=bool(prior_ids),
         continuation_source_ids=list(prior_ids),
@@ -1507,7 +1510,9 @@ def get_preview_summary(
         preparing_count=counts.get("PREPARING", (0, 0, 0))[0],
         input_issue_count=issue_count,
         total_unit_count=sum(x[0] for x in counts.values()),
-        daily_budget_sum=preview.budget * (g if budget_strategy == "ADGROUP" else n),
+        daily_budget_sum=preview_daily_budget_sum(
+            preview, campaign_count=n, group_count=g
+        ),
         daily_budget_label=budget_strategy_label(budget_strategy),
         budget_strategy=budget_strategy,
         bid_strategy=bid_strategy,
@@ -1721,7 +1726,9 @@ def get_preview_units(
                 title=d.title,
                 advertiser_id=u.advertiser_id,
                 currency=u.currency,
-                budget=preview.budget,
+                budget=Decimal(preview.config["copy_daily_budget_sum"])
+                if preview.config.get("campaign_copy_version") == 1
+                else preview.budget,
                 campaign_name=u.campaign_name,
                 readiness=cast(Readiness, u.readiness),
                 reason_codes=u.reason_codes,
@@ -1746,7 +1753,12 @@ def get_preview_units(
                     material_allocation_count=material_counts.get(u.id, (0, 0, 0))[2],
                     unique_material_count=material_counts.get(u.id, (0, 0, 0))[1],
                 )
-                + f"；{budget_unit_label(budget_strategy)}；竞价策略 {bid_strategy_label(bid_strategy)}",
+                + (
+                    "；本副本日预算合计，各组保留独立设置"
+                    if preview.config.get("campaign_copy_version") == 1
+                    else f"；{budget_unit_label(budget_strategy)}"
+                )
+                + f"；竞价策略 {bid_strategy_label(bid_strategy)}",
             )
             for u, d in rows[:limit]
         ],

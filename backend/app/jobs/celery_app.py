@@ -33,6 +33,7 @@ celery_app.conf.update(
         "app.modules.builds.image_candidate_tasks",
         "app.modules.builds.carousel_music_tasks",
         "app.modules.builds.preview_tasks",
+        "app.modules.campaign_copies.tasks",
         "app.modules.builds.submission_tasks",
         "app.modules.builds.tasks",
         "app.modules.builds.scene_tasks",
@@ -230,6 +231,11 @@ celery_app.conf.update(
         },
         "repair-build-previews": {
             "task": "builds.repair_previews",
+            "schedule": 60.0,
+            "options": {"queue": "control"},
+        },
+        "repair-campaign-copies": {
+            "task": "campaign_copies.repair",
             "schedule": 60.0,
             "options": {"queue": "control"},
         },

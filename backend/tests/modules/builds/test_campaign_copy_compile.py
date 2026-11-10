@@ -1,0 +1,111 @@
+import pytest
+
+from app.core.errors import DomainError
+from app.modules.builds.copy_compile import observed_body
+
+
+def campaign():
+    return {
+        "advertiser_id": "a",
+        "campaign_id": "c",
+        "campaign_name": "当前名称",
+        "objective_type": "APP_PROMOTION",
+        "app_promotion_type": "MINIS",
+        "campaign_type": "REGULAR_CAMPAIGN",
+        "budget": "120",
+        "budget_mode": "BUDGET_MODE_DYNAMIC_DAILY_BUDGET",
+        "budget_optimize_on": True,
+        "operation_status": "DISABLE",
+    }
+
+
+def test_current_source_budget_is_preserved_without_history():
+    value = campaign()
+    assert observed_body("CAMPAIGN", value)["budget"] == "120"
+    assert value == campaign()
+
+
+@pytest.mark.parametrize(
+    "field",
+    ["objective_type", "app_promotion_type", "budget_mode", "budget_optimize_on"],
+)
+def test_missing_current_fields_are_not_filled_by_dto_defaults(field):
+    value = campaign()
+    del value[field]
+    with pytest.raises(DomainError, match="来源"):
+        observed_body("CAMPAIGN", value)
+
+
+def test_unknown_business_setting_is_not_silently_dropped():
+    value = campaign()
+    value["unsupported_delivery_setting"] = True
+    with pytest.raises(DomainError):
+        observed_body("CAMPAIGN", value)
+
+
+def test_untrusted_binary_money_is_not_relabelled_exact():
+    value = campaign()
+    value["budget"] = 120.1
+    with pytest.raises(DomainError):
+        observed_body("CAMPAIGN", value)
+
+
+def test_malformed_creative_is_a_visible_blocker():
+    body = {
+        "advertiser_id": "a",
+        "adgroup_id": "g",
+        "ad_name": "ad",
+        "operation_status": "ENABLE",
+        "creative_list": [None],
+        "ad_text_list": [],
+        "landing_page_url_list": [],
+        "ad_configuration": {},
+    }
+    with pytest.raises(DomainError):
+        observed_body("AD", body)
+
+
+def group():
+    return {
+        "advertiser_id": "a",
+        "campaign_id": "c",
+        "adgroup_name": "g",
+        "minis_id": "m",
+        "promotion_type": "MINI_APP",
+        "optimization_goal": "VALUE",
+        "optimization_event": "IMPRESSION_LEVEL_AD_REVENUE",
+        "vbo_window": "ZERO_DAY",
+        "bid_type": "BID_TYPE_NO_BID",
+        "deep_bid_type": "VO_HIGHEST_VALUE",
+        "billing_event": "OCPM",
+        "placement_type": "PLACEMENT_TYPE_NORMAL",
+        "placements": ["PLACEMENT_TIKTOK"],
+        "schedule_type": "SCHEDULE_FROM_NOW",
+        "schedule_start_time": "2026-11-10 00:00:00",
+        "targeting_spec": {
+            "location_ids": ["loc"],
+            "spc_audience_age": "OVER_EIGHTEEN",
+        },
+        "targeting_optimization_mode": "AUTOMATIC",
+        "operation_status": "ENABLE",
+    }
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"budget": "100"},
+        {"schedule_type": "SCHEDULE_START_END"},
+        {"budget": "100", "budget_mode": None},
+    ],
+)
+def test_conditional_fields_cannot_be_invented_from_dto_defaults(changes):
+    with pytest.raises(DomainError) as error:
+        observed_body("ADGROUP", {**group(), **changes})
+    assert error.value.code == "copy_source_incomplete"
+
+
+@pytest.mark.parametrize("field", ["budget", "budget_optimize_on"])
+def test_campaign_null_budget_facts_are_not_creation_defaults(field):
+    with pytest.raises(DomainError):
+        observed_body("CAMPAIGN", {**campaign(), field: None})

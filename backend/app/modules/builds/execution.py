@@ -294,6 +294,19 @@ def prepare_request(
         return cta_request(frozen, set(first.cta_option_ids))
 
     if step.kind in {"CAMPAIGN", "ADGROUP"}:
+        # 复制保留每个来源组的独立实际配置，不经普通策略模板重建。
+        from .copy_compile import COPY_KEY, copy_parent_request
+
+        if COPY_KEY in snapshot:
+            return copy_parent_request(
+                frozen,
+                kind=step.kind,
+                name=frozen.campaign_name
+                if step.kind == "CAMPAIGN"
+                else _group(session, step).name,
+                parent_id=_parent(session, step) if step.kind == "ADGROUP" else None,
+                group_id=step.group_id,
+            )
         return parent_request(
             frozen,
             kind=step.kind,

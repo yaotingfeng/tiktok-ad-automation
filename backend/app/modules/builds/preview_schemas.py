@@ -13,6 +13,23 @@ from .targeting_schemas import AudienceTargeting
 Readiness = Literal["READY", "PREPARING", "BLOCKED"]
 
 
+def preview_daily_budget_sum(
+    preview: Any, *, campaign_count: int, group_count: int
+) -> Decimal:
+    """普通预览按统一预算汇总；单系列复制按冻结的逐组金额精确求和。"""
+    if preview.config.get("campaign_copy_version") == 1:
+        return (
+            Decimal(preview.config["copy_daily_budget_sum"])
+            if campaign_count
+            else Decimal(0)
+        )
+    return preview.budget * (
+        group_count
+        if preview.config.get("budget_strategy") == "ADGROUP"
+        else campaign_count
+    )
+
+
 def budget_strategy_label(strategy: str | None) -> str:
     """把冻结合同中的预算枚举转换为业务页面使用的中文名称。"""
     return "组预算合计" if strategy == "ADGROUP" else "系列预算合计"
@@ -105,6 +122,7 @@ class ExcludedDramaPublic(BaseModel):
 
 
 class PreviewSummary(BaseModel):
+    copy_group_settings: list[dict[str, Any]] = Field(default_factory=list)
     can_refresh_continuation: bool = False
     continuation_source_ids: list[UUID] = Field(default_factory=list)
     continuation_unit_count: int = 0

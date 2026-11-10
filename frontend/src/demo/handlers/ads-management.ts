@@ -105,6 +105,23 @@ const selections = new Map<
   StoredSelection & { tenantId: string; bcId: string; expiresAt: number }
 >()
 
+/** 复制与管理读取同一份冻结选择，不能回到当前列表重新扩大来源范围。 */
+export function getDemoFrozenSelection(
+  selectionId: string,
+  tenantId: string,
+  bcId: string,
+) {
+  const selected = selections.get(selectionId)
+  if (
+    !selected ||
+    selected.tenantId !== tenantId ||
+    selected.bcId !== bcId ||
+    selected.expiresAt <= now()
+  )
+    return null
+  return { refs: [...selected.refs], materialUses: [...selected.materialUses] }
+}
+
 /** 报表行键：`${bc}-${对象ID}`；账户、剧、素材行另有前缀，不能直接管理。 */
 function remoteIdOfRowKey(rowKey: string) {
   const parts = rowKey.split("-")

@@ -13,6 +13,8 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader } from "@/components/ui/card"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import type { CopyGroupSetting } from "@/features/campaign-copies/api"
+import { CopyFrozenGroups } from "@/features/campaign-copies/CopyFrozenGroups"
 import { CopyField } from "@/features/providers/presentation"
 import { normalizeDecimal } from "@/features/strategies/validation"
 import { TargetingSummary } from "@/features/targeting/TargetingForm"
@@ -158,6 +160,9 @@ export function BuildPreviewPanel({
         description="请切换到预览所属 BC 查看冻结范围。"
       />
     )
+  const copyGroups =
+    (current as PreviewSummary & { copy_group_settings?: CopyGroupSetting[] })
+      .copy_group_settings ?? []
   const back = () =>
     void navigate({
       to: "/tenants/$tenantId/build-drafts/$draftId",
@@ -293,7 +298,17 @@ export function BuildPreviewPanel({
           retry={() => void summary.refetch()}
         />
       )}
-      {current?.targeting && (
+      {!!copyGroups.length && (
+        <Card>
+          <CardHeader>
+            <p className="font-medium">复制冻结配置 · 按广告组核对</p>
+          </CardHeader>
+          <CardContent>
+            <CopyFrozenGroups groups={copyGroups} currency={current.currency} />
+          </CardContent>
+        </Card>
+      )}
+      {!copyGroups.length && current?.targeting && (
         <Card>
           <CardContent className="flex flex-col gap-2">
             <p className="font-medium">受众定向 · 严格限制</p>
@@ -476,6 +491,7 @@ export function BuildPreviewPanel({
           tenantId={tenantId}
           bcId={bcId}
           unit={unit}
+          copyGroups={copyGroups}
           onClose={() => setUnit(null)}
         />
       )}
@@ -839,11 +855,13 @@ function FrozenUnitSheet({
   tenantId,
   bcId,
   unit,
+  copyGroups,
   onClose,
 }: {
   tenantId: string
   bcId: string
   unit: PreviewUnit
+  copyGroups: CopyGroupSetting[]
   onClose: () => void
 }) {
   const paging = useCursorPage(),
@@ -893,20 +911,27 @@ function FrozenUnitSheet({
               value={detail.data.campaign_name}
               expanded
             />
-            <p className="text-sm">
-              {budgetUnitLabel(detail.data.budget_strategy)}{" "}
-              {detail.data.currency} {normalizeDecimal(detail.data.budget)} ·{" "}
-              {bidLabel(detail.data.bid_strategy)}
-              {detail.data.bid_strategy === "TARGET_ROAS" &&
-              detail.data.target_roas !== null
-                ? ` ${detail.data.target_roas}`
-                : ""}
-            </p>
+            {copyGroups.length ? (
+              <CopyFrozenGroups
+                groups={copyGroups}
+                currency={detail.data.currency}
+              />
+            ) : (
+              <p className="text-sm">
+                {budgetUnitLabel(detail.data.budget_strategy)}{" "}
+                {detail.data.currency} {normalizeDecimal(detail.data.budget)} ·{" "}
+                {bidLabel(detail.data.bid_strategy)}
+                {detail.data.bid_strategy === "TARGET_ROAS" &&
+                detail.data.target_roas !== null
+                  ? ` ${detail.data.target_roas}`
+                  : ""}
+              </p>
+            )}
             <CopyField label="推广链接" value={detail.data.url} expanded />
             <p className="break-all text-xs text-muted-foreground">
               策略版本 {detail.data.strategy_version_id}
             </p>
-            {detail.data.targeting && (
+            {!copyGroups.length && detail.data.targeting && (
               <div className="rounded-md border p-3">
                 <p className="mb-2 text-sm font-medium">
                   本账户冻结定向 · 严格限制

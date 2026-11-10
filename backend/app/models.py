@@ -155,6 +155,7 @@ from app.modules.ad_management import (  # noqa: E402
     batch_models as management_batch_models,  # noqa: E402, F401
 )
 from app.modules.ad_management import models as ad_management_models  # noqa: E402, F401
+from app.modules.campaign_copies import models as campaign_copy_models  # noqa: E402, F401
 from app.modules.builds import (  # noqa: E402
     carousel_music_models,  # noqa: E402,F401
     image_composition_models,  # noqa: E402, F401

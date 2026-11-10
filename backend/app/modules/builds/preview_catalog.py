@@ -16,6 +16,7 @@ from app.modules.builds.preview_schemas import (
     budget_strategy_label,
     build_structure_summary,
     frozen_bid_strategy,
+    preview_daily_budget_sum,
 )
 from app.modules.builds.previews import _page_scope, _preview
 
@@ -112,11 +113,10 @@ def get_preview_dramas(
                         unique_material_count=int(row["unique_material_count"] or 0),
                     )
                     + f"；预算策略 {budget_strategy_label(preview.config.get('budget_strategy'))}；竞价策略 {bid_strategy_label(frozen_bid_strategy(scene_snapshot={}, preview_config=preview.config, target_roas=preview.target_roas))}",
-                    "daily_budget_sum": preview.budget
-                    * int(
-                        row["eligible_adgroup_count"]
-                        if preview.config.get("budget_strategy") == "ADGROUP"
-                        else row["eligible_campaign_count"]
+                    "daily_budget_sum": preview_daily_budget_sum(
+                        preview,
+                        campaign_count=int(row["eligible_campaign_count"]),
+                        group_count=int(row["eligible_adgroup_count"]),
                     ),
                 },
             )

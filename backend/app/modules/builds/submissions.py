@@ -34,6 +34,7 @@ from app.modules.builds.preview_models import BuildPreview, BuildUnit
 from app.modules.builds.preview_schemas import (
     budget_strategy_label,
     frozen_bid_strategy,
+    preview_daily_budget_sum,
 )
 from app.modules.builds.previews import load_frozen_unit
 from app.modules.builds.route_views import execution_route_view
@@ -137,7 +138,10 @@ def submit_preview(
         )
     ).one_or_none()
     if existing is None:
+        from .copying import validate_copy_submission
         from .creative_units import preview_contract
+
+        validate_copy_submission(session, context=context, preview=preview)
 
         # 先解析所有历史提交重放；V1 仅禁止创建新的执行任务。
         if (
@@ -836,11 +840,10 @@ def get_submission(
         expanded=row.expanded,
         currency=preview.config["currency"],
         daily_budget_sum=str(
-            preview.budget
-            * (
-                scope["submitted_g"]
-                if budget_strategy == "ADGROUP"
-                else scope["submitted_c"]
+            preview_daily_budget_sum(
+                preview,
+                campaign_count=scope["submitted_c"],
+                group_count=scope["submitted_g"],
             )
         ),
         daily_budget_label=budget_strategy_label(budget_strategy),

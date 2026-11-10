@@ -314,6 +314,10 @@ import type {
   businessMemberResponse,
   businessOptionsData,
   businessOptionsResponse,
+  businessPreviewRateData,
+  businessPreviewRateResponse,
+  businessRateHistoryData,
+  businessRateHistoryResponse,
   businessRatesData,
   businessRatesResponse,
   businessReadEvidenceData,
@@ -324,6 +328,16 @@ import type {
   businessRunsResponse,
   businessSetRateData,
   businessSetRateResponse,
+  campaignCopiesCreateData,
+  campaignCopiesCreateResponse,
+  campaignCopiesGetData,
+  campaignCopiesGetResponse,
+  campaignCopiesPatchData,
+  campaignCopiesPatchResponse,
+  campaignCopiesPreviewData,
+  campaignCopiesPreviewResponse,
+  campaignCopiesSubmitData,
+  campaignCopiesSubmitResponse,
   cancelIngestFileData,
   cancelIngestFileResponse,
   completeIngestFileData,
@@ -551,7 +565,7 @@ export const DEMO_OPERATIONS = {
   "ads_reporting-list_report_exports": { method: "GET", path: "/api/tenants/{tenant_id}/report-exports", query: {} },
   "ads_reporting-list_report_views": { method: "GET", path: "/api/tenants/{tenant_id}/report-views", query: {} },
   "ads_reporting-metric_catalog": { method: "GET", path: "/api/tenants/{tenant_id}/ads/metric-catalog", query: {} },
-  "ads_reporting-query_ads": { method: "GET", path: "/api/tenants/{tenant_id}/ads", query: {"min_spend":"number","max_spend":"number","min_d0_roas":"number","max_d0_roas":"number","min_target_roas":"number","max_target_roas":"number","include_empty":"boolean","limit":"number"} },
+  "ads_reporting-query_ads": { method: "GET", path: "/api/tenants/{tenant_id}/ads", query: {"min_spend":"number","max_spend":"number","min_d0_roas":"number","max_d0_roas":"number","min_target_roas":"number","max_target_roas":"number","include_empty":"boolean","limit":"number","force_refresh":"boolean"} },
   "ads_reporting-request_ad_sync_refresh": { method: "POST", path: "/api/tenants/{tenant_id}/ad-sync-refresh", query: {} },
   "ads_reporting-update_report_view": { method: "PATCH", path: "/api/tenants/{tenant_id}/report-views/{view_id}", query: {} },
   "automation_rules-batch_rules": { method: "POST", path: "/api/tenants/{tenant_id}/automation-rules/batch", query: {} },
@@ -666,11 +680,18 @@ export const DEMO_OPERATIONS = {
   "business-mapping": { method: "PUT", path: "/api/tenants/{tenant_id}/business/mapping", query: {} },
   "business-member": { method: "PUT", path: "/api/tenants/{tenant_id}/business/member", query: {} },
   "business-options": { method: "GET", path: "/api/tenants/{tenant_id}/business/options", query: {} },
+  "business-preview_rate": { method: "POST", path: "/api/tenants/{tenant_id}/business/rates/preview", query: {} },
+  "business-rate_history": { method: "GET", path: "/api/tenants/{tenant_id}/business/rates/history", query: {"offset":"number","limit":"number"} },
   "business-rates": { method: "GET", path: "/api/tenants/{tenant_id}/business/rates", query: {} },
   "business-read_evidence": { method: "GET", path: "/api/tenants/{tenant_id}/business/evidence", query: {} },
   "business-rebuild": { method: "POST", path: "/api/tenants/{tenant_id}/business/rebuild", query: {} },
   "business-runs": { method: "GET", path: "/api/tenants/{tenant_id}/business/runs", query: {} },
   "business-set_rate": { method: "POST", path: "/api/tenants/{tenant_id}/business/rates", query: {} },
+  "campaign_copies-create": { method: "POST", path: "/api/tenants/{tenant_id}/campaign-copies", query: {} },
+  "campaign_copies-get": { method: "GET", path: "/api/tenants/{tenant_id}/campaign-copies/{draft_id}", query: {} },
+  "campaign_copies-patch": { method: "PATCH", path: "/api/tenants/{tenant_id}/campaign-copies/{draft_id}", query: {} },
+  "campaign_copies-preview": { method: "POST", path: "/api/tenants/{tenant_id}/campaign-copies/{draft_id}/preview", query: {} },
+  "campaign_copies-submit": { method: "POST", path: "/api/tenants/{tenant_id}/campaign-copies/{draft_id}/submit", query: {} },
   "cancel_ingest_file": { method: "POST", path: "/api/tenants/{tenant_id}/materials/ingest-sessions/{session_id}/files/{material_id}/cancel", query: {} },
   "complete_ingest_file": { method: "POST", path: "/api/tenants/{tenant_id}/materials/ingest-sessions/{session_id}/files/{material_id}/complete", query: {} },
   "create_ingest_chunk": { method: "POST", path: "/api/tenants/{tenant_id}/materials/ingest-sessions/{session_id}/chunks", query: {} },
@@ -924,11 +945,18 @@ export interface DemoOperationTypes {
   "business-mapping": { data: businessMappingData; response: businessMappingResponse }
   "business-member": { data: businessMemberData; response: businessMemberResponse }
   "business-options": { data: businessOptionsData; response: businessOptionsResponse }
+  "business-preview_rate": { data: businessPreviewRateData; response: businessPreviewRateResponse }
+  "business-rate_history": { data: businessRateHistoryData; response: businessRateHistoryResponse }
   "business-rates": { data: businessRatesData; response: businessRatesResponse }
   "business-read_evidence": { data: businessReadEvidenceData; response: businessReadEvidenceResponse }
   "business-rebuild": { data: businessRebuildData; response: businessRebuildResponse }
   "business-runs": { data: businessRunsData; response: businessRunsResponse }
   "business-set_rate": { data: businessSetRateData; response: businessSetRateResponse }
+  "campaign_copies-create": { data: campaignCopiesCreateData; response: campaignCopiesCreateResponse }
+  "campaign_copies-get": { data: campaignCopiesGetData; response: campaignCopiesGetResponse }
+  "campaign_copies-patch": { data: campaignCopiesPatchData; response: campaignCopiesPatchResponse }
+  "campaign_copies-preview": { data: campaignCopiesPreviewData; response: campaignCopiesPreviewResponse }
+  "campaign_copies-submit": { data: campaignCopiesSubmitData; response: campaignCopiesSubmitResponse }
   "cancel_ingest_file": { data: cancelIngestFileData; response: cancelIngestFileResponse }
   "complete_ingest_file": { data: completeIngestFileData; response: completeIngestFileResponse }
   "create_ingest_chunk": { data: createIngestChunkData; response: createIngestChunkResponse }

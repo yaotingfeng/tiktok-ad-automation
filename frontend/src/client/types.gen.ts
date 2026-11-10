@@ -1643,6 +1643,152 @@ export type Copy = {
 };
 
 /**
+ * CopyChildPublic
+ */
+export type CopyChildPublic = {
+    /**
+     * Row Id
+     */
+    row_id: string;
+    /**
+     * Advertiser Id
+     */
+    advertiser_id: string;
+    /**
+     * Ordinal
+     */
+    ordinal: number;
+    /**
+     * Preview Id
+     */
+    preview_id: string | null;
+    /**
+     * Submission Id
+     */
+    submission_id: string | null;
+    /**
+     * Status
+     */
+    status: string;
+    /**
+     * Error Code
+     */
+    error_code: string | null;
+    /**
+     * Group Settings
+     */
+    group_settings?: Array<{
+        [key: string]: unknown;
+    }>;
+};
+
+/**
+ * CopyConfiguration
+ */
+export type CopyConfiguration = {
+    /**
+     * Target Advertiser Ids
+     */
+    target_advertiser_ids: Array<string>;
+    /**
+     * Copies
+     */
+    copies?: number;
+    /**
+     * Budget
+     */
+    budget?: number | string | null;
+    /**
+     * Target Roas
+     */
+    target_roas?: number | string | null;
+    targeting?: AudienceTargeting | null;
+    delivery_config?: DeliveryConfig;
+    /**
+     * Material Ids
+     */
+    material_ids: Array<string>;
+};
+
+/**
+ * CopyCreateRequest
+ */
+export type CopyCreateRequest = {
+    /**
+     * Bc Id
+     */
+    bc_id: string;
+    /**
+     * Selection Id
+     */
+    selection_id: string;
+    /**
+     * Request Id
+     */
+    request_id: string;
+};
+
+/**
+ * CopyDraftPublic
+ */
+export type CopyDraftPublic = {
+    /**
+     * Draft Id
+     */
+    draft_id: string;
+    /**
+     * Bc Id
+     */
+    bc_id: string;
+    /**
+     * Revision
+     */
+    revision: number;
+    /**
+     * Status
+     */
+    status: 'DRAFT' | 'PREPARING' | 'READY' | 'SUBMITTED' | 'FAILED';
+    /**
+     * Rows
+     */
+    rows: Array<CopyRowPublic>;
+    /**
+     * Preview Digest
+     */
+    preview_digest: string | null;
+    /**
+     * Children
+     */
+    children: Array<CopyChildPublic>;
+    /**
+     * Submission Ids
+     */
+    submission_ids: Array<string>;
+    /**
+     * Error Code
+     */
+    error_code: string | null;
+};
+
+/**
+ * CopyPatchRequest
+ */
+export type CopyPatchRequest = {
+    /**
+     * Request Id
+     */
+    request_id: string;
+    /**
+     * Expected Revision
+     */
+    expected_revision: number;
+    /**
+     * Rows
+     */
+    rows: Array<CopyRowPatch>;
+};
+
+/**
  * CopyPoolPublic
  */
 export type CopyPoolPublic = {
@@ -1676,6 +1822,71 @@ export type CopyPublic = {
      * Position
      */
     position: number;
+};
+
+/**
+ * CopyRevisionRequest
+ */
+export type CopyRevisionRequest = {
+    /**
+     * Request Id
+     */
+    request_id: string;
+    /**
+     * Expected Revision
+     */
+    expected_revision: number;
+};
+
+/**
+ * CopyRowPatch
+ */
+export type CopyRowPatch = {
+    /**
+     * Row Id
+     */
+    row_id: string;
+    configuration: CopyConfiguration;
+};
+
+/**
+ * CopyRowPublic
+ */
+export type CopyRowPublic = {
+    /**
+     * Row Id
+     */
+    row_id: string;
+    /**
+     * Source
+     */
+    source: {
+        [key: string]: unknown;
+    };
+    /**
+     * Configuration
+     */
+    configuration: {
+        [key: string]: unknown;
+    };
+};
+
+/**
+ * CopySubmitRequest
+ */
+export type CopySubmitRequest = {
+    /**
+     * Request Id
+     */
+    request_id: string;
+    /**
+     * Expected Revision
+     */
+    expected_revision: number;
+    /**
+     * Preview Digest
+     */
+    preview_digest: string;
 };
 
 /**
@@ -6724,6 +6935,12 @@ export type PreviewRequest = {
  * PreviewSummary
  */
 export type PreviewSummary = {
+    /**
+     * Copy Group Settings
+     */
+    copy_group_settings?: Array<{
+        [key: string]: unknown;
+    }>;
     /**
      * Can Refresh Continuation
      */
@@ -19488,6 +19705,177 @@ export type buildsUpdateImageStructureResponses = {
 };
 
 export type buildsUpdateImageStructureResponse = buildsUpdateImageStructureResponses[keyof buildsUpdateImageStructureResponses];
+
+export type campaignCopiesCreateData = {
+    body: CopyCreateRequest;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+    };
+    query?: never;
+    url: '/api/tenants/{tenant_id}/campaign-copies';
+};
+
+export type campaignCopiesCreateErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type campaignCopiesCreateError = campaignCopiesCreateErrors[keyof campaignCopiesCreateErrors];
+
+export type campaignCopiesCreateResponses = {
+    /**
+     * Successful Response
+     */
+    201: CopyDraftPublic;
+};
+
+export type campaignCopiesCreateResponse = campaignCopiesCreateResponses[keyof campaignCopiesCreateResponses];
+
+export type campaignCopiesGetData = {
+    body?: never;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+        /**
+         * Draft Id
+         */
+        draft_id: string;
+    };
+    query: {
+        /**
+         * Bc Id
+         */
+        bc_id: string;
+    };
+    url: '/api/tenants/{tenant_id}/campaign-copies/{draft_id}';
+};
+
+export type campaignCopiesGetErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type campaignCopiesGetError = campaignCopiesGetErrors[keyof campaignCopiesGetErrors];
+
+export type campaignCopiesGetResponses = {
+    /**
+     * Successful Response
+     */
+    200: CopyDraftPublic;
+};
+
+export type campaignCopiesGetResponse = campaignCopiesGetResponses[keyof campaignCopiesGetResponses];
+
+export type campaignCopiesPatchData = {
+    body: CopyPatchRequest;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+        /**
+         * Draft Id
+         */
+        draft_id: string;
+    };
+    query?: never;
+    url: '/api/tenants/{tenant_id}/campaign-copies/{draft_id}';
+};
+
+export type campaignCopiesPatchErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type campaignCopiesPatchError = campaignCopiesPatchErrors[keyof campaignCopiesPatchErrors];
+
+export type campaignCopiesPatchResponses = {
+    /**
+     * Successful Response
+     */
+    200: CopyDraftPublic;
+};
+
+export type campaignCopiesPatchResponse = campaignCopiesPatchResponses[keyof campaignCopiesPatchResponses];
+
+export type campaignCopiesPreviewData = {
+    body: CopyRevisionRequest;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+        /**
+         * Draft Id
+         */
+        draft_id: string;
+    };
+    query?: never;
+    url: '/api/tenants/{tenant_id}/campaign-copies/{draft_id}/preview';
+};
+
+export type campaignCopiesPreviewErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type campaignCopiesPreviewError = campaignCopiesPreviewErrors[keyof campaignCopiesPreviewErrors];
+
+export type campaignCopiesPreviewResponses = {
+    /**
+     * Successful Response
+     */
+    202: CopyDraftPublic;
+};
+
+export type campaignCopiesPreviewResponse = campaignCopiesPreviewResponses[keyof campaignCopiesPreviewResponses];
+
+export type campaignCopiesSubmitData = {
+    body: CopySubmitRequest;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+        /**
+         * Draft Id
+         */
+        draft_id: string;
+    };
+    query?: never;
+    url: '/api/tenants/{tenant_id}/campaign-copies/{draft_id}/submit';
+};
+
+export type campaignCopiesSubmitErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type campaignCopiesSubmitError = campaignCopiesSubmitErrors[keyof campaignCopiesSubmitErrors];
+
+export type campaignCopiesSubmitResponses = {
+    /**
+     * Successful Response
+     */
+    202: CopyDraftPublic;
+};
+
+export type campaignCopiesSubmitResponse = campaignCopiesSubmitResponses[keyof campaignCopiesSubmitResponses];
 
 export type buildsSavedSubmissionData = {
     body?: never;

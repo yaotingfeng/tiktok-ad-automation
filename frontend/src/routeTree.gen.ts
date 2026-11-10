@@ -46,6 +46,7 @@ import { Route as LayoutTenantsTenantIdBuildPreviewsPreviewIdRouteImport } from 
 import { Route as LayoutTenantsTenantIdBuildTasksIndexRouteImport } from './routes/_layout/tenants.$tenantId.build-tasks.index'
 import { Route as LayoutTenantsTenantIdBuildTasksSubmissionIdRouteImport } from './routes/_layout/tenants.$tenantId.build-tasks.$submissionId'
 import { Route as LayoutTenantsTenantIdBuildsNewRouteImport } from './routes/_layout/tenants.$tenantId.builds.new'
+import { Route as LayoutTenantsTenantIdCampaignCopiesDraftIdRouteImport } from './routes/_layout/tenants.$tenantId.campaign-copies.$draftId'
 import { Route as LayoutTenantsTenantIdStrategiesIndexRouteImport } from './routes/_layout/tenants.$tenantId.strategies.index'
 import { Route as LayoutTenantsTenantIdStrategiesStrategyIdRouteImport } from './routes/_layout/tenants.$tenantId.strategies.$strategyId'
 import { Route as LayoutTenantsTenantIdStrategiesNewRouteImport } from './routes/_layout/tenants.$tenantId.strategies.new'
@@ -254,6 +255,12 @@ const LayoutTenantsTenantIdBuildsNewRoute =
     path: '/builds/new',
     getParentRoute: () => LayoutTenantsTenantIdRoute,
   } as any)
+const LayoutTenantsTenantIdCampaignCopiesDraftIdRoute =
+  LayoutTenantsTenantIdCampaignCopiesDraftIdRouteImport.update({
+    id: '/campaign-copies/$draftId',
+    path: '/campaign-copies/$draftId',
+    getParentRoute: () => LayoutTenantsTenantIdRoute,
+  } as any)
 const LayoutTenantsTenantIdStrategiesIndexRoute =
   LayoutTenantsTenantIdStrategiesIndexRouteImport.update({
     id: '/',
@@ -308,6 +315,7 @@ export interface FileRoutesByFullPath {
   '/tenants/$tenantId/build-previews/$previewId': typeof LayoutTenantsTenantIdBuildPreviewsPreviewIdRoute
   '/tenants/$tenantId/build-tasks/$submissionId': typeof LayoutTenantsTenantIdBuildTasksSubmissionIdRoute
   '/tenants/$tenantId/builds/new': typeof LayoutTenantsTenantIdBuildsNewRoute
+  '/tenants/$tenantId/campaign-copies/$draftId': typeof LayoutTenantsTenantIdCampaignCopiesDraftIdRoute
   '/tenants/$tenantId/strategies/$strategyId': typeof LayoutTenantsTenantIdStrategiesStrategyIdRoute
   '/tenants/$tenantId/strategies/new': typeof LayoutTenantsTenantIdStrategiesNewRoute
   '/tenants/$tenantId/ad-management-tasks/': typeof LayoutTenantsTenantIdAdManagementTasksIndexRoute
@@ -345,6 +353,7 @@ export interface FileRoutesByTo {
   '/tenants/$tenantId/build-previews/$previewId': typeof LayoutTenantsTenantIdBuildPreviewsPreviewIdRoute
   '/tenants/$tenantId/build-tasks/$submissionId': typeof LayoutTenantsTenantIdBuildTasksSubmissionIdRoute
   '/tenants/$tenantId/builds/new': typeof LayoutTenantsTenantIdBuildsNewRoute
+  '/tenants/$tenantId/campaign-copies/$draftId': typeof LayoutTenantsTenantIdCampaignCopiesDraftIdRoute
   '/tenants/$tenantId/strategies/$strategyId': typeof LayoutTenantsTenantIdStrategiesStrategyIdRoute
   '/tenants/$tenantId/strategies/new': typeof LayoutTenantsTenantIdStrategiesNewRoute
   '/tenants/$tenantId/ad-management-tasks': typeof LayoutTenantsTenantIdAdManagementTasksIndexRoute
@@ -388,6 +397,7 @@ export interface FileRoutesById {
   '/_layout/tenants/$tenantId/build-previews/$previewId': typeof LayoutTenantsTenantIdBuildPreviewsPreviewIdRoute
   '/_layout/tenants/$tenantId/build-tasks/$submissionId': typeof LayoutTenantsTenantIdBuildTasksSubmissionIdRoute
   '/_layout/tenants/$tenantId/builds/new': typeof LayoutTenantsTenantIdBuildsNewRoute
+  '/_layout/tenants/$tenantId/campaign-copies/$draftId': typeof LayoutTenantsTenantIdCampaignCopiesDraftIdRoute
   '/_layout/tenants/$tenantId/strategies/$strategyId': typeof LayoutTenantsTenantIdStrategiesStrategyIdRoute
   '/_layout/tenants/$tenantId/strategies/new': typeof LayoutTenantsTenantIdStrategiesNewRoute
   '/_layout/tenants/$tenantId/ad-management-tasks/': typeof LayoutTenantsTenantIdAdManagementTasksIndexRoute
@@ -431,6 +441,7 @@ export interface FileRouteTypes {
     | '/tenants/$tenantId/build-previews/$previewId'
     | '/tenants/$tenantId/build-tasks/$submissionId'
     | '/tenants/$tenantId/builds/new'
+    | '/tenants/$tenantId/campaign-copies/$draftId'
     | '/tenants/$tenantId/strategies/$strategyId'
     | '/tenants/$tenantId/strategies/new'
     | '/tenants/$tenantId/ad-management-tasks/'
@@ -468,6 +479,7 @@ export interface FileRouteTypes {
     | '/tenants/$tenantId/build-previews/$previewId'
     | '/tenants/$tenantId/build-tasks/$submissionId'
     | '/tenants/$tenantId/builds/new'
+    | '/tenants/$tenantId/campaign-copies/$draftId'
     | '/tenants/$tenantId/strategies/$strategyId'
     | '/tenants/$tenantId/strategies/new'
     | '/tenants/$tenantId/ad-management-tasks'
@@ -510,6 +522,7 @@ export interface FileRouteTypes {
     | '/_layout/tenants/$tenantId/build-previews/$previewId'
     | '/_layout/tenants/$tenantId/build-tasks/$submissionId'
     | '/_layout/tenants/$tenantId/builds/new'
+    | '/_layout/tenants/$tenantId/campaign-copies/$draftId'
     | '/_layout/tenants/$tenantId/strategies/$strategyId'
     | '/_layout/tenants/$tenantId/strategies/new'
     | '/_layout/tenants/$tenantId/ad-management-tasks/'
@@ -786,6 +799,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof LayoutTenantsTenantIdBuildsNewRouteImport
       parentRoute: typeof LayoutTenantsTenantIdRoute
     }
+    '/_layout/tenants/$tenantId/campaign-copies/$draftId': {
+      id: '/_layout/tenants/$tenantId/campaign-copies/$draftId'
+      path: '/campaign-copies/$draftId'
+      fullPath: '/tenants/$tenantId/campaign-copies/$draftId'
+      preLoaderRoute: typeof LayoutTenantsTenantIdCampaignCopiesDraftIdRouteImport
+      parentRoute: typeof LayoutTenantsTenantIdRoute
+    }
     '/_layout/tenants/$tenantId/strategies/': {
       id: '/_layout/tenants/$tenantId/strategies/'
       path: '/'
@@ -883,6 +903,7 @@ interface LayoutTenantsTenantIdRouteChildren {
   LayoutTenantsTenantIdBuildDraftsDraftIdRoute: typeof LayoutTenantsTenantIdBuildDraftsDraftIdRoute
   LayoutTenantsTenantIdBuildPreviewsPreviewIdRoute: typeof LayoutTenantsTenantIdBuildPreviewsPreviewIdRoute
   LayoutTenantsTenantIdBuildsNewRoute: typeof LayoutTenantsTenantIdBuildsNewRoute
+  LayoutTenantsTenantIdCampaignCopiesDraftIdRoute: typeof LayoutTenantsTenantIdCampaignCopiesDraftIdRoute
 }
 
 const LayoutTenantsTenantIdRouteChildren: LayoutTenantsTenantIdRouteChildren = {
@@ -908,6 +929,8 @@ const LayoutTenantsTenantIdRouteChildren: LayoutTenantsTenantIdRouteChildren = {
   LayoutTenantsTenantIdBuildPreviewsPreviewIdRoute:
     LayoutTenantsTenantIdBuildPreviewsPreviewIdRoute,
   LayoutTenantsTenantIdBuildsNewRoute: LayoutTenantsTenantIdBuildsNewRoute,
+  LayoutTenantsTenantIdCampaignCopiesDraftIdRoute:
+    LayoutTenantsTenantIdCampaignCopiesDraftIdRoute,
 }
 
 const LayoutTenantsTenantIdRouteWithChildren =

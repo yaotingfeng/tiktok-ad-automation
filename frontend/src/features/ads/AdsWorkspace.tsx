@@ -15,6 +15,7 @@ import {
   ManagementPreviewSheet,
   managementActionKey,
 } from "@/features/ad-management/ManagementPreviewSheet"
+import { createCopyDraft } from "@/features/campaign-copies/api"
 import { useTenantScope } from "@/features/tenants/TenantScope"
 import { WorkspacePageTitle } from "@/features/workspace/WorkspacePageTitle"
 import useAuth from "@/hooks/useAuth"
@@ -110,6 +111,61 @@ export function AdsWorkspace() {
   >(applied.dimension)
   const scopeRef = useRef(`${tenantId ?? ""}:${currentBcId ?? ""}`)
   const selectionRequestScopeRef = useRef<string | null>(null)
+  const copyIntentRef = useRef<{
+    key: string
+    requestId: string
+    selectionId?: string
+  } | null>(null)
+  const copyMutation = useMutation({
+    mutationFn: async () => {
+      if (
+        !tenantId ||
+        !currentBcId ||
+        !ads.snapshot ||
+        applied.dimension !== "campaign"
+      )
+        throw new Error("请先在系列维度勾选来源")
+      const operationScope = scopeRef.current
+      const selectionBody = {
+        snapshot_id: ads.snapshot.snapshot_id,
+        mode: ads.selection.allMatching
+          ? ("ALL_MATCHING" as const)
+          : ("EXPLICIT" as const),
+        row_keys: [...ads.selection.selected],
+        excluded_row_keys: [...ads.selection.excluded],
+      }
+      const key = JSON.stringify([operationScope, selectionBody])
+      if (copyIntentRef.current?.key !== key)
+        copyIntentRef.current = { key, requestId: crypto.randomUUID() }
+      const intent = copyIntentRef.current!
+      if (!intent.selectionId) {
+        const selection = await AdsReportingService.freezeAdSelection({
+          path: { tenant_id: tenantId },
+          query: { bc_id: currentBcId },
+          body: selectionBody,
+        })
+        intent.selectionId = selection.data.selection_id
+      }
+      // 网络结果未知时保留同一冻结选择和请求键，重试不会新建第二份复制草稿。
+      const draft = await createCopyDraft(tenantId, {
+        bc_id: currentBcId,
+        selection_id: intent.selectionId,
+        request_id: intent.requestId,
+      })
+      return { draft, tenantId, operationScope }
+    },
+    onSuccess: ({ draft, tenantId: sourceTenant, operationScope }) => {
+      if (scopeRef.current !== operationScope) return
+      void navigate({
+        to: "/tenants/$tenantId/campaign-copies/$draftId",
+        params: { tenantId: sourceTenant, draftId: draft.draft_id },
+      })
+    },
+    onError: () =>
+      setActionError(
+        "复制草稿创建失败，请检查来源数量、当前账户权限和目录状态后重试。",
+      ),
+  })
 
   // 列偏好状态：仅在 tenantId 和 user.id 都就绪后读写
   const prefsReady = Boolean(tenantId && user?.id)
@@ -839,9 +895,11 @@ export function AdsWorkspace() {
                     readonly: roleReadonly,
                     busy:
                       managementSubmitting ||
+                      copyMutation.isPending ||
                       selectionMutation.isPending ||
                       !ads.snapshot,
                     onAction: (action) => startManagementAction(action),
+                    onCopy: () => copyMutation.mutate(),
                     onSelectAllMatching: ads.selection.selectAllMatching,
                     onClear: ads.selection.clear,
                   }}

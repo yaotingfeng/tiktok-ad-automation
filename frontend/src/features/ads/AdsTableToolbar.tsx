@@ -79,6 +79,7 @@ export function toolbarActionLabel(key: ToolbarActionKey): string {
 }
 
 export type ToolbarSelection = {
+  onCopy?: () => void
   selectedCount: number
   allMatching: boolean
   total: number
@@ -93,6 +94,7 @@ export type ToolbarSelection = {
 }
 
 function SelectionToolbar({
+  onCopy,
   selectedCount,
   allMatching,
   total,
@@ -119,6 +121,17 @@ function SelectionToolbar({
         )}
       </span>
       <div className="flex flex-wrap items-center gap-2">
+        {!readonly && dimension === "campaign" && onCopy && (
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            disabled={busy}
+            onClick={onCopy}
+          >
+            批量复制
+          </Button>
+        )}
         {/* 只读成员只能看到计数与取消选择，不显示任何写入动作和跨页全选。 */}
         {!readonly &&
           actionsFor(dimension).map((key) => (
