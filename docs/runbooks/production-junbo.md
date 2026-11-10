@@ -1,3 +1,10 @@
+## 2026-11-10 41021搭建并发拒绝修复已发布
+
+- 应用41353d1122b497c52c3fc9dcc1037a716d06973a，创建41021进入最多5次退避重试；历史UNKNOWN通过原回查/原request_id恢复。
+- 用户明确要求不运行任何测试：本轮未运行测试。无DDL、无新备份/恢复演练。11角色镜像摘要与Ready、配置不变和仅镜像变更已核对；共享发布锁释放，CI恢复原禁用状态。
+- xuyin/BC7673415075352576016：776O和XAWQ均COMPLETED，各1系列/6广告组/30广告成功；原45条成功广告保留，补齐3广告组/15广告。其他40002批次不属于本次并发故障，未改写参数或强制重发。
+- 私有证据.runtime/build-concurrency-20261110/，详见docs/validation/2026-11-10-build-concurrency-retry.md。
+
 ## 2026-11-09 Minis自动定向修复已上线
 
 当前应用bb3344ad6e587adc6941e3a3082e2facfb6f9103/schema0101。新预览固定自动模式、语言独立控制、18+/25+映射最低年龄，旧精细年龄/性别选择须修正，旧MANUAL不重发。旧默认自动在途语义保持，冻结请求不改写。11角色/9Worker/唯一Beat、精确镜像/配置/四开关/DB池/HTTPS与后台12/typed12/prefetch12、publisher8核验；许音18+英语、25+英语暂停态真实创建/回读匹配，无广告或启用。原资源/额度保持，发布锁已释放，无DDL、新备份/恢复演练；Jenkins已恢复原enabled且无active/queued构建。见[本轮验收](../validation/2026-11-09-minis-automatic-targeting.md)。以下旧“当前”均为历史。
