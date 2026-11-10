@@ -7,9 +7,11 @@ import {
   type MaterialUsePublic,
   type ReportRow,
 } from "@/client"
+import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
+import { Empty, EmptyDescription } from "@/components/ui/empty"
 import { Skeleton } from "@/components/ui/skeleton"
 import {
   Table,
@@ -174,9 +176,24 @@ export function AdMaterialsTab({
     )
   const items = query.data?.items ?? []
   const creativeRows = query.data?.creative_rows ?? []
+  const coverage = query.data?.coverage
+  // 响应级证据独立于创意事实与当前使用位置；空行不能解释为零金额。
+  const coverageWarning =
+    coverage?.status === "INCOMPLETE" ||
+    typeof coverage?.unallocated_note === "string" ? (
+      <Alert role="status" data-testid="ad-material-coverage">
+        <AlertDescription>
+          <p>素材报表覆盖不完整，当前金额无法完整归属。</p>
+          {typeof coverage?.unallocated_note === "string" && (
+            <p>{coverage.unallocated_note}</p>
+          )}
+        </AlertDescription>
+      </Alert>
+    ) : null
   if ((query.data?.carousel_creatives?.length ?? 0) > 0)
     return (
       <div className="space-y-3">
+        {coverageWarning}
         <Badge variant="secondary">图片轮播</Badge>
         <p className="text-sm text-muted-foreground">
           每个轮播创意展示一份消耗与收入，金额不分配到单张图片。
@@ -225,7 +242,20 @@ export function AdMaterialsTab({
         ))}
       </div>
     )
-  if (!items.length) return <CreativeFacts rows={creativeRows} />
+  if (!items.length)
+    return (
+      <div className="flex flex-col gap-3">
+        {coverageWarning}
+        <CreativeFacts rows={creativeRows} />
+        {!creativeRows.length && !coverageWarning && (
+          <Empty>
+            <EmptyDescription>
+              所选日期暂无创意报表记录，也无当前素材使用位置。
+            </EmptyDescription>
+          </Empty>
+        )}
+      </div>
+    )
   const shown = columns.filter((column) => AD_MATERIAL_COLUMNS.has(column.key))
   // 接口一次返回本广告全部素材；按展示所用的原始数值排序，避免字符串/格式化值误排。
   // 缺失或非有限数值在两个方向都置底；相同值保持接口顺序，且不修改查询缓存。
@@ -255,6 +285,7 @@ export function AdMaterialsTab({
     })
   return (
     <div className="space-y-3">
+      {coverageWarning}
       <h3 className="text-sm font-medium">创意报表金额（本广告）</h3>
       <CreativeFacts rows={creativeRows} />
       <h3 className="text-sm font-medium">当前素材使用位置</h3>

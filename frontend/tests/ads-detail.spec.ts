@@ -733,3 +733,83 @@ for (const [kind, explanation] of [
     ).toHaveCount(0)
   })
 }
+
+for (const branch of ["empty", "uses", "carousel", "complete-empty"] as const) {
+  test(`响应级素材覆盖证据独立显示（${branch}）`, async ({ page }) => {
+    await adsBoundary(page)
+    await page.route("**/ads/ad/ad-1/materials?*", (route) =>
+      route.fulfill({
+        json: {
+          items:
+            branch === "uses"
+              ? [
+                  {
+                    name: "current-video.mp4",
+                    operation_status: "ENABLE",
+                    use_ref: {
+                      ad_ref: {
+                        advertiser_id: "adv-1",
+                        remote_id: "ad-1",
+                        kind: "ad",
+                      },
+                      platform_material_id: "vid-current",
+                      ad_material_id: "am-current",
+                      material_type: "VIDEO",
+                    },
+                    metric_buckets: [],
+                  },
+                ]
+              : [],
+          creative_rows: [],
+          coverage:
+            branch === "complete-empty"
+              ? { status: "COMPLETE" }
+              : {
+                  status: "INCOMPLETE",
+                  unallocated_note: "广告组存在未归属金额，无法分配到本广告。",
+                },
+          carousel_creatives:
+            branch === "carousel"
+              ? [
+                  {
+                    advertiser_id: "adv-1",
+                    ad_id: "ad-1",
+                    remote_creative_id: "cr-carousel",
+                    ordered_image_ids: ["img-1", "img-2"],
+                    music_id: "song",
+                  },
+                ]
+              : [],
+          carousel_linkage_complete: true,
+        },
+      }),
+    )
+    await page.goto(`/tenants/${TENANT}/ads?bc_id=${BC_A}`)
+    await page.getByRole("tab", { name: "广告", exact: true }).click()
+    await page
+      .getByRole("button", { name: /嘉书-总裁归来/ })
+      .first()
+      .click()
+    const sheet = page.getByRole("dialog")
+    await sheet.getByRole("tab", { name: "素材" }).click()
+    if (branch === "complete-empty") {
+      await expect(
+        sheet.getByText("所选日期暂无创意报表记录，也无当前素材使用位置。"),
+      ).toBeVisible()
+      await expect(sheet.getByTestId("ad-material-coverage")).toHaveCount(0)
+    } else {
+      const warning = sheet.getByTestId("ad-material-coverage")
+      await expect(warning).toContainText(
+        "素材报表覆盖不完整，当前金额无法完整归属。",
+      )
+      await expect(warning).toContainText(
+        "广告组存在未归属金额，无法分配到本广告。",
+      )
+      await expect(sheet.getByText(/消耗 0|收入 0/)).toHaveCount(0)
+      if (branch === "uses")
+        await expect(sheet.getByText("current-video.mp4")).toBeVisible()
+      if (branch === "carousel")
+        await expect(sheet.getByText("图片轮播", { exact: true })).toBeVisible()
+    }
+  })
+}

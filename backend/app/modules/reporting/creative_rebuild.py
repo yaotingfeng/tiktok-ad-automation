@@ -6,15 +6,21 @@
 import argparse
 import json
 import os
+from collections import defaultdict
+from collections.abc import Callable
 from datetime import UTC, date, datetime, timedelta
+from typing import Any
 from uuid import UUID
 
 from sqlalchemy import text
-from sqlmodel import Session
+from sqlmodel import Session, select
 
+from app import models as _models  # noqa: F401 - CLI先注册模型，避免业务模块循环导入
+from app.core.context import TenantContext
+from app.integrations.tiktok.contracts.context import FrozenTikTokRoute
 from app.modules.reporting.jobs import enqueue_job
 from app.modules.reporting.planner import owned_accounts
-from app.modules.reporting.store_models import AdSyncBc
+from app.modules.reporting.store_models import AdSyncAccount, AdSyncBc
 
 
 def _plan(session, tenant_id, bc_id):
@@ -24,66 +30,146 @@ def _plan(session, tenant_id, bc_id):
     return plan
 
 
-def enqueue_backfill(session, *, tenant_id, bc_id, start, end, now):
-    """只补当前归属账户已有总账日期；新建任务至多7日，近35天优先。
+def _backfill_windows(session, *, tenant_id, accounts, start, end, recent_start):
+    """倒序七日段，每次最多32账户×7日期；新近日期跨账户优先。"""
+    right = end
+    while right >= start:
+        left = max(start, right - timedelta(days=6))
+        if left < recent_start <= right:
+            left = recent_start
+        for offset in range(0, len(accounts), 32):
+            rows = (
+                session.connection()
+                .execute(
+                    text("""SELECT DISTINCT advertiser_id,stat_date FROM ad_report_day
+                WHERE tenant_id=:tenant AND advertiser_id=ANY(CAST(:accounts AS text[]))
+                  AND stat_date BETWEEN :start AND :end ORDER BY advertiser_id,stat_date"""),
+                    {
+                        "tenant": tenant_id,
+                        "accounts": accounts[offset : offset + 32],
+                        "start": left,
+                        "end": right,
+                    },
+                )
+                .all()
+            )
+            by_account = defaultdict(list)
+            for row in rows:
+                by_account[row.advertiser_id].append(row.stat_date)
+            for account, days in by_account.items():
+                first = last = days[0]
+                for day in days[1:]:
+                    if day != last + timedelta(days=1):
+                        yield account, first, last
+                        first = day
+                    last = day
+                yield account, first, last
+        right = left - timedelta(days=1)
 
-    已有覆盖任务仍由需求层复用，不改写其冻结范围；七日上限约束本轮新建任务。
+
+def enqueue_backfill(
+    session: Session,
+    *,
+    tenant_id: UUID,
+    bc_id: str,
+    start: date,
+    end: date,
+    now: datetime,
+    receipt: Callable[[dict[str, Any]], None] | None = None,
+) -> int:
+    """运维生产者独占此 Session：每账户/连续七日窗口提交，重跑复用既有需求。
+
+    每笔事务至多创建2任务、14日需求；已有较宽冻结任务仍安全复用而不改写。
+    receipt 在提交后发出，可用相同区间重启；中断仅回滚当前批次。
     """
+    from app.modules.accounts.routing import verify_route
+
     if end < start:
         raise ValueError("invalid backfill date range")
     plan = _plan(session, tenant_id, bc_id)
     accounts = owned_accounts(session, plan)
-    rows = (
-        session.connection()
-        .execute(
-            text("""
-        SELECT DISTINCT advertiser_id,stat_date FROM ad_report_day
-        WHERE tenant_id=:tenant AND advertiser_id=ANY(CAST(:accounts AS text[]))
-          AND stat_date BETWEEN :start AND :end
-        ORDER BY advertiser_id,stat_date
-    """),
-            {"tenant": tenant_id, "accounts": accounts, "start": start, "end": end},
-        )
-        .all()
-    )
-    windows = []
-    for account in accounts:
-        days = [row.stat_date for row in rows if row.advertiser_id == account]
-        left = right = None
-        for day in days:
-            if (
-                left is not None
-                and right is not None
-                and (day != right + timedelta(days=1) or (day - left).days >= 7)
-            ):
-                windows.append((account, left, right))
-                left = None
-            if left is None:
-                left = day
-            right = day
-        if left is not None:
-            windows.append((account, left, right))
-    count = 0
-    for account, left, right in sorted(
-        windows,
-        key=lambda w: (w[2] < now.date() - timedelta(days=35), -w[2].toordinal(), w[0]),
+    original_route = dict(plan.frozen_route)
+    count = batches = 0
+    for account, left, right in _backfill_windows(
+        session,
+        tenant_id=tenant_id,
+        accounts=accounts,
+        start=start,
+        end=end,
+        recent_start=now.date() - timedelta(days=35),
     ):
-        for kind in ("ad_day", "creative_day"):
-            if enqueue_job(
+        try:
+            # 每次写入边界重读计划和归属；局部行锁只保持到本窗口提交。
+            plan = session.exec(
+                select(AdSyncBc)
+                .where(AdSyncBc.tenant_id == tenant_id, AdSyncBc.bc_id == bc_id)
+                .with_for_update()
+                .execution_options(populate_existing=True)
+            ).one_or_none()
+            if plan is None or not plan.enabled or plan.frozen_route != original_route:
+                raise ValueError(
+                    "backfill plan or frozen route changed; restart with current scope"
+                )
+            owner = session.exec(
+                select(AdSyncAccount)
+                .where(
+                    AdSyncAccount.tenant_id == tenant_id,
+                    AdSyncAccount.advertiser_id == account,
+                )
+                .with_for_update()
+                .execution_options(populate_existing=True)
+            ).one_or_none()
+            if owner is None or owner.owner_bc_id != bc_id:
+                raise ValueError(
+                    "backfill account ownership changed; restart with current scope"
+                )
+            verify_route(
                 session,
-                tenant_id=tenant_id,
-                bc_id=bc_id,
-                kind=kind,
-                tier="history",
-                advertiser_ids=[account],
-                start=left,
-                end=right,
-                frozen_route=plan.frozen_route,
-                actor_id=plan.actor_id,
-                requested_at=now,
-                execution_window_days=7,
-            ):
-                count += 1
+                context=TenantContext(
+                    tenant_id=tenant_id, actor_id=plan.actor_id, role="operator"
+                ),
+                route=FrozenTikTokRoute.model_validate(plan.frozen_route),
+                advertiser_id=account,
+                capability="read",
+            )
+            created = []
+            for kind in ("ad_day", "creative_day"):
+                job_id = enqueue_job(
+                    session,
+                    tenant_id=tenant_id,
+                    bc_id=bc_id,
+                    kind=kind,
+                    tier="history",
+                    advertiser_ids=[account],
+                    start=left,
+                    end=right,
+                    frozen_route=plan.frozen_route,
+                    actor_id=plan.actor_id,
+                    requested_at=now,
+                    execution_window_days=7,
+                )
+                if job_id:
+                    created.append(str(job_id))
+            session.commit()
+        except Exception:
+            session.rollback()
+            raise
+        count += len(created)
+        batches += 1
+        if receipt:
+            receipt(
+                {
+                    "status": "COMMITTED",
+                    "tenant": str(tenant_id),
+                    "bc": bc_id,
+                    "advertiser": account,
+                    "start": left.isoformat(),
+                    "end": right.isoformat(),
+                    "created_jobs": created,
+                    "batches": batches,
+                    "enqueued": count,
+                }
+            )
     return count
 
 
@@ -248,6 +334,9 @@ def main():
                         start=args.start,
                         end=args.end,
                         now=datetime.now(UTC),
+                        receipt=lambda value: print(  # noqa: T201 - committed batch receipt
+                            json.dumps(value, sort_keys=True), flush=True
+                        ),
                     )
                 }
                 if args.action == "enqueue"

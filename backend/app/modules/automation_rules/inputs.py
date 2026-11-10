@@ -1,7 +1,7 @@
 """判断输入：展开租户账户、加载对象目录、报表事实与新鲜度。只读本地已同步数据。"""
 
 from collections import defaultdict
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from typing import Any
@@ -476,6 +476,19 @@ def load_inputs(
         skipped.extend(ledger_skipped)
     if not accounts:
         return Inputs(accounts={}, entities={}, facts={}, skipped_accounts=skipped)
+    ranges: list[str] = sorted(
+        {
+            str(c.range)
+            for c in definition.conditions
+            if c.range and RULE_METRICS[c.metric].kind == "fact"
+        }
+    )
+    proof = {}
+    if level == "material":
+        from app.modules.automation_rules.material_source import source_proof
+
+        session.flush()
+        proof = source_proof(session, tenant_id, accounts, ranges, now)
     entities = _objects(session, tenant_id, accounts, now)
     if "material" in (level, definition.action.level):
         entities.update(
@@ -488,13 +501,6 @@ def load_inputs(
                 now=now,
             )
         )
-    ranges: list[str] = sorted(
-        {
-            str(c.range)
-            for c in definition.conditions
-            if c.range and RULE_METRICS[c.metric].kind == "fact"
-        }
-    )
     facts: dict[str, dict[str, dict[str, Decimal | None]]] = {}
     for range_type in ranges:
         loaded = _facts(
@@ -518,8 +524,29 @@ def load_inputs(
             material_issues,
         )
 
+        after = source_proof(session, tenant_id, accounts, ranges, now)
+        changed = {adv for adv in accounts if proof.get(adv) != after.get(adv)}
+        # 任一窗口/身份变化后不能保留先前已通过门控的金额，审计沿用运行缺数字段。
+        for key, entity in entities.items():
+            if entity.kind == "material" and entity.advertiser_id in changed:
+                entities[key] = replace(
+                    entity, judgement_issue="MATERIAL_SOURCE_CHANGED"
+                )
+                for values in facts.values():
+                    values.pop(key, None)
         mark_missing_metrics(entities, facts, definition)
-        skipped.extend(material_issues(entities, definition))
+        issues = material_issues(entities, definition)
+        skipped.extend(issues)
+        # 当前使用位置可能在读取途中全部删除，零实体也必须留下来源变化审计。
+        audited = {
+            item["advertiser_id"]
+            for item in issues
+            if item["reason"] == "MATERIAL_SOURCE_CHANGED"
+        }
+        skipped.extend(
+            {"advertiser_id": adv, "reason": "MATERIAL_SOURCE_CHANGED", "count": "0"}
+            for adv in sorted(changed - audited)
+        )
     return Inputs(
         accounts=accounts, entities=entities, facts=facts, skipped_accounts=skipped
     )

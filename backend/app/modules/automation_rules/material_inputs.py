@@ -59,10 +59,12 @@ def load_material_entities(
     if not accounts:
         return {}
     creatives = session.exec(
-        select(AdCreative).where(
+        select(AdCreative)
+        .where(
             AdCreative.tenant_id == tenant_id,
             col(AdCreative.advertiser_id).in_(list(accounts)),
         )
+        .execution_options(populate_existing=True)
     ).all()
     by_video = defaultdict(list)
     conflicted_ads = set()
@@ -98,7 +100,7 @@ def load_material_entities(
             AdMaterialReference.material_type == "VIDEO",
         )
         .order_by(AdMaterialReference.advertiser_id, AdMaterialReference.ad_remote_id)
-        .execution_options(yield_per=256)
+        .execution_options(yield_per=256, populate_existing=True)
     )
     entities = {}
     for (adv, ad_id), candidates in groupby(
