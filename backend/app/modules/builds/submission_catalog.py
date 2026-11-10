@@ -806,6 +806,40 @@ def enrich_corrections(
 ) -> None:
     if not items:
         return
+    # 按当前页一次读取最新错误说明，避免每行单独查询；请求正文和诊断快照不公开。
+    failed = [i for i in items if i.error_code and i.status != "SUCCEEDED"]
+    if failed:
+        from app.integrations.tiktok.contracts.common import safe_remote_message
+
+        messages = (
+            cast(SASession, session)
+            .execute(
+                text("""
+SELECT DISTINCT ON (v.step_id) v.step_id,
+ coalesce(v.summary->>'remote_message',v.summary->>'local_message') message,
+ v.summary->'remote_code' remote_code
+FROM step_evidence v
+WHERE v.tenant_id=:tenant AND v.submission_id=:submission
+ AND v.step_id=ANY(CAST(:ids AS uuid[]))
+ AND v.conclusion IN ('REMOTE_REJECTED','RESULT_UNKNOWN','LOCAL_FAILED','LOCAL_UNKNOWN')
+ORDER BY v.step_id,v.observed_at DESC,v.id DESC
+"""),
+                {
+                    "tenant": context.tenant_id,
+                    "submission": submission_id,
+                    "ids": [i.step_id for i in failed],
+                },
+            )
+            .mappings()
+            .all()
+        )
+        by_id = {r["step_id"]: r for r in messages}
+        for item in failed:
+            if row := by_id.get(item.step_id):
+                item.error_message = safe_remote_message(row["message"])
+                item.remote_code = (
+                    row["remote_code"] if type(row["remote_code"]) is int else None
+                )
     from app.modules.builds.execution_schemas import ReplacementPublic
 
     rows = (

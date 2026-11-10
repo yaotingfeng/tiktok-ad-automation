@@ -219,3 +219,54 @@ def test_unknown_image_upload_timeout_only_reconciles_original_send(
     assert current.request_armed_at == sent.request_armed_at
     assert current.status == "VERIFYING" and current.dispatch_id
     assert sum(call[0] == "POST" for call in wire[0]) == 1
+
+
+@pytest.mark.parametrize(
+    ("failures", "code", "resumed"),
+    [
+        (0, "cover_result_unknown", True),
+        (3, "cover_result_unknown", False),
+        (0, "cover_receipt_ambiguous", False),
+    ],
+)
+def test_new_target_resumes_old_unknown_source_without_upload(
+    source_env, redis_client, wire, failures, code, resumed
+):
+    from app.modules.materials.models import AccountMaterial
+    from tests.modules.materials.test_source_uploads import seed_operation
+
+    identity = matrix(source_env, 1, 1)[0]
+    with Session(engine) as db, db.begin():
+        source = db.exec(
+            select(MaterialCoverJob).where(
+                MaterialCoverJob.tenant_id == source_env["context"].tenant_id,
+                MaterialCoverJob.purpose == "SOURCE",
+            )
+        ).one()
+        source.status, source.error_code = "UNKNOWN", code
+        source.failure_count = failures
+        source.created_at = source.request_armed_at = covers._now() - timedelta(days=1)
+        source.known_image_id = source.candidate_image_id = source.signature = None
+        source.dispatch_id = source.claim_token = source.claimed_until = None
+        source.repair_after = covers._now() - timedelta(minutes=1)
+        db.get(AccountMaterial, source.asset_id).image_id = None
+        source_id = source.id
+        armed = source.request_armed_at
+    seed_operation(
+        source_env,
+        status="succeeded",
+        evidence={
+            "video_id": "vid-actual-account",
+            "upload_video_id": "vid-actual-account",
+        },
+    )
+    run(source_env, redis_client, identity)
+    source = job_state(source_id)
+    assert source.status == ("VERIFYING" if resumed else "UNKNOWN")
+    assert bool(source.dispatch_id) is resumed
+    assert source.request_armed_at == armed
+    assert source.failure_count == (failures + 1 if resumed else failures)
+    assert job_state(identity).error_code == (
+        "cover_source_pending" if resumed else "cover_source_unavailable"
+    )
+    assert not wire[0]

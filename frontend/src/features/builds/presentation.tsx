@@ -197,6 +197,7 @@ export const reasonLabels: Record<string, string> = {
   manual_link_required: "请补充推广链接。",
   provider_rejected:
     "版权方未确认取链结果，请重新解析并准备，系统会优先读取已有链接。",
+  manual_link_drama_mismatch: "推广链接与剧目编号不一致，请核对后重新准备。",
   manual_link_invalid: "请填写有效的 TikTok Minis 推广链接。",
   manual_attribution_required: "请补充网眼提供的归因名称。",
   manual_link_conflict: "同一剧目 ID 对应不同输入，请合并为一行。",
@@ -225,6 +226,8 @@ export const reasonLabels: Record<string, string> = {
   url_upload_capacity_exceeded: "素材超过 URL 转存容量限制",
   sdk_upload_capacity_exceeded: "素材超过文件上传容量限制",
   material_refresh_required: "正在重新核实目标账户的视频与封面",
+  tiktok_business_error: "TikTok 拒绝创建，请查看下方具体原因。",
+  cover_source_unavailable: "来源封面不可用，请核查或恢复来源封面任务。",
   cover_pending: "正在准备目标账户的视频封面",
   cover_result_unknown: "封面上传结果待核实，请核查原任务，勿重复上传",
   cover_permission_unverified: "当前连接的封面读写权限尚未核实",

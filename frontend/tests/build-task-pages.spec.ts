@@ -73,6 +73,8 @@ async function boundary(
     },
   }
   const step = {
+    error_message: null as string | null,
+    remote_code: null as number | null,
     step_id: E,
     unit_id: U,
     kind: "AD",
@@ -1391,4 +1393,16 @@ test("旧任务说明已由新版接续并提供新任务入口", async ({ page 
   await expect(
     page.getByRole("link", { name: "查看续建任务", exact: true }),
   ).toHaveAttribute("href", `/tenants/${T}/build-tasks/${newer}?bc_id=${BC}`)
+})
+
+
+test("失败列表直接显示平台具体原因，无需打开操作记录", async ({ page }) => {
+  const api = await boundary(page)
+  api.step.status = "FAILED"
+  api.step.error_code = "tiktok_business_error"
+  api.step.error_message = "Invalid landing page URL. Please check and try again."
+  api.step.remote_code = 40002
+  await page.goto(`/tenants/${T}/build-tasks/${ID}?bc_id=${BC}&tab=issues&result=FAILED`)
+  await expect(page.getByText(/Invalid landing page URL.*TikTok 40002/)).toBeVisible()
+  expect(api.requests.filter((r) => r.path.endsWith("/events"))).toHaveLength(0)
 })

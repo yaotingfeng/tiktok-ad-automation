@@ -571,3 +571,23 @@ def test_missing_provider_still_returns_scoped_domain_error(session, context, in
     with pytest.raises(DomainError) as error:
         create_draft(session, context=context, **intent)
     assert error.value.code == "resource_not_found"
+
+
+def test_jiashu_manual_link_rejects_another_drama_vid():
+    from app.modules.builds.manual_links import validate_manual_links
+
+    with pytest.raises(DomainError) as caught:
+        validate_manual_links(
+            [
+                {
+                    "line_no": 1,
+                    "external_drama_id": "201222",
+                    "url": "https://www.tiktok.com/minis/example?vid=201225",
+                    "protected_base": "jiashu-example",
+                    "material_identifier": "201222",
+                }
+            ],
+            ["example"],
+            "jiashu",
+        )
+    assert caught.value.code == "manual_link_drama_mismatch"

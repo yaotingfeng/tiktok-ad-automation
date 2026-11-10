@@ -8837,6 +8837,14 @@ export type Split = {
  * StepPublic
  */
 export type StepPublic = {
+    /**
+     * Error Message
+     */
+    error_message?: string | null;
+    /**
+     * Remote Code
+     */
+    remote_code?: number | null;
     correction?: ReplacementPublic | null;
     /**
      * Can Historical Read

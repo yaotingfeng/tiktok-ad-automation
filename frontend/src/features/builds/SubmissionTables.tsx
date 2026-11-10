@@ -733,6 +733,12 @@ export function SubmissionStepsTable({
                       status={r.correction?.status || r.status}
                     />
                     {r.mismatch && !r.correction && <span>结果差异</span>}
+                    {!r.correction && r.error_message && (
+                      <p className="max-w-xl whitespace-pre-wrap break-words text-sm">
+                        {r.error_message}
+                        {r.remote_code != null && `（TikTok ${r.remote_code}）`}
+                      </p>
+                    )}
                     <Reasons
                       codes={
                         !r.correction && r.error_code ? [r.error_code] : []

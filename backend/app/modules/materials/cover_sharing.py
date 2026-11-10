@@ -265,6 +265,26 @@ def _start_recorded_source(
         if result.state == "blocked" and result.task_id:
             source = covers._job(db, context, result.task_id, lock=True)
             if (
+                source.status == "UNKNOWN"
+                and source.error_code != "cover_receipt_ambiguous"
+                and source.request_armed_at is not None
+                and source.failure_count < covers.COVER_READ_RETRY_LIMIT
+                and source.dispatch_id is None
+                and not (source.claimed_until and source.claimed_until > covers._now())
+            ):
+                # 新搭建是旧源仍被使用的明确信号，不受两小时后台扫描窗口限制。
+                # 只接续原发送的读取，不上传新图片；共用失败预算且不因目标数重置。
+                if source.repair_after > covers._now():
+                    return True
+                failures = source.failure_count
+                result = covers.request_cover_reconciliation(
+                    db, context=context, job_id=source.id
+                )
+                source.failure_count = failures + 1
+                source.repair_after = max(
+                    source.repair_after, covers._now() + covers.AUTO_RECOVERY_BACKOFF
+                )
+            elif (
                 source.status == "BLOCKED"
                 and source.error_code in covers.COVER_READ_TRANSIENT_CODES
                 and source.failure_count < covers.COVER_READ_RETRY_LIMIT

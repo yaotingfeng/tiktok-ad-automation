@@ -445,6 +445,13 @@ def test_platform_reason_survives_adapter_receipt_and_public_events(
     assert getattr(event, "remote_message", None) == message
     assert event.remote_code == remote_code
     assert event.request_id == "platform-request"
+    from app.modules.builds.submissions import get_submission_steps
+
+    shown = get_submission_steps(
+        session, context=context, submission_id=claim.submission_id
+    ).items[0]
+    assert shown.error_message == message
+    assert shown.remote_code == remote_code
 
 
 def test_local_deadline_not_sent_uses_the_bounded_transport_retry_budget():

@@ -127,6 +127,14 @@ class ReplacementPublic(BaseModel):
 
 
 class StepPublic(BaseModel):
+    error_message: str | None = None
+    remote_code: int | None = None
+
+    @field_validator("error_message", mode="before")
+    @classmethod
+    def sanitized_error_message(cls, value: object) -> str | None:
+        return safe_remote_message(value)
+
     correction: ReplacementPublic | None = None
     can_historical_read: bool = False
     title: str | None = None

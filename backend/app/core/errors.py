@@ -91,6 +91,7 @@ ERROR_HTTP_STATUS: dict[str, int] = {
     "minis_links_unavailable": 409,
     "manual_link_mapping_required": 422,
     "manual_link_invalid": 422,
+    "manual_link_drama_mismatch": 422,
     "manual_attribution_required": 422,
     "manual_link_required": 409,
     "manual_link_conflict": 409,

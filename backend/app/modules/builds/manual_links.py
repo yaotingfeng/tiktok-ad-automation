@@ -140,6 +140,14 @@ def validate_manual_links(
                 "manual_link_invalid",
                 "请检查剧目行号，并填写完整的 HTTPS TikTok Minis 推广链接",
             ) from None
+        if kind == "jiashu" and value.url and value.external_drama_id:
+            # 嘉书链接的 vid 就是剧目编号；只校验明确提供的编号，不推断其他版权方。
+            vids = parse_qs(parts.query, keep_blank_values=True).get("vid")
+            if vids is not None and vids != [value.external_drama_id]:
+                raise DomainError(
+                    "manual_link_drama_mismatch",
+                    "推广链接的 vid 与剧目编号不一致，请核对嘉书链接",
+                )
         if kind == "wangyan" and value.url and not value.protected_base.strip():
             raise DomainError(
                 "manual_attribution_required",
