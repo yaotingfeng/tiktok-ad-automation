@@ -268,7 +268,12 @@ def test_empty_then_large_statement_and_noop_rebuild_preserve_versions(
     assert {
         h["platform_material_id"]: h["version_id"] for h in heads(material_members)
     } == old_versions
-    connection.execute(text(material_statements()[-1]))
+    connection.execute(
+        text("""SELECT qrm_refresh_material_members(:tenant,'acc-1',platform_material_id)
+        FROM (SELECT DISTINCT platform_material_id FROM current_ad_material
+          WHERE tenant_id=:tenant AND advertiser_id='acc-1' AND material_type='VIDEO') v"""),
+        parameters,
+    )
     assert {
         h["platform_material_id"]: h["version_id"] for h in heads(material_members)
     } == old_versions
@@ -319,7 +324,10 @@ def test_rebuild_repairs_missing_derived_heads(material_members):
         text("DELETE FROM material_account_member_current WHERE tenant_id=:tenant"),
         {"tenant": seed.tenant_id},
     )
-    session.connection().execute(text(material_statements()[-1]))
+    session.connection().execute(
+        text("SELECT qrm_refresh_material_members(:tenant,'acc-1','vid')"),
+        {"tenant": seed.tenant_id},
+    )
     assert heads(material_members)[0]["version_id"] != old
     assert heads(material_members)[0]["use_count"] == 1
     assert evidence(material_members, old)["retired_at"] is not None

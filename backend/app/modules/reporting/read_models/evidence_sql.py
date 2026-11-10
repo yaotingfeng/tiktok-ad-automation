@@ -82,10 +82,20 @@ def evidence_statements() -> list[str]:
             result.append(
                 f"CREATE TRIGGER {function} AFTER {operation} ON {table} REFERENCING {transitions} FOR EACH STATEMENT EXECUTE FUNCTION {function}()"
             )
-    result.append("""DO $$ DECLARE k RECORD; BEGIN
-        FOR k IN SELECT tenant_id,advertiser_id FROM advertiser_account ORDER BY tenant_id,advertiser_id LOOP
-            PERFORM qrm_refresh_report_names(k.tenant_id,k.advertiser_id);
-        END LOOP; END $$""")
+    # 源写入冻结、目标为空的迁移只做集合初始化，不能累计全租户运行时锁。
+    # 名称范围保留全部current名称；与账户成员不同，不再过滤已删除的目录系列。
+    result.append("""WITH created AS (
+        INSERT INTO report_evidence_version(id,tenant_id,advertiser_id,kind,naming_versions)
+        SELECT gen_random_uuid(),a.tenant_id,a.advertiser_id,'name_scope',
+            COALESCE(jsonb_object_agg(a.advertiser_id||':'||n.campaign_remote_id,n.name_revision)
+                FILTER(WHERE n.campaign_remote_id IS NOT NULL),'{}'::jsonb)
+        FROM advertiser_account a LEFT JOIN campaign_name_current n
+          ON n.tenant_id=a.tenant_id AND n.advertiser_id=a.advertiser_id
+        GROUP BY a.tenant_id,a.advertiser_id
+        RETURNING id,tenant_id,advertiser_id
+    )
+    INSERT INTO report_name_scope_current(tenant_id,advertiser_id,version_id)
+        SELECT tenant_id,advertiser_id,id FROM created""")
     return result
 
 

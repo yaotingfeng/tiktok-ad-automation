@@ -124,11 +124,25 @@ def upgrade() -> None:
     END $$;
     CREATE TRIGGER zz_account_membership_retire AFTER DELETE ON advertiser_account
         REFERENCING OLD TABLE AS old_rows FOR EACH STATEMENT EXECUTE FUNCTION zz_account_membership_retire();
-    DO $$ DECLARE k RECORD; BEGIN
-        FOR k IN SELECT tenant_id,advertiser_id FROM advertiser_account ORDER BY tenant_id,advertiser_id LOOP
-            PERFORM qrm_refresh_account_membership(k.tenant_id,k.advertiser_id);
-        END LOOP;
-    END $$;
+    -- 迁移已冻结源写入且目标表为空；集合初始化不调用运行时维护函数，
+    -- 避免每账户事务级advisory锁一直累计到整条升级链提交。
+    WITH created AS (
+        INSERT INTO account_membership_version(id,tenant_id,advertiser_id,refs,naming_versions)
+        SELECT gen_random_uuid(),a.tenant_id,a.advertiser_id,
+            COALESCE(jsonb_agg(jsonb_build_object('tenant_id',a.tenant_id::text,
+                'advertiser_id',a.advertiser_id,'kind','campaign','remote_id',e.remote_id)
+                ORDER BY e.remote_id COLLATE "C") FILTER(WHERE e.remote_id IS NOT NULL),'[]'::jsonb),
+            COALESCE(jsonb_object_agg(a.advertiser_id||':'||e.remote_id,n.name_revision)
+                FILTER(WHERE n.name_revision IS NOT NULL),'{}'::jsonb)
+        FROM advertiser_account a LEFT JOIN ad_object e
+          ON e.tenant_id=a.tenant_id AND e.advertiser_id=a.advertiser_id AND e.kind='campaign'
+        LEFT JOIN campaign_name_current n ON n.tenant_id=e.tenant_id
+          AND n.advertiser_id=e.advertiser_id AND n.campaign_remote_id=e.remote_id
+        GROUP BY a.tenant_id,a.advertiser_id
+        RETURNING id,tenant_id,advertiser_id
+    )
+    INSERT INTO account_membership_current(tenant_id,advertiser_id,version_id)
+        SELECT tenant_id,advertiser_id,id FROM created;
     ALTER TABLE query_snapshot_row ADD COLUMN account_membership_version_id UUID
         REFERENCES account_membership_version(id);
     CREATE INDEX ix_query_snapshot_row_account_membership_version_id

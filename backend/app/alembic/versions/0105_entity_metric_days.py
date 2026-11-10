@@ -85,8 +85,6 @@ def upgrade() -> None:
             currency VARCHAR(16) NOT NULL,timezone VARCHAR(64) NOT NULL,
             {metrics},fetched_at TIMESTAMPTZ NOT NULL,source_revision BIGINT NOT NULL,
             PRIMARY KEY ({",".join(KEYS)}),
-            FOREIGN KEY(tenant_id,advertiser_id)
-                REFERENCES advertiser_account(tenant_id,advertiser_id) ON DELETE CASCADE,
             CONSTRAINT ck_entity_metric_day_kind CHECK(kind IN ('campaign','adgroup','ad','material')),
             CONSTRAINT ck_entity_metric_day_variant CHECK(kind='material' OR variant='')
         ) PARTITION BY RANGE (stat_date);
@@ -158,6 +156,12 @@ def upgrade() -> None:
         op.execute(f"""CREATE VIEW {kind}_metric_day AS SELECT tenant_id,advertiser_id,stat_date,
             {id_columns},currency,timezone,{columns},fetched_at,source_revision
             FROM entity_metric_day WHERE kind='{kind}'""")
+    # 新目标在冻结写入期间初始化；回填后一次校验FK，避免千万级逐行外键
+    # 事件堆积和重复账户探测。分区父表直接ADD完整约束，最终生命周期不变。
+    op.execute("""ALTER TABLE entity_metric_day
+        ADD CONSTRAINT entity_metric_day_tenant_id_advertiser_id_fkey
+        FOREIGN KEY(tenant_id,advertiser_id)
+        REFERENCES advertiser_account(tenant_id,advertiser_id) ON DELETE CASCADE""")
     # 删除账户由FK只清派生事实；重新发现后立即恢复仍保留的canonical及派生源。
     restore = ";".join(
         f"EXECUTE $restore${_restore('new_rows', kind, table, identity)}$restore$"

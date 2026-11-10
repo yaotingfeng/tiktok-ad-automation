@@ -88,21 +88,12 @@ def material_statements() -> list[str]:
             material_type varchar(64) NOT NULL CHECK (material_type='VIDEO'),
             version_id uuid NOT NULL, ad_material_id varchar(128), name varchar,
             raw_id uuid NOT NULL, published_version bigint NOT NULL,
-            PRIMARY KEY(tenant_id,advertiser_id,ad_remote_id,platform_material_id,material_type),
-            FOREIGN KEY(tenant_id,advertiser_id) REFERENCES advertiser_account(tenant_id,advertiser_id) ON DELETE CASCADE,
-            FOREIGN KEY(tenant_id,advertiser_id,version_id) REFERENCES report_evidence_version(tenant_id,advertiser_id,id))""",
+            PRIMARY KEY(tenant_id,advertiser_id,ad_remote_id,platform_material_id,material_type))""",
         """CREATE TABLE material_account_member_current (
             tenant_id uuid NOT NULL, advertiser_id varchar(128) NOT NULL,
             platform_material_id varchar(128) NOT NULL, version_id uuid NOT NULL,
             use_count bigint NOT NULL CHECK(use_count>0), name varchar, ad_ids text[] NOT NULL,
-            PRIMARY KEY(tenant_id,advertiser_id,platform_material_id),
-            FOREIGN KEY(tenant_id,advertiser_id) REFERENCES advertiser_account(tenant_id,advertiser_id) ON DELETE CASCADE,
-            FOREIGN KEY(tenant_id,advertiser_id,version_id) REFERENCES report_evidence_version(tenant_id,advertiser_id,id))""",
-        "CREATE INDEX ix_material_ad_member_video ON material_ad_member_current(tenant_id,platform_material_id,advertiser_id)",
-        "CREATE INDEX ix_material_ad_member_ad ON material_ad_member_current(tenant_id,advertiser_id,ad_remote_id)",
-        "CREATE INDEX ix_material_ad_member_version ON material_ad_member_current(version_id)",
-        "CREATE INDEX ix_material_account_member_video ON material_account_member_current(tenant_id,platform_material_id,advertiser_id)",
-        "CREATE INDEX ix_material_account_member_version ON material_account_member_current(version_id)",
+            PRIMARY KEY(tenant_id,advertiser_id,platform_material_id))""",
         """CREATE FUNCTION qrm_retire_material_member() RETURNS trigger LANGUAGE plpgsql AS $$
         BEGIN
             UPDATE report_evidence_version SET retired_at=COALESCE(retired_at,clock_timestamp()) WHERE id=OLD.version_id;
@@ -248,10 +239,152 @@ def material_statements() -> list[str]:
         END $$""",
         """CREATE TRIGGER zz_material_members_account_insert AFTER INSERT ON advertiser_account
             REFERENCING NEW TABLE AS new_accounts FOR EACH STATEMENT EXECUTE FUNCTION qrm_material_members_account_insert()""",
-        """DO $$ DECLARE k record; BEGIN
-            FOR k IN SELECT DISTINCT tenant_id,advertiser_id,platform_material_id FROM current_ad_material
-                WHERE material_type='VIDEO' ORDER BY tenant_id,advertiser_id,platform_material_id
-            LOOP PERFORM qrm_refresh_material_members(k.tenant_id,k.advertiser_id,k.platform_material_id); END LOOP;
-        END $$""",
     ]
+    # 冻结源的bootstrap不复用运行时锁路径。先填新表，再用集合校验加回最终硬FK，
+    # 避免新heads每行产生两次FK探测和巨型after-trigger队列；对外可见前全部验证。
+    statements.extend(material_bootstrap_statements())
+    for table, prefix in (
+        ("material_ad_member_current", "fk_material_ad"),
+        ("material_account_member_current", "fk_material_account"),
+    ):
+        statements.extend(
+            [
+                f"ALTER TABLE {table} ADD CONSTRAINT {prefix}_account FOREIGN KEY(tenant_id,advertiser_id) REFERENCES advertiser_account(tenant_id,advertiser_id) ON DELETE CASCADE NOT VALID",
+                f"ALTER TABLE {table} ADD CONSTRAINT {prefix}_version FOREIGN KEY(tenant_id,advertiser_id,version_id) REFERENCES report_evidence_version(tenant_id,advertiser_id,id) NOT VALID",
+                f"ALTER TABLE {table} VALIDATE CONSTRAINT {prefix}_account",
+                f"ALTER TABLE {table} VALIDATE CONSTRAINT {prefix}_version",
+            ]
+        )
+    statements.extend(
+        [
+            "CREATE INDEX ix_material_ad_member_video ON material_ad_member_current(tenant_id,platform_material_id,advertiser_id)",
+            "CREATE INDEX ix_material_ad_member_ad ON material_ad_member_current(tenant_id,advertiser_id,ad_remote_id)",
+            "CREATE INDEX ix_material_ad_member_version ON material_ad_member_current(version_id)",
+            "CREATE INDEX ix_material_account_member_video ON material_account_member_current(tenant_id,platform_material_id,advertiser_id)",
+            "CREATE INDEX ix_material_account_member_version ON material_account_member_current(version_id)",
+        ]
+    )
     return statements
+
+
+def material_bootstrap_statements(*, batch_rows: int = 20_000) -> list[str]:
+    """仅用于源写入已冻结、目标heads为空的首次迁移。
+
+    只扫描一次current投影的VIDEO行，临时stage保存归并后身份与一次生成的UUID。
+    按VID整组划批；单批最多batch_rows加最大单VID的使用数，不拆散同VID聚合。
+    最大单VID本身就是不可拆分JSON证据，发布预检仍须核对它的行数/载荷容量。
+    全局窄stage按账户/VID索引；仅批次临时表反复TRUNCATE，不积累advisory锁。
+    全局临时空间与归并VIDEO数成正比，发布预检必须另计排序及临时文件容量。
+    """
+    if type(batch_rows) is not int or batch_rows <= 0:
+        raise ValueError("bootstrap batch_rows must be a positive integer")
+    return [
+        """CREATE TEMP TABLE qrm_material_bootstrap_ad (
+            tenant_id uuid NOT NULL,advertiser_id varchar(128) NOT NULL,
+            ad_remote_id varchar(128) NOT NULL,platform_material_id varchar(128) NOT NULL,
+            material_type varchar(64) NOT NULL,version_id uuid NOT NULL,
+            ad_material_id varchar(128),name varchar,raw_id uuid NOT NULL,published_version bigint NOT NULL
+        ) ON COMMIT DROP""",
+        """CREATE TEMP TABLE qrm_material_bootstrap_groups (
+            platform_material_id varchar(128) PRIMARY KEY,use_count bigint NOT NULL,batch_no bigint NOT NULL
+        ) ON COMMIT DROP""",
+        """CREATE INDEX qrm_material_bootstrap_groups_batch ON qrm_material_bootstrap_groups(batch_no)""",
+        """CREATE TEMP TABLE qrm_material_bootstrap_account (
+            tenant_id uuid NOT NULL,advertiser_id varchar(128) NOT NULL,
+            platform_material_id varchar(128) NOT NULL,version_id uuid NOT NULL,
+            use_count bigint NOT NULL,name varchar,ad_ids text[] NOT NULL,
+            refs jsonb NOT NULL,material_uses jsonb NOT NULL
+        ) ON COMMIT DROP""",
+        f"""DO $material_bootstrap$
+        DECLARE account_scope record; part record;
+        BEGIN
+            IF EXISTS(SELECT 1 FROM material_ad_member_current)
+                OR EXISTS(SELECT 1 FROM material_account_member_current) THEN
+                RAISE EXCEPTION 'material bootstrap requires empty target heads';
+            END IF;
+            -- 全源只扫描一次，且只保留VIDEO；不能对上万账户反复扫描宽current表。
+            -- 完整/最新/精确优先已由current维护。窗口计数发生在DISTINCT ON之前。
+            INSERT INTO qrm_material_bootstrap_ad
+            SELECT chosen.tenant_id,chosen.advertiser_id,chosen.ad_remote_id,chosen.platform_material_id,
+                chosen.material_type,gen_random_uuid(),chosen.ad_material_id,chosen.name,chosen.raw_id,chosen.published_version
+            FROM (
+                SELECT DISTINCT ON(u.tenant_id,u.advertiser_id,u.ad_remote_id,u.platform_material_id,u.material_type)
+                    u.tenant_id,u.advertiser_id,u.ad_remote_id,u.platform_material_id,u.material_type,u.id AS raw_id,
+                    NULLIF(u.name,'') AS name,u.published_version,
+                    CASE WHEN count(*) OVER(PARTITION BY u.tenant_id,u.advertiser_id,u.ad_remote_id,u.platform_material_id,u.material_type)>1
+                        THEN NULL ELSE u.ad_material_id END AS ad_material_id
+                FROM current_ad_material u JOIN advertiser_account a
+                    ON a.tenant_id=u.tenant_id AND a.advertiser_id=u.advertiser_id
+                WHERE u.material_type='VIDEO'
+                ORDER BY u.tenant_id,u.advertiser_id,u.ad_remote_id,u.platform_material_id,u.material_type,u.id
+            ) chosen;
+            -- 数千万VIDEO先顺序写临时heap，再bulk建索引，避免逐行维护随机B-tree。
+            CREATE INDEX qrm_material_bootstrap_ad_vid ON qrm_material_bootstrap_ad(tenant_id,advertiser_id,platform_material_id);
+            ANALYZE qrm_material_bootstrap_ad;
+            FOR account_scope IN
+                SELECT DISTINCT tenant_id,advertiser_id FROM qrm_material_bootstrap_ad
+                ORDER BY tenant_id,advertiser_id
+            LOOP
+                TRUNCATE qrm_material_bootstrap_groups;
+                EXECUTE $groups$
+                    INSERT INTO qrm_material_bootstrap_groups
+                    SELECT platform_material_id,use_count,
+                        floor((sum(use_count) OVER(ORDER BY platform_material_id COLLATE "C")-use_count)/{batch_rows})::bigint
+                    FROM (SELECT platform_material_id,count(*) AS use_count
+                        FROM qrm_material_bootstrap_ad WHERE tenant_id=$1 AND advertiser_id=$2
+                        GROUP BY platform_material_id) groups
+                $groups$ USING account_scope.tenant_id,account_scope.advertiser_id;
+                ANALYZE qrm_material_bootstrap_groups;
+                FOR part IN SELECT DISTINCT batch_no FROM qrm_material_bootstrap_groups ORDER BY batch_no LOOP
+                    -- 每条SPI写入有界，避免整库一次INSERT积压数千万FK after-trigger事件。
+                    -- 临时UUID复用于两个INSERT，不能分别调用gen_random_uuid破坏硬引用。
+                    EXECUTE $ad_evidence$
+                        INSERT INTO report_evidence_version
+                            (id,tenant_id,advertiser_id,kind,refs,material_uses,naming_versions,created_at)
+                        SELECT u.version_id,u.tenant_id,u.advertiser_id,'material_ad',
+                            jsonb_build_array(jsonb_build_object('tenant_id',u.tenant_id::text,'advertiser_id',u.advertiser_id,
+                                'kind','ad','remote_id',u.ad_remote_id)),
+                            jsonb_build_array(jsonb_build_object('ad_ref',jsonb_build_object('tenant_id',u.tenant_id::text,
+                                'advertiser_id',u.advertiser_id,'kind','ad','remote_id',u.ad_remote_id),
+                                'platform_material_id',u.platform_material_id,'ad_material_id',u.ad_material_id,'material_type',u.material_type)),
+                            '{{}}'::jsonb,clock_timestamp()
+                        FROM qrm_material_bootstrap_groups g JOIN qrm_material_bootstrap_ad u USING(platform_material_id)
+                        WHERE g.batch_no=$1 AND u.tenant_id=$2 AND u.advertiser_id=$3
+                    $ad_evidence$ USING part.batch_no,account_scope.tenant_id,account_scope.advertiser_id;
+                    EXECUTE $ad_heads$
+                        INSERT INTO material_ad_member_current(tenant_id,advertiser_id,ad_remote_id,platform_material_id,
+                            material_type,version_id,ad_material_id,name,raw_id,published_version)
+                        SELECT u.tenant_id,u.advertiser_id,u.ad_remote_id,u.platform_material_id,u.material_type,
+                            u.version_id,u.ad_material_id,u.name,u.raw_id,u.published_version
+                        FROM qrm_material_bootstrap_groups g JOIN qrm_material_bootstrap_ad u USING(platform_material_id)
+                        WHERE g.batch_no=$1 AND u.tenant_id=$2 AND u.advertiser_id=$3
+                    $ad_heads$ USING part.batch_no,account_scope.tenant_id,account_scope.advertiser_id;
+                    TRUNCATE qrm_material_bootstrap_account;
+                    -- VIDEO归并后同账户/VID/ad只有一行，故refs与ad_ids自然按广告去重。
+                    EXECUTE $account_stage$
+                        INSERT INTO qrm_material_bootstrap_account
+                        SELECT u.tenant_id,u.advertiser_id,u.platform_material_id,gen_random_uuid(),count(*),
+                            min(u.name COLLATE "C"),array_agg(u.ad_remote_id ORDER BY u.ad_remote_id COLLATE "C"),
+                            jsonb_agg(jsonb_build_object('tenant_id',u.tenant_id::text,'advertiser_id',u.advertiser_id,
+                                'kind','ad','remote_id',u.ad_remote_id) ORDER BY u.ad_remote_id COLLATE "C"),
+                            jsonb_agg(jsonb_build_object('ad_ref',jsonb_build_object('tenant_id',u.tenant_id::text,
+                                'advertiser_id',u.advertiser_id,'kind','ad','remote_id',u.ad_remote_id),
+                                'platform_material_id',u.platform_material_id,'ad_material_id',u.ad_material_id,'material_type',u.material_type)
+                                ORDER BY u.advertiser_id COLLATE "C",u.ad_remote_id COLLATE "C",u.platform_material_id COLLATE "C",
+                                    COALESCE(u.ad_material_id,'') COLLATE "C",u.material_type COLLATE "C")
+                        FROM qrm_material_bootstrap_groups g JOIN qrm_material_bootstrap_ad u USING(platform_material_id)
+                        WHERE g.batch_no=$1 AND u.tenant_id=$2 AND u.advertiser_id=$3 GROUP BY u.tenant_id,u.advertiser_id,u.platform_material_id
+                    $account_stage$ USING part.batch_no,account_scope.tenant_id,account_scope.advertiser_id;
+                    INSERT INTO report_evidence_version
+                        (id,tenant_id,advertiser_id,kind,refs,material_uses,naming_versions,created_at)
+                    SELECT version_id,tenant_id,advertiser_id,'material_account',refs,material_uses,'{{}}'::jsonb,clock_timestamp()
+                        FROM qrm_material_bootstrap_account;
+                    INSERT INTO material_account_member_current
+                        (tenant_id,advertiser_id,platform_material_id,version_id,use_count,name,ad_ids)
+                    SELECT tenant_id,advertiser_id,platform_material_id,version_id,use_count,name,ad_ids
+                        FROM qrm_material_bootstrap_account;
+                END LOOP;
+            END LOOP;
+        END $material_bootstrap$""",
+        "DROP TABLE qrm_material_bootstrap_account,qrm_material_bootstrap_groups,qrm_material_bootstrap_ad",
+    ]
