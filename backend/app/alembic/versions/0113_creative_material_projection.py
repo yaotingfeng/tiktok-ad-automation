@@ -21,6 +21,7 @@ def upgrade() -> None:
         {values},PRIMARY KEY(tenant_id,advertiser_id,stat_date,currency,timezone,fact_key),
         FOREIGN KEY(tenant_id,advertiser_id) REFERENCES advertiser_account(tenant_id,advertiser_id) ON DELETE CASCADE)
     """)
+    op.execute('CREATE INDEX ix_creative_material_period ON creative_material_entity_day (tenant_id,stat_date,advertiser_id)')
     op.execute('CREATE INDEX ix_creative_material_page ON creative_material_entity_day (tenant_id,row_key,advertiser_id,stat_date)')
     op.execute('CREATE INDEX ix_creative_material_group ON creative_material_entity_day (tenant_id,advertiser_id,adgroup_id,stat_date)')
     op.execute('CREATE INDEX ix_creative_material_ad ON creative_material_entity_day (tenant_id,advertiser_id,ad_remote_id,stat_date)')
