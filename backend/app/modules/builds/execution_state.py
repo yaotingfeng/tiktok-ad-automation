@@ -424,7 +424,8 @@ def record_not_sent(
     return step.status
 
 
-_BUSINESS_REJECTION_RETRIES = {40002: 1, 51002: 2}
+# 并发拒绝允许五次指数退避；超过预算明确失败，避免无限重试。
+_BUSINESS_REJECTION_RETRIES = {40002: 1, 51002: 2, 41021: 5}
 
 
 def record_rejected(

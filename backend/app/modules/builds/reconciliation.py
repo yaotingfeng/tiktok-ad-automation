@@ -376,6 +376,10 @@ def _recover_known_rejection(
     ).first()
     summary = evidence_row.summary if evidence_row is not None else {}
     remote_code = summary.get("remote_code") if isinstance(summary, dict) else None
+    # 历史41021保留原RESULT_UNKNOWN审计，走完整缺失回查及原request_id重放；
+    # 不能只改为FAILED，否则历史未知证据会阻止安全重试。
+    if remote_code == 41021:
+        return None
     if not known_no_effect_rejection(source.kind, remote_code):
         return None
     now = datetime.now(UTC)
