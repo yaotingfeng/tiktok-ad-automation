@@ -119,7 +119,10 @@ def run_migrations_online():
             SELECT child.relname FROM pg_inherits i
             JOIN pg_class child ON child.oid=i.inhrelid
             JOIN pg_class parent ON parent.oid=i.inhparent
-            WHERE parent.relname IN ('ad_report_day','material_report_day')
+            WHERE parent.relname IN (
+                'ad_report_day','material_report_day','creative_report_day',
+                'entity_metric_day','business_day'
+            )
         """)
             ).scalars()
         )

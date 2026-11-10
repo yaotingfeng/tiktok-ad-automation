@@ -79,7 +79,11 @@ def test_unmapped_creative_keeps_money_without_fake_reconciliation(session, sync
     unmapped = [r for r in rows if r.attribution_status == "UNMAPPED"]
     assert len(unmapped) == 1 and unmapped[0].spend == Decimal("10")
     # 这个用例的其他计数指标有独立差额；身份缺失不能制造消耗或总收入差额。
-    assert all(r.spend == 0 and r.revenue_total == 0 for r in rows if r.attribution_status == "RESIDUAL")
+    assert all(
+        r.spend == 0 and r.revenue_total == 0
+        for r in rows
+        if r.attribution_status == "RESIDUAL"
+    )
     assert (
         session.connection()
         .execute(
@@ -148,3 +152,150 @@ def test_identity_arriving_after_facts_marks_shadow_bucket_dirty(session, sync_s
     )
     rows = rebuild(session, sync_seed, models.CreativeMaterialEntityDay)
     assert rows[0].attribution_status == "RESOLVED"
+
+
+def test_newer_unchanged_identity_preserves_clean_history_and_fence(session, sync_seed):
+    from datetime import timedelta
+
+    from app.modules.ads.creatives import upsert_creatives
+    from app.modules.reporting.read_models.creative_projector import (
+        project_creative_bucket,
+    )
+
+    item = identity(session, sync_seed)
+    build(session, sync_seed, rows=[creative_row("mapped", "100", "30")])
+    item.evidence = {"conflicts": []}
+    session.flush()
+    original_time = item.observed_at
+    params = {"t": sync_seed.tenant_id}
+
+    def state():
+        return (
+            session.connection()
+            .execute(
+                text(
+                    "SELECT source_revision,derived_revision FROM read_bucket_state WHERE tenant_id=:t AND advertiser_id='acc-1' AND kind='creative_material' AND bucket=:d"
+                ),
+                params | {"d": D},
+            )
+            .one()
+        )
+
+    before = state()
+    row = {
+        "creative_id": "mapped",
+        "ad_remote_id": "ad-1",
+        "ad_material_id": "am-1",
+        "assets": item.assets,
+    }
+    upsert_creatives(
+        session,
+        tenant_id=sync_seed.tenant_id,
+        advertiser_id="acc-1",
+        rows=[row],
+        observed_at=original_time + timedelta(seconds=1),
+        published_version=2,
+    )
+    assert item.published_version == 2 and item.observed_at > original_time
+    assert state() == before
+    # 旧目录观察不能借历史仍干净覆盖较新的观察。
+    upsert_creatives(
+        session,
+        tenant_id=sync_seed.tenant_id,
+        advertiser_id="acc-1",
+        rows=[row | {"name": "stale"}],
+        observed_at=original_time,
+        published_version=1,
+    )
+    assert item.name == "" and item.published_version == 2
+    assert state() == before
+    upsert_creatives(
+        session,
+        tenant_id=sync_seed.tenant_id,
+        advertiser_id="acc-1",
+        rows=[row | {"name": "new display"}],
+        observed_at=original_time + timedelta(seconds=2),
+        published_version=3,
+    )
+    assert state().source_revision > before.source_revision
+    assert not project_creative_bucket(
+        session,
+        ReadBucketKey(sync_seed.tenant_id, "acc-1", "creative_material", D),
+        expected_version=before.source_revision,
+    ).published
+    rebuild(session, sync_seed, models.CreativeMaterialEntityDay)
+    clean = state()
+    upsert_creatives(
+        session,
+        tenant_id=sync_seed.tenant_id,
+        advertiser_id="acc-1",
+        rows=[row | {"ad_remote_id": "conflicting-ad"}],
+        observed_at=original_time + timedelta(seconds=3),
+        published_version=4,
+    )
+    assert item.identity_status == "CONFLICT"
+    assert state().source_revision > clean.source_revision
+
+
+def test_semantic_identity_change_invalidates_all_history_only_in_exact_scope(
+    session, sync_seed
+):
+    from datetime import timedelta
+
+    from app.modules.ads.creatives import upsert_creatives
+    from tests.modules.reporting.sync_conftest import sync_seed as seed_factory
+
+    other = seed_factory.__wrapped__(session)
+    for seed, account in ((sync_seed, "acc-1"), (sync_seed, "acc-2"), (other, "acc-1")):
+        upsert_creatives(
+            session,
+            tenant_id=seed.tenant_id,
+            advertiser_id=account,
+            rows=[
+                {
+                    "creative_id": "shared",
+                    "ad_remote_id": "ad",
+                    "assets": [{"platform_material_id": "v", "material_type": "VIDEO"}],
+                }
+            ],
+            observed_at=datetime.now(UTC),
+            published_version=1,
+        )
+        for day in (D, D - timedelta(days=90)):
+            row = creative_row("shared", "10", "5")
+            row["dimensions"]["stat_time_day"] = f"{day} 00:00:00"
+            row["metrics"]["advertiser_id"] = account
+            publish.publish_creative_day(
+                session,
+                tenant_id=seed.tenant_id,
+                job_id=uuid4(),
+                accounts={account: publish.AccountMeta("USD", "UTC")},
+                start=day,
+                end=day,
+                rows=[row],
+            )
+    query = text(
+        "SELECT tenant_id,advertiser_id,bucket,source_revision FROM read_bucket_state WHERE tenant_id=ANY(CAST(:tenants AS uuid[])) AND kind='creative_material'"
+    )
+
+    def revisions():
+        return {
+            (r.tenant_id, r.advertiser_id, r.bucket): r.source_revision
+            for r in session.connection().execute(
+                query, {"tenants": [sync_seed.tenant_id, other.tenant_id]}
+            )
+        }
+
+    before = revisions()
+    session.connection().execute(
+        text(
+            "UPDATE ad_creative SET name='new' WHERE tenant_id=:t AND advertiser_id='acc-1'"
+        ),
+        {"t": sync_seed.tenant_id},
+    )
+    after = revisions()
+    assert len(before) == 6
+    for key, revision in before.items():
+        assert after[key] == revision + (
+            1 if key[:2] == (sync_seed.tenant_id, "acc-1") else 0
+        )
