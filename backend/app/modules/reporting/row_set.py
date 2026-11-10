@@ -28,7 +28,6 @@ from sqlmodel import Session
 from app.integrations.tiktok.contracts.ads import EntityRef
 from app.modules.reporting import query_diagnostics
 from app.modules.reporting.filters import CONFIG_SORT_FIELDS, NAME_SORT_FIELDS
-from app.modules.reporting.read_models.material_names import material_names_sql
 from app.modules.reporting.schemas import ReportingFilter
 from app.modules.reporting.store_models import METRIC_COLUMNS
 
@@ -58,8 +57,6 @@ MONEY_SORT_FIELDS = frozenset(
         "cpc",
     }
 )
-# 素材日报不提供 D3/D30 收入，统一标 UNSUPPORTED。
-MATERIAL_UNSUPPORTED = frozenset({"revenue_d3", "revenue_d30"})
 NAME_FIELDS = (
     "name",
     "account_name",
@@ -87,8 +84,6 @@ _FACT_META = {
         "adgroup_name",
         "ad_name",
     ),
-    "material_report_day": ("main_material_name",),
-    "material_entity_day": (),
     "adgroup_report_day": ("campaign_id", "campaign_name", "adgroup_name"),
     # 纯指标路径仍保留后续CTE的列合同，但只生成NULL占位，不读历史名称。
     "campaign_metric_day": ("campaign_id", "campaign_name"),
@@ -100,7 +95,6 @@ _FACT_META = {
         "adgroup_name",
         "ad_name",
     ),
-    "material_metric_day": (),
 }
 
 
@@ -229,14 +223,7 @@ def _facts_cte(
     meta = f"{meta}," if meta else ""
 
     def identity(column: str) -> str:
-        # 只有派生行键/币种使用C聚合。账户和类型还会关联基表身份索引，必须
-        # 保留存储列的collation；显式C会传播到JOIN，使账户条件退化为索引后过滤。
-        return (
-            f'{column} COLLATE "C"'
-            if table in {"material_entity_day", "material_metric_day"}
-            and column in {"t.row_key", "t.currency"}
-            else column
-        )
+        return column
 
     adv = identity("t.advertiser_id")
     rid = identity(f"t.{id_column}" if id_column else "t.advertiser_id")
@@ -247,19 +234,12 @@ def _facts_cte(
     if table in {
         "account_report_day",
         "adgroup_report_day",
-        "material_entity_day",
         "campaign_metric_day",
         "adgroup_metric_day",
         "ad_metric_day",
-        "material_metric_day",
     }:
-        # 素材D3/D30在成员桶恒为UNSUPPORTED；不为最终必然丢弃的值
-        # 建立SUM/BOOL_OR聚合状态，列合同仍保留NULL。
         metric_sums = ", ".join(
-            f"NULL::numeric AS {m}, false AS {m}_hn"
-            if table in {"material_entity_day", "material_metric_day"}
-            and m in MATERIAL_UNSUPPORTED
-            else f"sum(t.{m}) AS {m}, bool_or(t.{m}_has_null OR t.{m} IS NULL) AS {m}_hn"
+            f"sum(t.{m}) AS {m}, bool_or(t.{m}_has_null OR t.{m} IS NULL) AS {m}_hn"
             for m in METRIC_COLUMNS
         )
     predicate = """t.tenant_id = :tenant AND t.advertiser_id = ANY(:advs)
@@ -284,16 +264,11 @@ def _common_ctes(cov_kind: str, *, account: bool = False) -> str:
     period = ""
     if account:
         state = "SELECT tenant_id,advertiser_id,stat_date,status FROM account_report_day_state"
-    elif cov_kind == "material_day":
-        # 同一期间状态供覆盖与缺失日期共同消费，避免再读一次所有历史状态。
-        period = """material_period AS MATERIALIZED (
-            SELECT tenant_id,advertiser_id,bucket AS stat_date,derived_revision,
-                derived_status AS status FROM read_bucket_state
-            WHERE tenant_id=:tenant AND kind='material_day'
-                AND bucket BETWEEN :start AND :end
-        ),"""
-        state = """SELECT tenant_id,advertiser_id,stat_date,status
-            FROM material_period WHERE derived_revision>0 AND status='COMPLETE'"""
+    elif cov_kind == "creative_material":
+        from app.modules.reporting.creative_query import PERIOD_SQL
+
+        period = f"material_period AS MATERIALIZED ({PERIOD_SQL}),"
+        state = "SELECT tenant_id,advertiser_id,stat_date,status FROM material_period"
     else:
         state = f"SELECT tenant_id,advertiser_id,stat_date,status FROM report_sync_state WHERE report_kind='{cov_kind}'"
     return f"""acc AS NOT MATERIALIZED (
@@ -463,20 +438,15 @@ def _member_buckets(members: str, *, unsupported: frozenset[str]) -> str:
 def _material_member_buckets() -> str:
     """已投影事实就是素材成员；避免先去重身份再与同一事实集自连接。"""
     fact_values = ", ".join(
-        f"NULL::numeric AS {m}, false AS {m}_hn"
-        if m in MATERIAL_UNSUPPORTED
-        else f"f.{m}, COALESCE(f.{m}_hn,false) AS {m}_hn"
-        for m in METRIC_COLUMNS
+        f"f.{m}, COALESCE(f.{m}_hn,false) AS {m}_hn" for m in METRIC_COLUMNS
     )
     empty_values = ", ".join(
-        f"NULL::numeric AS {m}, false AS {m}_hn"
-        if m in MATERIAL_UNSUPPORTED
-        else f"CASE WHEN c.complete THEN 0::numeric END AS {m},false AS {m}_hn"
+        f"CASE WHEN c.complete THEN 0::numeric END AS {m},false AS {m}_hn"
         for m in METRIC_COLUMNS
     )
     return f"""mb AS (
         SELECT f.rid AS row_key,f.adv,COALESCE(f.currency,a.currency) AS currency,
-            COALESCE(f.tz,a.tz) AS tz,NOT c.complete AS incomplete,{fact_values}
+            COALESCE(f.tz,a.tz) AS tz,(NOT c.complete OR f.source_incomplete) AS incomplete,{fact_values}
         FROM facts f JOIN acc a ON a.adv=f.adv JOIN cov c ON c.adv=f.adv
         UNION ALL
         SELECT ra.row_key,ra.adv,a.currency,a.tz,NOT c.complete AS incomplete,{empty_values}
@@ -864,236 +834,54 @@ def _dimension_rows(
     return ",\n".join([_common_ctes("ad_day", account=dim == "account"), *ctes]), "base"
 
 
-# 同步事务已规范化歧义与位置；查询只连接不可变版本，避免重复组装大型JSON。
-_USE_COLUMNS = """u.raw_id AS id,u.advertiser_id AS adv,u.ad_remote_id,u.platform_material_id,
-                u.ad_material_id,u.material_type,u.name,u.version_id,1::int AS use_count,
-                ARRAY[u.ad_remote_id]::text[] AS ref_ids"""
-_ACCOUNT_USE_COLUMNS = """NULL::uuid AS id,u.advertiser_id AS adv,NULL::text AS ad_remote_id,
-                u.platform_material_id,NULL::text AS ad_material_id,'VIDEO'::text AS material_type,
-                u.name,u.version_id,u.use_count,ARRAY[]::text[] AS ref_ids"""
-
-
-def _material_identity_ctes(filters: ReportingFilter, *, aggregate: bool) -> list[str]:
-    """素材维度的帖子归属 fk 与目录使用位置 uses。
-
-    列出无数据视频时读取全部使用位置与帖子对照。默认只列有数据的帖子/视频：
-    已归属视频只读这些视频的使用位置；无法归属视频的帖子在cand_raw中
-    按准确广告身份读取，避免全量uses反复连接和重复帖子影响歧义计数。
-    """
-    fk = """fk AS (
-        SELECT DISTINCT f.adv,f.rid,f.main_material_type AS mtype,f.rid AS row_key,
-            CASE WHEN (f.rid::jsonb)->>0='material' THEN (f.rid::jsonb)->>1 ELSE (f.rid::jsonb)->>2 END AS mid,
-            CASE WHEN (f.rid::jsonb)->>0='material' THEN (f.rid::jsonb)->>1 END AS vid
-        FROM facts f
-    )"""
-    table = (
-        "material_account_member_current" if aggregate else "material_ad_member_current"
-    )
-    columns = _ACCOUNT_USE_COLUMNS if aggregate else _USE_COLUMNS
-    if aggregate and filters.sort_by not in NAME_SORT_FIELDS:
-        columns = columns.replace("u.name,", "NULL::text AS name,")
-    if filters.include_empty:
-        uses = f"""uses AS (
-            SELECT {columns} FROM {table} u
-            WHERE u.tenant_id=:tenant AND u.advertiser_id=ANY(:advs)
-        )"""
-    else:
-        uses = f"""uses AS (
-            SELECT u.* FROM (
-                SELECT {columns} FROM {table} u
-                WHERE u.tenant_id=:tenant AND u.platform_material_id=ANY(ARRAY(
-                    SELECT DISTINCT vid COLLATE "default" FROM fk WHERE vid IS NOT NULL
-                ))
-                OFFSET 0
-            ) u
-            WHERE u.adv=ANY(:advs)
-        )"""
-    return [fk, uses]
-
-
 def _material_rows(filters: ReportingFilter, params: _Params) -> tuple[str, str]:
-    """素材维度：一个素材库视频一行，跨账户、跨广告合计。
+    """逐创意筛选后汇总；仅精确当前视频位置附带不可变动作证据。"""
+    from app.modules.reporting.creative_query import filtered_ctes
 
-    素材日报的主素材是帖子（Spark 每条广告一条），先经 material_post_link 与广告目录
-    归到视频；对不上的帖子各自一行，保证金额不丢。勾选“显示无数据对象”时，
-    目录里有、所选日期无数据的视频也列出，按账户覆盖填 0 或空。
-    """
-    params.add("kinds", ["campaign", "adgroup", "ad"])
-    entity_filter = _entity_conditions(filters, params, e="ae", p="p")
-    has_entity_filter = bool(entity_filter)
-    use_match = " AND ".join(entity_filter) or "TRUE"
-    null_ok = "TRUE" if _null_entity_matches(filters) else "FALSE"
-    use_ids = "ARRAY[u.adv, u.campaign_id, u.adgroup_id, u.ad_remote_id]"
-    use_text = "concat_ws(' ', u.adv, u.account_name, u.campaign_id, u.campaign_name, u.adgroup_id, u.adgroup_name, u.ad_remote_id, u.ad_name)"
-    row_ids = "array_remove(ARRAY[r.row_key, r.mid] || r.post_ids || r.advs || r.ref_ids, NULL)"
-    row_text = "concat_ws(' ', r.row_key, r.mid, array_to_string(r.post_ids, ' '), array_to_string(r.advs, ' '), array_to_string(r.ref_ids, ' '), r.name, r.account_name)"
-    plain = _text_conditions(filters, params, ids=row_ids, haystack=row_text)
-    text_ok = " AND ".join(plain) or "TRUE"
-    if plain:
-        # 搜索/层级筛选可命中某个使用位置（行展示 + 该位置的层级），但金额仍是整份素材合计。
-        hier = " AND ".join(
-            _text_conditions(
-                filters,
-                params,
-                ids=f"array_remove(ARRAY[r.row_key, r.mid] || r.post_ids || r.advs || r.ref_ids || {use_ids}, NULL)",
-                haystack=f"concat_ws(' ', {row_text}, {use_text})",
-            )
-        )
-        text_ok = (
-            f"(({text_ok}) OR r.row_key IN (SELECT hit.row_key FROM hier_hits hit))"
-        )
-    else:
-        hier = None
-    video_key = "'[\"material\", ' || to_json({vid})::text || ']'"
+    values = ",".join(
+        f"sum(f.{m}) AS {m},bool_or(f.{m}_has_null OR f.{m} IS NULL) AS {m}_hn"
+        for m in METRIC_COLUMNS
+    )
     ctes = [
-        _common_ctes("material_day"),
-        _facts_cte(
-            "material_metric_day",
-            "row_key",
-            extra_group=("main_material_type",),
-            include_metadata=False,
-            period_scan=len(params.values["advs"]) >= 1000,
+        _common_ctes("creative_material"),
+        filtered_ctes(filters, params),
+        f"""facts AS (
+            SELECT advertiser_id AS adv,row_key AS rid,currency,
+                CASE WHEN min(timezone)=max(timezone) THEN min(timezone) ELSE 'MIXED' END AS tz,
+                bool_or(source_status<>'COMPLETE' OR unallocated) AS source_incomplete,{values}
+            FROM creative_filtered f GROUP BY advertiser_id,row_key,currency
+        )""",
+        """fk AS (SELECT DISTINCT adv,rid AS row_key FROM facts),
+        row_advs AS (SELECT row_key,adv FROM fk UNION SELECT row_key,advertiser_id FROM creative_directory),
+        names AS (
+            SELECT row_key,min(name) AS name FROM (
+                SELECT row_key,material_name AS name FROM creative_filtered
+                UNION ALL SELECT row_key,name FROM creative_directory
+            ) n GROUP BY row_key
         ),
-        *_material_identity_ctes(filters, aggregate=not has_entity_filter and not hier),
-        f"""mkey AS (
-            SELECT row_key, min(mid) AS mid FROM (
-                SELECT row_key, mid FROM fk
-                {
-            ""
-            if not filters.include_empty
-            else f"UNION ALL SELECT {video_key.format(vid='u.platform_material_id')}, u.platform_material_id FROM uses u"
-        }
-            ) k GROUP BY row_key
-        )""",
-        f"fname AS ({material_names_sql()})",
-        f"""cand_raw AS (
-            -- 视频行管理该视频的全部使用位置；帖子行只有对照上的那条广告位置。
-            SELECT {video_key.format(vid="u.platform_material_id")} AS row_key, u.*
-            FROM uses u
-            UNION ALL
-            SELECT k.row_key, u.*
-            FROM fk k
-            JOIN (
-                -- 批量按帖子ID读窄覆盖索引，账户仍在结果外层及精确关联处双重约束。
-                SELECT l.advertiser_id,l.main_material_id,l.main_material_type,
-                    l.ad_remote_id,l.ad_material_id FROM material_post_link l
-                WHERE l.tenant_id=:tenant AND l.ad_material_id IS NOT NULL
-                    AND l.main_material_id=ANY(ARRAY(
-                        SELECT DISTINCT mid COLLATE "default" FROM fk WHERE vid IS NULL
-                    ))
-                OFFSET 0
-            ) l ON l.advertiser_id=k.adv AND l.main_material_id=k.mid
-                AND l.main_material_type=k.mtype AND l.advertiser_id=ANY(:advs)
-            CROSS JOIN LATERAL (
-                -- 先在真实目录身份内判定歧义，再匹配帖子。多个帖子引用同一
-                -- 使用位置不会凭空增加目录候选数，也不再重复扫描全量uses。
-                SELECT {_USE_COLUMNS} FROM material_ad_member_current u
-                WHERE u.tenant_id=:tenant AND u.advertiser_id=l.advertiser_id
-                    AND u.ad_remote_id=l.ad_remote_id AND u.material_type='VIDEO'
-                    AND u.ad_material_id=l.ad_material_id
-                OFFSET 0
-            ) u
-            WHERE k.vid IS NULL AND u.ad_material_id = l.ad_material_id
-        )""",
-        _obj_ctes(
-            filters,
-            (
-                ("ad", "SELECT adv, ad_remote_id FROM cand_raw"),
-                ("adgroup", None),
-                ("campaign", None),
-            ),
+        use_list AS (
+            SELECT row_key,array_agg(version_id ORDER BY advertiser_id,ad_remote_id) AS evidence_versions,
+                count(*)::int AS member_count FROM creative_uses GROUP BY row_key
         ),
-        _proj_cte(),
-        f"""cand AS (
-            SELECT DISTINCT ON (u.row_key, u.adv, u.ad_remote_id, u.platform_material_id, u.ad_material_id, u.material_type)
-                u.*, g.parent AS campaign_id, ae.parent AS adgroup_id,
-                CASE WHEN ae.adv IS NOT NULL THEN COALESCE(ae.name, u.ad_remote_id) ELSE u.ad_remote_id END AS ad_name,
-                CASE WHEN g.adv IS NOT NULL THEN COALESCE(g.name, g.rid) ELSE ae.parent END AS adgroup_name,
-                CASE WHEN g.parent IS NULL THEN NULL WHEN c.adv IS NOT NULL THEN COALESCE(c.name, c.rid)
-                    ELSE g.parent END AS campaign_name,
-                COALESCE(a.name, u.adv) AS account_name,
-                ({use_match}) AS matched
-            FROM cand_raw u
-            JOIN acc a ON a.adv = u.adv
-            LEFT JOIN obj ae ON ae.adv = u.adv AND ae.kind = 'ad' AND ae.rid = u.ad_remote_id
-            LEFT JOIN obj g ON g.adv = u.adv AND g.kind = 'adgroup' AND g.rid = COALESCE(ae.parent, '')
-            LEFT JOIN obj c ON c.adv = u.adv AND c.kind = 'campaign' AND c.rid = g.parent
-            LEFT JOIN proj p ON p.adv = u.adv AND p.cid = g.parent
-            ORDER BY u.row_key, u.adv, u.ad_remote_id, u.platform_material_id, u.ad_material_id, u.material_type, u.id
-        )"""
-        if has_entity_filter or hier
-        else """cand AS (
-            -- 两个来源分别由账户/广告成员主键及帖子对照主键唯一约束；行键前缀互斥。
-            -- 不再为已唯一的18万条使用位置执行一次宽行DISTINCT排序。
-            SELECT
-                u.*, COALESCE(a.name,u.adv) AS account_name, TRUE AS matched
-            FROM cand_raw u JOIN acc a ON a.adv=u.adv
-        )""",
-        f"""muse AS (SELECT * FROM cand WHERE {"matched" if has_entity_filter else "TRUE"})""",
-        """cand_names AS (SELECT row_key, min(name COLLATE "C") AS name FROM cand GROUP BY row_key)""",
-        """use_refs AS (
-            SELECT u.row_key,array_agg(DISTINCT i.rid) AS ref_ids
-            FROM muse u CROSS JOIN LATERAL unnest(u.ref_ids) i(rid) GROUP BY u.row_key
-        )""",
-        """use_list AS (
-            SELECT u.row_key,array_agg(DISTINCT u.version_id) AS evidence_versions,
-                sum(u.use_count)::int AS member_count
-            FROM muse u GROUP BY u.row_key
-        )""",
-        """row_advs AS (
-            -- 行涉及的账户：有事实的账户 ∪ 目录使用位置所在账户；覆盖与空值按这些账户算。
-            SELECT row_key, adv FROM fk
-            UNION
-            SELECT row_key, adv FROM cand
-        )""",
-        """adv_list AS (
-            SELECT ra.row_key, array_agg(ra.adv ORDER BY ra.adv COLLATE "C") AS advs,
-                CASE WHEN count(*) = 1 THEN COALESCE(min(a.name), min(ra.adv)) END AS account_name
-            FROM row_advs ra JOIN acc a ON a.adv = ra.adv GROUP BY ra.row_key
-        )""",
-        """post_list AS (
-            SELECT d.row_key,array_agg(DISTINCT p.mid) AS post_ids
-            FROM material_entity_day d CROSS JOIN LATERAL unnest(d.post_ids) p(mid)
-            WHERE d.tenant_id=:tenant AND d.advertiser_id=ANY(:advs) AND d.stat_date BETWEEN :start AND :end
-            GROUP BY d.row_key
-        )""",
-        """rowsrc AS (
-            SELECT k.row_key, k.mid,
-                -- 视频名优先取目录（各帖子一致），否则取素材日报里的名称。
-                COALESCE(cn.name, fn.name, k.mid) AS name,
-                al.account_name, al.advs,
-                COALESCE(pl.post_ids, ARRAY[]::text[]) AS post_ids,
-                COALESCE(ur.ref_ids, ARRAY[]::text[]) AS ref_ids,
-                COALESCE(ul.evidence_versions, ARRAY[]::uuid[]) AS evidence_versions,
+        rowsrc AS (
+            SELECT ra.row_key,min(n.name) AS name,
+                CASE WHEN count(DISTINCT ra.adv)=1 THEN min(COALESCE(a.name,ra.adv)) END AS account_name,
                 COALESCE(ul.member_count,0) AS member_count,
-                ul.row_key IS NOT NULL AS has_uses
-            FROM mkey k
-            -- mkey来自同一授权fk/uses，必有row_advs；此处只补展示信息，
-            -- LEFT JOIN使无名称/账户搜索时可裁掉不需要的全候选聚合。
-            LEFT JOIN adv_list al ON al.row_key = k.row_key
-            LEFT JOIN fname fn ON fn.row_key = k.row_key
-            LEFT JOIN cand_names cn ON cn.row_key = k.row_key
-            LEFT JOIN post_list pl ON pl.row_key = k.row_key
-            LEFT JOIN use_refs ur ON ur.row_key = k.row_key
-            LEFT JOIN use_list ul ON ul.row_key = k.row_key
+                COALESCE(ul.evidence_versions,ARRAY[]::uuid[]) AS evidence_versions
+            FROM row_advs ra JOIN acc a ON a.adv=ra.adv
+            LEFT JOIN names n ON n.row_key=ra.row_key LEFT JOIN use_list ul ON ul.row_key=ra.row_key
+            GROUP BY ra.row_key,ul.member_count,ul.evidence_versions
         )""",
         _material_member_buckets(),
         _row_buckets(),
     ]
-    if hier:
-        ctes.append(f"""hier_hits AS (
-            SELECT DISTINCT r.row_key FROM rowsrc r JOIN muse u ON u.row_key = r.row_key WHERE {hier}
-        )""")
-    metric_ok = _metric_bounds(filters, params) or "TRUE"
+    metric = _metric_bounds(filters, params) or "TRUE"
     ctes.append(f"""base AS (
-        SELECT r.row_key, r.name, r.account_name, NULL::text AS campaign_name, NULL::text AS adgroup_name,
-            NULL::text AS ad_name, r.name AS material_name, NULL::text AS drama_name,
-            NULL::numeric AS target_roas, NULL::numeric AS campaign_budget, NULL::numeric AS adgroup_budget,
-            NULL::numeric AS balance, NULL::text AS balance_currency,
-            '[]'::jsonb AS refs,'[]'::jsonb AS material_uses,'[]'::jsonb AS member_keys,
-            r.member_count,r.evidence_versions
-        FROM rowsrc r
-        WHERE (r.has_uses OR {null_ok}) AND {text_ok} AND {metric_ok}
+        SELECT r.row_key,r.name,r.account_name,NULL::text AS campaign_name,NULL::text AS adgroup_name,
+            NULL::text AS ad_name,r.name AS material_name,NULL::text AS drama_name,
+            NULL::numeric AS target_roas,NULL::numeric AS campaign_budget,NULL::numeric AS adgroup_budget,
+            NULL::numeric AS balance,NULL::text AS balance_currency,r.member_count,r.evidence_versions
+        FROM rowsrc r WHERE {metric}
     )""")
     return ",\n".join(ctes), "base"
 
@@ -1230,11 +1018,9 @@ def insert_snapshot_rows(
         filters, tenant_id=tenant_id, advertisers=advertisers, bc_id=bc_id
     )
     params |= {"snapshot_id": snapshot_id, "dimension": filters.dimension}
-    unsupported = (
-        MATERIAL_UNSUPPORTED if filters.dimension == "material" else frozenset()
-    )
+    unsupported = frozenset()
     coverage_source = (
-        "SELECT tenant_id,advertiser_id,'material_day' AS report_kind,stat_date,status FROM material_period"
+        "SELECT tenant_id,advertiser_id,'creative_material' AS report_kind,stat_date,status FROM material_period"
         if filters.dimension == "material"
         else "SELECT tenant_id,advertiser_id,report_kind,stat_date,status FROM report_sync_state"
     )
@@ -1279,7 +1065,7 @@ def insert_snapshot_rows(
         (SELECT COALESCE(array_agg(DISTINCT d.day::date ORDER BY d.day::date), ARRAY[]::date[])
            FROM bad b CROSS JOIN generate_series(CAST(:start AS date), CAST(:end AS date), interval '1 day') d(day)
            WHERE NOT EXISTS (SELECT 1 FROM ({coverage_source}) s WHERE s.tenant_id = :tenant
-               AND s.advertiser_id = b.adv AND s.report_kind = '{"material_day" if filters.dimension == "material" else "ad_day"}'
+               AND s.advertiser_id = b.adv AND s.report_kind = '{"creative_material" if filters.dimension == "material" else "ad_day"}'
                AND s.stat_date = d.day::date AND s.status = 'COMPLETE')) AS bad_dates,
         {account_versions} AS account_versions
     """

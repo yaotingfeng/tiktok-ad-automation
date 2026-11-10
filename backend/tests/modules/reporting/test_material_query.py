@@ -3,29 +3,69 @@ from datetime import UTC, date, datetime
 from decimal import Decimal
 from uuid import uuid4
 
+from sqlalchemy import text
+
+from app.modules.ads.creative_models import AdCreative
 from app.modules.ads.models import AdMaterialReference, AdObject
-from app.modules.reporting.publish import AccountMeta, publish_material_day
+from app.modules.reporting.publish import AccountMeta, publish_creative_day
 from app.modules.reporting.schemas import ReportingFilter
-from app.modules.reporting.store_models import MaterialPostLink
+from app.modules.reporting.store_models import (
+    METRIC_COLUMNS,
+    CreativeReportDay,
+    ReportSyncState,
+)
 from tests.modules.reporting.query_helpers import build_rows
 
 D = date(2026, 10, 5)
 
 
-def material_row(post_id, spend, name=None):
-    # Spark 广告的素材日报主素材是帖子 ID，类型 VIDEO_SPARK_ADS。
-    return {
-        "dimensions": {
-            "main_material_id": post_id,
-            "main_material_type": "VIDEO_SPARK_ADS",
-            "stat_time_day": str(D),
-        },
-        "metrics": {"spend": spend, "main_material_name": name or post_id},
-    }
+def material_row(creative_id, spend, _name=None):
+    from tests.modules.reporting.test_creative_reporting import creative_row
+
+    row = creative_row(creative_id, spend, "0")
+    for key in row["metrics"]:
+        if key.startswith("native_growth") or key in {"impressions", "clicks"}:
+            row["metrics"][key] = "0"
+    return row
+
+
+def reconcile(session, seed, adv):
+    # 查询夹具的广告总账恰好等于创意总账；差额专项另有独立用例。
+    session.flush()
+    columns = ",".join(METRIC_COLUMNS)
+    params = {"t": seed.tenant_id, "a": adv, "d": D}
+    session.execute(
+        text(
+            "DELETE FROM ad_report_day WHERE tenant_id=:t AND advertiser_id=:a AND stat_date=:d"
+        ),
+        params,
+    )
+    session.execute(
+        text(f"""INSERT INTO ad_report_day
+        (tenant_id,advertiser_id,stat_date,ad_id,campaign_id,adgroup_id,currency,timezone,fetched_at,sync_job_id,{columns})
+        SELECT tenant_id,advertiser_id,stat_date,creative_id,campaign_id,adgroup_id,currency,timezone,fetched_at,sync_job_id,{columns}
+        FROM creative_report_day WHERE tenant_id=:t AND advertiser_id=:a AND stat_date=:d"""),
+        params,
+    )
+    session.merge(
+        ReportSyncState(
+            tenant_id=seed.tenant_id,
+            advertiser_id=adv,
+            report_kind="ad_day",
+            stat_date=D,
+            status="COMPLETE",
+            observed_at=datetime.now(UTC),
+            last_success_at=datetime.now(UTC),
+            publication_version=1,
+        )
+    )
+    session.flush()
 
 
 def publish(session, seed, adv, rows):
-    publish_material_day(
+    for row in rows:
+        row["metrics"]["advertiser_id"] = adv
+    publish_creative_day(
         session,
         tenant_id=seed.tenant_id,
         job_id=uuid4(),
@@ -34,10 +74,11 @@ def publish(session, seed, adv, rows):
         end=D,
         rows=rows,
     )
+    reconcile(session, seed, adv)
 
 
 def use(session, seed, *, adv, ad, video, ad_material, post=None, adgroup="g1"):
-    """目录里的一个素材使用位置；给出 post 时写入“帖子 → 广告”对照。"""
+    """当前唯一使用位置及创意身份；旧夹具参数名 post 现在表示 creative_id。"""
     now = datetime.now(UTC)
     session.add(
         AdMaterialReference(
@@ -53,18 +94,28 @@ def use(session, seed, *, adv, ad, video, ad_material, post=None, adgroup="g1"):
         )
     )
     if post:
-        session.add(
-            MaterialPostLink(
+        session.merge(
+            AdCreative(
                 tenant_id=seed.tenant_id,
                 advertiser_id=adv,
-                main_material_id=post,
+                creative_id=post,
                 ad_remote_id=ad,
-                main_material_type="VIDEO_SPARK_ADS",
                 ad_material_id=ad_material,
+                material_type="VIDEO",
                 platform_material_id=video,
+                identity_status="RESOLVED",
+                assets=[{"material_type": "VIDEO", "platform_material_id": video}],
+                name=f"{video}.mp4",
+                first_observed_at=now,
                 observed_at=now,
+                published_version=1,
             )
         )
+        fact = session.get(CreativeReportDay, (seed.tenant_id, adv, D, post))
+        if fact:
+            fact.adgroup_id = adgroup
+            session.add(fact)
+            reconcile(session, seed, adv)
     for kind, remote_id, parent, name, status in (
         ("ad", ad, adgroup, f"广告{ad}", "ENABLE"),
         ("adgroup", adgroup, "c1", f"组{adgroup}", "DISABLE"),
@@ -113,7 +164,7 @@ def test_page_coverage_does_not_rescan_all_accounts_for_every_row(
 
     publish(session, sync_seed, "acc-1", [material_row("p1", "10")])
     publish(session, sync_seed, "acc-2", [material_row("p2", "20")])
-    original = material_query.projected_states
+    original = material_query.creative_states
     visits = []
     sizes = []
 
@@ -124,20 +175,20 @@ def test_page_coverage_does_not_rescan_all_accounts_for_every_row(
                 yield item
 
     def counted(*args, **kwargs):
-        states, projections = original(*args, **kwargs)
+        states = original(*args, **kwargs)
         sizes.append(len(states))
-        return CountedStates(states), projections
+        return CountedStates(states)
 
-    monkeypatch.setattr(material_query, "projected_states", counted)
+    monkeypatch.setattr(material_query, "creative_states", counted)
     rows = query(session, sync_seed)
     assert len(rows) == 2
-    assert all(row.coverage["status"] == "COMPLETE" for row in rows)
+    assert all(row.coverage["status"] == "INCOMPLETE" for row in rows)
     # 页补全对全账户状态只允许固定次数遍历，不能随账户数或行数相乘。
     assert sum(visits) <= 3 * sum(sizes)
 
 
-def test_unlinked_posts_keep_money_as_post_rows(session, sync_seed):
-    # 对不上广告的帖子单独成行，金额不丢，仍可排序。
+def test_unmapped_creatives_keep_money_as_unknown_rows(session, sync_seed):
+    # 未映射创意单独成行，金额不丢，仍可排序。
     publish(
         session,
         sync_seed,
@@ -146,14 +197,14 @@ def test_unlinked_posts_keep_money_as_post_rows(session, sync_seed):
     )
     rows = query(session, sync_seed, sort_by="spend", sort_direction="desc")
     assert [json.loads(r.row_key) for r in rows] == [
-        ["post", "acc-1", "p2"],
-        ["post", "acc-1", "p1"],
+        ["unmapped_creative", "acc-1", "p2"],
+        ["unmapped_creative", "acc-1", "p1"],
     ]
     for r in rows:
-        assert r.coverage["reason"] == "usage_unknown"
+        assert r.coverage["reason"] == "creative_identity_unmapped"
         assert r.material_uses == ()
         assert r.display["account_id"] == "acc-1"
-        assert r.metric_buckets[0].availability["revenue_d3"] == "UNSUPPORTED"
+        assert r.metric_buckets[0].availability["revenue_d3"] == "PARTIAL"
 
 
 def test_same_video_across_ads_and_accounts_is_one_row(session, sync_seed):
@@ -193,7 +244,7 @@ def test_same_video_across_ads_and_accounts_is_one_row(session, sync_seed):
         post="p3",
     )
     rows = query(session, sync_seed)
-    assert [json.loads(r.row_key) for r in rows] == [["material", "v1"]]
+    assert [json.loads(r.row_key) for r in rows] == [["material", "VIDEO", "v1"]]
     row = rows[0]
     assert row.metric_buckets[0].values["spend"] == Decimal(22)
     assert {
@@ -343,14 +394,16 @@ def test_default_material_rows_match_full_listing_for_videos_with_facts(
         }
 
     default, full = rows(False), rows(True)
-    assert list(default) == ['["material", "v1"]']
-    assert default['["material", "v1"]'] == full['["material", "v1"]']
-    display, buckets, uses = default['["material", "v1"]']
-    assert buckets[0].values["spend"] == Decimal(10)
-    assert {(u.ad_ref.advertiser_id, u.ad_ref.remote_id) for u in uses} == {
-        ("acc-1", "a1"),
-        ("acc-2", "b1"),
-    }
+    key = '["material", "VIDEO", "v1"]'
+    assert list(default) == [key]
+    assert (
+        default[key][1][0].values["spend"]
+        == full[key][1][0].values["spend"]
+        == Decimal(10)
+    )
+    # 默认仅有创意事实的精确广告位置；include_empty 才加入无事实当前使用位置。
+    assert len(default[key][2]) == 1
+    assert len(full[key][2]) == 2
 
 
 def test_material_grouping_keeps_exact_case_and_unicode_post_identities(

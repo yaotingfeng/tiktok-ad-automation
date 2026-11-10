@@ -46,11 +46,11 @@ from app.modules.reporting.read_models.models import (
     AccountReportDayState,
 )
 from app.modules.reporting.row_set import (
-    MATERIAL_UNSUPPORTED,
     SnapshotTotals,
     insert_snapshot_rows,
 )
 from app.modules.reporting.schemas import (
+    MATERIAL_QUERY_CONTRACT,
     AdsQueryPage,
     QuerySnapshotPublic,
     ReportingFilter,
@@ -84,14 +84,14 @@ def _decode_cursor(value: str) -> dict[str, Any]:
         raise HTTPException(404, detail="query_cursor_not_found") from exc
 
 
-def _summary(totals: SnapshotTotals, *, dimension: str) -> dict[str, Any]:
+def _summary(totals: SnapshotTotals) -> dict[str, Any]:
     """汇总按币种分桶，与行内合并共用部分合计规则（数据库内按成员计算）。
 
     混口径/混币种桶仍按桶展示，不偷偷换汇。缺覆盖的成员不当成 0：已同步部分照常
     相加并标 PARTIAL，同时给出不完整账户数与缺失日期，由页面提示"N 个账户数据
     不完整"。
     """
-    unsupported = MATERIAL_UNSUPPORTED if dimension == "material" else frozenset()
+    unsupported = frozenset()
     buckets = []
     for bucket in totals.buckets:
         values = {
@@ -188,6 +188,8 @@ def _build_snapshot(
             raise HTTPException(409, detail="query_membership_unavailable")
     now = datetime.now(UTC)
     publication_versions = {"reporting": 1}
+    if filters.dimension == "material":
+        publication_versions["material_query_contract"] = MATERIAL_QUERY_CONTRACT
     state_model = (
         AccountReportDayState if filters.dimension == "account" else ReportSyncState
     )
@@ -238,7 +240,7 @@ def _build_snapshot(
         else pin_snapshot_names(session, snapshot=snapshot)
     )
     snapshot.total = totals.total
-    snapshot.summary = _summary(totals, dimension=filters.dimension)
+    snapshot.summary = _summary(totals)
     snapshot.coverage = {
         "status": "EMPTY"
         if not totals.total
@@ -248,6 +250,7 @@ def _build_snapshot(
     if filters.dimension == "material":
         projected = read_projection_coverage(
             session,
+            kind="creative_material",
             tenant_id=context.tenant_id,
             advertisers=allowed_ids,
             start=filters.start_date,
@@ -324,6 +327,7 @@ def _read_page(
     if filters.dimension == "material":
         metrics_coverage = read_projection_coverage(
             session,
+            kind="creative_material",
             tenant_id=context.tenant_id,
             advertisers=snapshot.advertiser_ids,
             start=filters.start_date,

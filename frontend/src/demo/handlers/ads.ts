@@ -188,7 +188,7 @@ handle("ads_reporting-query_ads", (req) => {
               adgroup_name: adgroup.name,
               adgroup_id: adgroup.adgroup_id,
               creative_format: ad.carousel_creatives ? "CAROUSEL_ADS" : "VIDEO",
-              metric_scope: ad.carousel_creatives ? "AD" : "MATERIAL",
+              metric_scope: "CREATIVE",
               creative_linkage: ad.carousel_creatives ? "COMPLETE" : null,
               ad_name: ad.name,
               ad_id: ad.ad_id,
@@ -921,7 +921,7 @@ handle("ads_reporting-ad_materials", (req) => {
       coverage: { status: "COMPLETE" },
       carousel_creatives: ad.carousel_creatives,
       carousel_linkage_complete: true,
-      metric_scope: "AD",
+      metric_scope: "CREATIVE",
       frozen_creative_links: ad.frozen_creative_links ?? [],
     } satisfies AdMaterialsPublic
   const materials = materialsOfDrama(campaign.drama_id).filter(
@@ -943,8 +943,7 @@ handle("ads_reporting-ad_materials", (req) => {
       },
       name: material.file_name,
       operation_status: ad.status,
-      post_ids: [`post-${material.id}`],
-      shared: false,
+      creative_ids: [`creative-${material.id}`],
       metric_buckets: [
         {
           currency: "USD",

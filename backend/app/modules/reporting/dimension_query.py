@@ -193,10 +193,8 @@ def _aggregate(
     start: date,
     end: date,
     ids: Iterable[str] | None = None,
-    material_types: Collection[str] | None = None,
     identities: Collection[tuple[str, str]] | None = None,
 ) -> list[RowMapping]:
-    table_name = model.__tablename__
     source = None
     wanted = None
     if identities is not None:
@@ -226,32 +224,6 @@ def _aggregate(
             .lateral()
         )
         model = aliased(model, source)
-    elif table_name == "material_entity_day" and ids is not None:
-        # 素材一行跨多个账户，身份先由页内row_key限定，再在外层核验授权账户。
-        # 与目录点查相同，OFFSET 0防止优化器改成数千账户的期间主键探测。
-        ids = tuple(dict.fromkeys(ids))
-        if not ids:
-            return []
-        wanted = (
-            func.unnest(bindparam(None, list(ids), type_=ARRAY(Text)))
-            .table_valued("rid")
-            .render_derived()
-        )
-        source = (
-            sql_select(model)
-            .where(
-                model.tenant_id == tenant_id,
-                model.row_key == wanted.c.rid,
-                model.stat_date >= start,
-                model.stat_date <= end,
-            )
-            .offset(0)
-            .correlate(wanted)
-            .lateral()
-        )
-        model = aliased(model, source)
-    # 同一对象跨日按部分合计规则（设计 7.3）：只合计有值的日期，另带
-    # "<列>_has_null" 标记该列是否有日期为空，由 fact_vector 标成 PARTIAL。
     columns = [col(getattr(model, name)) for name in group_cols]
     metadata = [
         func.array_agg(
@@ -269,12 +241,8 @@ def _aggregate(
             "campaign_name",
             "adgroup_name",
             "ad_name",
-            "main_material_name",
-            "main_material_type",
         )
-        if hasattr(model, name)
-        and name not in group_cols
-        and not (table_name == "material_entity_day" and name == "main_material_name")
+        if hasattr(model, name) and name not in group_cols
     ]
     stmt = (
         sql_select(
@@ -302,12 +270,6 @@ def _aggregate(
             col(model.advertiser_id).in_(advertisers),
             model.stat_date >= start,
             model.stat_date <= end,
-            # 只有明确的素材消费者传类型；广告/系列与一般事实聚合维持原口径。
-            *(
-                []
-                if material_types is None
-                else [col(model.main_material_type).in_(material_types)]
-            ),
             # 分页补全只读页面对象的事实。
             *([] if ids is None else [any_of(col(getattr(model, group_cols[1])), ids)]),
         )
@@ -608,7 +570,12 @@ def materialize_rows(
     # 账户行的 refs 是冻结的系列集合，行身份是账户本身。
     identities = {
         member.row_key: (
-            ((member.row_key.split(":account:", 1)[0],) * 2,)
+            (
+                (
+                    member.row_key.split(":account:", 1)[0],
+                    member.row_key.split(":account:", 1)[0],
+                ),
+            )
             if kind == "account"
             else tuple(
                 (ref.advertiser_id, ref.remote_id) for ref in row_refs[member.row_key]

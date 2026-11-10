@@ -248,13 +248,9 @@ export type AdMaterialPublic = {
      */
     operation_status?: string | null;
     /**
-     * Post Ids
+     * Creative Ids
      */
-    post_ids?: Array<string>;
-    /**
-     * Shared
-     */
-    shared?: boolean;
+    creative_ids?: Array<string>;
     /**
      * Metric Buckets
      */
@@ -292,7 +288,11 @@ export type AdMaterialsPublic = {
     /**
      * Metric Scope
      */
-    metric_scope?: 'AD' | 'MATERIAL';
+    metric_scope?: 'CREATIVE';
+    /**
+     * Creative Rows
+     */
+    creative_rows?: Array<ReportRow>;
     /**
      * Frozen Creative Links
      */
@@ -9980,9 +9980,9 @@ export type SyncHealthPublic = {
      */
     missing_directory_ads?: number;
     /**
-     * Unlinked Material Posts
+     * Unmapped Creatives
      */
-    unlinked_material_posts?: number;
+    unmapped_creatives?: number;
     /**
      * Pending Actions
      */
@@ -15006,6 +15006,10 @@ export type adsReportingAdTrendData = {
          * Ids
          */
         ids?: string | null;
+        /**
+         * Snapshot Id
+         */
+        snapshot_id?: string | null;
     };
     url: '/api/tenants/{tenant_id}/ads/trend';
 };

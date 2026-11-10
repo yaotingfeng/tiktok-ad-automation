@@ -15,6 +15,9 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from app.integrations.tiktok.contracts.ads import EntityRef, MaterialUseRef
 from app.integrations.tiktok.contracts.carousel import CarouselCreativeIdentity
 
+# 素材经济事实源与行键已切换；缓存和冻结快照必须使用同一合同代数。
+MATERIAL_QUERY_CONTRACT = 2
+
 Dimension = Literal["account", "campaign", "adgroup", "ad", "material", "drama"]
 # PARTIAL 表示部分合计：只合计有值的成员（跨日、跨账户或跨对象），缺失成员既不
 # 参与求和也不当成 0；会出现在报表行、汇总卡片和趋势点上（设计 7.3）。
@@ -312,7 +315,7 @@ class SyncHealthPublic(BaseModel):
     stale_ad_accounts: int = 0
     stale_material_accounts: int = 0
     missing_directory_ads: int = 0
-    unlinked_material_posts: int = 0
+    unmapped_creatives: int = 0
     pending_actions: int = 0
     oldest_data_at: datetime | None = None
     issues: tuple[str, ...] = ()

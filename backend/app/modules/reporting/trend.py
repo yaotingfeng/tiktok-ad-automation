@@ -10,25 +10,27 @@ from __future__ import annotations
 from collections import defaultdict
 from datetime import UTC, date, datetime, time, timedelta
 from typing import Any, Literal, cast
+from urllib.parse import unquote
+from uuid import UUID
 from zoneinfo import ZoneInfo
 
 from fastapi import HTTPException
-from sqlalchemy import and_, false, func, or_, tuple_
+from sqlalchemy import func
 from sqlalchemy import select as sql_select
 from sqlmodel import Session, col, select
 
 from app.core.context import TenantContext
+from app.modules.reporting.creative_query import creative_states
 from app.modules.reporting.dimension_query import merge_metric_buckets, metric_vector
 from app.modules.reporting.filters import authorized_grants
-from app.modules.reporting.material_links import post_video_map
 from app.modules.reporting.planner import request_campaign_hours
+from app.modules.reporting.read_models.models import CreativeMaterialEntityDay
 from app.modules.reporting.schemas import MetricVector, TrendPoint, TrendPublic
 from app.modules.reporting.store_models import (
     METRIC_COLUMNS,
     AdReportDay,
     CampaignReportDay,
     CampaignReportHour,
-    MaterialReportDay,
     ReportSyncState,
 )
 
@@ -44,10 +46,8 @@ _DAY_MODELS: dict[str, tuple[Any, str, str]] = {
     "campaign": (CampaignReportDay, "campaign_id", "ad_day"),
     "adgroup": (AdReportDay, "adgroup_id", "ad_day"),
     "ad": (AdReportDay, "ad_id", "ad_day"),
-    "material": (MaterialReportDay, "main_material_id", "material_day"),
+    "material": (CreativeMaterialEntityDay, "row_key", "creative_material"),
 }
-# 素材报表平台不提供 D3、D30，与素材维度行一致标为不支持而不是缺失。
-_MATERIAL_UNSUPPORTED = frozenset({"revenue_d3", "revenue_d30"})
 
 
 def _invalid(detail: str) -> HTTPException:
@@ -70,6 +70,7 @@ def build_trend(
     end: date,
     granularity: str,
     now: datetime | None = None,
+    snapshot_id: UUID | None = None,
 ) -> TrendPublic:
     if end < start:
         raise _invalid("trend_range_invalid")
@@ -121,6 +122,25 @@ def build_trend(
                 func.count(col(getattr(model, name))).label(f"n_{name}")
                 for name in METRIC_COLUMNS
             ],
+            *(
+                [
+                    func.bool_or(col(getattr(model, f"{name}_has_null"))).label(
+                        f"null_{name}"
+                    )
+                    for name in METRIC_COLUMNS
+                ]
+                if level == "material"
+                else []
+            ),
+            *(
+                [
+                    func.bool_or(
+                        col(CreativeMaterialEntityDay.source_status) != "COMPLETE"
+                    ).label("source_incomplete")
+                ]
+                if level == "material"
+                else []
+            ),
             func.count().label("n_rows"),
         )
         .where(
@@ -138,36 +158,49 @@ def build_trend(
         )
     else:
         stmt = stmt.where(time_col >= start, time_col <= end)
-    if ids and level == "material":
-        # 素材行以视频为身份：视频 ID 展开为它在各账户、各广告的帖子；
-        # 对不上视频的帖子行直接以帖子 ID 查询。
-        video_of = post_video_map(
+    if ids:
+        # 素材趋势必须传完整命名空间行键，不能将图片/视频同名 ID 混为一个素材。
+        stmt = stmt.where(col(getattr(model, id_col)).in_(ids))
+    if level == "material":
+        from app.modules.reporting.creative_query import trend_rows
+        from app.modules.reporting.query_models import read_snapshot
+        from app.modules.reporting.schemas import ReportingFilter
+        from app.modules.reporting.snapshot_members import _material_key
+
+        filters = ReportingFilter(dimension="material", start_date=start, end_date=end)
+        if snapshot_id is not None:
+            snapshot = read_snapshot(
+                session, context=context, bc_id=bc_id, snapshot_id=snapshot_id
+            )
+            if snapshot.filters.get("dimension") != "material":
+                raise _invalid("trend_snapshot_dimension_invalid")
+            scope &= set(snapshot.advertiser_ids)
+            filters = ReportingFilter.model_validate(snapshot.filters).model_copy(
+                update={"start_date": start, "end_date": end}
+            )
+        keys = tuple(
+            unquote(key.removeprefix("material:"))
+            if key.startswith("material:")
+            else key
+            for key in ids
+        )
+        for key in keys:
+            _material_key(key, scope)
+        rows = trend_rows(
             session,
             tenant_id=context.tenant_id,
             advertisers=sorted(scope),
-            start=start,
-            end=end,
+            filters=filters,
+            row_keys=keys,
         )
-        posts = [key for key, vid in video_of.items() if vid in ids]
-        mapped_direct = [key for key in video_of if key[1] in ids]
-        identity = tuple_(
-            col(MaterialReportDay.advertiser_id),
-            col(MaterialReportDay.main_material_id),
-            col(MaterialReportDay.main_material_type),
-        )
-        # 与列表同一归属：视频趋势只含精确类型；原始帖子趋势只含未归到视频的事实。
-        raw_post = col(MaterialReportDay.main_material_id).in_(ids)
-        if mapped_direct:
-            raw_post = and_(raw_post, ~identity.in_(mapped_direct))
-        stmt = stmt.where(or_(raw_post, identity.in_(posts) if posts else false()))
-    elif ids:
-        stmt = stmt.where(col(getattr(model, id_col)).in_(ids))
-    rows = session.connection().execute(stmt).mappings().all()
+    else:
+        rows = session.connection().execute(stmt).mappings().all()
 
-    unsupported = _MATERIAL_UNSUPPORTED if level == "material" else frozenset()
+    unsupported = frozenset()
     by_point: dict[str, list[MetricVector]] = defaultdict(list)
     point_days: dict[str, set[date]] = defaultdict(set)
     zones: set[str] = set()
+    partial_days: set[date] = set()
     for row in rows:
         if granularity == "hour":
             instant = cast(datetime, row["at"]).astimezone(UTC)
@@ -183,8 +216,16 @@ def build_trend(
         }
         # 部分合计规则：某点内有成员该列为 NULL 时不当 0，已有值相加并标 PARTIAL。
         partial = {
-            name for name in METRIC_COLUMNS if 0 < row[f"n_{name}"] < row["n_rows"]
+            name
+            for name in METRIC_COLUMNS
+            if 0 < row[f"n_{name}"] < row["n_rows"]
+            or (
+                level == "material"
+                and (row[f"null_{name}"] or row["source_incomplete"])
+            )
         }
+        if level == "material" and row["source_incomplete"]:
+            partial_days.add(local_day)
         zones.add(row["timezone"])
         point_days[key].add(local_day)
         by_point[key].append(
@@ -206,6 +247,14 @@ def build_trend(
             col(ReportSyncState.stat_date) <= end,
         )
     ).all()
+    if level == "material":
+        states = creative_states(
+            session,
+            tenant_id=context.tenant_id,
+            advertisers=sorted(scope),
+            start=start,
+            end=end,
+        )
     complete_days: dict[date, set[str]] = defaultdict(set)
     for state in states:
         if state.status == "COMPLETE":
@@ -214,7 +263,7 @@ def build_trend(
     def day_coverage(day: date, has_facts: bool) -> Coverage:
         done = complete_days.get(day, set())
         if scope and done >= scope:
-            return "COMPLETE"
+            return "INCOMPLETE" if day in partial_days else "COMPLETE"
         return "INCOMPLETE" if done or has_facts else "MISSING"
 
     if granularity == "day":

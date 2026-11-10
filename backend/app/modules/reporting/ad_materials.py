@@ -1,23 +1,16 @@
-"""广告详情里的素材：这条广告下每个素材在所选日期的数据，以及只针对本广告的启停选择。
-
-数据取自素材日报（含收入），经 material_post_link 归到本广告：Spark 帖子只属于一条
-广告，数据就是这个素材在本广告里的表现。非 Spark 主素材可能被多条广告共用，平台
-不拆分，这类行标 shared，金额是共用广告的合计。
-"""
+"""广告详情：本广告的创意经济事实，以及精确当前素材位置的管理动作。"""
 
 from __future__ import annotations
 
 import hashlib
 import json
-from collections import defaultdict
 from datetime import UTC, date, datetime, timedelta
 from typing import Literal
 from uuid import uuid4
 
 from fastapi import HTTPException
 from pydantic import BaseModel, ConfigDict
-from sqlalchemy import text
-from sqlmodel import Session, select
+from sqlmodel import Session
 
 from app.core.context import TenantContext
 from app.core.errors import DomainError
@@ -33,25 +26,25 @@ from app.modules.reporting.carousel_links import (
     FrozenCarouselLink,
     frozen_carousel_links,
 )
+from app.modules.reporting.creative_query import creative_states, read_facts
 from app.modules.reporting.dimension_query import (
     COMPLETE_COVERAGE_STATUSES,
-    _aggregate,
     _coverage,
     empty_metric_values,
-    fact_vector,
     merge_metric_buckets,
     metric_vector,
 )
-from app.modules.reporting.material_value import VIDEO_REPORT_TYPES
+from app.modules.reporting.material_query import materialize_material_rows
 from app.modules.reporting.query_models import FrozenSelectionRecord
-from app.modules.reporting.row_set import MATERIAL_UNSUPPORTED
+from app.modules.reporting.row_set import SnapshotMember
 from app.modules.reporting.schemas import (
     FrozenSelection,
     MetricVector,
     ReportingFilter,
+    ReportRow,
 )
 from app.modules.reporting.selection import selection_digest, selection_public
-from app.modules.reporting.store_models import MaterialReportDay, ReportSyncState
+from app.modules.reporting.store_models import METRIC_COLUMNS
 
 MAX_DAY_SPAN = 90
 SELECTION_TTL = timedelta(minutes=15)
@@ -63,10 +56,7 @@ class AdMaterialPublic(BaseModel):
     use_ref: MaterialUseRef
     name: str = ""
     operation_status: str | None = None
-    # 报表里的主素材 ID（Spark 为帖子 ID）；未出现在素材日报时为空。
-    post_ids: tuple[str, ...] = ()
-    # 主素材被多条广告共用：平台不拆分，金额是这些广告的合计。
-    shared: bool = False
+    creative_ids: tuple[str, ...] = ()
     metric_buckets: tuple[MetricVector, ...] = ()
 
 
@@ -76,7 +66,8 @@ class AdMaterialsPublic(BaseModel):
     items: tuple[AdMaterialPublic, ...] = ()
     carousel_creatives: tuple[CarouselCreativeIdentity, ...] = ()
     carousel_linkage_complete: bool = True
-    metric_scope: Literal["AD", "MATERIAL"] = "MATERIAL"
+    metric_scope: Literal["CREATIVE"] = "CREATIVE"
+    creative_rows: tuple[ReportRow, ...] = ()
     frozen_creative_links: tuple[FrozenCarouselLink, ...] = ()
     coverage: dict[str, object] = {}
 
@@ -122,68 +113,50 @@ def list_ad_materials(
         # 目录主响应缺内容时只能确认图片格式，不以扁平使用记录猜顺序和曲目。
         carousel = CarouselDirectory(is_carousel=True, complete=False)
     uses = [use for use in current_uses if use.material_type != "IMAGE"]
-    links = session.connection().execute(
-        text("""
-        SELECT l.platform_material_id AS vid, l.main_material_id, l.main_material_type,
-            (SELECT count(*) FROM material_post_link o
-              WHERE o.tenant_id = l.tenant_id AND o.advertiser_id = l.advertiser_id
-                AND o.main_material_id = l.main_material_id) > 1 AS shared
-        FROM material_post_link l
-        WHERE l.tenant_id = :t AND l.advertiser_id = :a AND l.ad_remote_id = :ad
-          AND l.main_material_type IN ('VIDEO_SPARK_ADS','VIDEO_NON_SPARK_ADS')
-        """),
-        {"t": context.tenant_id, "a": advertiser_id, "ad": ad_id},
+    filters = ReportingFilter(
+        dimension="material", start_date=start, end_date=end, ids=(ad_id,)
     )
-    # 按视频归集本广告的帖子：素材重建后同一视频在本广告可能有新旧多条帖子。
-    posts: dict[str | None, list[str]] = defaultdict(list)
-    shared: set[str] = set()
-    post_types: set[tuple[str, str]] = set()
-    for row in links:
-        posts[row.vid].append(row.main_material_id)
-        post_types.add((row.main_material_id, row.main_material_type))
-        if row.shared:
-            shared.add(row.main_material_id)
-    post_ids = sorted({mid for mids in posts.values() for mid in mids})
-    facts = defaultdict(list)
-    if post_ids:
-        for item in _aggregate(
-            session,
-            model=MaterialReportDay,
-            group_cols=["advertiser_id", "main_material_id", "main_material_type"],
-            tenant_id=context.tenant_id,
-            advertisers=[advertiser_id],
-            start=start,
-            end=end,
-            ids=post_ids,
-            material_types=VIDEO_REPORT_TYPES,
-        ):
-            if (item["main_material_id"], item["main_material_type"]) in post_types:
-                facts[item["main_material_id"]].append(item)
-    filters = ReportingFilter(dimension="material", start_date=start, end_date=end)
-    states = session.exec(
-        select(ReportSyncState).where(
-            ReportSyncState.tenant_id == context.tenant_id,
-            ReportSyncState.advertiser_id == advertiser_id,
-            ReportSyncState.report_kind == "material_day",
-            ReportSyncState.stat_date >= start,
-            ReportSyncState.stat_date <= end,
-        )
-    ).all()
+    facts = read_facts(
+        session,
+        tenant_id=context.tenant_id,
+        advertisers=[advertiser_id],
+        filters=filters,
+        exact_ad=ad_id,
+    )
+    states = creative_states(
+        session,
+        tenant_id=context.tenant_id,
+        advertisers=[advertiser_id],
+        start=start,
+        end=end,
+    )
     coverage = _coverage(
-        states, advertisers={advertiser_id}, filters=filters, kind="material_day"
+        states, advertisers={advertiser_id}, filters=filters, kind="creative_material"
     )
     incomplete = coverage["status"] not in COMPLETE_COVERAGE_STATUSES
     account = session.get(AdvertiserAccount, (context.tenant_id, advertiser_id))
     empty = empty_metric_values(
-        states, advertiser=advertiser_id, filters=filters, kind="material_day"
+        states, advertiser=advertiser_id, filters=filters, kind="creative_material"
     )
     items = []
     for use in uses:
-        mids = sorted(set(posts.get(use.platform_material_id, [])))
+        # 不把共享 VID 的另一条广告金额带入本位置，也不把轮播金额分给图片。
+        items_for_use = [
+            f
+            for f in facts
+            if f["material_type"] == use.material_type
+            and f["platform_material_id"] == use.platform_material_id
+            and f["ad_material_id"] == use.ad_material_id
+            and f["ad_remote_id"] == ad_id
+        ]
         vectors = tuple(
-            fact_vector(item, unsupported=MATERIAL_UNSUPPORTED)
-            for mid in mids
-            for item in facts.get(mid, [])
+            metric_vector(
+                f,
+                currency=f["currency"],
+                timezone=f["timezone"],
+                partial={m for m in METRIC_COLUMNS if f[f"{m}_has_null"]},
+            )
+            for f in items_for_use
         )
         if not vectors and account is not None:
             # 无数据的素材按账户覆盖填 0 或空，与报表其他维度一致。
@@ -192,7 +165,6 @@ def list_ad_materials(
                     empty,
                     currency=account.currency,
                     timezone=account.timezone,
-                    unsupported=MATERIAL_UNSUPPORTED,
                 ),
             )
         items.append(
@@ -200,9 +172,19 @@ def list_ad_materials(
                 use_ref=use.use_ref,
                 name=use.name,
                 operation_status=use.operation_status,
-                post_ids=tuple(mids),
-                shared=any(mid in shared for mid in mids),
-                metric_buckets=merge_metric_buckets([(vectors, incomplete)]),
+                creative_ids=tuple(sorted({f["creative_id"] for f in items_for_use})),
+                metric_buckets=merge_metric_buckets(
+                    [
+                        (
+                            vectors,
+                            incomplete
+                            or any(
+                                f["source_status"] != "COMPLETE" or f["unallocated"]
+                                for f in items_for_use
+                            ),
+                        )
+                    ]
+                ),
             )
         )
     return AdMaterialsPublic(
@@ -210,7 +192,17 @@ def list_ad_materials(
         coverage=coverage,
         carousel_creatives=carousel.identities,
         carousel_linkage_complete=carousel.complete,
-        metric_scope="AD" if carousel.is_carousel else "MATERIAL",
+        creative_rows=materialize_material_rows(
+            session,
+            exact_ad=ad_id,
+            tenant_id=context.tenant_id,
+            advertisers=[advertiser_id],
+            filters=filters,
+            members=[
+                SnapshotMember(key, (), ())
+                for key in sorted({f["row_key"] for f in facts})
+            ],
+        ),
         frozen_creative_links=frozen_carousel_links(
             session,
             tenant_id=context.tenant_id,

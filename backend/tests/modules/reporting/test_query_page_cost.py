@@ -1,81 +1,69 @@
 """页内素材映射必须完整包含历史帖子，同时不加载无关身份。"""
 
 import json
-from datetime import UTC, datetime
 
-from app.modules.reporting.store_models import MaterialPostLink
 from tests.modules.reporting.test_material_query import D, material_row, publish
 
 
-def test_page_identity_is_bounded_and_keeps_historical_posts(session, sync_seed):
-    from app.modules.reporting.read_models.material_identity import (
-        hydrate_material_identities,
-    )
+def test_page_identity_is_bounded_and_keeps_historical_creatives(session, sync_seed):
+    from sqlalchemy import text
 
-    posts = ["old-post", "new-post", "other-post", "ambiguous-post", "wrong-type"]
-    publish(session, sync_seed, "acc-1", [material_row(p, "5") for p in posts])
-    for post, video, ad, kind in [
-        ("old-post", "wanted", "deleted-ad", "VIDEO_SPARK_ADS"),
-        ("new-post", "wanted", "current-ad", "VIDEO_SPARK_ADS"),
-        ("other-post", "unrelated", "other-ad", "VIDEO_SPARK_ADS"),
-        ("ambiguous-post", "wanted", "ambiguous-1", "VIDEO_SPARK_ADS"),
-        ("ambiguous-post", "aaa", "ambiguous-2", "VIDEO_SPARK_ADS"),
-        ("wrong-type", "wanted", "wrong-ad", "CAROUSEL_SPARK_ADS"),
-    ]:
-        session.add(
-            MaterialPostLink(
-                tenant_id=sync_seed.tenant_id,
-                advertiser_id="acc-1",
-                main_material_id=post,
-                main_material_type=kind,
-                ad_remote_id=ad,
-                platform_material_id=video,
-                observed_at=datetime.now(UTC),
-            )
-        )
-    session.flush()
-    mapping = hydrate_material_identities(
+    from app.modules.reporting.creative_query import read_facts
+    from app.modules.reporting.schemas import ReportingFilter
+    from tests.modules.reporting.query_helpers import finish_projections
+    from tests.modules.reporting.test_material_query import use
+
+    publish(
+        session,
+        sync_seed,
+        "acc-1",
+        [material_row(c, "5") for c in ("old", "new", "other")],
+    )
+    for c, video in [("old", "wanted"), ("new", "wanted"), ("other", "unrelated")]:
+        use(session, sync_seed, adv="acc-1", ad=c, video=video, ad_material=c, post=c)
+    session.execute(
+        text(
+            "DELETE FROM current_ad_material WHERE tenant_id=:t AND ad_remote_id='old'"
+        ),
+        {"t": sync_seed.tenant_id},
+    )
+    finish_projections(session)
+    facts = read_facts(
         session,
         tenant_id=sync_seed.tenant_id,
         advertisers=["acc-1"],
-        row_keys=[json.dumps(["material", "wanted"])],
-        start=D,
-        end=D,
+        filters=ReportingFilter(dimension="material", start_date=D, end_date=D),
+        row_keys=[json.dumps(["material", "VIDEO", "wanted"])],
     )
-    assert mapping == {
-        ("acc-1", post, "VIDEO_SPARK_ADS"): "wanted"
-        for post in ["old-post", "new-post"]
-    }
+    assert {f["creative_id"] for f in facts} == {"old", "new"}
 
 
 def test_page_identity_never_crosses_authorized_accounts(session, sync_seed):
-    from app.modules.reporting.read_models.material_identity import (
-        hydrate_material_identities,
-    )
+    from app.modules.reporting.creative_query import read_facts
+    from app.modules.reporting.schemas import ReportingFilter
+    from tests.modules.reporting.query_helpers import finish_projections
+    from tests.modules.reporting.test_material_query import use
 
     for advertiser in ["acc-1", "acc-2"]:
-        publish(session, sync_seed, advertiser, [material_row("same-post", "7")])
-        session.add(
-            MaterialPostLink(
-                tenant_id=sync_seed.tenant_id,
-                advertiser_id=advertiser,
-                main_material_id="same-post",
-                main_material_type="VIDEO_SPARK_ADS",
-                ad_remote_id="ad",
-                platform_material_id="video",
-                observed_at=datetime.now(UTC),
-            )
+        publish(session, sync_seed, advertiser, [material_row("same", "7")])
+        use(
+            session,
+            sync_seed,
+            adv=advertiser,
+            ad="ad",
+            video="video",
+            ad_material="am",
+            post="same",
         )
-    session.flush()
-    result = hydrate_material_identities(
+    finish_projections(session)
+    facts = read_facts(
         session,
         tenant_id=sync_seed.tenant_id,
         advertisers=["acc-1"],
-        row_keys=[json.dumps(["material", "video"])],
-        start=D,
-        end=D,
+        filters=ReportingFilter(dimension="material", start_date=D, end_date=D),
+        row_keys=[json.dumps(["material", "VIDEO", "video"])],
     )
-    assert set(result) == {("acc-1", "same-post", "VIDEO_SPARK_ADS")}
+    assert {f["advertiser_id"] for f in facts} == {"acc-1"}
 
 
 def test_campaign_query_does_not_read_wide_directory_or_name_history(report_case):
@@ -133,7 +121,23 @@ def test_material_page_uses_video_bound_probe_under_cold_random_io(session, sync
     # 冷随机I/O成本高时，仍应由当前页素材身份驱动；不能退为整个账户目录扫描。
     session.execute(text("SET LOCAL random_page_cost=100"))
     members = [
-        SnapshotMember(json.dumps(["material", f"video-{i}"]), (), ())
+        SnapshotMember(
+            json.dumps(["material", "VIDEO", f"video-{i}"]),
+            (),
+            (
+                {
+                    "ad_ref": {
+                        "tenant_id": str(sync_seed.tenant_id),
+                        "advertiser_id": "acc-1",
+                        "kind": "ad",
+                        "remote_id": f"ad-{i}",
+                    },
+                    "platform_material_id": f"video-{i}",
+                    "ad_material_id": None,
+                    "material_type": "VIDEO",
+                },
+            ),
+        )
         for i in range(1, 51)
     ]
     statements = []
@@ -175,3 +179,59 @@ def test_material_page_uses_video_bound_probe_under_cold_random_io(session, sync
         if node.get("Relation Name") == "current_ad_material"
     )
     assert scanned < 1000, json.dumps(plan)
+
+
+def test_creative_page_pushes_row_key_into_fact_index(session, sync_seed):
+    from sqlalchemy import event, text
+
+    from app.modules.reporting.creative_query import read_facts
+    from app.modules.reporting.schemas import ReportingFilter
+    from tests.modules.reporting.query_helpers import finish_projections
+
+    publish(session, sync_seed, "acc-1", [material_row("wanted", "5")])
+    finish_projections(session)
+    session.execute(
+        text("""INSERT INTO creative_material_entity_day
+        (tenant_id,advertiser_id,stat_date,fact_key,row_key,creative_id,campaign_id,adgroup_id,
+         currency,timezone,fetched_at,source_revision,material_type,assets,attribution_status,source_status,source_info)
+        SELECT :t,'acc-1',:d,'creative:spare-'||n,jsonb_build_array('unmapped_creative','acc-1','spare-'||n)::text,
+            'spare-'||n,'c1','g1','USD','UTC',now(),1,'UNKNOWN','[]'::jsonb,'UNMAPPED','PARTIAL','{}'::jsonb
+        FROM generate_series(1,10000)n"""),
+        {"t": sync_seed.tenant_id, "d": D},
+    )
+    session.execute(text("ANALYZE creative_material_entity_day"))
+    statements = []
+    connection = session.connection()
+
+    def capture(_conn, _cursor, statement, parameters, _context, _many):
+        if "WITH creative_selected" in statement:
+            statements.append((statement, parameters))
+
+    event.listen(connection, "before_cursor_execute", capture)
+    try:
+        rows = read_facts(
+            session,
+            tenant_id=sync_seed.tenant_id,
+            advertisers=["acc-1"],
+            filters=ReportingFilter(dimension="material", start_date=D, end_date=D),
+            row_keys=[json.dumps(["unmapped_creative", "acc-1", "wanted"])],
+        )
+    finally:
+        event.remove(connection, "before_cursor_execute", capture)
+    assert len(rows) == 1
+    statement, parameters = statements[0]
+    plan = connection.exec_driver_sql(
+        "EXPLAIN (ANALYZE,BUFFERS,TIMING OFF,FORMAT JSON) " + statement, parameters
+    ).scalar_one()[0]["Plan"]
+
+    def nodes(node):
+        yield node
+        for child in node.get("Plans", []):
+            yield from nodes(child)
+
+    scanned = sum(
+        (n["Actual Rows"] + n.get("Rows Removed by Filter", 0)) * n["Actual Loops"]
+        for n in nodes(plan)
+        if n.get("Relation Name") == "creative_material_entity_day"
+    )
+    assert scanned < 100, json.dumps(plan)

@@ -275,7 +275,12 @@ function DetailBody({
   const name = detail?.name ?? rowDisplayName(row, dimension)
   const status = statusLabel(row.display ?? {})
   // 没有快照的行无法冻结选择，不显示操作按钮。
-  const actions = readonly || !snapshotId ? [] : actionsFor(dimension)
+  const actions =
+    readonly ||
+    !snapshotId ||
+    (dimension === "material" && !row.material_uses?.length)
+      ? []
+      : actionsFor(dimension)
   // 素材挂在广告下面：只有广告（及素材自身）显示素材页签，系列、广告组不显示。
   const hasMaterials = dimension === "ad" || dimension === "material"
   return (
@@ -329,6 +334,7 @@ function DetailBody({
         </TabsContent>
         <TabsContent value="trend" className="mt-4">
           <TrendTab
+            snapshotId={snapshotId ?? undefined}
             row={row}
             dimension={dimension}
             startDate={startDate}

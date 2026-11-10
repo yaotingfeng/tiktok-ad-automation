@@ -914,7 +914,14 @@ export function AdsWorkspace() {
                   total={ads.query.data?.total ?? 0}
                   onToggle={ads.selection.toggleRow}
                   onToggleAllOnPage={(checked) =>
-                    ads.selection.toggleRows(items, checked)
+                    ads.selection.toggleRows(
+                      items.filter(
+                        (row) =>
+                          applied.dimension !== "material" ||
+                          (row.material_uses?.length ?? 0) > 0,
+                      ),
+                      checked,
+                    )
                   }
                   onOpen={(row) => openDetail(row, dimension.value)}
                   onDrill={navigateToChild}

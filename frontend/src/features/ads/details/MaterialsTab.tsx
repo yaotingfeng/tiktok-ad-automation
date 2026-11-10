@@ -5,6 +5,7 @@ import {
   type AdMaterialPublic,
   AdsReportingService,
   type MaterialUsePublic,
+  type ReportRow,
 } from "@/client"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -86,7 +87,7 @@ const AD_MATERIAL_COLUMNS = new Set([
 ])
 
 /**
- * 广告详情的素材：每个素材在这条广告里的数据（来自素材日报，按帖子归到本广告），
+ * 广告详情的素材：每个素材在这条广告里的创意报表数据，
  * 勾选后只启停本广告里的这些素材，不影响同一视频在其他广告的投放。
  */
 export function AdMaterialsTab({
@@ -172,20 +173,21 @@ export function AdMaterialsTab({
       </div>
     )
   const items = query.data?.items ?? []
-  if (query.data?.metric_scope === "AD")
+  const creativeRows = query.data?.creative_rows ?? []
+  if ((query.data?.carousel_creatives?.length ?? 0) > 0)
     return (
       <div className="space-y-3">
         <Badge variant="secondary">图片轮播</Badge>
         <p className="text-sm text-muted-foreground">
-          当前仅显示广告级消耗与收入，请在概览或趋势查看；图片和轮播单元不拆分金额。
-          图片创意暂不支持素材级自动规则
+          每个轮播创意展示一份消耗与收入，金额不分配到单张图片。
         </p>
-        {!query.data.carousel_linkage_complete && (
+        <CreativeFacts rows={creativeRows} />
+        {!query.data?.carousel_linkage_complete && (
           <p className="text-sm text-muted-foreground">
-            轮播关联不完整：缺少图片顺序或曲目证据，广告级数据仍可查看。
+            轮播关联不完整：缺少图片顺序或曲目证据，创意报表金额仍可查看。
           </p>
         )}
-        {(query.data.carousel_creatives ?? []).map((creative, index) => (
+        {(query.data?.carousel_creatives ?? []).map((creative, index) => (
           <section
             className="space-y-1 rounded-md border p-3 text-sm"
             key={`${index}:${creative.remote_creative_id ?? ""}`}
@@ -202,7 +204,7 @@ export function AdMaterialsTab({
             </div>
           </section>
         ))}
-        {(query.data.frozen_creative_links ?? []).map((link) => (
+        {(query.data?.frozen_creative_links ?? []).map((link) => (
           <div key={link.planned_ad_id} className="space-y-1">
             <Button variant="outline" size="sm" asChild>
               <Link
@@ -223,12 +225,7 @@ export function AdMaterialsTab({
         ))}
       </div>
     )
-  if (!items.length)
-    return (
-      <p className="text-sm text-muted-foreground">
-        暂无素材使用记录；外部广告仍保留。
-      </p>
-    )
+  if (!items.length) return <CreativeFacts rows={creativeRows} />
   const shown = columns.filter((column) => AD_MATERIAL_COLUMNS.has(column.key))
   // 接口一次返回本广告全部素材；按展示所用的原始数值排序，避免字符串/格式化值误排。
   // 缺失或非有限数值在两个方向都置底；相同值保持接口顺序，且不修改查询缓存。
@@ -258,6 +255,9 @@ export function AdMaterialsTab({
     })
   return (
     <div className="space-y-3">
+      <h3 className="text-sm font-medium">创意报表金额（本广告）</h3>
+      <CreativeFacts rows={creativeRows} />
+      <h3 className="text-sm font-medium">当前素材使用位置</h3>
       {previewing && (
         <section className="flex flex-col gap-2 rounded-md border p-3">
           <div className="flex items-center justify-between gap-2">
@@ -376,11 +376,6 @@ export function AdMaterialsTab({
                     <div className="truncate">
                       {item.name || item.use_ref.platform_material_id}
                     </div>
-                    {item.shared && (
-                      <Badge variant="outline" className="mt-1">
-                        多广告共用，数据为合计
-                      </Badge>
-                    )}
                   </TableCell>
                   <TableCell>{statusText(item.operation_status)}</TableCell>
                   <TableCell>
@@ -418,4 +413,63 @@ export function AdMaterialsTab({
 
 function isVideo(item: AdMaterialPublic) {
   return item.use_ref.material_type.toUpperCase().includes("VIDEO")
+}
+
+/** 无当前可操作位置、未知身份和轮播仍保留经济事实与完整图片清单。 */
+function CreativeFacts({ rows }: { rows: ReportRow[] }) {
+  if (!rows.length) return null
+  return (
+    <div className="space-y-2">
+      {rows.map((row) => (
+        <section className="rounded-md border p-3 text-sm" key={row.row_key}>
+          <div className="font-medium">{row.display?.name}</div>
+          {row.metric_buckets?.map((bucket) => (
+            <div key={bucket.currency}>
+              {bucket.currency} · 消耗 {bucket.values?.spend ?? "未知"} · 收入{" "}
+              {bucket.values?.revenue_total ?? "未知"}
+              {bucket.availability?.spend === "PARTIAL" && (
+                <Badge variant="outline" className="ml-2">
+                  部分数据
+                </Badge>
+              )}
+            </div>
+          ))}
+          <CreativeEvidence row={row} />
+        </section>
+      ))}
+    </div>
+  )
+}
+
+export function CreativeEvidence({ row }: { row: ReportRow }) {
+  const reason = row.coverage?.reason
+  const labels: Record<string, string> = {
+    creative_identity_unmapped: "创意身份尚未关联，金额已保留。",
+    group_reconciliation_difference:
+      "广告组广告金额与创意金额的有符号差额，未分配给任何素材。",
+    composite_creative_not_allocated_to_images:
+      "完整轮播创意金额，不拆分到单张图片。",
+  }
+  const assets = row.coverage?.assets as
+    | { creative_id: string; assets: { platform_material_id?: string }[] }[]
+    | undefined
+  return (
+    <div className="space-y-1 text-xs text-muted-foreground">
+      {typeof reason === "string" && labels[reason] && <p>{labels[reason]}</p>}
+      {row.coverage?.status !== "COMPLETE" && (
+        <p>数据尚不完整或源报表已过期。</p>
+      )}
+      {typeof row.coverage?.unallocated_note === "string" && (
+        <p>{row.coverage.unallocated_note}</p>
+      )}
+      {assets?.map((creative) => (
+        <p key={creative.creative_id}>
+          创意 {creative.creative_id} · 素材顺序：
+          {creative.assets
+            .map((asset) => asset.platform_material_id ?? "未知")
+            .join(" → ")}
+        </p>
+      ))}
+    </div>
+  )
 }

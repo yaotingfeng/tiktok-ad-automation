@@ -285,8 +285,12 @@ export function AdsTable({
   emptyMessage?: string
 }) {
   const config = configColumns(dimension)
+  const selectableRows = rows.filter(
+    (row) => dimension !== "material" || (row.material_uses?.length ?? 0) > 0,
+  )
   const pageSelected =
-    rows.length > 0 && rows.every((row) => selected.has(row.row_key))
+    selectableRows.length > 0 &&
+    selectableRows.every((row) => selected.has(row.row_key))
   // 回收窗口按各账户本地日判断；当前页没有单一时区可用时退回浏览器时区。
   const zones = [
     ...new Set(
@@ -433,6 +437,9 @@ export function AdsTable({
                     <TableCell data-sticky="select" className={STICKY_SELECT}>
                       <Checkbox
                         checked={checked}
+                        disabled={
+                          dimension === "material" && !row.material_uses?.length
+                        }
                         onCheckedChange={(value) =>
                           onToggle(row, value === true)
                         }

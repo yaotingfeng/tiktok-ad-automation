@@ -30,7 +30,7 @@ from app.modules.reporting.query_models import (
     read_snapshot,
     snapshot_transaction,
 )
-from app.modules.reporting.schemas import ReportingFilter
+from app.modules.reporting.schemas import MATERIAL_QUERY_CONTRACT, ReportingFilter
 from app.modules.tenants.permissions import require_tenant
 
 BUILD_LEASE_SECONDS = 45
@@ -63,9 +63,15 @@ class QueryDependencyStamp:
 
 
 def query_key(context: TenantContext, bc_id: str, filters: ReportingFilter) -> str:
-    return _digest(
-        [context.tenant_id, bc_id, context.actor_id, filters.model_dump(mode="json")]
-    )
+    payload = [
+        context.tenant_id,
+        bc_id,
+        context.actor_id,
+        filters.model_dump(mode="json"),
+    ]
+    if filters.dimension == "material":
+        payload.append(f"creative-material-v{MATERIAL_QUERY_CONTRACT}")
+    return _digest(payload)
 
 
 @dataclass(frozen=True)
@@ -158,7 +164,7 @@ def dependency_stamp(
         )
         .all()
     )
-    kind = "material_day" if filters.dimension == "material" else "ad_day"
+    kind = "creative_material" if filters.dimension == "material" else "ad_day"
     facts = [tuple(r[:4]) for r in rows if r.kind == kind]
     derived = [
         (r.advertiser_id, r.kind, r.bucket, r.derived_revision)
@@ -178,6 +184,9 @@ def dependency_stamp(
             )
         ]
     return QueryDependencyStamp(
+        metric_contract=f"creative-material-v{MATERIAL_QUERY_CONTRACT}"
+        if filters.dimension == "material"
+        else "report-metrics-v1",
         scope_digest=authority.scope_digest,
         permission_revision=authority.permission_revision,
         filter_digest=_digest(filters.model_dump(mode="json")),
@@ -185,7 +194,7 @@ def dependency_stamp(
         derived_buckets_digest=_digest(derived),
         directory_revision=_digest([revisions({"directory"}), balances]),
         naming_revision=revisions({"naming"}),
-        link_revision=revisions({"link", "usage"})
+        link_revision=revisions({"creative_identity", "creative_day", "usage"})
         if filters.dimension == "material"
         else _digest([]),
     )

@@ -29,7 +29,7 @@ const HEALTH_COUNTS = [
   ["stale_ad_accounts", "广告", "个账户超时"],
   ["stale_material_accounts", "素材", "个账户超时"],
   ["missing_directory_ads", "目录", "条待补齐或刷新"],
-  ["unlinked_material_posts", "素材", "项待关联"],
+  ["unmapped_creatives", "创意", "项待关联"],
   ["pending_actions", "动作", "项积压"],
 ] as const
 const HEALTH_ISSUES: Record<string, string> = {

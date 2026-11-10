@@ -98,10 +98,10 @@ def test_csv_header_uses_official_names():
     assert "roas_d3" not in header
 
 
-def test_material_csv_drops_every_metric_without_material_field():
-    # 素材报表没有第 2 天/第 29 天回收，金额与 ROAS 列（含派生列）都不导出。
+def test_material_csv_includes_creative_revenue_windows():
+    # 素材读取创意日报，支持第 2 天/第 29 天回收。
     export = _export_like_existing_test(dimension="material")
     header = _csv_rows(export, []).decode().splitlines()[0]
-    assert "第 2 天" not in header
-    assert "第 29 天" not in header
-    assert "第 6 天广告收入 ROAS" in header
+    assert "第 2 天" in header
+    assert "第 29 天" in header
+    assert "第 6 天广告收益 ROAS" in header

@@ -1,4 +1,4 @@
-import { expect, test, type Page, type Request } from "@playwright/test"
+import { expect, type Page, type Request, test } from "@playwright/test"
 import { adsBoundary, BC_A, TENANT } from "./utils/adsBoundary"
 import { expectLineDrawn } from "./utils/trendChart"
 
@@ -608,7 +608,33 @@ for (const complete of [true, false]) {
       route.fulfill({
         json: {
           items: [],
-          metric_scope: "AD",
+          metric_scope: "CREATIVE",
+          creative_rows: [
+            {
+              row_key: '["carousel", "adv-1", "native-2"]',
+              display: { name: "轮播创意 native-2", material_type: "CAROUSEL" },
+              metric_buckets: [
+                {
+                  currency: "USD",
+                  values: { spend: "90", revenue_total: "20" },
+                  availability: { spend: "PARTIAL" },
+                },
+              ],
+              coverage: {
+                status: "INCOMPLETE",
+                reason: "composite_creative_not_allocated_to_images",
+                assets: [
+                  {
+                    creative_id: "native-2",
+                    assets: [
+                      { platform_material_id: "second" },
+                      { platform_material_id: "shared" },
+                    ],
+                  },
+                ],
+              },
+            },
+          ],
           carousel_linkage_complete: complete,
           carousel_creatives: [
             {
@@ -646,6 +672,8 @@ for (const complete of [true, false]) {
     const sheet = page.getByRole("dialog")
     await sheet.getByRole("tab", { name: "素材" }).click()
     await expect(sheet.getByText("图片轮播", { exact: true })).toBeVisible()
+    await expect(sheet.getByText(/USD · 消耗 90 · 收入 20/)).toHaveCount(1)
+    await expect(sheet.getByText("部分数据", { exact: true })).toBeVisible()
     await expect(
       sheet.getByText("图片顺序：shared → second", { exact: true }),
     ).toBeVisible()
@@ -661,10 +689,10 @@ for (const complete of [true, false]) {
     await expect(
       sheet.getByText("平台创意 ID：未返回", { exact: true }),
     ).toBeVisible()
-    await expect(sheet.getByText(/当前仅显示广告级消耗与收入/)).toBeVisible()
     await expect(
-      sheet.getByText(/图片创意暂不支持素材级自动规则/),
+      sheet.getByText(/每个轮播创意展示一份消耗与收入/),
     ).toBeVisible()
+    await expect(sheet.getByText(/金额不分配到单张图片/)).toBeVisible()
     await expect(sheet.getByRole("columnheader", { name: "消耗" })).toHaveCount(
       0,
     )
@@ -679,5 +707,29 @@ for (const complete of [true, false]) {
     await expect(sheet.getByText(/轮播关联不完整/)).toHaveCount(
       complete ? 0 : 1,
     )
+  })
+}
+
+for (const [kind, explanation] of [
+  ["UNMAPPED_CREATIVE", "创意身份尚未关联，金额已保留。"],
+  ["UNATTRIBUTED", "广告组广告金额与创意金额的有符号差额，未分配给任何素材。"],
+  ["CAROUSEL", "完整轮播创意金额，不拆分到单张图片。"],
+] as const) {
+  test(`素材 ${kind} 保留金额说明且不可执行视频操作`, async ({ page }) => {
+    await adsBoundary(page, { materialViewOnly: kind })
+    await page.goto(`/tenants/${TENANT}/ads?bc_id=${BC_A}`)
+    await page.getByRole("tab", { name: "素材", exact: true }).click()
+    await expect(
+      page.getByRole("checkbox", { name: "选择 素材-测试" }),
+    ).toBeDisabled()
+    await page.getByRole("button", { name: "素材-测试", exact: true }).click()
+    const sheet = page.getByRole("dialog")
+    await expect(sheet.getByText(explanation, { exact: true })).toBeVisible()
+    await expect(
+      sheet.getByRole("button", { name: "预览成片", exact: true }),
+    ).toHaveCount(0)
+    await expect(
+      sheet.getByRole("button", { name: "暂停", exact: true }),
+    ).toHaveCount(0)
   })
 }

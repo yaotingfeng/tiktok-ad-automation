@@ -15,6 +15,7 @@ export type AdsBoundaryOptions = {
   emptyRows?: boolean
   projectionStatus?: "CURRENT" | "STALE" | "BUILDING"
   lastSuccess?: string
+  materialViewOnly?: "UNMAPPED_CREATIVE" | "UNATTRIBUTED" | "CAROUSEL"
   reportSpend?: string
   syncAccounts?: Array<{
     advertiser_id: string
@@ -245,6 +246,7 @@ export async function adsBoundary(
                   ? {
                       name: "素材-测试",
                       material_name: "素材-测试",
+                      material_type: options.materialViewOnly ?? "VIDEO",
                       main_material_id: "material-1",
                       account_id: ADVERTISER,
                       account_name: "甲账户",
@@ -287,7 +289,18 @@ export async function adsBoundary(
           metrics_coverage: { status: options.projectionStatus ?? "CURRENT" },
           items: [
             {
-              row_key: `${bc}-campaign-1`,
+              row_key:
+                dimension === "material"
+                  ? JSON.stringify(
+                      options.materialViewOnly
+                        ? [
+                            options.materialViewOnly.toLowerCase(),
+                            ADVERTISER,
+                            "creative",
+                          ]
+                        : ["material", "VIDEO", "vid-1"],
+                    )
+                  : `${bc}-campaign-1`,
               display: {
                 ...display,
                 ...(options.balance
@@ -316,7 +329,7 @@ export async function adsBoundary(
                     ],
               // 素材行带一个使用位置，详情的成片预览据此选视频与候选账户。
               material_uses:
-                dimension === "material"
+                dimension === "material" && !options.materialViewOnly
                   ? [
                       {
                         ad_ref: {
@@ -361,12 +374,11 @@ export async function adsBoundary(
                     clicks: "AVAILABLE",
                     roas_total: "AVAILABLE",
                     roas_d0: "AVAILABLE",
-                    roas_d3:
-                      dimension === "material" ? "UNSUPPORTED" : "AVAILABLE",
+                    roas_d3: dimension === "material" ? "MISSING" : "AVAILABLE",
                     roas_d7: "AVAILABLE",
                     roas_d14: "AVAILABLE",
                     roas_d30:
-                      dimension === "material" ? "UNSUPPORTED" : "AVAILABLE",
+                      dimension === "material" ? "MISSING" : "AVAILABLE",
                     cost_per_ad_impression_event: "AVAILABLE",
                     ctr: "AVAILABLE",
                   },
@@ -403,15 +415,11 @@ export async function adsBoundary(
                           roas_total: "AVAILABLE",
                           roas_d0: "AVAILABLE",
                           roas_d3:
-                            dimension === "material"
-                              ? "UNSUPPORTED"
-                              : "AVAILABLE",
+                            dimension === "material" ? "MISSING" : "AVAILABLE",
                           roas_d7: "AVAILABLE",
                           roas_d14: "AVAILABLE",
                           roas_d30:
-                            dimension === "material"
-                              ? "UNSUPPORTED"
-                              : "AVAILABLE",
+                            dimension === "material" ? "MISSING" : "AVAILABLE",
                           cost_per_ad_impression_event: "AVAILABLE",
                           ctr: "AVAILABLE",
                         },
@@ -421,7 +429,15 @@ export async function adsBoundary(
               ],
               capabilities: { can_manage: true },
               coverage: {
-                status: "COMPLETE",
+                status: options.materialViewOnly ? "INCOMPLETE" : "COMPLETE",
+                reason:
+                  options.materialViewOnly === "UNMAPPED_CREATIVE"
+                    ? "creative_identity_unmapped"
+                    : options.materialViewOnly === "UNATTRIBUTED"
+                      ? "group_reconciliation_difference"
+                      : options.materialViewOnly === "CAROUSEL"
+                        ? "composite_creative_not_allocated_to_images"
+                        : undefined,
                 updated_at: "2026-10-01T00:00:00Z",
               },
             },
@@ -463,12 +479,10 @@ export async function adsBoundary(
                   clicks: "AVAILABLE",
                   roas_total: "AVAILABLE",
                   roas_d0: "AVAILABLE",
-                  roas_d3:
-                    dimension === "material" ? "UNSUPPORTED" : "AVAILABLE",
+                  roas_d3: dimension === "material" ? "MISSING" : "AVAILABLE",
                   roas_d7: "AVAILABLE",
                   roas_d14: "AVAILABLE",
-                  roas_d30:
-                    dimension === "material" ? "UNSUPPORTED" : "AVAILABLE",
+                  roas_d30: dimension === "material" ? "MISSING" : "AVAILABLE",
                   cost_per_ad_impression_event: "AVAILABLE",
                   ctr: "AVAILABLE",
                   cpm: "AVAILABLE",
@@ -509,15 +523,11 @@ export async function adsBoundary(
                         roas_total: "AVAILABLE",
                         roas_d0: "AVAILABLE",
                         roas_d3:
-                          dimension === "material"
-                            ? "UNSUPPORTED"
-                            : "AVAILABLE",
+                          dimension === "material" ? "MISSING" : "AVAILABLE",
                         roas_d7: "AVAILABLE",
                         roas_d14: "AVAILABLE",
                         roas_d30:
-                          dimension === "material"
-                            ? "UNSUPPORTED"
-                            : "AVAILABLE",
+                          dimension === "material" ? "MISSING" : "AVAILABLE",
                         cost_per_ad_impression_event: "AVAILABLE",
                         ctr: "AVAILABLE",
                         cpm: "AVAILABLE",

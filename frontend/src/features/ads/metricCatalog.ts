@@ -64,18 +64,16 @@ export function formatMetric(
 
 export function columnsFor(
   catalog: MetricDefinitionPublic[],
-  dimension: AdsDimension,
+  _dimension: AdsDimension,
 ): ColumnDef[] {
-  const material = dimension === "material"
-  return catalog
-    .filter((item) => !material || item.material_field !== null)
-    .map((item) => ({
-      key: item.key,
-      label: (material ? item.material_label : null) ?? item.basic_label,
-      fullName: (material ? item.material_name_zh : null) ?? item.basic_name_zh,
-      unit: item.unit,
-      recoveryDay: recoveryDayOf(item.key),
-    }))
+  // 素材读取创意日报，同样提供全部收入窗口。
+  return catalog.map((item) => ({
+    key: item.key,
+    label: item.basic_label,
+    fullName: item.basic_name_zh,
+    unit: item.unit,
+    recoveryDay: recoveryDayOf(item.key),
+  }))
 }
 
 export function useMetricCatalog() {

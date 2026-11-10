@@ -28,6 +28,7 @@ from app.core.context import TenantContext
 from app.modules.accounts.models import TenantBC
 from app.modules.ads.models import AwareDateTime
 from app.modules.reporting.filters import authorized_grants
+from app.modules.reporting.schemas import MATERIAL_QUERY_CONTRACT
 from app.modules.tenants.permissions import require_tenant
 
 
@@ -370,6 +371,12 @@ def read_snapshot(
     allowed = authorized_grants(session, context=context, bc_id=bc_id)
     if not set(snapshot.advertiser_ids) <= {grant.advertiser_id for grant in allowed}:
         raise HTTPException(403, detail="report_scope_forbidden")
+    if (
+        snapshot.filters.get("dimension") == "material"
+        and snapshot.publication_versions.get("material_query_contract")
+        != MATERIAL_QUERY_CONTRACT
+    ):
+        raise HTTPException(409, detail="query_snapshot_contract_changed")
     if snapshot.expires_at <= datetime.now(UTC):
         raise HTTPException(409, detail="query_snapshot_expired")
     return snapshot

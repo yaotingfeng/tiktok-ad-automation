@@ -63,11 +63,14 @@ export function trendScope(
       (use) => use.ad_ref.advertiser_id,
     )
     const own = rowAdvertiserId(row)
-    const id = rowObjectId(row, dimension)
+    const id = `material:${encodeURIComponent(row.row_key)}`
     return {
       level: "material",
       advertiserIds: [
-        ...new Set(fromUses.length ? fromUses : own ? [own] : []),
+        ...new Set(
+          (row.coverage?.advertiser_ids as string[] | undefined) ??
+            (fromUses.length ? fromUses : own ? [own] : []),
+        ),
       ],
       ids: id ? [id] : [],
     }
@@ -103,12 +106,14 @@ export function TrendTab({
   startDate,
   endDate,
   columns,
+  snapshotId,
 }: {
   row: ReportRow
   dimension: AdsDimension
   startDate: string
   endDate: string
   columns: ColumnDef[]
+  snapshotId?: string
 }) {
   const [range, setRange] = useState<Range>("14")
   const [hourly, setHourly] = useState(false)
@@ -125,6 +130,7 @@ export function TrendTab({
   const scope = trendScope(row, dimension)
   const trend = useAdsTrend({
     ...scope,
+    snapshotId: dimension === "material" ? snapshotId : undefined,
     startDate: rangeStart,
     endDate,
     granularity: byHour ? "hour" : "day",

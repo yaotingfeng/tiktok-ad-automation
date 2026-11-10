@@ -14,6 +14,7 @@ import {
   rowObjectId,
 } from "../search"
 import { statusLabel } from "../statusLabel"
+import { CreativeEvidence } from "./MaterialsTab"
 import { MaterialVideoPreview } from "./MaterialVideoPreview"
 import { type LinkedTarget, useLinkedRows } from "./useLinkedRows"
 
@@ -179,6 +180,7 @@ export function OverviewTab({
         )}
       </dl>
 
+      {dimension === "material" && <CreativeEvidence row={row} />}
       {dimension === "account" ? (
         <section className="flex flex-col gap-2">
           <h3 className="font-medium">账户信息</h3>
@@ -283,7 +285,9 @@ export function OverviewTab({
         />
       )}
 
-      {dimension === "material" && <MaterialVideoPreview row={row} />}
+      {dimension === "material" && row.display?.material_type === "VIDEO" && (
+        <MaterialVideoPreview row={row} />
+      )}
 
       <section className="flex flex-col gap-2">
         <h3 className="font-medium">所选日期核心指标</h3>

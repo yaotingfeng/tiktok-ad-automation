@@ -11,6 +11,7 @@ export function useAdsTrend(params: {
   startDate: string
   endDate: string
   granularity: "day" | "hour"
+  snapshotId?: string
   enabled: boolean
 }) {
   const { tenantId, bc } = useTenantScope()
@@ -24,6 +25,7 @@ export function useAdsTrend(params: {
       "ads-trend",
       bcId,
       params.level,
+      params.snapshotId,
       params.advertiserIds?.join(",") ?? "",
       params.ids?.join(",") ?? "",
       params.startDate,
@@ -47,6 +49,7 @@ export function useAdsTrend(params: {
             start_date: params.startDate,
             end_date: params.endDate,
             granularity: params.granularity,
+            snapshot_id: params.snapshotId,
           },
           signal,
         })

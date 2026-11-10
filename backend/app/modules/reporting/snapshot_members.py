@@ -62,9 +62,13 @@ def _material_key(key: str, advertisers: Collection[str]) -> list[str]:
         isinstance(part, str) and part for part in identity
     ):
         raise _unavailable()
-    if len(identity) == 2 and identity[0] == "material":
+    if len(identity) == 3 and identity[0] == "material":
         return identity
-    if len(identity) == 3 and identity[0] == "post" and identity[1] in advertisers:
+    if (
+        len(identity) == 3
+        and identity[0] in {"carousel", "unmapped_creative", "unattributed"}
+        and identity[1] in advertisers
+    ):
         return identity
     raise _unavailable()
 
@@ -148,10 +152,7 @@ def members_from_data(
                     "material_snapshot",
                 }:
                     raise _unavailable()
-                if (
-                    material_key[0] == "post"
-                    and evidence_version.advertiser_id != material_key[1]
-                ):
+                if material_key[0] != "material" or material_key[1] != "VIDEO":
                     raise _unavailable()
                 for ref in evidence_version.refs:
                     _check_ref(ref, tenant_id, evidence_version.advertiser_id)
@@ -177,7 +178,7 @@ def members_from_data(
                     # 保留水位保证版本生命周期；仍验证本行VID，不能混入另一素材。
                     if (
                         material_key[0] == "material"
-                        and usage["platform_material_id"] != material_key[1]
+                        and usage["platform_material_id"] != material_key[2]
                     ):
                         raise _unavailable()
                     uses.append(usage)

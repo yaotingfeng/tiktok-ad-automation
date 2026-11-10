@@ -1,4 +1,4 @@
-"""已知目录名不再展开历史帖子JSON；缺失名称仍按原期间口径回退。"""
+"""创意名称来自投影与当前目录，页面不再展开历史帖子 JSON。"""
 
 from sqlalchemy import event, text
 
@@ -60,6 +60,6 @@ def test_page_only_reads_historical_names_for_missing_directory_names(
         event.remove(connection, "before_cursor_execute", record)
     assert {r.display["main_material_id"]: r.display["name"] for r in rows} == {
         "v1": "v1.mp4",
-        "v2": "需要回退的历史名",
+        "v2": "v2.mp4",
     }
-    assert requested == ['["material", "v2"]']
+    assert requested == []

@@ -274,13 +274,8 @@ def _decimal(value: Any) -> Decimal | None:
 def _csv_rows(export: ReportExport, rows: Iterable[dict[str, Any]]) -> bytes:
     from app.modules.reporting.metric_catalog import METRIC_CATALOG, metric_name_zh
 
-    dimension = str((export.filters or {}).get("dimension") or "campaign")
-    # 素材报表没有对应字段的指标（含由其派生的 ROAS）整列不导出，避免空列被误读为 0。
-    metric_fields = [
-        item.key
-        for item in METRIC_CATALOG
-        if dimension != "material" or item.material_field is not None
-    ]
+    # 创意日报与广告日报使用相同收入窗口，包括 D3/D30。
+    metric_fields = [item.key for item in METRIC_CATALOG]
     fields = [
         "row_key",
         "name",
@@ -302,7 +297,7 @@ def _csv_rows(export: ReportExport, rows: Iterable[dict[str, Any]]) -> bytes:
     out = io.StringIO(newline="")
     writer = csv.DictWriter(out, fieldnames=fields, lineterminator="\n")
     headers = {key: key for key in fields} | {
-        key: metric_name_zh(key, dimension) for key in metric_fields
+        key: metric_name_zh(key, "ad") for key in metric_fields
     }
     writer.writerow(headers)
     for raw in rows:

@@ -1,29 +1,18 @@
-"""素材维度行补全：一个素材库视频一行，跨账户、跨广告合计帖子事实。
-
-成员、筛选与排序由 row_set 在数据库内完成；这里只为冻结的素材行补全展示与指标。
-帖子到视频的归属见 material_links。
-"""
-
-from __future__ import annotations
+"""创意素材行补全；分页、导出与快照使用相同的逐创意筛选。"""
 
 import json
 from collections import defaultdict
-from collections.abc import Sequence
 from hashlib import sha256
-from typing import Any
-from uuid import UUID
 
-from sqlalchemy import RowMapping, text
-from sqlmodel import Session, select
+from sqlalchemy import text
+from sqlmodel import select
 
 from app.integrations.tiktok.contracts.ads import MaterialUseRef
 from app.modules.accounts.models import AdvertiserAccount
+from app.modules.reporting.creative_query import creative_states, read_facts
 from app.modules.reporting.dimension_query import (
-    COMPLETE_COVERAGE_STATUSES,
-    _aggregate,
     _coverage,
     empty_metric_values,
-    fact_vector,
     merge_metric_buckets,
     metric_vector,
     scoped_rows,
@@ -32,21 +21,13 @@ from app.modules.reporting.read_models.coverage import (
     projected_states,
     projection_coverage,
 )
-from app.modules.reporting.read_models.material_names import material_names_sql
-from app.modules.reporting.read_models.models import (
-    CurrentAdMaterial as AdMaterialReference,
-)
-from app.modules.reporting.read_models.models import MaterialEntityDay, ReadBucketState
-from app.modules.reporting.row_set import (
-    MATERIAL_UNSUPPORTED,
-    SnapshotMember,
-    entity_ref,
-)
-from app.modules.reporting.schemas import ReportingFilter, ReportRow
-from app.modules.reporting.store_models import ReportSyncState
+from app.modules.reporting.read_models.models import CurrentAdMaterial
+from app.modules.reporting.row_set import entity_ref
+from app.modules.reporting.schemas import ReportRow
+from app.modules.reporting.store_models import METRIC_COLUMNS
 
 
-def _use(data: dict[str, Any]) -> MaterialUseRef:
+def _use(data):
     return MaterialUseRef(
         entity_ref(data["ad_ref"]),
         data["platform_material_id"],
@@ -56,110 +37,43 @@ def _use(data: dict[str, Any]) -> MaterialUseRef:
 
 
 def materialize_material_rows(
-    session: Session,
-    *,
-    tenant_id: UUID,
-    filters: ReportingFilter,
-    members: Sequence[SnapshotMember],
-    advertisers: Sequence[str],
-) -> tuple[ReportRow, ...]:
-    """为冻结的素材行补全展示与指标；行身份与 row_set._material_rows 一致。
-
-    视频行合计该视频在全部账户、全部广告的帖子事实；帖子行只合计这一条帖子。
-    """
-    scope = sorted(set(advertisers))
-    keys = {member.row_key: json.loads(member.row_key) for member in members}
-    videos = {key[1] for key in keys.values() if key[0] == "material"}
-    posts_by_row: dict[str, set[tuple[str, str, str]]] = defaultdict(set)
-    # 当前页素材驱动索引探测；OFFSET 0保留相关子查询，避免大账户集合
-    # 把计划改成按账户扫描整个目录。账户条件在外层SQL过滤，防止每个素材
-    # 又按全部账户展开索引探测；全部合法使用位置仍返回，不加LIMIT或截断。
-    usages = (
-        session.execute(
-            select(AdMaterialReference).from_statement(
-                text("""SELECT u.* FROM unnest(CAST(:videos AS text[])) v(id)
-                CROSS JOIN LATERAL (
-                    SELECT * FROM current_ad_material
-                    WHERE tenant_id=:tenant AND platform_material_id=v.id
-                        AND complete AND material_type='VIDEO'
-                    OFFSET 0
-                ) u
-                WHERE u.advertiser_id=ANY(CAST(:advertisers AS text[]))""")
-            ),
-            {"tenant": tenant_id, "videos": sorted(videos), "advertisers": scope},
-        )
-        .scalars()
-        .all()
-        if videos
-        else []
+    session, *, tenant_id, filters, members, advertisers, exact_ad=None
+):
+    scope = set(advertisers)
+    facts = read_facts(
+        session,
+        tenant_id=tenant_id,
+        advertisers=advertisers,
+        filters=filters,
+        row_keys=[m.row_key for m in members],
+        exact_ad=exact_ad,
     )
-    usage_by_video: dict[str, list[AdMaterialReference]] = defaultdict(list)
-    for usage in usages:
-        usage_by_video[usage.platform_material_id].append(usage)
-    # 展示一直优先目录名；只为确实缺名的行展开历史帖子JSON，避免为整页无用回退读大字段。
-    fallback_keys = [
-        row_key
-        for row_key, key in keys.items()
-        if key[0] != "material"
-        or not any(u.name for u in usage_by_video.get(key[1], ()))
-    ]
-    names = (
-        {
-            row.row_key: row.name
-            for row in session.connection()
-            .execute(
-                text(material_names_sql(page=True)),
-                {
-                    "tenant": tenant_id,
-                    "advs": scope,
-                    "start": filters.start_date,
-                    "end": filters.end_date,
-                    "row_keys": fallback_keys,
-                },
-            )
-            .all()
-        }
-        if fallback_keys
-        else {}
+    directory = read_facts(
+        session,
+        tenant_id=tenant_id,
+        advertisers=advertisers,
+        filters=filters,
+        row_keys=[m.row_key for m in members],
+        exact_ad=exact_ad,
+        directory=True,
     )
-    data = (
-        _aggregate(
-            session,
-            model=MaterialEntityDay,
-            group_cols=["advertiser_id", "row_key", "main_material_type"],
-            tenant_id=tenant_id,
-            advertisers=scope,
-            start=filters.start_date,
-            end=filters.end_date,
-            ids=list(keys),
-        )
-        if keys
-        else []
-    )
-    facts: dict[tuple[str, str, str], list[RowMapping]] = defaultdict(list)
-    for item in data:
-        identity = (
-            item["advertiser_id"],
-            item["row_key"],
-            item["main_material_type"],
-        )
-        row_key = item["row_key"]
-        if row_key in keys:
-            posts_by_row[row_key].add(identity)
-            facts[identity].append(item)
-    # 素材金额仍在原授权scope内读取；展示覆盖只加载本页实际关系账户。
-    # 冻结使用位置必须参与：当前目录删除后旧快照仍保留当时使用位置。
+    directory_by_key = defaultdict(list)
+    for usage in directory:
+        directory_by_key[usage["row_key"]].append(usage)
+    by_key = defaultdict(list)
+    for fact in facts:
+        by_key[fact["row_key"]].append(fact)
     page_scope = sorted(
-        set(scope)
+        scope
         & (
-            {item["advertiser_id"] for item in data}
-            | {usage.advertiser_id for usage in usages}
-            | {ref["advertiser_id"] for member in members for ref in member.refs}
+            {f["advertiser_id"] for f in facts}
+            | {u["advertiser_id"] for u in directory}
             | {
-                use["ad_ref"]["advertiser_id"]
-                for member in members
-                for use in member.material_uses
+                json.loads(m.row_key)[1]
+                for m in members
+                if json.loads(m.row_key)[0] != "material"
             }
+            | {u["ad_ref"]["advertiser_id"] for m in members for u in m.material_uses}
         )
     )
     accounts = {
@@ -168,89 +82,186 @@ def materialize_material_rows(
             session, AdvertiserAccount, tenant_id=tenant_id, advertisers=page_scope
         )
     }
-    states, projection_states = projected_states(
+    states = creative_states(
         session,
         tenant_id=tenant_id,
         advertisers=page_scope,
         start=filters.start_date,
         end=filters.end_date,
     )
-    # 先按账户分组；每次覆盖计算只遍历对应账户的日期，避免账户数的平方级扫描。
-    states_by_adv: dict[str, list[ReportSyncState]] = defaultdict(list)
+    states_by_adv = defaultdict(list)
     for state in states:
         states_by_adv[state.advertiser_id].append(state)
-    projections_by_adv: dict[str, list[ReadBucketState]] = defaultdict(list)
-    for projection_state in projection_states:
-        projections_by_adv[projection_state.advertiser_id].append(projection_state)
-    incomplete_by_adv = {
-        adv: _coverage(
-            states_by_adv[adv], advertisers={adv}, filters=filters, kind="material_day"
-        )["status"]
-        not in COMPLETE_COVERAGE_STATUSES
-        for adv in page_scope
+    _, projections = projected_states(
+        session,
+        tenant_id=tenant_id,
+        advertisers=page_scope,
+        start=filters.start_date,
+        end=filters.end_date,
+        kind="creative_material",
+    )
+    projections_by_adv = defaultdict(list)
+    for projection in projections:
+        projections_by_adv[projection.advertiser_id].append(projection)
+    # 当前目录仅补名称与版本；不可变快照证据仍决定动作对象，不重新扩大使用位置。
+    videos = {
+        json.loads(m.row_key)[2]
+        for m in members
+        if json.loads(m.row_key)[:2] == ["material", "VIDEO"]
     }
-    empty_by_adv = {
-        adv: empty_metric_values(
-            states_by_adv[adv], advertiser=adv, filters=filters, kind="material_day"
+    current = (
+        session.execute(
+            select(CurrentAdMaterial).from_statement(
+                text("""
+        SELECT u.* FROM unnest(CAST(:videos AS text[])) v(id)
+        CROSS JOIN LATERAL (
+            SELECT * FROM current_ad_material WHERE tenant_id=:tenant AND platform_material_id=v.id
+                AND complete AND material_type='VIDEO' OFFSET 0
+        ) u WHERE u.advertiser_id=ANY(CAST(:advs AS text[]))
+    """)
+            ),
+            {"tenant": tenant_id, "videos": sorted(videos), "advs": page_scope},
         )
-        for adv in accounts
+        .scalars()
+        .all()
+        if videos
+        else []
+    )
+    current_by_use = {
+        (u.advertiser_id, u.ad_remote_id, u.platform_material_id, u.ad_material_id): u
+        for u in current
     }
     result = []
     for member in members:
-        key = keys[member.row_key]
-        posts = posts_by_row.get(member.row_key, set())
-        row_usages = usage_by_video.get(key[1], []) if key[0] == "material" else []
-        # 行涉及的账户与快照 row_advs 一致：有事实的账户 ∪ 使用位置所在账户。
+        key = json.loads(member.row_key)
+        items = by_key[member.row_key]
+        directory_items = directory_by_key[member.row_key]
+        uses = tuple(_use(u) for u in member.material_uses)
         row_advs = sorted(
-            {adv for adv, _, _ in posts}
-            | {u.advertiser_id for u in row_usages}
-            | {use.ad_ref.advertiser_id for use in map(_use, member.material_uses)}
+            scope
+            & (
+                {f["advertiser_id"] for f in items}
+                | {u["advertiser_id"] for u in directory_items}
+                | ({key[1]} if key[0] != "material" else set())
+                | {u.ad_ref.advertiser_id for u in uses}
+            )
         )
-        row_advs = [adv for adv in row_advs if adv in accounts]
-        items = [item for post in sorted(posts) for item in facts.get(post, [])]
+        row_states = [s for adv in row_advs for s in states_by_adv[adv]]
         coverage = _coverage(
-            [state for adv in row_advs for state in states_by_adv[adv]],
-            advertisers=set(row_advs),
-            filters=filters,
-            kind="material_day",
+            row_states, advertisers=row_advs, filters=filters, kind="creative_material"
         )
         coverage["projection"] = projection_coverage(
-            [state for adv in row_advs for state in projections_by_adv[adv]]
+            [p for adv in row_advs for p in projections_by_adv[adv]]
         )
-        uses = tuple(_use(item) for item in member.material_uses)
-        if not uses:
-            coverage["reason"] = "usage_unknown"
-        fact_advs = {item["advertiser_id"] for item in items}
-        # 账户覆盖不完整时，该账户已同步部分的金额标 PARTIAL（与其他维度同一规则）。
-        buckets = [
-            (
-                (fact_vector(item, unsupported=MATERIAL_UNSUPPORTED),),
-                incomplete_by_adv[item["advertiser_id"]],
-            )
-            for item in items
-        ] + [
-            # 没有事实的账户按覆盖填 0 或空，与快照排序口径一致。
-            (
-                (
-                    metric_vector(
-                        empty_by_adv[adv],
-                        currency=accounts[adv].currency,
-                        timezone=accounts[adv].timezone,
-                        unsupported=MATERIAL_UNSUPPORTED,
-                    ),
-                ),
-                incomplete_by_adv[adv],
-            )
-            for adv in row_advs
-            if adv not in fact_advs
+        statuses = sorted({f["source_status"] for f in items})
+        coverage["advertiser_ids"] = row_advs
+        coverage["source_statuses"] = statuses
+        coverage["attribution_statuses"] = sorted(
+            {f["attribution_status"] for f in items}
+        )
+        coverage["assets"] = [
+            {"creative_id": f["creative_id"], "assets": f["assets"]}
+            for f in {f["creative_id"]: f for f in items if f["creative_id"]}.values()
         ]
-        mid = key[1] if key[0] == "material" else key[2]
-        # 与快照排序同一取值：目录名优先（各帖子一致），否则取素材日报名称。
-        name = (
-            min((u.name for u in row_usages if u.name), default=None)
-            or names.get(member.row_key)
-            or mid
+        coverage["source_info"] = [f["source_info"] for f in items]
+        if (
+            any(s != "COMPLETE" for s in statuses)
+            or any(f["unallocated"] for f in items)
+        ) and coverage["status"] == "COMPLETE":
+            coverage["status"] = "INCOMPLETE"
+        if key[0] == "unattributed":
+            coverage["reason"] = "group_reconciliation_difference"
+        elif key[0] == "unmapped_creative":
+            coverage["reason"] = "creative_identity_unmapped"
+        elif key[0] == "carousel":
+            coverage["reason"] = "composite_creative_not_allocated_to_images"
+        elif not uses:
+            coverage["reason"] = (
+                "usage_unknown" if key[1] == "VIDEO" else "material_actions_unavailable"
+            )
+        if (
+            filters.ids
+            or filters.operation_statuses
+            or filters.review_statuses
+            or filters.query
+        ):
+            coverage["unallocated_note"] = (
+                "广告组对账差额仅按广告组保留，无法分摊到单条广告或素材。"
+            )
+        buckets = []
+        for f in items:
+            incomplete = (
+                _coverage(
+                    states_by_adv[f["advertiser_id"]],
+                    advertisers=[f["advertiser_id"]],
+                    filters=filters,
+                    kind="creative_material",
+                )["status"]
+                != "COMPLETE"
+            )
+            vector = metric_vector(
+                f,
+                currency=f["currency"],
+                timezone=f["timezone"],
+                partial={m for m in METRIC_COLUMNS if f[f"{m}_has_null"]},
+            )
+            buckets.append(
+                (
+                    (vector,),
+                    incomplete or f["source_status"] != "COMPLETE" or f["unallocated"],
+                )
+            )
+        for adv in set(row_advs) - {f["advertiser_id"] for f in items}:
+            account = accounts[adv]
+            buckets.append(
+                (
+                    (
+                        metric_vector(
+                            empty_metric_values(
+                                states_by_adv[adv],
+                                advertiser=adv,
+                                filters=filters,
+                                kind="creative_material",
+                            ),
+                            currency=account.currency,
+                            timezone=account.timezone,
+                        ),
+                    ),
+                    _coverage(
+                        states_by_adv[adv],
+                        advertisers=[adv],
+                        filters=filters,
+                        kind="creative_material",
+                    )["status"]
+                    != "COMPLETE",
+                )
+            )
+        current_uses = [
+            current_by_use[k]
+            for u in uses
+            if (
+                k := (
+                    u.ad_ref.advertiser_id,
+                    u.ad_ref.remote_id,
+                    u.platform_material_id,
+                    u.ad_material_id,
+                )
+            )
+            in current_by_use
+        ]
+        mid = key[2]
+        name = min(
+            [f["material_name"] for f in items if f["material_name"]]
+            + [u["name"] for u in directory_items if u["name"]]
+            + [u.name for u in current_uses if u.name],
+            default=mid,
         )
+        if key[0] == "unattributed":
+            name = "未归属到素材／对账差额"
+        elif key[0] == "unmapped_creative":
+            name = f"未关联创意 {mid}"
+        elif key[0] == "carousel":
+            name = f"轮播创意 {mid}"
         single = row_advs[0] if len(row_advs) == 1 else None
         result.append(
             ReportRow(
@@ -259,38 +270,24 @@ def materialize_material_rows(
                     "name": name,
                     "material_name": name,
                     "main_material_id": mid,
-                    "material_type": (
-                        items[0].get("main_material_type") if items else None
-                    )
-                    or (row_usages[0].material_type if row_usages else None),
+                    "material_type": key[1] if key[0] == "material" else key[0].upper(),
                     "account_id": single,
                     "advertiser_id": single,
                     "account_name": (accounts[single].name or single)
                     if single
                     else None,
-                    # 跨账户合计的视频行没有单一账户；页面用账户数提示合计范围。
                     "account_count": str(len(row_advs)),
                 },
-                refs=tuple(entity_ref(ref) for ref in member.refs),
+                refs=tuple(entity_ref(r) for r in member.refs),
                 material_uses=uses,
                 metric_buckets=merge_metric_buckets(buckets),
                 coverage=coverage,
                 membership_digest=sha256(
-                    json.dumps(
-                        [
-                            (
-                                u.ad_ref.advertiser_id,
-                                u.ad_ref.remote_id,
-                                u.platform_material_id,
-                                u.ad_material_id,
-                                u.material_type,
-                            )
-                            for u in uses
-                        ],
-                        sort_keys=True,
-                    ).encode()
+                    json.dumps(member.material_uses, sort_keys=True).encode()
                 ).hexdigest(),
-                directory_versions={str(u.id): u.published_version for u in row_usages},
+                directory_versions={
+                    str(u.id): u.published_version for u in current_uses
+                },
             )
         )
     return tuple(result)
