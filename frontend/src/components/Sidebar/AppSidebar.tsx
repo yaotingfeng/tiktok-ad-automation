@@ -1,4 +1,4 @@
-import { LayoutGrid } from "lucide-react"
+import { FlaskConical, LayoutGrid } from "lucide-react"
 import type { UserPublic } from "@/client"
 import { WorkspaceBrand } from "@/components/Common/WorkspaceBrand"
 import { Separator } from "@/components/ui/separator"
@@ -6,7 +6,12 @@ import {
   Sidebar,
   SidebarContent,
   SidebarFooter,
+  SidebarGroup,
+  SidebarGroupContent,
   SidebarHeader,
+  SidebarMenu,
+  SidebarMenuButton,
+  SidebarMenuItem,
 } from "@/components/ui/sidebar"
 import { Main, type NavGroup } from "./Main"
 import { workspaceNavigation } from "./navigation"
@@ -35,6 +40,20 @@ export function AppSidebar({
           ))}
       </SidebarContent>
       <SidebarFooter>
+        <SidebarGroup>
+          <SidebarGroupContent>
+            <SidebarMenu>
+              <SidebarMenuItem>
+                <SidebarMenuButton tooltip="打开体验版" asChild>
+                  <a href="/demo/" target="_blank" rel="noopener noreferrer">
+                    <FlaskConical />
+                    <span>打开体验版</span>
+                  </a>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+            </SidebarMenu>
+          </SidebarGroupContent>
+        </SidebarGroup>
         {user?.is_superuser && (
           <Main
             items={[

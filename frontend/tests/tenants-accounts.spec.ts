@@ -693,6 +693,29 @@ test("member creation draft stays guarded after switching to the existing-user t
   expect(requests.filter((request) => request.method !== "GET")).toHaveLength(0)
 })
 
+for (const role of ["tenant_admin", "operator", "viewer"] as const)
+  test(`${role} can open the demo from the tenant sidebar`, async ({ page }) => {
+    await boundary(page, { platform: false, role })
+    await page.goto(`/tenants/${A}/builds/new`)
+    const demoLink = page.getByRole("link", { name: "打开体验版", exact: true })
+    await expect(demoLink).toBeVisible()
+    await expect(demoLink).toHaveAttribute("href", "/demo/")
+    await expect(demoLink).toHaveAttribute("target", "_blank")
+    await expect(demoLink).toHaveAttribute("rel", "noopener noreferrer")
+    await page.context().route("**/demo/", (route) =>
+      route.fulfill({ contentType: "text/html", body: "<title>体验版</title>" }),
+    )
+    const popupPromise = page.waitForEvent("popup")
+    await demoLink.click()
+    const popup = await popupPromise
+    await expect(popup).toHaveURL(/\/demo\/$/)
+    await expect(page).toHaveURL(`/tenants/${A}/builds/new`)
+    expect(
+      await page.evaluate(() => localStorage.getItem("access_token")),
+    ).toBe(token)
+    await popup.close()
+  })
+
 for (const role of ["viewer", "operator"] as const)
   test(`${role} has no member write/navigation entry and keeps login on direct denial`, async ({
     page,

@@ -25,7 +25,7 @@ Check `frontend/package.json` to see the other available commands.
 
 ## 引导式体验版（/demo/）
 
-体验版是同一套页面的独立构建：入口 `demo/index.html` → `src/demo/main.tsx`，所有接口由浏览器内假后端（`src/demo/handlers`）就地应答，不连接任何后端或 TikTok，链接可公开分享。`bun run build` 会同时产出 `backend/app/frontend/demo/`，由后端以 `/demo/` 提供；平台租户管理页有“打开体验版”入口。
+体验版是同一套页面的独立构建：入口 `demo/index.html` → `src/demo/main.tsx`，所有接口由浏览器内假后端（`src/demo/handlers`）就地应答，不连接任何后端或 TikTok，链接可公开分享。`bun run build` 会同时产出 `backend/app/frontend/demo/`，由后端以 `/demo/` 提供；所有租户成员均可通过侧栏底部的“打开体验版”在新标签页进入，平台租户管理页也保留该入口。
 
 - 本地开发：`bun run dev:demo`，打开 <http://localhost:5180/demo/>。
 - 接口变化后：`bun run generate-client` 之后运行 `bun run demo:operations`，并为新接口在 `src/demo/handlers` 注册演示处理（确实无需演示的写入 `src/demo/coverage-exemptions.ts` 并注明原因）；`bun run demo:coverage` 检查覆盖。
