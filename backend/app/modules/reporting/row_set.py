@@ -281,18 +281,26 @@ def _facts_cte(
 
 
 def _common_ctes(cov_kind: str, *, account: bool = False) -> str:
+    period = ""
     if account:
         state = "SELECT tenant_id,advertiser_id,stat_date,status FROM account_report_day_state"
     elif cov_kind == "material_day":
-        state = """SELECT tenant_id,advertiser_id,bucket AS stat_date,derived_status AS status
-            FROM read_bucket_state WHERE kind='material_day' AND derived_revision>0
-                AND derived_status='COMPLETE'"""
+        # 同一期间状态供覆盖与缺失日期共同消费，避免再读一次所有历史状态。
+        period = """material_period AS MATERIALIZED (
+            SELECT tenant_id,advertiser_id,bucket AS stat_date,derived_revision,
+                derived_status AS status FROM read_bucket_state
+            WHERE tenant_id=:tenant AND kind='material_day'
+                AND bucket BETWEEN :start AND :end
+        ),"""
+        state = """SELECT tenant_id,advertiser_id,stat_date,status
+            FROM material_period WHERE derived_revision>0 AND status='COMPLETE'"""
     else:
         state = f"SELECT tenant_id,advertiser_id,stat_date,status FROM report_sync_state WHERE report_kind='{cov_kind}'"
     return f"""acc AS NOT MATERIALIZED (
         SELECT advertiser_id AS adv, NULLIF(name, '') AS name, currency, timezone AS tz
         FROM advertiser_account WHERE tenant_id = :tenant AND advertiser_id = ANY(:advs)
     ),
+    {period}
     cov AS (
         SELECT a.adv, count(s.stat_date) FILTER (WHERE s.status = 'COMPLETE') = :ndays AS complete
         FROM acc a LEFT JOIN ({state}) s
@@ -964,13 +972,17 @@ def _material_rows(filters: ReportingFilter, params: _Params) -> tuple[str, str]
             UNION ALL
             SELECT k.row_key, u.*
             FROM fk k
-            CROSS JOIN LATERAL (
-                SELECT l.* FROM material_post_link l
-                WHERE l.tenant_id = :tenant AND l.advertiser_id = k.adv
-                    AND l.main_material_id = (k.rid::jsonb)->>2 AND l.main_material_type = k.mtype
-                    AND l.ad_material_id IS NOT NULL
+            JOIN (
+                -- 批量按帖子ID读窄覆盖索引，账户仍在结果外层及精确关联处双重约束。
+                SELECT l.advertiser_id,l.main_material_id,l.main_material_type,
+                    l.ad_remote_id,l.ad_material_id FROM material_post_link l
+                WHERE l.tenant_id=:tenant AND l.ad_material_id IS NOT NULL
+                    AND l.main_material_id=ANY(ARRAY(
+                        SELECT DISTINCT mid COLLATE "default" FROM fk WHERE vid IS NULL
+                    ))
                 OFFSET 0
-            ) l
+            ) l ON l.advertiser_id=k.adv AND l.main_material_id=k.mid
+                AND l.main_material_type=k.mtype AND l.advertiser_id=ANY(:advs)
             CROSS JOIN LATERAL (
                 -- 先在真实目录身份内判定歧义，再匹配帖子。多个帖子引用同一
                 -- 使用位置不会凭空增加目录候选数，也不再重复扫描全量uses。
@@ -1220,7 +1232,7 @@ def insert_snapshot_rows(
         MATERIAL_UNSUPPORTED if filters.dimension == "material" else frozenset()
     )
     coverage_source = (
-        "SELECT tenant_id,advertiser_id,kind AS report_kind,bucket AS stat_date,derived_status AS status FROM read_bucket_state"
+        "SELECT tenant_id,advertiser_id,'material_day' AS report_kind,stat_date,status FROM material_period"
         if filters.dimension == "material"
         else "SELECT tenant_id,advertiser_id,report_kind,stat_date,status FROM report_sync_state"
     )
@@ -1246,29 +1258,20 @@ def insert_snapshot_rows(
         all_rows=all_rows,
     )
     bad_source = "mb" if all_rows else "mb JOIN fr ON fr.row_key = mb.row_key"
-    links = "links AS (SELECT 1 WHERE FALSE)"
-    if filters.dimension == "material":
-        links = """links AS (
-            INSERT INTO query_snapshot_evidence(snapshot_id,row_key,version_id)
-            SELECT i.snapshot_id,i.row_key,v.id FROM ins i JOIN ordered o ON o.row_key=i.row_key
-            CROSS JOIN LATERAL unnest(o.evidence_versions) v(id)
-            ON CONFLICT DO NOTHING RETURNING 1
-        )"""
     statement = f"""{ctes},
     ins AS (
         INSERT INTO query_snapshot_row (snapshot_id, row_key, stable_sequence, dimension, display, refs,
-            material_uses, metric_buckets, capabilities, directory_versions, membership_digest,account_membership_version_id,member_keys,member_count)
+            material_uses, metric_buckets, capabilities, directory_versions, membership_digest,account_membership_version_id,member_keys,member_count,evidence_versions)
         SELECT :snapshot_id, row_key, seq, :dimension, '{{}}'::jsonb, refs, material_uses,
-            '[]'::jsonb, '{{}}'::jsonb, '{{}}'::jsonb, '',account_membership_version_id,member_keys,member_count
+            '[]'::jsonb, '{{}}'::jsonb, '{{}}'::jsonb, '',account_membership_version_id,member_keys,member_count,evidence_versions
         FROM ordered
         RETURNING snapshot_id,row_key
     ),
-    {links},
     bad AS (
         SELECT DISTINCT mb.adv FROM {bad_source} WHERE mb.incomplete
     )
     SELECT
-        (SELECT count(*) FROM ins) AS total, (SELECT count(*) FROM links) AS evidence_count,
+        (SELECT count(*) FROM ins) AS total,
         (SELECT COALESCE(jsonb_agg(to_jsonb(s)), '[]'::jsonb) FROM ({summary_sql}) s) AS buckets,
         (SELECT COALESCE(array_agg(adv ORDER BY adv), ARRAY[]::text[]) FROM bad) AS bad_advs,
         (SELECT COALESCE(array_agg(DISTINCT d.day::date ORDER BY d.day::date), ARRAY[]::date[])
@@ -1284,11 +1287,18 @@ def insert_snapshot_rows(
     with session.begin_nested():
         connection = session.connection()
         previous_join = connection.exec_driver_sql("SHOW enable_nestloop").scalar_one()
+        previous_memory = connection.exec_driver_sql("SHOW work_mem").scalar_one()
         connection.exec_driver_sql("SET LOCAL enable_nestloop = off")
+        # 仅本次集合聚合使用16MiB工作区，减少十几万行反复外排；不改部署或连接池默认值。
+        connection.exec_driver_sql("SET LOCAL work_mem = '16MB'")
         row = connection.execute(text(statement), params).one()
         connection.execute(
             text("SELECT set_config('enable_nestloop',:previous,true)"),
             {"previous": previous_join},
+        )
+        connection.execute(
+            text("SELECT set_config('work_mem',:previous,true)"),
+            {"previous": previous_memory},
         )
     bad_dates: Sequence[date] = row.bad_dates
     return SnapshotTotals(

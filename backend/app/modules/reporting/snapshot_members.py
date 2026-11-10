@@ -1,7 +1,6 @@
 """六维报表共享冻结身份解析；查询时保存紧凑键/版本，操作时展开原证据。"""
 
 import json
-from collections import defaultdict
 from collections.abc import Collection, Mapping, Sequence
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
@@ -11,7 +10,10 @@ from sqlalchemy import text
 from sqlmodel import Session, col, select
 
 from app.modules.reporting.account_memberships import load_account_versions
-from app.modules.reporting.read_models.evidence import ReportEvidenceVersion
+from app.modules.reporting.read_models.evidence import (
+    ReportEvidenceVersion,
+    begin_evidence_snapshot,
+)
 from app.modules.reporting.row_set import SnapshotMember
 
 if TYPE_CHECKING:
@@ -172,7 +174,7 @@ def members_from_data(
                         usage["ad_material_id"], str
                     ):
                         raise _unavailable()
-                    # FK保证版本存在；仍需验证版本属于本行VID，不能把同租户另一素材混入操作。
+                    # 保留水位保证版本生命周期；仍验证本行VID，不能混入另一素材。
                     if (
                         material_key[0] == "material"
                         and usage["platform_material_id"] != material_key[1]
@@ -215,26 +217,21 @@ def members_from_data(
 def snapshot_members(
     session: Session, *, snapshot: QuerySnapshot, rows: Sequence[QuerySnapshotRow]
 ) -> dict[str, SnapshotMember]:
+    # 选择/导出可能在有效期末开始；展开期间即使快照过期也不能被清理越过。
+    if any(row.dimension == "material" for row in rows):
+        begin_evidence_snapshot(session)
     if any(
         row.snapshot_id != snapshot.id or row.dimension != snapshot.filters["dimension"]
         for row in rows
     ):
         raise _unavailable()
-    links: dict[str, list[UUID]] = defaultdict(list)
-    if any(row.dimension == "material" for row in rows):
-        for key, version in session.connection().execute(
-            text("""SELECT row_key,version_id FROM query_snapshot_evidence
-            WHERE snapshot_id=:snapshot AND row_key=ANY(:keys)"""),
-            {"snapshot": snapshot.id, "keys": [r.row_key for r in rows]},
-        ):
-            links[key].append(version)
     descriptors = [
         {
             "row_key": r.row_key,
             "account_membership_version_id": r.account_membership_version_id,
             "member_keys": r.member_keys,
             "member_count": r.member_count,
-            "evidence_versions": links[r.row_key],
+            "evidence_versions": r.evidence_versions,
         }
         for r in rows
     ]
@@ -347,9 +344,21 @@ def snapshot_names(
 
 
 def prune_report_evidence(session: Session, *, limit: int = 100) -> None:
+    # 不等待正在构建的快照；构建共享锁释放后，新快照已经提交并可进入时间水位。
+    if (
+        not session.connection()
+        .execute(
+            text("""SELECT pg_try_advisory_xact_lock(
+        hashtextextended('report-evidence-retention',0))""")
+        )
+        .scalar_one()
+    ):
+        return
     session.connection().execute(
         text("""DELETE FROM report_evidence_version WHERE id IN (
         SELECT v.id FROM report_evidence_version v WHERE v.retired_at<clock_timestamp()-interval '1 hour'
+        AND v.retired_at < COALESCE((SELECT min(created_at) FROM query_snapshot
+            WHERE expires_at>clock_timestamp()),clock_timestamp())
         AND NOT EXISTS(SELECT 1 FROM report_name_scope_current h WHERE h.version_id=v.id)
         AND NOT EXISTS(SELECT 1 FROM material_account_member_current h WHERE h.version_id=v.id)
         AND NOT EXISTS(SELECT 1 FROM material_ad_member_current h WHERE h.version_id=v.id)

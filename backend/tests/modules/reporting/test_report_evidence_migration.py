@@ -269,6 +269,8 @@ def test_report_evidence_migration_round_trip_preserves_scope_and_payload(monkey
                         ).scalars()
                     )
                     assert not current_ids & {item["id"] for item in evidence}
+            # 上面独立核对0106历史结构；今日解析器在当前head运行，不能用新增列读取旧schema。
+            command.upgrade(config, "head")
             with Session(engine) as session:
                 for identity, seed, bc in cases:
                     snapshot = read_snapshot(

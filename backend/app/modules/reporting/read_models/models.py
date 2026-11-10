@@ -50,6 +50,19 @@ class ReadBucketState(SQLModel, table=True):
             postgresql_where=text("derived_revision>0 AND derived_status='COMPLETE'"),
         ),
         Index(
+            "ix_read_bucket_projection_period",
+            "tenant_id",
+            "kind",
+            "bucket",
+            "advertiser_id",
+            postgresql_include=[
+                "source_revision",
+                "derived_revision",
+                "derived_observed_at",
+                "derived_status",
+            ],
+        ),
+        Index(
             "ix_read_bucket_dirty",
             "observed_at",
             "tenant_id",

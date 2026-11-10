@@ -11,6 +11,7 @@ from fastapi import HTTPException
 from sqlalchemy import (
     BigInteger,
     CheckConstraint,
+    Column,
     Connection,
     Engine,
     ForeignKeyConstraint,
@@ -19,7 +20,8 @@ from sqlalchemy import (
     event,
     text,
 )
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.dialects.postgresql import ARRAY, JSONB
+from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlmodel import Field, Session, SQLModel, col, select
 
 from app.core.context import TenantContext
@@ -167,6 +169,15 @@ class QuerySnapshotRow(SQLModel, table=True):
         default_factory=list, sa_type=JSONB, nullable=False
     )
     member_count: int = 0
+    # 版本ID直接冻结；当前版本外键和历史保留水位共同保证生命周期。
+    evidence_versions: list[UUID] = Field(
+        default_factory=list,
+        sa_column=Column(
+            ARRAY(PG_UUID(as_uuid=True)),
+            nullable=False,
+            server_default=text("'{}'::uuid[]"),
+        ),
+    )
     account_membership_version_id: UUID | None = Field(
         default=None, foreign_key="account_membership_version.id"
     )

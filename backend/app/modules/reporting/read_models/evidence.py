@@ -1,14 +1,28 @@
-"""查询快照的不可变来源证据；头和快照均以外键引用。"""
+"""不可变来源证据：当前头以外键引用，内联快照由事务锁和保留水位保护。"""
 
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, cast
 from uuid import UUID, uuid4
 
 from sqlalchemy import ForeignKeyConstraint, Index, UniqueConstraint, text
 from sqlalchemy.dialects.postgresql import JSONB
-from sqlmodel import Field, SQLModel
+from sqlmodel import Field, Session, SQLModel
 
 from app.modules.ads.models import AwareDateTime
+
+
+def begin_evidence_snapshot(session: Session) -> datetime:
+    """提交前阻止清理，提交后以本事务开始时间保护冻结的不可变版本。"""
+    row = (
+        session.connection()
+        .execute(
+            text("""SELECT transaction_timestamp(),
+        pg_advisory_xact_lock_shared(hashtextextended('report-evidence-retention',0))
+    """)
+        )
+        .one()
+    )
+    return cast(datetime, row[0])
 
 
 class ReportEvidenceVersion(SQLModel, table=True):

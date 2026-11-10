@@ -175,6 +175,15 @@ class MaterialPostLink(SQLModel, table=True):
             postgresql_include=["ad_remote_id", "ad_material_id"],
             postgresql_where=text("ad_material_id IS NOT NULL"),
         ),
+        Index(
+            "ix_material_post_link_post",
+            "tenant_id",
+            "main_material_id",
+            "advertiser_id",
+            "main_material_type",
+            postgresql_include=["ad_remote_id", "ad_material_id"],
+            postgresql_where=text("ad_material_id IS NOT NULL"),
+        ),
         Index("ix_material_post_link_ad", "tenant_id", "advertiser_id", "ad_remote_id"),
         Index(
             "ix_material_post_link_video_page",

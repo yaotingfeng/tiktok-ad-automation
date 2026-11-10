@@ -40,6 +40,7 @@ from app.modules.reporting.query_reuse import (
     reuse_in_transaction,
 )
 from app.modules.reporting.read_models.coverage import read_projection_coverage
+from app.modules.reporting.read_models.evidence import begin_evidence_snapshot
 from app.modules.reporting.read_models.models import (
     AccountMembershipCurrent,
     AccountReportDayState,
@@ -159,6 +160,11 @@ def _build_snapshot(
     filters: ReportingFilter,
 ) -> QuerySnapshot:
     """在数据库内一次算出并写入快照成员与顺序，再落汇总；行内容不入快照。"""
+    transaction_started = (
+        begin_evidence_snapshot(session)
+        if filters.dimension == "material"
+        else datetime.now(UTC)
+    )
     grants = authorized_grants(
         session, context=context, bc_id=bc_id, advertiser_ids=filters.advertiser_ids
     )
@@ -197,6 +203,7 @@ def _build_snapshot(
         publication_versions["max"] = int(updated.timestamp() * 1_000_000)
     snapshot = QuerySnapshot(
         id=uuid4(),
+        created_at=transaction_started,
         tenant_id=context.tenant_id,
         bc_id=bc_id,
         actor_id=context.actor_id,
