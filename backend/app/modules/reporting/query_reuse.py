@@ -68,10 +68,17 @@ def query_key(context: TenantContext, bc_id: str, filters: ReportingFilter) -> s
     )
 
 
-@query_diagnostics.timed("dependencies")
-def dependency_stamp(
+@dataclass(frozen=True)
+class QueryAuthorityStamp:
+    scope_digest: str
+    permission_revision: str
+    advertisers: tuple[str, ...]
+
+
+def authority_stamp(
     session: Session, *, context: TenantContext, bc_id: str, filters: ReportingFilter
-) -> QueryDependencyStamp:
+) -> QueryAuthorityStamp:
+    """缓存和精确构建共用实时权限标签；命中缓存不必扫描事实桶版本。"""
     authority = require_tenant(
         session, actor_id=context.actor_id, tenant_id=context.tenant_id, action="read"
     )
@@ -87,8 +94,6 @@ def dependency_stamp(
         "tenant": context.tenant_id,
         "bc": bc_id,
         "advertisers": advertisers,
-        "start": filters.start_date,
-        "end": filters.end_date,
     }
     connections = (
         session.connection()
@@ -105,6 +110,41 @@ def dependency_stamp(
         )
         .all()
     )
+    return QueryAuthorityStamp(
+        scope_digest=_digest([context.tenant_id, bc_id, context.actor_id, advertisers]),
+        permission_revision=_digest(
+            [
+                authority.role,
+                [tuple(r) for r in connections],
+                sorted(
+                    (
+                        g.advertiser_id,
+                        str(g.connection_id),
+                        g.permission_state,
+                        g.can_upload,
+                        g.can_build,
+                    )
+                    for g in grants
+                ),
+            ]
+        ),
+        advertisers=tuple(advertisers),
+    )
+
+
+@query_diagnostics.timed("dependencies")
+def dependency_stamp(
+    session: Session, *, context: TenantContext, bc_id: str, filters: ReportingFilter
+) -> QueryDependencyStamp:
+    authority = authority_stamp(session, context=context, bc_id=bc_id, filters=filters)
+    advertisers = list(authority.advertisers)
+    params = {
+        "tenant": context.tenant_id,
+        "bc": bc_id,
+        "advertisers": advertisers,
+        "start": filters.start_date,
+        "end": filters.end_date,
+    }
     rows = (
         session.connection()
         .execute(
@@ -138,23 +178,8 @@ def dependency_stamp(
             )
         ]
     return QueryDependencyStamp(
-        scope_digest=_digest([context.tenant_id, bc_id, context.actor_id, advertisers]),
-        permission_revision=_digest(
-            [
-                authority.role,
-                [tuple(r) for r in connections],
-                sorted(
-                    (
-                        g.advertiser_id,
-                        str(g.connection_id),
-                        g.permission_state,
-                        g.can_upload,
-                        g.can_build,
-                    )
-                    for g in grants
-                ),
-            ]
-        ),
+        scope_digest=authority.scope_digest,
+        permission_revision=authority.permission_revision,
         filter_digest=_digest(filters.model_dump(mode="json")),
         fact_buckets_digest=_digest(facts),
         derived_buckets_digest=_digest(derived),

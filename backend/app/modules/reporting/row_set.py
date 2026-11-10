@@ -380,9 +380,10 @@ def _metrics_only(filters: ReportingFilter) -> bool:
     默认口径下系列/广告组/广告的成员即有事实的对象；没有搜索、目录筛选、
     命名筛选，也不按名称或配置排序时，快照只需事实与指标。名称与上级在
     翻页补全时只为当前页读取（materialize_rows），页面显示不变。
+    素材仍需冻结使用位置；这里只额外允许其无筛选汇总直接消费全部成员桶。
     """
     return (
-        filters.dimension in ("campaign", "adgroup", "ad", "drama")
+        filters.dimension in ("campaign", "adgroup", "ad", "drama", "material")
         and not filters.include_empty
         and not filters.ids
         and not _search_terms(filters)
@@ -1022,10 +1023,11 @@ def _material_rows(filters: ReportingFilter, params: _Params) -> tuple[str, str]
         )"""
         if has_entity_filter or hier
         else """cand AS (
-            SELECT DISTINCT ON (u.row_key,u.adv,u.ad_remote_id,u.platform_material_id,u.ad_material_id,u.material_type)
+            -- 两个来源分别由账户/广告成员主键及帖子对照主键唯一约束；行键前缀互斥。
+            -- 不再为已唯一的18万条使用位置执行一次宽行DISTINCT排序。
+            SELECT
                 u.*, COALESCE(a.name,u.adv) AS account_name, TRUE AS matched
             FROM cand_raw u JOIN acc a ON a.adv=u.adv
-            ORDER BY u.row_key,u.adv,u.ad_remote_id,u.platform_material_id,u.ad_material_id,u.material_type,u.id
         )""",
         f"""muse AS (SELECT * FROM cand WHERE {"matched" if has_entity_filter else "TRUE"})""",
         """cand_names AS (SELECT row_key, min(name COLLATE "C") AS name FROM cand GROUP BY row_key)""",

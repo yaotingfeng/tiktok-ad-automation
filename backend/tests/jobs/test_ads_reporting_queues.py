@@ -23,6 +23,13 @@ def test_ads_reporting_tasks_have_dedicated_queues_and_standard_beat_gate():
     )
     assert "ads-publish" in _QUEUES
     assert dispatch_queue("reporting.job_step") == "ads-reporting"
+    assert dispatch_queue("reporting.plan_query_pages") == "control"
+    assert dispatch_queue("reporting.refresh_query_page") == "ads-reporting"
+    assert "reporting.refresh_query_page" in celery_app.tasks
+    assert (
+        celery_app.conf.task_routes["reporting.refresh_query_page"]["queue"]
+        == "ads-reporting"
+    )
     assert celery_app.conf.task_routes["reporting.plan_due"]["queue"] == "control"
     assert "scan-ads-reporting-due" in celery_app.conf.beat_schedule
     assert "ads-directory" in _QUEUES
@@ -40,7 +47,7 @@ def test_ads_reporting_tasks_have_dedicated_queues_and_standard_beat_gate():
         settings.ADS_SYNC_ENABLED = previous
 
 
-def test_worker_templates_keep_one_slot_and_shared_switch_injection():
+def test_worker_templates_keep_approved_slots_and_shared_switch_injection():
     root = Path(__file__).resolve().parents[3]
     compose = (root / "compose.yml").read_text()
     production = (root / "compose.production.yml").read_text()
@@ -71,7 +78,8 @@ def test_worker_templates_keep_one_slot_and_shared_switch_injection():
             ","
         ):
             consumers.append(deployment["metadata"]["name"])
-            assert command[command.index("--concurrency") + 1] == "1"
+            # staging仍单槽；ACK已批准的publisher为8槽，本地缓存不改变运行并发。
+            assert command[command.index("--concurrency") + 1] == "8"
     assert consumers == ["tiktok-ad-automation-worker-ads-directory"]
 
 

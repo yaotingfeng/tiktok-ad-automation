@@ -1,6 +1,14 @@
 import { expect, test } from "@playwright/test"
 import { adsBoundary, BC_A, TENANT } from "./utils/adsBoundary"
 
+test("首屏显示一分钟缓存的数据时点", async ({ page }) => {
+  await adsBoundary(page, { cacheDataAt: "2026-10-01T05:05:00Z" })
+  await page.goto(`/tenants/${TENANT}/ads?bc_id=${BC_A}`)
+  await expect(page.getByTestId("report-query-times")).toContainText(
+    "最多延迟1分钟",
+  )
+})
+
 test("区分冻结汇总和页指标时点，并如实显示投影等待", async ({ page }) => {
   await adsBoundary(page, { projectionStatus: "BUILDING" })
   await page.goto(`/tenants/${TENANT}/ads?bc_id=${BC_A}`)
@@ -285,6 +293,11 @@ test("后台发布不打断第二页选择，用户可选择加载最新数据",
   await page.clock.install()
   const options = { paged: true, lastSuccess: "2026-10-05T05:00:00Z" }
   await adsBoundary(page, options)
+  const requests: string[] = []
+  page.on("request", (request) => {
+    if (new URL(request.url()).pathname.endsWith(`/tenants/${TENANT}/ads`))
+      requests.push(request.url())
+  })
   await page.goto(`/tenants/${TENANT}/ads?bc_id=${BC_A}`)
   await page.getByRole("tab", { name: "系列", exact: true }).click()
   await page.getByRole("button", { name: "下一页" }).click()
@@ -302,6 +315,9 @@ test("后台发布不打断第二页选择，用户可选择加载最新数据",
     0,
   )
   await expect(page.getByText("已选 1 条", { exact: true })).toHaveCount(0)
+  expect(new URL(requests.at(-1)!).searchParams.get("force_refresh")).toBe(
+    "true",
+  )
 })
 
 test("空闲页面后台发布自动更新汇总且同版本不循环刷新", async ({ page }) => {
@@ -324,6 +340,9 @@ test("空闲页面后台发布自动更新汇总且同版本不循环刷新", as
   await expect(page.getByTestId("summary-spend")).toContainText("240.00")
   expect(requests.length).toBe(before + 1)
   expect(new URL(requests.at(-1)!).searchParams.get("snapshot_id")).toBeNull()
+  expect(new URL(requests.at(-1)!).searchParams.get("force_refresh")).not.toBe(
+    "true",
+  )
   await page.clock.fastForward(31_000)
   expect(requests.length).toBe(before + 1)
   await expect(

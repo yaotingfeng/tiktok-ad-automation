@@ -77,6 +77,25 @@ def test_inline_missing_version_fails_closed(session, sync_seed):
     )
 
 
+def test_unfiltered_material_summary_matches_full_row_filter_path(session, sync_seed):
+    material_snapshot(session, sync_seed)
+    use(session, sync_seed, adv="acc-2", ad="a2", video="v1", ad_material="m2")
+    pages = [
+        query_ads(
+            session,
+            context=sync_seed.context,
+            bc_id="bc-a",
+            filters=ReportingFilter(
+                dimension="material", start_date=D, end_date=D, **bounds
+            ),
+        )
+        for bounds in ({}, {"min_spend": 0})
+    ]
+    assert pages[0].total == pages[1].total
+    assert pages[0].summary == pages[1].summary
+    assert pages[0].items == pages[1].items
+
+
 def test_active_snapshot_watermark_preserves_old_retired_version_until_expiry(
     session, sync_seed
 ):

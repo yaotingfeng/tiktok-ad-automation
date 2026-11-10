@@ -162,7 +162,7 @@ def _build_snapshot(
     """在数据库内一次算出并写入快照成员与顺序，再落汇总；行内容不入快照。"""
     transaction_started = (
         begin_evidence_snapshot(session)
-        if filters.dimension == "material"
+        if filters.dimension in {"material", "campaign", "drama"}
         else datetime.now(UTC)
     )
     grants = authorized_grants(

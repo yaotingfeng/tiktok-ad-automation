@@ -218,7 +218,7 @@ def snapshot_members(
     session: Session, *, snapshot: QuerySnapshot, rows: Sequence[QuerySnapshotRow]
 ) -> dict[str, SnapshotMember]:
     # 选择/导出可能在有效期末开始；展开期间即使快照过期也不能被清理越过。
-    if any(row.dimension == "material" for row in rows):
+    if any(row.dimension in {"material", "campaign", "drama"} for row in rows):
         begin_evidence_snapshot(session)
     if any(
         row.snapshot_id != snapshot.id or row.dimension != snapshot.filters["dimension"]
@@ -256,13 +256,12 @@ def pin_snapshot_names(session: Session, *, snapshot: QuerySnapshot) -> dict[str
           WHERE snapshot_id=:snapshot AND dimension='campaign'
         UNION SELECT p->>0 FROM query_snapshot_row q CROSS JOIN LATERAL jsonb_array_elements(q.member_keys) p
           WHERE q.snapshot_id=:snapshot AND q.dimension='drama'
-    ), ins AS (
-        INSERT INTO query_snapshot_name_version(snapshot_id,version_id)
-        SELECT :snapshot,h.version_id FROM wanted w JOIN report_name_scope_current h
+    ), versions AS (
+        SELECT h.version_id FROM wanted w JOIN report_name_scope_current h
           ON h.tenant_id=:tenant AND h.advertiser_id=w.adv
-        WHERE h.advertiser_id=ANY(:advertisers) RETURNING version_id
+        WHERE h.advertiser_id=ANY(:advertisers)
     ) SELECT (SELECT count(*) FROM wanted) AS expected,
-        COALESCE((SELECT array_agg(version_id) FROM ins),ARRAY[]::uuid[]) AS versions"""),
+        COALESCE((SELECT array_agg(version_id) FROM versions),ARRAY[]::uuid[]) AS versions"""),
             {
                 "snapshot": snapshot.id,
                 "tenant": snapshot.tenant_id,
@@ -305,16 +304,7 @@ def snapshot_names(
         }
     if dimension not in {"campaign", "drama"}:
         return dict(snapshot.naming_versions)
-    name_rows = (
-        session.connection()
-        .execute(
-            text("""SELECT v.id,v.tenant_id,v.advertiser_id,v.kind,v.naming_versions
-        FROM query_snapshot_name_version l JOIN report_evidence_version v ON v.id=l.version_id
-        WHERE l.snapshot_id=:snapshot"""),
-            {"snapshot": snapshot.id},
-        )
-        .all()
-    )
+    begin_evidence_snapshot(session)
     try:
         expected = {
             UUID(k.removeprefix("name-version:"))
@@ -323,6 +313,19 @@ def snapshot_names(
         }
     except ValueError:
         raise _unavailable() from None
+    # 头里的UUID已经冻结在naming_versions；与素材同用保留水位，无需每次复制外键关联。
+    name_rows = (
+        session.connection()
+        .execute(
+            text("""SELECT v.id,v.tenant_id,v.advertiser_id,v.kind,v.naming_versions
+            FROM report_evidence_version v
+            WHERE v.tenant_id=:tenant AND v.id=ANY(CAST(:versions AS uuid[]))"""),
+            {"tenant": snapshot.tenant_id, "versions": sorted(expected)},
+        )
+        .all()
+        if expected
+        else []
+    )
     if {r.id for r in name_rows} != expected:
         raise _unavailable()
     scopes = {}

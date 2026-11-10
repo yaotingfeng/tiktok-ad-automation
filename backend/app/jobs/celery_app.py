@@ -44,6 +44,7 @@ celery_app.conf.update(
         "app.modules.reporting.health",
         "app.modules.reporting.balance_tasks",
         "app.modules.reporting.read_models.tasks",
+        "app.modules.reporting.page_cache_tasks",
         "app.modules.sync_control.tasks",
         "app.modules.sync_control.archive_tasks",
         "app.modules.reporting.export_tasks",
@@ -86,6 +87,8 @@ celery_app.conf.update(
         "reporting.plan_balances": {"queue": "control"},
         "reporting.balance_step": {"queue": "ads-directory"},
         "reporting.project_read_models": {"queue": "ads-reporting"},
+        "reporting.plan_query_pages": {"queue": "control"},
+        "reporting.refresh_query_page": {"queue": "ads-reporting"},
         "reporting.cleanup_store": {"queue": "ads-reporting"},
         "ads.sync_step": {"queue": "ads-directory"},
         "ads.publish_step": {"queue": "ads-publish"},
@@ -102,6 +105,11 @@ celery_app.conf.update(
         "automation.send_summary": {"queue": "control"},
     },
     beat_schedule={
+        "refresh-active-report-pages": {
+            "task": "reporting.plan_query_pages",
+            "schedule": 5.0,
+            "options": {"queue": "control", "expires": 4.0},
+        },
         "schedule-business-accounting": {
             "task": "business.schedule",
             "schedule": 60.0,

@@ -1288,10 +1288,21 @@ CLEANUP_CURSOR_KEY = "reporting:cleanup:cursors:v2"
 # 先按主键取有限候选，再判断保留期，避免无时间索引时 LIMIT 仍扫描全表。
 CLEANUP_SCAN_ROWS = 1000
 CLEANUP_BATCH_ROWS = 100
+# 一分钟首屏会持续生成紧凑快照；只提高已过期快照子行的清理吞吐。
+# 原始报表/目录大JSON页仍100条，保留期、2秒语句预算及拥塞缩批机制均不变。
+CLEANUP_SNAPSHOT_BATCH_ROWS = 5000
 # 无页父任务很小，单批放大到1000；大JSONB子页仍独立限制100页。
 CLEANUP_JOB_BATCH_ROWS = 1000
 CLEANUP_STATEMENT_MS = 2000
 CLEANUP_LOCK_MS = 200
+
+
+def _cleanup_default_batch(category: str) -> int:
+    if category == "snapshots":
+        return CLEANUP_SNAPSHOT_BATCH_ROWS
+    return CLEANUP_JOB_BATCH_ROWS if category == "jobs" else CLEANUP_BATCH_ROWS
+
+
 CLEANUP_CATEGORIES = (
     "covered_directories",
     "covered_reports",
@@ -1526,7 +1537,7 @@ def _cleanup_category(session, *, category, now, cursors):
     }
     model, condition = models[category]
     limits = cursors.get("_limits", {}).get(category, {})
-    batch_limit = limits.get("batch", CLEANUP_BATCH_ROWS)
+    batch_limit = limits.get("batch", _cleanup_default_batch(category))
     # 分页从子表自己的主键窗口出发，避免为找到少量有页任务反复读无页父记录。
     # v2游标记录(job_id/run_id,page)，旧v1父表游标不复用；重扫不会越过保留策略。
     page_model = {
@@ -1655,9 +1666,7 @@ def cleanup_store(session, *, now, categories=CLEANUP_CATEGORIES, cursors=None):
             limits = cursors.get("_limits", {}).get(category)
             if limits:
                 limits["scan"] = min(CLEANUP_SCAN_ROWS, limits["scan"] * 2)
-                maximum = (
-                    CLEANUP_JOB_BATCH_ROWS if category == "jobs" else CLEANUP_BATCH_ROWS
-                )
+                maximum = _cleanup_default_batch(category)
                 limits["batch"] = min(maximum, limits["batch"] * 2)
         except DBAPIError as error:
             # 数据库主动取消语句，savepoint 回滚后仍可处理其他类别；未知错误保留告警。
@@ -1666,9 +1675,7 @@ def cleanup_store(session, *, now, categories=CLEANUP_CATEGORIES, cursors=None):
             # 大窗口超时后下轮缩小重试，保持原游标；不能永久重跑同一超大批。
             limits = cursors.setdefault("_limits", {}).setdefault(category, {})
             limits["scan"] = max(1, limits.get("scan", CLEANUP_SCAN_ROWS) // 4)
-            default_batch = (
-                CLEANUP_JOB_BATCH_ROWS if category == "jobs" else CLEANUP_BATCH_ROWS
-            )
+            default_batch = _cleanup_default_batch(category)
             limits["batch"] = max(1, limits.get("batch", default_batch) // 4)
             cursors["_deferred"] = True
             if limits["scan"] == limits["batch"] == 1:

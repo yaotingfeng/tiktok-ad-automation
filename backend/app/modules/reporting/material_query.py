@@ -69,25 +69,6 @@ def materialize_material_rows(
     """
     scope = sorted(set(advertisers))
     keys = {member.row_key: json.loads(member.row_key) for member in members}
-    names: dict[str, str] = (
-        {
-            row.row_key: row.name
-            for row in session.connection()
-            .execute(
-                text(material_names_sql(page=True)),
-                {
-                    "tenant": tenant_id,
-                    "advs": scope,
-                    "start": filters.start_date,
-                    "end": filters.end_date,
-                    "row_keys": list(keys),
-                },
-            )
-            .all()
-        }
-        if keys
-        else {}
-    )
     videos = {key[1] for key in keys.values() if key[0] == "material"}
     posts_by_row: dict[str, set[tuple[str, str, str]]] = defaultdict(set)
     # 当前页素材驱动索引探测；OFFSET 0保留相关子查询，避免大账户集合
@@ -115,6 +96,32 @@ def materialize_material_rows(
     usage_by_video: dict[str, list[AdMaterialReference]] = defaultdict(list)
     for usage in usages:
         usage_by_video[usage.platform_material_id].append(usage)
+    # 展示一直优先目录名；只为确实缺名的行展开历史帖子JSON，避免为整页无用回退读大字段。
+    fallback_keys = [
+        row_key
+        for row_key, key in keys.items()
+        if key[0] != "material"
+        or not any(u.name for u in usage_by_video.get(key[1], ()))
+    ]
+    names = (
+        {
+            row.row_key: row.name
+            for row in session.connection()
+            .execute(
+                text(material_names_sql(page=True)),
+                {
+                    "tenant": tenant_id,
+                    "advs": scope,
+                    "start": filters.start_date,
+                    "end": filters.end_date,
+                    "row_keys": fallback_keys,
+                },
+            )
+            .all()
+        }
+        if fallback_keys
+        else {}
+    )
     data = (
         _aggregate(
             session,

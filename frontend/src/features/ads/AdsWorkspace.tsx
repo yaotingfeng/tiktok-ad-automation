@@ -177,31 +177,37 @@ export function AdsWorkspace() {
   const clearSelection = ads.selection.clear
   const pendingRefreshScope = useRef<string | null>(null)
   const [newDataAvailable, setNewDataAvailable] = useState(false)
-  const loadLatest = useCallback(() => {
-    lastSnapshotRequestAt.current = Date.now()
-    pendingRefreshScope.current = null
-    setNewDataAvailable(false)
-    clearSelection()
-    clearManagementPreview()
-    closeDetail()
-    setCursorHistory([])
-    setSearch((current) => ({
-      ...current,
-      page: 1,
-      cursor: undefined,
-      snapshot_id: undefined,
-    }))
-    setApplied((current) => ({
-      ...current,
-      page: 1,
-      cursor: undefined,
-      snapshot_id: undefined,
-    }))
-    setQueryRevision((current) => current + 1)
-    setSyncNotice("报表数据已更新")
-  }, [clearSelection, clearManagementPreview, closeDetail])
+  const forceNextQuery = ads.forceNextQuery
+  const loadLatest = useCallback(
+    (force = true) => {
+      if (force) forceNextQuery()
+      lastSnapshotRequestAt.current = Date.now()
+      pendingRefreshScope.current = null
+      setNewDataAvailable(false)
+      clearSelection()
+      clearManagementPreview()
+      closeDetail()
+      setCursorHistory([])
+      setSearch((current) => ({
+        ...current,
+        page: 1,
+        cursor: undefined,
+        snapshot_id: undefined,
+      }))
+      setApplied((current) => ({
+        ...current,
+        page: 1,
+        cursor: undefined,
+        snapshot_id: undefined,
+      }))
+      setQueryRevision((current) => current + 1)
+      setSyncNotice("报表数据已更新")
+    },
+    [clearSelection, clearManagementPreview, closeDetail, forceNextQuery],
+  )
   const refetchRows = ads.query.refetch
   const refreshCurrentPage = useCallback(() => {
+    forceNextQuery()
     void refetchRows()
     // 已打开的详情/广告内素材也读取同一轮目录回读，不留着操作前的缓存。
     void queryClient.invalidateQueries({
@@ -211,7 +217,7 @@ export function AdsWorkspace() {
           String(query.queryKey[3]),
         ) && query.queryKey[4] === currentBcId,
     })
-  }, [refetchRows, queryClient, tenantId, currentBcId])
+  }, [refetchRows, queryClient, tenantId, currentBcId, forceNextQuery])
   const syncMutation = useMutation({
     mutationFn: async () => {
       // 手动刷新按当前筛选账户插队，不从当前页推导范围，也不触发历史回补。
@@ -603,13 +609,13 @@ export function AdsWorkspace() {
     // 只有空闲且当前请求结束时换快照，避免打断选择、详情、预览或跨页操作。
     // 用户明确点击刷新可重建；后台发布必须服从空闲状态和60秒间隔。
     if (pendingRefreshScope.current === publicationScope && pageVisible)
-      loadLatest()
+      loadLatest(false)
     else if (canAutoLoadLatest) {
       const remaining = 60_000 - (Date.now() - lastSnapshotRequestAt.current)
-      if (remaining <= 0) loadLatest()
+      if (remaining <= 0) loadLatest(false)
       else {
         setNewDataAvailable(true)
-        const timer = window.setTimeout(loadLatest, remaining)
+        const timer = window.setTimeout(() => loadLatest(false), remaining)
         return () => window.clearTimeout(timer)
       }
     } else if (previous.version !== version && followOwnOperation) {
@@ -719,7 +725,7 @@ export function AdsWorkspace() {
         startDate={applied.start_date}
         coverage={ads.query.data?.coverage}
         notice={syncNotice}
-        onLoadLatest={newDataAvailable ? loadLatest : undefined}
+        onLoadLatest={newDataAvailable ? () => loadLatest() : undefined}
       />
       {/* 卡片自带纵向内边距，这里改为只用内容区的紧凑内边距，给列表留出空间。 */}
       <Card className="py-0 lg:py-0">
@@ -759,6 +765,7 @@ export function AdsWorkspace() {
         hasPreviousData={!!ads.query.data}
         snapshotAt={ads.snapshot?.snapshot_at}
         metricsObservedAt={ads.query.data?.metrics_observed_at}
+        cacheDataAt={ads.query.data?.cache_data_at}
         projectionStatus={String(
           ads.query.data?.metrics_coverage?.status ?? "",
         )}

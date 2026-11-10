@@ -226,6 +226,30 @@ def _aggregate(
             .lateral()
         )
         model = aliased(model, source)
+    elif table_name == "material_entity_day" and ids is not None:
+        # 素材一行跨多个账户，身份先由页内row_key限定，再在外层核验授权账户。
+        # 与目录点查相同，OFFSET 0防止优化器改成数千账户的期间主键探测。
+        ids = tuple(dict.fromkeys(ids))
+        if not ids:
+            return []
+        wanted = (
+            func.unnest(bindparam(None, list(ids), type_=ARRAY(Text)))
+            .table_valued("rid")
+            .render_derived()
+        )
+        source = (
+            sql_select(model)
+            .where(
+                model.tenant_id == tenant_id,
+                model.row_key == wanted.c.rid,
+                model.stat_date >= start,
+                model.stat_date <= end,
+            )
+            .offset(0)
+            .correlate(wanted)
+            .lateral()
+        )
+        model = aliased(model, source)
     # 同一对象跨日按部分合计规则（设计 7.3）：只合计有值的日期，另带
     # "<列>_has_null" 标记该列是否有日期为空，由 fact_vector 标成 PARTIAL。
     columns = [col(getattr(model, name)) for name in group_cols]

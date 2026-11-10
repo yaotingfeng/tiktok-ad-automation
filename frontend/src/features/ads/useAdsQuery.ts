@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query"
-import { useCallback, useEffect, useMemo, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import {
   type AdsQueryPage,
   AdsReportingService,
@@ -16,6 +16,11 @@ export function useAdsQuery(search: AdsSearch, queryRevision = 0) {
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [allMatching, setAllMatching] = useState(false)
   const [excluded, setExcluded] = useState<Set<string>>(new Set())
+  const requestedRefresh = useRef(0)
+  const completedRefresh = useRef(0)
+  const forceNextQuery = useCallback(() => {
+    requestedRefresh.current += 1
+  }, [])
   const bcId = bc?.bc_id ?? null
   const queryKey = useMemo(
     () =>
@@ -47,23 +52,28 @@ export function useAdsQuery(search: AdsSearch, queryRevision = 0) {
     gcTime: 5 * 60_000,
     refetchOnWindowFocus: false,
     refetchIntervalInBackground: false,
-    queryFn: async ({ signal }) =>
-      (
-        await AdsReportingService.queryAds({
-          path: { tenant_id: tenantId! },
-          query: {
-            bc_id: bcId!,
-            // 同键重读补全当前状态，沿用已返回的成员/顺序；主动筛选/刷新会换键建新快照。
-            ...toAdsQuery(
-              search,
-              search.snapshot_id ??
-                queryClient.getQueryData<AdsQueryPage>(queryKey)?.snapshot
-                  .snapshot_id,
-            ),
-          },
-          signal,
-        })
-      ).data,
+    queryFn: async ({ signal }) => {
+      const refresh = requestedRefresh.current
+      const forceRefresh = refresh > completedRefresh.current
+      // 首屏重新进入走一分钟缓存；选择或分页中的操作仍固定原快照。
+      const heldSnapshot =
+        selected.size || allMatching || (search.page ?? 1) > 1
+          ? queryClient.getQueryData<AdsQueryPage>(queryKey)?.snapshot
+              .snapshot_id
+          : undefined
+      const result = await AdsReportingService.queryAds({
+        path: { tenant_id: tenantId! },
+        query: {
+          bc_id: bcId!,
+          ...toAdsQuery(search, search.snapshot_id ?? heldSnapshot),
+          force_refresh: forceRefresh ? true : undefined,
+        },
+        signal,
+      })
+      if (forceRefresh && refresh === requestedRefresh.current)
+        completedRefresh.current = refresh
+      return result.data
+    },
   })
   const selectionKey = useMemo(() => {
     const {
@@ -118,6 +128,7 @@ export function useAdsQuery(search: AdsSearch, queryRevision = 0) {
   }, [])
   return {
     query,
+    forceNextQuery,
     snapshot: query.data?.snapshot ?? null,
     selection: {
       selected,

@@ -103,6 +103,8 @@ register_dispatch_task("accounts.runtime_discover", "resources")
 register_dispatch_task("builds.historical_read_step", "resources")
 # 导出只消费本地冻结快照，和报表同步共用 ads-reporting worker 隔离。
 register_dispatch_task("reporting.export", "ads-reporting")
+register_dispatch_task("reporting.plan_query_pages", "control")
+register_dispatch_task("reporting.refresh_query_page", "ads-reporting")
 register_dispatch_task("ad_management.execute", "ad-management")
 
 

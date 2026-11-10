@@ -410,6 +410,22 @@ export type AdsQueryPage = {
     metrics_coverage?: {
         [key: string]: unknown;
     };
+    /**
+     * Cache Data At
+     */
+    cache_data_at?: string | null;
+    /**
+     * Cache Generated At
+     */
+    cache_generated_at?: string | null;
+    /**
+     * Cache Expires At
+     */
+    cache_expires_at?: string | null;
+    /**
+     * Cache Hit
+     */
+    cache_hit?: boolean;
 };
 
 /**
@@ -14670,6 +14686,10 @@ export type adsReportingQueryAdsData = {
          * Limit
          */
         limit?: number;
+        /**
+         * Force Refresh
+         */
+        force_refresh?: boolean;
     };
     url: '/api/tenants/{tenant_id}/ads';
 };

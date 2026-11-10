@@ -189,6 +189,10 @@ class AdsQueryPage(BaseModel):
     metrics_observed_at: datetime | None = None
     ordering_basis: Literal["snapshot"] = "snapshot"
     metrics_coverage: dict[str, object] = Field(default_factory=dict)
+    cache_data_at: datetime | None = None
+    cache_generated_at: datetime | None = None
+    cache_expires_at: datetime | None = None
+    cache_hit: bool = False
 
 
 class SelectionRequest(BaseModel):

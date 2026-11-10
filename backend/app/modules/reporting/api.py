@@ -42,6 +42,7 @@ from app.modules.reporting.exports import (
 )
 from app.modules.reporting.filters import authorized_grants
 from app.modules.reporting.metric_catalog import METRIC_CATALOG, table_label
+from app.modules.reporting.page_cache import query_cached_ads
 from app.modules.reporting.planner import (
     backfill_allowed,
     ensure_bc_plans,
@@ -56,7 +57,6 @@ from app.modules.reporting.preferences import (
     save_view,
     update_view,
 )
-from app.modules.reporting.queries import query_ads
 from app.modules.reporting.query_reuse import QueryCancellation
 from app.modules.reporting.schemas import (
     AdMaterialSelectionRequest,
@@ -192,6 +192,7 @@ async def query_ads_route(
     snapshot_id: UUID | None = None,
     cursor: Annotated[str | None, Query(max_length=8192)] = None,
     limit: Annotated[int, Query(ge=1, le=100)] = 50,
+    force_refresh: bool = False,
 ) -> AdsQueryPage:
     # 默认日期必须按请求时刻计算；写在参数默认值里会固定为服务启动当天。
     today = date.today()
@@ -221,9 +222,9 @@ async def query_ads_route(
     )
     cancellation = QueryCancellation()
 
-    def execute_query():
+    def execute_query() -> AdsQueryPage:
         context = _context(session, user, tenant_id)
-        result = query_ads(
+        result = query_cached_ads(
             session,
             context=context,
             bc_id=bc_id,
@@ -232,6 +233,7 @@ async def query_ads_route(
             cursor=cursor,
             limit=limit,
             cancellation=cancellation,
+            force_refresh=force_refresh,
         )
         session.commit()
         return result

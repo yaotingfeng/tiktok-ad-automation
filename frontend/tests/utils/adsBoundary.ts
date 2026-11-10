@@ -11,6 +11,7 @@ export const ADVERTISER = "adv-1"
 const token = "ads-workspace-test-token"
 
 export type AdsBoundaryOptions = {
+  cacheDataAt?: string
   emptyRows?: boolean
   projectionStatus?: "CURRENT" | "STALE" | "BUILDING"
   lastSuccess?: string
@@ -281,6 +282,7 @@ export async function adsBoundary(
             publication_versions: {},
           },
           metrics_observed_at: "2026-10-01T05:05:00Z",
+          cache_data_at: options.cacheDataAt,
           ordering_basis: "snapshot",
           metrics_coverage: { status: options.projectionStatus ?? "CURRENT" },
           items: [

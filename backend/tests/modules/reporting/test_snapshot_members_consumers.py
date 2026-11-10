@@ -2,6 +2,7 @@
 
 import pytest
 from fastapi import HTTPException
+from sqlalchemy import text
 
 from app.modules.reporting.read_models.evidence import ReportEvidenceVersion
 from app.modules.reporting.snapshot_members import members_from_data
@@ -20,6 +21,15 @@ def test_selection_and_export_expand_original_name_version(report_case, dimensio
         case.session, campaign_ref=ref, raw_name="嘉书-旧剧-备注", parser_revision=1
     )
     page = query(case, filters=filters_for(dimension))
+    assert (
+        case.session.execute(
+            text(
+                "SELECT count(*) FROM query_snapshot_name_version WHERE snapshot_id=:s"
+            ),
+            {"s": page.snapshot.snapshot_id},
+        ).scalar_one()
+        == 0
+    )
     append_campaign_name_projection(
         case.session, campaign_ref=ref, raw_name="嘉书-新剧-备注", parser_revision=1
     )

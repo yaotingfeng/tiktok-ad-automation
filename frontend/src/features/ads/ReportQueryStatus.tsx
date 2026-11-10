@@ -8,12 +8,14 @@ export function ReportQueryStatus({
   snapshotAt,
   metricsObservedAt,
   projectionStatus,
+  cacheDataAt,
 }: {
   loading: boolean
   hasPreviousData: boolean
   snapshotAt?: string
   metricsObservedAt?: string | null
   projectionStatus?: string
+  cacheDataAt?: string | null
 }) {
   const [slow, setSlow] = useState(false)
   useEffect(() => {
@@ -26,7 +28,7 @@ export function ReportQueryStatus({
 
   const time = (value: string) => new Date(value).toLocaleTimeString()
   return (
-    <div className="space-y-2">
+    <div className="flex flex-col gap-2">
       {loading && (
         <Alert role="status" aria-live="polite">
           <LoaderCircle className="animate-spin" aria-hidden="true" />
@@ -50,6 +52,8 @@ export function ReportQueryStatus({
             ? `行指标观察于 ${time(metricsObservedAt)}`
             : "行指标尚未准备完成"}
           。
+          {cacheDataAt &&
+            ` 首屏汇总缓存，数据视图 ${time(cacheDataAt)}，最多延迟1分钟。`}
         </p>
       )}
       {(projectionStatus === "BUILDING" || projectionStatus === "STALE") && (
