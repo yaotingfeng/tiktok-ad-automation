@@ -25,7 +25,10 @@ def _plan(session, tenant_id, bc_id):
 
 
 def enqueue_backfill(session, *, tenant_id, bc_id, start, end, now):
-    """只补当前归属账户已有总账日期；每段至多7日，近35天优先。"""
+    """只补当前归属账户已有总账日期；新建任务至多7日，近35天优先。
+
+    已有覆盖任务仍由需求层复用，不改写其冻结范围；七日上限约束本轮新建任务。
+    """
     if end < start:
         raise ValueError("invalid backfill date range")
     plan = _plan(session, tenant_id, bc_id)
@@ -76,13 +79,18 @@ def enqueue_backfill(session, *, tenant_id, bc_id, start, end, now):
                 frozen_route=plan.frozen_route,
                 actor_id=plan.actor_id,
                 requested_at=now,
+                execution_window_days=7,
             ):
                 count += 1
     return count
 
 
 def audit(session, *, tenant_id, bc_id, start, end):
-    """独立列出事实、身份及差额；不把未关联金额算成缺失金额。"""
+    """按币种、账户日时区分别审计；部分和只作排查证据，不充当完整总额。
+
+    返回各源账户日桶数、未知指标行数和投影 PARTIAL/STALE/脏桶数；
+    不按全 BC 展开日明细，也不将不同来源或未关联金额加进广告总账。
+    """
     plan = _plan(session, tenant_id, bc_id)
     params = {
         "tenant": tenant_id,
@@ -90,38 +98,78 @@ def audit(session, *, tenant_id, bc_id, start, end):
         "start": start,
         "end": end,
     }
-    row = (
+    # 表名、指标与类别都是内部常量；作用域参数仍使用 SQL 绑定。
+    scoped = """tenant_id=:tenant AND advertiser_id=ANY(CAST(:accounts AS text[]))
+        AND stat_date BETWEEN :start AND :end"""
+    sources = []
+    for prefix, table in (("ad", "ad_report_day"), ("creative", "creative_report_day")):
+        sources.append(f"""
+            SELECT advertiser_id,stat_date,currency,timezone,'{prefix}' AS source,
+              spend,revenue_total,spend IS NULL AS spend_unknown,
+              revenue_total IS NULL AS revenue_unknown,NULL::text AS source_status
+            FROM {table} WHERE {scoped}
+        """)
+    sources.append(f"""
+        SELECT advertiser_id,stat_date,currency,timezone,
+          CASE attribution_status WHEN 'UNMAPPED' THEN 'unmapped'
+            WHEN 'RESIDUAL' THEN 'residual' ELSE 'mapped' END AS source,
+          spend,revenue_total,(spend IS NULL OR spend_has_null) AS spend_unknown,
+          (revenue_total IS NULL OR revenue_total_has_null) AS revenue_unknown,source_status
+        FROM creative_material_entity_day WHERE {scoped}
+    """)
+    aggregates = []
+    for prefix in ("ad", "creative", "unmapped", "residual"):
+        condition = f"source='{prefix}'"
+        aggregates.extend(
+            [
+                f"count(*) FILTER(WHERE {condition}) AS {prefix}_rows",
+                f"count(DISTINCT (s.advertiser_id,s.stat_date)) "
+                f"FILTER(WHERE {condition}) AS {prefix}_buckets",
+            ]
+        )
+        for column, metric in (("spend", "spend"), ("revenue_total", "revenue")):
+            unknown = f"{metric}_unknown"
+            # SUM 本身会忽略 NULL：完整值必须额外检查所有行的未知标志。
+            # 无事实时保留 NULL；partial 只返回可见数值的和，不伪造零。
+            aggregates.extend(
+                [
+                    f"CASE WHEN count(*) FILTER(WHERE {condition} AND {unknown})=0 "
+                    f"THEN sum({column}) FILTER(WHERE {condition}) END AS {prefix}_{metric}",
+                    f"sum({column}) FILTER(WHERE {condition}) AS {prefix}_{metric}_partial",
+                    f"count(*) FILTER(WHERE {condition} AND {unknown}) "
+                    f"AS {prefix}_{metric}_unknown_rows",
+                ]
+            )
+    dirty_sql = """SELECT advertiser_id,bucket FROM read_bucket_state
+        WHERE tenant_id=:tenant AND advertiser_id=ANY(CAST(:accounts AS text[]))
+          AND kind='creative_material' AND bucket BETWEEN :start AND :end
+          AND source_revision>derived_revision"""
+    rows = (
         session.connection()
         .execute(
-            text("""
-        WITH a AS (SELECT count(*) AS rows,count(DISTINCT (advertiser_id,stat_date)) AS buckets,
-          sum(spend) AS spend,sum(revenue_total) AS revenue FROM ad_report_day
-          WHERE tenant_id=:tenant AND advertiser_id=ANY(CAST(:accounts AS text[])) AND stat_date BETWEEN :start AND :end),
-        c AS (SELECT count(*) AS rows,count(DISTINCT (advertiser_id,stat_date)) AS buckets,
-          sum(spend) AS spend,sum(revenue_total) AS revenue FROM creative_report_day
-          WHERE tenant_id=:tenant AND advertiser_id=ANY(CAST(:accounts AS text[])) AND stat_date BETWEEN :start AND :end),
-        p AS (SELECT count(*) FILTER(WHERE attribution_status='UNMAPPED') AS unmapped_rows,
-          sum(spend) FILTER(WHERE attribution_status='UNMAPPED') AS unmapped_spend,
-          sum(revenue_total) FILTER(WHERE attribution_status='UNMAPPED') AS unmapped_revenue,
-          count(*) FILTER(WHERE attribution_status='RESIDUAL') AS residual_rows,
-          sum(spend) FILTER(WHERE attribution_status='RESIDUAL') AS residual_spend,
-          sum(revenue_total) FILTER(WHERE attribution_status='RESIDUAL') AS residual_revenue,
-          count(*) FILTER(WHERE source_status='STALE') AS stale_rows
-          FROM creative_material_entity_day WHERE tenant_id=:tenant
-          AND advertiser_id=ANY(CAST(:accounts AS text[])) AND stat_date BETWEEN :start AND :end),
-        b AS (SELECT count(*) AS dirty FROM read_bucket_state WHERE tenant_id=:tenant
-          AND advertiser_id=ANY(CAST(:accounts AS text[])) AND kind='creative_material'
-          AND bucket BETWEEN :start AND :end AND source_revision>derived_revision)
-        SELECT a.rows AS ad_rows,a.buckets AS ad_buckets,a.spend AS ad_spend,a.revenue AS ad_revenue,
-          c.rows AS creative_rows,c.buckets AS creative_buckets,c.spend AS creative_spend,c.revenue AS creative_revenue,p.*,b.dirty
-        FROM a,c,p,b
-    """),
+            text(f"""
+            WITH sources AS ({" UNION ALL ".join(sources)}), dirty AS ({dirty_sql})
+            SELECT s.currency,s.timezone,{",".join(aggregates)},
+              count(*) FILTER(WHERE source_status='PARTIAL') AS partial_rows,
+              count(*) FILTER(WHERE source_status='STALE') AS stale_rows,
+              count(DISTINCT (s.advertiser_id,s.stat_date))
+                FILTER(WHERE d.advertiser_id IS NOT NULL) AS dirty_buckets
+            FROM sources s LEFT JOIN dirty d
+              ON d.advertiser_id=s.advertiser_id AND d.bucket=s.stat_date
+            GROUP BY s.currency,s.timezone ORDER BY s.currency,s.timezone
+        """),
             params,
         )
         .mappings()
-        .one()
+        .all()
     )
-    return dict(row)
+    # 删除后的脏桶可能已没有任何事实；独立计数仍能暴露尚待重建的桶。
+    dirty = (
+        session.connection()
+        .execute(text(f"SELECT count(*) FROM ({dirty_sql}) d"), params)
+        .scalar_one()
+    )
+    return {"groups": [dict(row) for row in rows], "dirty": dirty}
 
 
 def main():
