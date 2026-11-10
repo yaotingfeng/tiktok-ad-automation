@@ -171,12 +171,27 @@ def test_page_objects_handle_more_ids_than_bind_parameter_limit(report_case):
     objects = _page_objects(
         case.session,
         tenant_id=case.context.tenant_id,
-        advertisers=[ref.advertiser_id],
         kind="campaign",
-        ids=ids,
         parents={},
+        identities=[(ref.advertiser_id, remote_id) for remote_id in ids],
     )
     assert set(objects) == {(ref.advertiser_id, "campaign", ref.remote_id)}
+
+
+def test_page_objects_only_read_requested_account_object_pairs(report_case):
+    from app.modules.reporting.dimension_query import _page_objects
+
+    case = report_case
+    first = case.seed_campaign("P-First", "report-account", 1, 2)
+    second = case.seed_campaign("P-Second", "report-account-2", 3, 4)
+    objects = _page_objects(
+        case.session,
+        tenant_id=case.context.tenant_id,
+        kind="campaign",
+        parents={},
+        identities=[(first.advertiser_id, second.remote_id)],
+    )
+    assert objects == {}
 
 
 def test_rename_keeps_old_snapshot_and_new_query_regroups(report_case):

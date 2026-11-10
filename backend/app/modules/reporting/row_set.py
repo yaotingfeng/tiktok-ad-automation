@@ -214,6 +214,7 @@ def _facts_cte(
     *,
     extra_group: Sequence[str] = (),
     include_metadata: bool = True,
+    period_scan: bool = False,
 ) -> str:
     meta = ", ".join(
         (
@@ -263,12 +264,18 @@ def _facts_cte(
         )
     predicate = """t.tenant_id = :tenant AND t.advertiser_id = ANY(:advs)
           AND t.stat_date BETWEEN :start AND :end"""
+    source = f"{table} t"
+    if period_scan and table.endswith("_metric_day"):
+        source = f"""(
+            SELECT * FROM {table}
+            WHERE tenant_id=:tenant AND stat_date BETWEEN :start AND :end OFFSET 0
+        ) t"""
     return f"""facts AS (
         SELECT {adv} AS adv, {rid} AS rid{extra_select}, {currency} AS currency,
             CASE WHEN min(t.timezone) = max(t.timezone) THEN min(t.timezone) ELSE 'MIXED' END AS tz,
             {meta}
             {metric_sums}
-        FROM {table} t WHERE {predicate}
+        FROM {source} WHERE {predicate}
         GROUP BY {group}
     )"""
 
@@ -347,7 +354,7 @@ def _obj_ctes(filters: ReportingFilter, chain: Sequence[tuple[str, str | None]])
         )
         parts.append(f"""{name} AS (
         SELECT o.* FROM (SELECT DISTINCT adv, rid FROM ({ids}) x(adv, rid) WHERE rid IS NOT NULL) k
-        CROSS JOIN LATERAL ({lookup}) o
+        CROSS JOIN LATERAL ({lookup} OFFSET 0) o
     )""")
         previous = name
     union = " UNION ALL ".join(f"SELECT * FROM obj_{kind}" for kind, _ in chain)
@@ -544,10 +551,17 @@ def _order_by(filters: ReportingFilter) -> str:
     return f"({value} IS NULL), {currency}{value} {direction}, {tie}"
 
 
-def _metric_dimension_rows(filters: ReportingFilter) -> tuple[str, str]:
+def _metric_dimension_rows(
+    filters: ReportingFilter, *, period_scan: bool = False
+) -> tuple[str, str]:
     """纯指标候选本身就是事实成员，避免身份集合再回连同一份大聚合。"""
     dim = filters.dimension
-    fact = _facts_cte(f"{dim}_metric_day", f"{dim}_id", include_metadata=False)
+    fact = _facts_cte(
+        f"{dim}_metric_day",
+        f"{dim}_id",
+        include_metadata=False,
+        period_scan=period_scan,
+    )
     values = ", ".join(f"f.{m}, f.{m}_hn" for m in METRIC_COLUMNS)
     return ",\n".join(
         [
@@ -571,7 +585,9 @@ def _dimension_rows(
 ) -> tuple[str, str]:
     """返回维度 CTE 序列与行 CTE 名，冻结列由 _ctes 统一投影。"""
     if _metrics_only(filters):
-        return _metric_dimension_rows(filters)
+        return _metric_dimension_rows(
+            filters, period_scan=len(params.values["advs"]) >= 1000
+        )
     dim = filters.dimension
     table, id_column = _FACT_TABLE[dim]
     kind = "campaign" if dim == "drama" else dim
@@ -806,7 +822,7 @@ _USE_COLUMNS = """u.raw_id AS id,u.advertiser_id AS adv,u.ad_remote_id,u.platfor
                 ARRAY[u.ad_remote_id]::text[] AS ref_ids"""
 _ACCOUNT_USE_COLUMNS = """NULL::uuid AS id,u.advertiser_id AS adv,NULL::text AS ad_remote_id,
                 u.platform_material_id,NULL::text AS ad_material_id,'VIDEO'::text AS material_type,
-                u.name,u.version_id,u.use_count,u.ad_ids AS ref_ids"""
+                u.name,u.version_id,u.use_count,ARRAY[]::text[] AS ref_ids"""
 
 
 def _material_identity_ctes(filters: ReportingFilter, *, aggregate: bool) -> list[str]:
@@ -826,18 +842,25 @@ def _material_identity_ctes(filters: ReportingFilter, *, aggregate: bool) -> lis
         "material_account_member_current" if aggregate else "material_ad_member_current"
     )
     columns = _ACCOUNT_USE_COLUMNS if aggregate else _USE_COLUMNS
-    predicate = (
-        ""
-        if filters.include_empty
-        else "AND u.platform_material_id IN (SELECT vid FROM fk WHERE vid IS NOT NULL)"
-    )
-    return [
-        fk,
-        f"""uses AS (
-        SELECT {columns} FROM {table} u
-        WHERE u.tenant_id=:tenant AND u.advertiser_id=ANY(:advs) {predicate}
-    )""",
-    ]
+    if aggregate and filters.sort_by not in NAME_SORT_FIELDS:
+        columns = columns.replace("u.name,", "NULL::text AS name,")
+    if filters.include_empty:
+        uses = f"""uses AS (
+            SELECT {columns} FROM {table} u
+            WHERE u.tenant_id=:tenant AND u.advertiser_id=ANY(:advs)
+        )"""
+    else:
+        uses = f"""uses AS (
+            SELECT u.* FROM (
+                SELECT {columns} FROM {table} u
+                WHERE u.tenant_id=:tenant AND u.platform_material_id=ANY(ARRAY(
+                    SELECT DISTINCT vid COLLATE "default" FROM fk WHERE vid IS NOT NULL
+                ))
+                OFFSET 0
+            ) u
+            WHERE u.adv=ANY(:advs)
+        )"""
+    return [fk, uses]
 
 
 def _material_rows(filters: ReportingFilter, params: _Params) -> tuple[str, str]:
@@ -881,6 +904,7 @@ def _material_rows(filters: ReportingFilter, params: _Params) -> tuple[str, str]
             "row_key",
             extra_group=("main_material_type",),
             include_metadata=False,
+            period_scan=len(params.values["advs"]) >= 1000,
         ),
         *_material_identity_ctes(filters, aggregate=not has_entity_filter and not hier),
         f"""mkey AS (
@@ -898,19 +922,22 @@ def _material_rows(filters: ReportingFilter, params: _Params) -> tuple[str, str]
             -- 视频行管理该视频的全部使用位置；帖子行只有对照上的那条广告位置。
             SELECT {video_key.format(vid="u.platform_material_id")} AS row_key, u.*
             FROM uses u
-            -- 默认只列有数据的视频：视频行只带出本次有事实的视频的使用位置。
-            {"" if filters.include_empty else "WHERE u.platform_material_id IN (SELECT mid FROM fk)"}
             UNION ALL
             SELECT k.row_key, u.*
             FROM fk k
-            JOIN material_post_link l ON l.tenant_id = :tenant AND l.advertiser_id = k.adv
-                AND l.main_material_id = (k.rid::jsonb)->>2 AND l.main_material_type = k.mtype
+            CROSS JOIN LATERAL (
+                SELECT l.* FROM material_post_link l
+                WHERE l.tenant_id = :tenant AND l.advertiser_id = k.adv
+                    AND l.main_material_id = (k.rid::jsonb)->>2 AND l.main_material_type = k.mtype
+                OFFSET 0
+            ) l
             CROSS JOIN LATERAL (
                 -- 先在真实目录身份内判定歧义，再匹配帖子。多个帖子引用同一
                 -- 使用位置不会凭空增加目录候选数，也不再重复扫描全量uses。
                 SELECT {_USE_COLUMNS} FROM material_ad_member_current u
                 WHERE u.tenant_id=:tenant AND u.advertiser_id=l.advertiser_id
                     AND u.ad_remote_id=l.ad_remote_id AND u.material_type='VIDEO'
+                OFFSET 0
             ) u
             WHERE k.vid IS NULL AND u.ad_material_id = l.ad_material_id
         )""",

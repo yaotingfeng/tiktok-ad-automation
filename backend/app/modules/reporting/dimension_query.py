@@ -11,9 +11,10 @@ from hashlib import sha256
 from typing import Any, cast
 from uuid import UUID
 
-from sqlalchemy import RowMapping, Text, any_, bindparam, func
+from sqlalchemy import RowMapping, Text, any_, bindparam, func, text, true
 from sqlalchemy import select as sql_select
 from sqlalchemy.dialects.postgresql import ARRAY, aggregate_order_by
+from sqlalchemy.orm import aliased
 from sqlalchemy.sql import ColumnElement
 from sqlmodel import Session, SQLModel, col, select
 
@@ -193,7 +194,38 @@ def _aggregate(
     end: date,
     ids: Iterable[str] | None = None,
     material_types: Collection[str] | None = None,
+    identities: Collection[tuple[str, str]] | None = None,
 ) -> list[RowMapping]:
+    table_name = model.__tablename__
+    source = None
+    wanted = None
+    if identities is not None:
+        scope = set(advertisers)
+        pairs = sorted({pair for pair in identities if pair[0] in scope})
+        if not pairs:
+            return []
+        wanted = (
+            func.unnest(
+                bindparam(None, [adv for adv, _ in pairs], type_=ARRAY(Text)),
+                bindparam(None, [remote for _, remote in pairs], type_=ARRAY(Text)),
+            )
+            .table_valued("adv", "rid")
+            .render_derived()
+        )
+        source = (
+            sql_select(model)
+            .where(
+                model.tenant_id == tenant_id,
+                model.advertiser_id == wanted.c.adv,
+                getattr(model, group_cols[1]) == wanted.c.rid,
+                model.stat_date >= start,
+                model.stat_date <= end,
+            )
+            .offset(0)
+            .correlate(wanted)
+            .lateral()
+        )
+        model = aliased(model, source)
     # 同一对象跨日按部分合计规则（设计 7.3）：只合计有值的日期，另带
     # "<列>_has_null" 标记该列是否有日期为空，由 fact_vector 标成 PARTIAL。
     columns = [col(getattr(model, name)) for name in group_cols]
@@ -218,10 +250,7 @@ def _aggregate(
         )
         if hasattr(model, name)
         and name not in group_cols
-        and not (
-            model.__tablename__ == "material_entity_day"
-            and name == "main_material_name"
-        )
+        and not (table_name == "material_entity_day" and name == "main_material_name")
     ]
     stmt = (
         sql_select(
@@ -260,6 +289,8 @@ def _aggregate(
         )
         .group_by(*columns, col(model.currency))
     )
+    if source is not None and wanted is not None:
+        stmt = stmt.select_from(wanted).join(source, true())
     return list(session.connection().execute(stmt).mappings().all())
 
 
@@ -594,6 +625,9 @@ def materialize_rows(
         start=filters.start_date,
         end=filters.end_date,
         ids=None if kind == "account" else member_ids,
+        identities=None
+        if kind == "account"
+        else {identity for pairs in identities.values() for identity in pairs},
     )
     facts = defaultdict(list)
     for fact in grouped_facts:
@@ -602,7 +636,7 @@ def materialize_rows(
     # 目录缺失时父级身份来自报表元数据，名称仍优先取目录对象。
     parents = {
         parent: {
-            item[f"{parent}_id"]
+            (item["advertiser_id"], item[f"{parent}_id"])
             for items in facts.values()
             for item in items
             if item.get(f"{parent}_id")
@@ -612,10 +646,11 @@ def materialize_rows(
     objects = _page_objects(
         session,
         tenant_id=tenant_id,
-        advertisers=advertisers,
         kind=kind,
-        ids=member_ids,
         parents=parents,
+        identities=tuple(
+            {identity for pairs in identities.values() for identity in pairs}
+        ),
     )
     # 轮播完整身份只在当前广告页补全；全候选筛选和排序始终只读窄投影。
     carousels = (
@@ -803,10 +838,9 @@ def _page_objects(
     session: Session,
     *,
     tenant_id: UUID,
-    advertisers: Sequence[str],
     kind: str,
-    ids: Sequence[str],
-    parents: Mapping[str, set[str]],
+    parents: Mapping[str, set[tuple[str, str]]],
+    identities: Sequence[tuple[str, str]],
 ) -> dict[tuple[str, str, str], AdObject]:
     """只读取页面对象及其上级（广告 -> 广告组 -> 系列），不加载整个目录。"""
     if kind == "account":
@@ -814,26 +848,42 @@ def _page_objects(
     objects: dict[tuple[str, str, str], AdObject] = {}
     levels = ("ad", "adgroup", "campaign")
     above = levels[levels.index(kind) + 1 :]
-    wanted = {kind: set(ids)} | {level: set(parents.get(level, ())) for level in above}
+    wanted = {kind: set(identities)} | {
+        level: set(parents.get(level, ())) for level in above
+    }
     for current, parent in (
         ("ad", "adgroup"),
         ("adgroup", "campaign"),
         ("campaign", None),
     ):
-        remote_ids = wanted.get(current)
-        if not remote_ids:
+        pairs = sorted(wanted.get(current, ()))
+        if not pairs:
             continue
-        for obj in session.exec(
-            select(AdObject).where(
-                AdObject.tenant_id == tenant_id,
-                col(AdObject.advertiser_id).in_(advertisers),
-                AdObject.kind == current,
-                any_of(col(AdObject.remote_id), remote_ids),
-            )
+        statement = sql_select(AdObject).from_statement(
+            text("""
+            SELECT entity.*
+            FROM unnest(CAST(:advertisers AS text[]), CAST(:ids AS text[])) wanted(adv, rid)
+            CROSS JOIN LATERAL (
+                SELECT obj.* FROM ad_entity_read obj
+                WHERE obj.tenant_id=:tenant AND obj.advertiser_id=wanted.adv
+                    AND obj.kind=:kind AND obj.remote_id=wanted.rid OFFSET 0
+            ) entity
+            """)
+        )
+        for obj in session.scalars(
+            statement,
+            {
+                "tenant": tenant_id,
+                "kind": current,
+                "advertisers": [advertiser for advertiser, _ in pairs],
+                "ids": [remote_id for _, remote_id in pairs],
+            },
         ).all():
             objects[(obj.advertiser_id, obj.kind, obj.remote_id)] = obj
             if parent and obj.parent_remote_id:
-                wanted.setdefault(parent, set()).add(obj.parent_remote_id)
+                wanted.setdefault(parent, set()).add(
+                    (obj.advertiser_id, obj.parent_remote_id)
+                )
     return objects
 
 

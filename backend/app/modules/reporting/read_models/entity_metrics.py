@@ -4,6 +4,7 @@ from sqlalchemy import CheckConstraint, Index
 from sqlmodel import Field
 
 from app.modules.reporting.read_models.models import _ReadDay, account_reference
+from app.modules.reporting.store_models import METRIC_COLUMNS
 
 
 class EntityMetricDay(_ReadDay, table=True):
@@ -23,6 +24,14 @@ class EntityMetricDay(_ReadDay, table=True):
             "kind",
             "stat_date",
             "advertiser_id",
+            postgresql_include=[
+                "remote_id",
+                "variant",
+                "currency",
+                "timezone",
+                *METRIC_COLUMNS,
+                *(f"{metric}_has_null" for metric in METRIC_COLUMNS),
+            ],
         ),
         {"postgresql_partition_by": "RANGE (stat_date)"},
     )

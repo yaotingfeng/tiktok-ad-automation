@@ -65,6 +65,7 @@ class MaterialAccountMemberCurrent(SQLModel, table=True):
             "tenant_id",
             "platform_material_id",
             "advertiser_id",
+            postgresql_include=["version_id", "use_count"],
         ),
         Index("ix_material_account_member_version", "version_id"),
     )

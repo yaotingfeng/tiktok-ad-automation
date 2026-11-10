@@ -61,6 +61,25 @@ def test_levels_add_up_and_roas_is_sum_over_sum(session, sync_seed):
     )  # 有成员缺失 → 合计为空
 
 
+def test_page_facts_only_read_requested_account_object_pairs(session, sync_seed):
+    from app.modules.reporting.dimension_query import _aggregate
+    from app.modules.reporting.store_models import AdReportDay
+
+    _seed(session, sync_seed)
+    rows = _aggregate(
+        session,
+        model=AdReportDay,
+        group_cols=["advertiser_id", "ad_id"],
+        tenant_id=sync_seed.tenant_id,
+        advertisers=["acc-1", "acc-2"],
+        start=D,
+        end=D,
+        ids=["a1", "b1"],
+        identities=[("acc-1", "b1")],
+    )
+    assert rows == []
+
+
 def test_shared_account_visible_in_both_bcs(session, sync_seed):
     _seed(session, sync_seed)
     rows_b = build_rows(
