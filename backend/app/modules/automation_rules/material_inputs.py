@@ -113,7 +113,10 @@ def load_material_entities(
             ids = by_video[adv, ad_id, use.platform_material_id]
             issue = None
             group_id = (ad.parent_key or "").rsplit(":", 1)[-1]
-            if not use.ad_material_id or use.operation_status is None:
+            if (adv, None) in issues:
+                # 整日缺报影响所有当前组，不能被普通目录待同步原因掩盖财务告警。
+                issue = issues[adv, None]
+            elif not use.ad_material_id or use.operation_status is None:
                 issue = "MATERIAL_IDENTITY_AMBIGUOUS"
             elif parents_enabled is None:
                 issue = "MATERIAL_PARENT_UNKNOWN"

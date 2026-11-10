@@ -1,5 +1,7 @@
 """创意级止损的财务完整性门控，使用原始事实而非延迟的页面投影。"""
 
+from zoneinfo import ZoneInfo
+
 from sqlalchemy import text
 
 from app.modules.reporting.metric_catalog import DERIVED_RATIOS, STORED_KEYS
@@ -16,14 +18,40 @@ def group_issues(session, *, tenant_id, accounts, definition, now):
             requirements.setdefault(str(condition.range), set()).update(
                 set(metrics) & set(STORED_KEYS)
             )
+    if not requirements or not accounts:
+        return {}
+    # 只信官方账户创建时刻；最早事实/水位不能证明更早日期没有投放。
+    created_at = dict(
+        session.connection()
+        .execute(
+            text("""SELECT advertiser_id,remote_created_at FROM advertiser_account
+            WHERE tenant_id=:t AND advertiser_id=ANY(CAST(:advs AS text[]))"""),
+            {"t": tenant_id, "advs": list(accounts)},
+        )
+        .all()
+    )
     issues = {}
     for window, metrics in requirements.items():
         if not metrics:
             continue
         metrics = sorted(metrics)
-        bounds = [
-            local_window(window, info.timezone, now) for info in accounts.values()
-        ]
+        bounds, history_known = [], []
+        for adv, info in accounts.items():
+            start, end = local_window(window, info.timezone, now)
+            created = created_at.get(adv)
+            known = window != "LIFETIME" or created is not None
+            if created is not None:
+                if created > now:
+                    known = False
+                else:
+                    creation_day = created.astimezone(ZoneInfo(info.timezone)).date()
+                    start = (
+                        creation_day
+                        if window == "LIFETIME"
+                        else max(start, creation_day)
+                    )
+            bounds.append((start, end))
+            history_known.append(known)
         sums = ",".join(
             f"CASE WHEN count({m})=count(*) THEN sum({m}) END AS {m}" for m in metrics
         )
@@ -40,7 +68,21 @@ def group_issues(session, *, tenant_id, accounts, definition, now):
             session.connection()
             .execute(
                 text(f"""
-            WITH w AS (SELECT * FROM unnest(CAST(:advs AS text[]),CAST(:starts AS date[]),CAST(:ends AS date[])) AS x(adv,s,e)),
+            WITH w AS (SELECT * FROM unnest(CAST(:advs AS text[]),CAST(:starts AS date[]),CAST(:ends AS date[]),CAST(:known AS boolean[])) AS x(adv,s,e,known)),
+            coverage AS (
+              -- 每日状态主键唯一，成对完整日期数必须等于所需日数；不展开账户×生命周期日期。
+              SELECT w.adv,NULL::text AS gid,'MATERIAL_SOURCE_INCOMPLETE' AS issue
+              FROM w LEFT JOIN LATERAL (
+                SELECT count(*) AS days FROM report_sync_state sa
+                JOIN report_sync_state sc ON sc.tenant_id=sa.tenant_id AND sc.advertiser_id=sa.advertiser_id
+                  AND sc.stat_date=sa.stat_date AND sc.report_kind='creative_day'
+                WHERE w.known AND sa.tenant_id=:t AND sa.advertiser_id=w.adv
+                  AND sa.report_kind='ad_day' AND sa.stat_date BETWEEN w.s AND w.e
+                  AND sa.status='COMPLETE' AND sc.status='COMPLETE'
+                  AND sa.observed_at IS NOT NULL AND sc.observed_at IS NOT NULL
+                  AND abs(extract(epoch from sa.observed_at-sc.observed_at))<=1800
+              ) paired ON true
+              WHERE NOT w.known OR paired.days<>GREATEST(w.e-w.s+1,0)),
             a AS (SELECT f.advertiser_id,f.stat_date,f.adgroup_id,f.currency,f.timezone,count(*) AS n,{sums}
               FROM ad_report_day f JOIN w ON w.adv=f.advertiser_id AND f.stat_date BETWEEN w.s AND w.e
               WHERE f.tenant_id=:t GROUP BY f.advertiser_id,f.stat_date,f.adgroup_id,f.currency,f.timezone),
@@ -65,6 +107,7 @@ def group_issues(session, *, tenant_id, accounts, definition, now):
               WHERE f.tenant_id=:t AND COALESCE(m.identity_status,'UNRESOLVED') NOT IN ('RESOLVED','COMPOSITE') AND ({valuable}))
             SELECT adv,gid,issue FROM checked WHERE issue IS NOT NULL
             UNION ALL SELECT adv,gid,issue FROM unmapped
+            UNION ALL SELECT adv,gid,issue FROM coverage
             ORDER BY issue
         """),
                 {
@@ -72,6 +115,7 @@ def group_issues(session, *, tenant_id, accounts, definition, now):
                     "advs": list(accounts),
                     "starts": [b[0] for b in bounds],
                     "ends": [b[1] for b in bounds],
+                    "known": history_known,
                 },
             )
             .all()

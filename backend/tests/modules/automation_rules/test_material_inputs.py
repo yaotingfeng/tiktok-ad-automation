@@ -8,11 +8,17 @@ import pytest
 from sqlalchemy import text
 from sqlmodel import select
 
+from app.modules.accounts.models import AdvertiserAccount
 from app.modules.ads.creatives import upsert_creatives
 from app.modules.ads.models import AdMaterialReference, AdObject
 from app.modules.automation_rules.evaluate import evaluate
 from app.modules.automation_rules.inputs import load_inputs
 from app.modules.automation_rules.pickers import search_objects
+from app.modules.reporting.publish import (
+    AccountMeta,
+    publish_ad_day,
+    publish_creative_day,
+)
 from app.modules.reporting.store_models import (
     AdReportDay,
     CreativeReportDay,
@@ -45,19 +51,24 @@ def setup(session, seed):
             published_version=1,
         )
     )
-    for kind in ("ad_day", "creative_day"):
-        state = session.get(ReportSyncState, (seed.tenant_id, "acc-1", kind, TODAY))
-        if state is None:
-            state = ReportSyncState(
-                tenant_id=seed.tenant_id,
-                advertiser_id="acc-1",
-                report_kind=kind,
-                stat_date=TODAY,
-                status="COMPLETE",
-            )
-            session.add(state)
-        state.status = "COMPLETE"
-        state.last_success_at = state.observed_at = NOW
+    # 本组规则覆盖真实的两天账户生命周期；先发布成对空报表，再由post写入具体事实。
+    # 创建时间是明确的官方元数据夹具，不从已有事实推断历史起点。
+    account = session.get(AdvertiserAccount, (seed.tenant_id, "acc-1"))
+    account.remote_created_at = NOW - timedelta(days=1)
+    for publish in (publish_ad_day, publish_creative_day):
+        publish(
+            session,
+            tenant_id=seed.tenant_id,
+            job_id=uuid4(),
+            accounts={"acc-1": AccountMeta("USD", "Asia/Hong_Kong")},
+            start=TODAY - timedelta(days=1),
+            end=TODAY,
+            rows=[],
+        )
+    for day in (TODAY - timedelta(days=1), TODAY):
+        for kind in ("ad_day", "creative_day"):
+            state = session.get(ReportSyncState, (seed.tenant_id, "acc-1", kind, day))
+            state.last_success_at = state.observed_at = NOW
     session.flush()
 
 
