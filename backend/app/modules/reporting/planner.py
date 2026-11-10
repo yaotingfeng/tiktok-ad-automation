@@ -448,7 +448,7 @@ def _group_by_window(
 
 # 筛选时平台确认窗口内零消耗的账户不会再建报表任务；为它们记一条“已完成、
 # 0 行”的同步状态，否则这些账户永远显示缺数据，汇总也会因一个缺失成员整体为空。
-CONFIRMED_EMPTY_KINDS = ("ad_day", "account_day", "material_day")
+CONFIRMED_EMPTY_KINDS = ("ad_day", "creative_day", "account_day", "material_day")
 
 
 def mark_confirmed_empty(
@@ -472,7 +472,7 @@ def mark_confirmed_empty(
     scopes = sorted(
         f"report:{plan.tenant_id}:{account}:{kind}"
         for account in {a for accounts in windows.values() for a in accounts}
-        for kind in ("ad_day", "material_day")
+        for kind in ("ad_day", "creative_day", "material_day")
     )
     if not scopes:
         return 0
@@ -610,6 +610,18 @@ def plan_hot(
                 **_common(plan),
             )
         )
+        # 影子创意事实与同一广告窗口一起规划，独立单账户分页，不影响旧素材链路。
+        count += len(
+            enqueue_jobs(
+                session,
+                kind="creative_day",
+                tier=tier,
+                advertiser_groups=([a] for a in advertisers),
+                start=start,
+                end=end,
+                **_common(plan),
+            )
+        )
     return count
 
 
@@ -640,7 +652,7 @@ def plan_day_closeout(
           SELECT true AS found FROM material_report_day f WHERE ad.found IS NULL
             AND f.tenant_id=:tenant AND f.advertiser_id=y.advertiser_id AND f.stat_date=y.day LIMIT 1
         ) mat ON true
-        CROSS JOIN (VALUES ('ad_day'),('material_day')) k(kind)
+        CROSS JOIN (VALUES ('ad_day'),('creative_day'),('material_day')) k(kind)
         LEFT JOIN report_sync_state s ON s.tenant_id=:tenant
           AND s.advertiser_id=y.advertiser_id AND s.stat_date=y.day AND s.report_kind=k.kind
         WHERE (s.last_success_at IS NULL OR s.last_success_at<=y.midnight)
@@ -697,7 +709,7 @@ def plan_day_closeout(
     for (kind, day), advertisers in grouped.items():
         groups = (
             ([advertiser] for advertiser in advertisers)
-            if kind == "material_day"
+            if kind in {"material_day", "creative_day"}
             else batch_accounts(
                 session, tenant_id=plan.tenant_id, advertiser_ids=advertisers, days=1
             )
@@ -859,7 +871,7 @@ def plan_daily(session, plan, *, active_32d, now) -> int:
         session, plan, active_32d, daily_window(now)
     ).items():
         end = current - timedelta(days=1)  # 当前日由实时槽负责，冷档不重复拉它。
-        for kind in ("ad_day", "account_day", "material_day"):
+        for kind in ("ad_day", "creative_day", "account_day", "material_day"):
             windows = {}
             for advertiser in advertisers:
                 first = None
@@ -878,7 +890,7 @@ def plan_daily(session, plan, *, active_32d, now) -> int:
             for (a, b), ids in windows.items():
                 batches = (
                     ([advertiser] for advertiser in ids)
-                    if kind == "material_day"
+                    if kind in {"material_day", "creative_day"}
                     else batch_accounts(
                         session,
                         tenant_id=plan.tenant_id,
@@ -942,6 +954,17 @@ def plan_history(session, plan, *, now, accounts=None, progress=None) -> int:
                     enqueue_job(
                         session,
                         kind="ad_day",
+                        tier="history",
+                        advertiser_ids=[account.advertiser_id],
+                        start=s,
+                        end=e,
+                        **_common(plan),
+                    )
+                )
+                count += bool(
+                    enqueue_job(
+                        session,
+                        kind="creative_day",
                         tier="history",
                         advertiser_ids=[account.advertiser_id],
                         start=s,

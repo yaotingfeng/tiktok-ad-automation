@@ -739,6 +739,34 @@ def _run(
         # 完整报表与补目录 outbox 同事务提交，新投放对象不等全量历史扫描。
         refresh_report_directory(session, job)
         return count
+    if job.kind == "creative_day":
+        try:
+            rows = _read_all(
+                lambda p: reader.creative_day(
+                    advertiser_ids=advertisers,
+                    start=s,
+                    end=e,
+                    page=p,
+                    campaign_ids=tuple(job.campaign_ids),
+                )
+            )
+        except DomainError as error:
+            if error.code != "report_truncation_risk" or job.campaign_ids:
+                raise
+            rows = _read_campaign_batches(
+                reader, advertisers, s, e, kind="creative_day"
+            )
+        return publish.publish_creative_day(
+            session,
+            tenant_id=t,
+            job_id=j,
+            accounts=accounts,
+            start=s,
+            end=e,
+            rows=rows,
+            campaign_ids=tuple(job.campaign_ids),
+            requested_at=observed_at,
+        )
     if job.kind == "campaign_hour":
         rows = _read_all(
             lambda p: reader.campaign_hour(advertiser_ids=advertisers, day=s, page=p)
@@ -818,7 +846,7 @@ def _run(
     raise DomainError("report_job_kind_invalid", "未知报表任务类型")
 
 
-def _read_campaign_batches(reader, advertisers, start, end):
+def _read_campaign_batches(reader, advertisers, start, end, *, kind="ad_day"):
     """每次拆分都重新读取本期完整系列清单，缓存可能缺少新系列，不能作为过滤依据。"""
     try:
         campaigns = _read_all(
@@ -836,7 +864,7 @@ def _read_campaign_batches(reader, advertisers, start, end):
             batch = tuple(ids[offset : offset + 30])
             rows.extend(
                 _read_all(
-                    lambda p, batch=batch: reader.ad_day(
+                    lambda p, batch=batch: getattr(reader, kind)(
                         advertiser_ids=advertisers,
                         start=start,
                         end=end,

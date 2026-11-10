@@ -6,6 +6,7 @@ from sqlmodel import select
 
 from app.integrations.tiktok.contracts.report_reader import RawReportPage
 from app.modules.reporting.planner import (
+    CONFIRMED_EMPTY_KINDS,
     account_owners,
     batch_accounts,
     ensure_bc_plans,
@@ -142,8 +143,8 @@ def test_hot_plan_uses_current_local_day_and_daily_excludes_it(
     }
     live = [job for job in jobs if job.priority <= 2]
     cold = [job for job in jobs if job.priority >= 3]
-    assert {job.kind for job in live} == {"ad_day", "material_day"}
-    assert {job.kind for job in cold} == {"ad_day", "material_day", "account_day"}
+    assert {job.kind for job in live} == {"ad_day", "creative_day", "material_day"}
+    assert {job.kind for job in cold} == {"ad_day", "creative_day", "material_day", "account_day"}
     for job in live:
         assert all(
             job.start_date == job.end_date == today[advertiser]
@@ -173,7 +174,7 @@ def test_inactive_account_keeps_published_rows_until_daily_refresh(session, sync
             select(ReportSyncJob).where(ReportSyncJob.tenant_id == sync_seed.tenant_id)
         ).all()
     }
-    assert kinds == {"ad_day", "material_day", "account_day"}
+    assert kinds == {"ad_day", "creative_day", "material_day", "account_day"}
 
 
 def test_history_shards_30_days_from_account_creation(session, sync_seed):
@@ -500,7 +501,7 @@ def test_zero_spend_actual_facts_stay_hot_without_fabricating_watermark(
     jobs = session.exec(
         select(ReportSyncJob).where(ReportSyncJob.tenant_id == sync_seed.tenant_id)
     ).all()
-    assert len(jobs) == 2 and {job.kind for job in jobs} == {"ad_day", "material_day"}
+    assert len(jobs) == 3 and {job.kind for job in jobs} == {"ad_day", "creative_day", "material_day"}
     assert all(
         job.advertiser_ids == ["acc-1"]
         and job.start_date == job.end_date == day
@@ -586,7 +587,7 @@ def test_confirmed_empty_window_uses_bounded_database_round_trips(
         )
     finally:
         event.remove(connection, "before_cursor_execute", collect)
-    assert first == account_count * 32 * 3
+    assert first == account_count * 32 * len(CONFIRMED_EMPTY_KINDS)
     assert len(statements) <= 10
     assert (
         mark_confirmed_empty(

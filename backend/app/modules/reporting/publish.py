@@ -29,6 +29,7 @@ from app.modules.reporting.store_models import (
     AdReportDay,
     CampaignReportDay,
     CampaignReportHour,
+    CreativeReportDay,
     MaterialReportDay,
     ReportSyncState,
 )
@@ -390,6 +391,90 @@ def publish_ad_day(
     _refresh_reconciliation_sums(session, tenant_id, buckets)
     diagnostics.counts(rows=row_count)
     return row_count
+
+
+@diagnostics.timed("financial_publish")
+def publish_creative_day(
+    session,
+    *,
+    tenant_id,
+    job_id,
+    accounts,
+    start,
+    end,
+    rows,
+    campaign_ids=(),
+    requested_at=None,
+) -> int:
+    """完整创意快照独立原子替换；失败/旧观察绝不改写广告总账。"""
+    now = _database_now(session)
+    observed = requested_at or now
+    counts = {}
+
+    def records():
+        for row in rows:
+            advertiser = _account(row, accounts)
+            dims, metrics = row.get("dimensions") or {}, row.get("metrics") or {}
+            day = _in_range(parse_local_day(dims.get("stat_time_day")), start, end)
+            creative = dims.get("ad_id")
+            campaign, group = metrics.get("campaign_id"), metrics.get("adgroup_id")
+            if not all(isinstance(x, str) and x for x in (creative, campaign, group)):
+                raise DomainError(
+                    "report_row_invalid", "创意行缺少创意、系列或广告组ID"
+                )
+            if campaign_ids and campaign not in campaign_ids:
+                raise DomainError("report_row_invalid", "创意分批包含范围外系列")
+            meta = accounts[advertiser]
+            yield dict(
+                tenant_id=tenant_id,
+                advertiser_id=advertiser,
+                stat_date=day,
+                creative_id=creative,
+                campaign_id=campaign,
+                adgroup_id=group,
+                campaign_automation_type=metrics.get("campaign_automation_type"),
+                currency=meta.currency,
+                timezone=meta.timezone,
+                fetched_at=now,
+                sync_job_id=job_id,
+                **basic_metric_values(metrics),
+            )
+            counts[advertiser, day] = counts.get((advertiser, day), 0) + 1
+
+    staged = _stage_records(session, CreativeReportDay, records())
+    buckets = _writable_buckets(
+        session,
+        tenant_id=tenant_id,
+        accounts=accounts,
+        kind="creative_day",
+        start=start,
+        end=end,
+        requested_at=observed,
+    )
+    if not buckets:
+        return 0
+    statement = delete(CreativeReportDay).where(
+        CreativeReportDay.tenant_id == tenant_id,
+        _bucket_filter(CreativeReportDay, buckets),
+    )
+    if campaign_ids:
+        statement = statement.where(CreativeReportDay.campaign_id.in_(campaign_ids))
+    session.connection().execute(statement)
+    count = _publish_staged(
+        session, CreativeReportDay, staged, _bucket_filter(staged.c, buckets)
+    )
+    if not campaign_ids:
+        _set_state(
+            session,
+            tenant_id=tenant_id,
+            kind="creative_day",
+            buckets=buckets,
+            counts=counts,
+            observed_at=observed,
+            job_id=job_id,
+        )
+    session.flush()
+    return count
 
 
 def _publish_simple(

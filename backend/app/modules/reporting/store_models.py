@@ -90,6 +90,30 @@ class AdReportDay(_Fact, table=True):
     adgroup_name: str | None = None
 
 
+class CreativeReportDay(_Fact, table=True):
+    """独立创意日报；Upgraded Smart+ 的 ad_id 是创意，不是广告资产组。"""
+
+    __tablename__ = "creative_report_day"
+    __table_args__ = (
+        Index(
+            "ix_creative_report_day_period", "tenant_id", "stat_date", "advertiser_id"
+        ),
+        Index(
+            "ix_creative_report_day_group",
+            "tenant_id",
+            "advertiser_id",
+            "adgroup_id",
+            "stat_date",
+        ),
+        {"postgresql_partition_by": "RANGE (stat_date)"},
+    )
+    stat_date: date = Field(primary_key=True)
+    creative_id: str = Field(primary_key=True, max_length=128)
+    campaign_id: str = Field(max_length=128)
+    adgroup_id: str = Field(max_length=128)
+    campaign_automation_type: str | None = Field(default=None, max_length=64)
+
+
 class CampaignReportDay(_Fact, table=True):
     """由 ad_report_day 在同一事务汇总写入的查询加速表，不独立拉取。"""
 
@@ -240,6 +264,7 @@ class AccountReconciliationDay(SQLModel, table=True):
 
 
 REPORT_KINDS = (
+    "creative_day",
     "ad_day",
     "campaign_hour",
     "material_day",

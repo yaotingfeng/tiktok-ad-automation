@@ -40,8 +40,6 @@ def _check_accounts(ids: tuple[str, ...]) -> None:
         raise DomainError("report_query_invalid", "一次报表请求须带 1–5 个不同账户")
 
 
-
-
 class SdkReportReader(SdkChangeLogReader):
     def __init__(self, *, send: Send) -> None:
         self._send = send
@@ -214,7 +212,30 @@ class SdkReportReader(SdkChangeLogReader):
         return page_from_data(data, requested_page=page)
 
     def ad_day(self, *, advertiser_ids, start, end, page, campaign_ids=()):
-        # 轮播沿用广告唯一维度；图片/曲目仅用于说明，不加 creative/image 维度展开金额。
+        return self._entity_day(
+            advertiser_ids=advertiser_ids,
+            start=start,
+            end=end,
+            page=page,
+            campaign_ids=campaign_ids,
+            dimension="ad_id_v2",
+        )
+
+    def creative_day(self, *, advertiser_ids, start, end, page, campaign_ids=()):
+        # 创意与广告是独立事实；只按单账户读取，身份始终留在对应账户命名空间。
+        if len(advertiser_ids) != 1:
+            raise DomainError("report_query_invalid", "创意日报只支持单账户")
+        return self._entity_day(
+            advertiser_ids=advertiser_ids,
+            start=start,
+            end=end,
+            page=page,
+            campaign_ids=campaign_ids,
+            dimension="ad_id",
+        )
+
+    def _entity_day(self, *, advertiser_ids, start, end, page, campaign_ids, dimension):
+        # 共用指标/范围校验，不把创意ID与资产组ID相互改名。
         _check_range(start, end, max_days=30)
         filtering = [_STATUS_ALL]
         if campaign_ids:
@@ -232,7 +253,7 @@ class SdkReportReader(SdkChangeLogReader):
         return self._basic(
             advertiser_ids=advertiser_ids,
             data_level="AUCTION_AD",
-            dimensions=("ad_id_v2", "stat_time_day"),
+            dimensions=(dimension, "stat_time_day"),
             metrics=AD_DAY_METRICS,
             start=start,
             end=end,

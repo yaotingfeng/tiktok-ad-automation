@@ -6,7 +6,12 @@ from datetime import date
 from sqlalchemy import text
 from sqlmodel import Session
 
-PARTITIONED_TABLES = ("ad_report_day", "material_report_day", "entity_metric_day")
+PARTITIONED_TABLES = (
+    "ad_report_day",
+    "creative_report_day",
+    "material_report_day",
+    "entity_metric_day",
+)
 
 
 def _month_start(value: date, offset: int) -> date:

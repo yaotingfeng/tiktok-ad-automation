@@ -333,3 +333,51 @@ from app.modules.reporting.read_models.material_memberships import (  # noqa: E4
     MaterialAccountMemberCurrent,
     MaterialAdMemberCurrent,
 )
+
+
+class CreativeMaterialEntityDay(_ReadDay, table=True):
+    """独立创意素材投影：每个经济事实只一行，筛选在汇总之前进行。"""
+
+    __tablename__ = "creative_material_entity_day"
+    __table_args__ = (
+        account_reference(),
+        Index(
+            "ix_creative_material_page",
+            "tenant_id",
+            "row_key",
+            "advertiser_id",
+            "stat_date",
+        ),
+        Index(
+            "ix_creative_material_group",
+            "tenant_id",
+            "advertiser_id",
+            "adgroup_id",
+            "stat_date",
+        ),
+        Index(
+            "ix_creative_material_ad",
+            "tenant_id",
+            "advertiser_id",
+            "ad_remote_id",
+            "stat_date",
+        ),
+    )
+    fact_key: str = Field(primary_key=True, max_length=512)
+    row_key: str = Field(max_length=512)
+    creative_id: str | None = Field(default=None, max_length=128)
+    ad_remote_id: str | None = Field(default=None, max_length=128)
+    ad_material_id: str | None = Field(default=None, max_length=128)
+    campaign_id: str = Field(max_length=128)
+    adgroup_id: str = Field(max_length=128)
+    material_type: str = Field(max_length=64)
+    platform_material_id: str | None = Field(default=None, max_length=128)
+    material_name: str | None = None
+    assets: list[dict[str, Any]] = Field(
+        default_factory=list, sa_type=JSONB, nullable=False
+    )
+    attribution_status: str = Field(max_length=32)
+    source_status: str = Field(max_length=16)
+    source_info: dict[str, Any] = Field(
+        default_factory=dict, sa_type=JSONB, nullable=False
+    )

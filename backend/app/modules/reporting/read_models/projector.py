@@ -32,6 +32,12 @@ def _metric_select() -> str:
 def project_bucket(
     session: Session, key: ReadBucketKey, *, expected_version: int
 ) -> ProjectionResult:
+    if key.kind == "creative_material":
+        from app.modules.reporting.read_models.creative_projector import (
+            project_creative_bucket,
+        )
+
+        return project_creative_bucket(session, key, expected_version=expected_version)
     if key.kind not in {"ad_day", "material_day"}:
         raise ValueError("unsupported read bucket kind")
     params = parameters(key) | {"revision": expected_version}
@@ -120,7 +126,7 @@ def rebuild_pending(session: Session, *, limit: int = 25) -> list[ProjectionResu
         .execute(
             text("""
         SELECT tenant_id,advertiser_id,kind,bucket,source_revision FROM read_bucket_state
-        WHERE source_revision>derived_revision AND kind IN ('ad_day','material_day')
+        WHERE source_revision>derived_revision AND kind IN ('ad_day','material_day','creative_material')
         ORDER BY observed_at,tenant_id,advertiser_id,kind,bucket
         LIMIT :limit FOR UPDATE SKIP LOCKED
     """),
