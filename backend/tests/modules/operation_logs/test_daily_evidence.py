@@ -325,3 +325,37 @@ def test_empty_tail_extension_changes_evidence_only_until_anchor_covered(
         tail_end=datetime(2026, 11, 2, 0, 3, tzinfo=UTC),
     )
     assert snapshot()["signature"] == after["signature"]
+
+
+def test_freezing_anchors_does_not_load_configuration_json(session, report_case):
+    """百万锚点只冻结窄身份，配置JSON留到单账户核算时才读取。"""
+    from sqlalchemy import event
+
+    publish(session, report_case, export())
+    anchors(session, report_case)
+    statements = []
+    connection = session.connection()
+
+    def capture(_conn, _cursor, statement, _parameters, _context, _executemany):
+        if "FROM operation_observation" in statement:
+            statements.append(statement)
+
+    event.listen(connection, "before_cursor_execute", capture)
+    try:
+        frozen = frozen_sources(
+            session,
+            report_case.context.tenant_id,
+            ["report-account"],
+            date(2026, 11, 1),
+            date(2026, 11, 1),
+        )
+    finally:
+        event.remove(connection, "before_cursor_execute", capture)
+    assert len(frozen["observations"]) == 2
+    assert statements
+    # ORDER BY仍保留选锚语义；投影不得传输配置、摘要、父级等未消费大字段。
+    for statement in statements:
+        projection = statement.split("FROM operation_observation", 1)[0]
+        assert "operation_observation.configuration" not in projection
+        assert "operation_observation.digest" not in projection
+    assert calculate(session, report_case, frozen).data["amount"] == "50"

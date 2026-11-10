@@ -46,8 +46,14 @@ def frozen_sources(
         }
     # 优先选择区间结束后的首个锚点；新目录观察不应反复改写旧区间的依据。
     boundary = datetime.combine(end + timedelta(days=1), time.min, UTC)
+    # 冻结只消费身份/账户/时间；百万目录锚点不能展开完整配置JSON和ORM。
+    # DISTINCT ON与原排序不变，实际逐系列核算仍按冻结ID读取完整配置。
     observations = session.exec(
-        select(OperationObservation)
+        select(
+            col(OperationObservation.id),
+            col(OperationObservation.advertiser_id),
+            col(OperationObservation.observed_at),
+        )
         .where(
             OperationObservation.tenant_id == tenant_id,
             col(OperationObservation.advertiser_id).in_(accounts),
