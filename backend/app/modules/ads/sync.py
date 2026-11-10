@@ -502,11 +502,41 @@ def _material_stage(session):
         text(f"""
         CREATE TEMP TABLE {name} (LIKE ad_material_reference INCLUDING DEFAULTS
             INCLUDING CONSTRAINTS, PRIMARY KEY(id),
-            UNIQUE NULLS NOT DISTINCT ({",".join(_MATERIAL_IDENTITY)}),
+            UNIQUE NULLS NOT DISTINCT ({",".join(_MATERIAL_IDENTITY)})) ON COMMIT DROP
+    """)
+    )
+    return name
+
+
+def _creative_material_stage(session):
+    name = f"directory_creative_materials_{uuid4().hex}"
+    # 创意成员属于观察本身：同素材跨页可能属于不同创意，不能被canonical使用键覆盖。
+    # 独立保留完整观察及其顺序，不改变旧素材表的去重/覆盖语义。
+    session.connection().execute(
+        text(f"""
+        CREATE TEMP TABLE {name} (LIKE ad_material_reference INCLUDING DEFAULTS
+            INCLUDING CONSTRAINTS,
             creative_asset_ordinal bigint GENERATED ALWAYS AS IDENTITY) ON COMMIT DROP
     """)
     )
     return name
+
+
+def _stage_creative_material_batch(session, staged, materials, *, run, version):
+    values = [
+        _material_values(data, run=run, version=version)
+        for data in materials
+        if data.get("complete")
+    ]
+    if values:
+        session.connection().execute(
+            text(f"""
+            INSERT INTO {staged} ({_MATERIAL_COLUMNS})
+            SELECT {_MATERIAL_COLUMNS} FROM
+                jsonb_populate_recordset(NULL::ad_material_reference,CAST(:rows AS jsonb)) incoming
+        """),
+            {"rows": json.dumps(values, default=str, ensure_ascii=False)},
+        )
 
 
 def _stage_material_batch(session, staged, materials, *, run, version):
@@ -1017,6 +1047,7 @@ def publish_directory(
         stale_materials = stale_owner_materials = False
         owner_cache = {}
         staged_materials = _material_stage(session)
+        staged_creative_materials = _creative_material_stage(session)
         for materials in _directory_payload_batches(session, run, "materials"):
             # 即使后续所有权筛选丢弃该观察，也必须先拒绝非法身份。
             for material in materials:
@@ -1076,6 +1107,9 @@ def publish_directory(
             _stage_material_batch(
                 session, staged_materials, materials, run=run, version=version
             )
+            _stage_creative_material_batch(
+                session, staged_creative_materials, materials, run=run, version=version
+            )
         _publish_staged_materials(
             session,
             run,
@@ -1088,7 +1122,7 @@ def publish_directory(
             session,
             tenant_id=run.tenant_id,
             advertiser_id=run.advertiser_id,
-            materials_table=staged_materials,
+            materials_table=staged_creative_materials,
             entities_table=staged,
             published_version=version,
             observed_at=run.observed_at or min(page.observed_at for page in ordered),

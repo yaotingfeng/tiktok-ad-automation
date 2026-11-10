@@ -17,7 +17,7 @@ from app.integrations.tiktok.contracts.ads import (
 from app.modules.accounts.models import AdvertiserAccount
 from app.modules.ads.creative_models import AdCreative
 from app.modules.ads.creatives import backfill_creatives, upsert_creatives
-from app.modules.ads.models import AdMaterialReference
+from app.modules.ads.models import AdMaterialReference, AdObject
 from app.modules.ads.sync import publish_directory, stage_directory_page
 from tests.modules.ads.test_directory_sync import _authority, _run
 from tests.modules.ads.test_material_directory_children import _source_page
@@ -536,3 +536,255 @@ def test_backfill_reuses_known_order_instead_of_conflicting_with_unordered_histo
     )
     row = _get(session, directory_seed)
     assert row.identity_status == "COMPOSITE" and row.assets == assets
+
+
+@pytest.mark.parametrize("batch_size", [1, 500])
+@pytest.mark.parametrize(
+    "asset_lists,asset_type",
+    [
+        ((["shared"], ["shared"]), "VIDEO"),
+        ((["shared", "first-only"], ["second-only", "shared"]), "IMAGE"),
+    ],
+)
+def test_cross_page_shared_assets_retain_every_creative_membership_and_order(
+    session, directory_seed, monkeypatch, batch_size, asset_lists, asset_type
+):
+    from app.modules.ads import sync
+
+    monkeypatch.setattr(sync, "_PUBLISH_BATCH_SIZE", batch_size)
+    _authority(session, directory_seed)
+    owner = directory_seed.row
+    run = _run(session, directory_seed, kind="creative", ad_type="REGULAR")
+    for number, asset_ids in enumerate(asset_lists, 1):
+        source = _source_page(
+            directory_seed, number, [(owner.remote_id, "group")], terminal=number == 2
+        )
+        child = replace(
+            source.items[0],
+            ref=EntityRef(
+                owner.tenant_id, owner.advertiser_id, "creative", f"creative-{number}"
+            ),
+            parent_ref=owner.ref,
+            ad_type="REGULAR",
+        )
+        usages = tuple(
+            AdMaterialUsage(
+                MaterialUseRef(owner.ref, asset, None, asset_type),
+                None,
+                "ENABLE",
+                True,
+                creative_ids=(child.ref.remote_id,),
+            )
+            for asset in asset_ids
+        )
+        stage_directory_page(
+            session,
+            run_id=run.id,
+            page=replace(
+                source,
+                items=(child,),
+                materials=usages,
+                materials_complete=True,
+                material_missing_reason=None,
+            ),
+            claim_generation=1,
+        )
+    publish_directory(session, run_id=run.id, claim_generation=1)
+    for number, asset_ids in enumerate(asset_lists, 1):
+        creative = _get(session, directory_seed, f"creative-{number}")
+        assert creative.identity_status == (
+            "RESOLVED" if asset_type == "VIDEO" else "COMPOSITE"
+        )
+        assert creative.assets == [
+            {"platform_material_id": asset, "material_type": asset_type}
+            for asset in asset_ids
+        ]
+        assert creative.platform_material_id == (
+            "shared" if asset_type == "VIDEO" else None
+        )
+
+
+def test_newer_partial_active_child_cannot_revive_explicitly_deleted_parent(
+    session, directory_seed
+):
+    _authority(session, directory_seed)
+    owner = directory_seed.row
+    source = _source_page(
+        directory_seed, 1, [(owner.remote_id, "group")], terminal=True
+    )
+    observation = owner.observed_at
+    parent_ref = owner.ref
+    _write(
+        session,
+        directory_seed,
+        [_row("native", parent=parent_ref.remote_id)],
+        observed=observation,
+    )
+
+    def publish_parent(status, offset):
+        parent = replace(
+            source.items[0],
+            operation_status=status,
+            observed_at=observation + timedelta(seconds=offset),
+        )
+        run = _run(session, directory_seed, kind="ad", ad_type="SMART_PLUS")
+        stage_directory_page(
+            session,
+            run_id=run.id,
+            page=replace(source, items=(parent,), materials=()),
+            claim_generation=1,
+        )
+        publish_directory(session, run_id=run.id, claim_generation=1)
+
+    def publish_partial_child(offset):
+        child = replace(
+            source.items[0],
+            ref=EntityRef(
+                parent_ref.tenant_id, parent_ref.advertiser_id, "creative", "native"
+            ),
+            parent_ref=parent_ref,
+            ad_type="REGULAR",
+            operation_status="ENABLE",
+            observed_at=observation + timedelta(seconds=offset),
+        )
+        run = _run(session, directory_seed, kind="creative", ad_type="REGULAR")
+        stage_directory_page(
+            session,
+            run_id=run.id,
+            page=replace(source, items=(child,), materials=()),
+            claim_generation=1,
+        )
+        publish_directory(session, run_id=run.id, claim_generation=1)
+
+    publish_parent("DELETE", 1)
+    assert _get(session, directory_seed, "native").deleted
+    publish_partial_child(2)
+    creative = _get(session, directory_seed, "native")
+    assert creative.deleted and creative.operation_status == "ENABLE"
+    assert creative.platform_material_id == "video"
+    # 只有父目录的明确新观察才允许之后的活跃子观察恢复有效状态。
+    publish_parent("ENABLE", 3)
+    publish_partial_child(4)
+    assert not _get(session, directory_seed, "native").deleted
+
+
+@pytest.mark.parametrize("reference_version", [4, 5])
+def test_same_or_older_backfill_does_not_overwrite_live_status(
+    session, directory_seed, reference_version
+):
+    owner = directory_seed.row
+    observed = owner.observed_at
+    _write(
+        session,
+        directory_seed,
+        [_row(parent=owner.remote_id, name="live", operation_status="DISABLE")],
+        version=5,
+        observed=observed,
+    )
+    owner.observed_at = observed + timedelta(seconds=10)
+    session.add(
+        AdMaterialReference(
+            tenant_id=owner.tenant_id,
+            advertiser_id=owner.advertiser_id,
+            ad_remote_id=owner.remote_id,
+            platform_material_id="video",
+            material_type="VIDEO",
+            ad_material_id="material",
+            creative_ids=["creative"],
+            complete=True,
+            name="historical",
+            operation_status="ENABLE",
+            published_version=reference_version,
+        )
+    )
+    session.flush()
+    backfill_creatives(
+        session, tenant_id=owner.tenant_id, advertiser_id=owner.advertiser_id
+    )
+    creative = _get(session, directory_seed)
+    assert (
+        creative.name,
+        creative.operation_status,
+        creative.observed_at,
+        creative.published_version,
+    ) == ("live", "DISABLE", observed, 5)
+
+
+def test_partial_backfill_preserves_complete_live_carousel(session, directory_seed):
+    owner = directory_seed.row
+    assets = [
+        {"platform_material_id": image, "material_type": "IMAGE"}
+        for image in ["b", "a"]
+    ]
+    _write(
+        session,
+        directory_seed,
+        [_row(parent=owner.remote_id, assets=assets)],
+        observed=owner.observed_at,
+    )
+    owner.observed_at += timedelta(seconds=1)
+    # canonical共享素材成员曾被后页覆盖；更高版本也不能把缺失解释为资产删除。
+    session.add(
+        AdMaterialReference(
+            tenant_id=owner.tenant_id,
+            advertiser_id=owner.advertiser_id,
+            ad_remote_id=owner.remote_id,
+            platform_material_id="a",
+            material_type="IMAGE",
+            ad_material_id="material",
+            creative_ids=["creative"],
+            complete=True,
+            published_version=2,
+        )
+    )
+    session.flush()
+    backfill_creatives(
+        session, tenant_id=owner.tenant_id, advertiser_id=owner.advertiser_id
+    )
+    creative = _get(session, directory_seed)
+    assert creative.identity_status == "COMPOSITE" and creative.assets == assets
+    assert creative.evidence["conflicts"] == []
+
+
+@pytest.mark.parametrize("changed", ["parent", "ad_material", "asset"])
+def test_backfill_still_records_genuinely_conflicting_identity(
+    session, directory_seed, changed
+):
+    owner = directory_seed.row
+    _write(
+        session,
+        directory_seed,
+        [_row(parent=owner.remote_id)],
+        observed=owner.observed_at,
+    )
+    owner.observed_at += timedelta(seconds=1)
+    parent = owner.remote_id
+    if changed == "parent":
+        parent = "different-parent"
+        session.add(AdObject(**{**owner.model_dump(), "remote_id": parent}))
+    session.add(
+        AdMaterialReference(
+            tenant_id=owner.tenant_id,
+            advertiser_id=owner.advertiser_id,
+            ad_remote_id=parent,
+            platform_material_id="different-video" if changed == "asset" else "video",
+            material_type="VIDEO",
+            ad_material_id="different-material"
+            if changed == "ad_material"
+            else "material",
+            creative_ids=["creative"],
+            complete=True,
+            published_version=2,
+        )
+    )
+    session.flush()
+    backfill_creatives(
+        session, tenant_id=owner.tenant_id, advertiser_id=owner.advertiser_id
+    )
+    creative = _get(session, directory_seed)
+    assert creative.identity_status == "CONFLICT"
+    assert (
+        creative.ad_remote_id == owner.remote_id
+        and creative.ad_material_id == "material"
+        and creative.platform_material_id == "video"
+    )

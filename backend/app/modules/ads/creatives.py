@@ -332,7 +332,7 @@ def backfill_creatives(
                     session.connection()
                     .execute(
                         text("""
-                    SELECT creative_id,ad_remote_id,ad_material_id,assets FROM ad_creative
+                    SELECT creative_id,ad_remote_id,ad_material_id,assets,published_version FROM ad_creative
                     WHERE tenant_id=:tenant AND advertiser_id=:account AND creative_id=ANY(:ids)
                 """),
                         {**scope, "ids": sorted({row["creative_id"] for row in rows})},
@@ -341,9 +341,11 @@ def backfill_creatives(
                     .all()
                 )
                 by_creative = {row["creative_id"]: row for row in existing}
+                accepted = []
                 for row in rows:
                     original = by_creative.get(row["creative_id"])
-                    # 旧引用没有位置列：相同资产集合沿用已知顺序，不以排序制造冲突。
+                    # 历史引用可能丢失共享素材成员且没有位置列：同身份的资产子集
+                    # 沿用完整已知资产/顺序，不能以缺失推断删除或制造冲突。
                     if (
                         original
                         and original["ad_remote_id"] == row["ad_remote_id"]
@@ -352,12 +354,21 @@ def backfill_creatives(
                             (asset["material_type"], asset["platform_material_id"])
                             for asset in original["assets"]
                         }
-                        == {
+                        >= {
                             (asset["material_type"], asset["platform_material_id"])
                             for asset in row["assets"]
                         }
                     ):
                         row["assets"] = original["assets"]
+                        # 父目录可能更晚同步，但它的时间不能提升旧素材引用的权威性。
+                        # 相同或较旧版本的弱回填仅补不存在的身份，不覆盖live状态。
+                        if row["published_version"] <= original["published_version"]:
+                            continue
+                    accepted.append(row)
+                rows = accepted
+                if not rows:
+                    after = parents[-1]
+                    continue
                 # 创意实体明确删除优先；父广告未删不能反推已删除创意仍有效。
                 statuses = (
                     session.connection()
@@ -398,8 +409,8 @@ def publish_staged_creatives(
     observed_at: datetime,
 ) -> int:
     """只接收目录发布器已胜出且完整的素材；同创意跨页图片合并后一次发布。"""
-    # 临时表名只由sync内部生成；首次观察序号在跨批重复UPSERT时不变，
-    # 不使用会随UPDATE变化的ctid，也不以素材ID排序轮播。
+    # 临时表名只由sync内部生成；完整观察流保留跨页共享素材的每个创意成员，
+    # 按观察顺序分别组装各创意轮播，不使用canonical去重后的行或物理ctid。
     references = (
         session.connection()
         .execute(
@@ -423,9 +434,11 @@ def publish_staged_creatives(
         .execute(
             text(f"""
         SELECT o.kind,o.remote_id,o.parent_kind,o.parent_remote_id,o.ad_type,
-               o.name,o.operation_status,o.observed_at
+               o.name,o.operation_status,o.observed_at,p.operation_status AS parent_status
         FROM {entities_table} s JOIN ad_object o
           ON o.tenant_id=:tenant AND o.advertiser_id=:account AND o.kind=s.kind AND o.remote_id=s.remote_id
+        LEFT JOIN ad_object p ON p.tenant_id=o.tenant_id AND p.advertiser_id=o.advertiser_id
+          AND p.kind='ad' AND p.remote_id=o.parent_remote_id AND o.parent_kind='ad'
         WHERE o.published_version=:version AND o.kind IN ('ad','creative')
         ORDER BY o.kind,o.remote_id
     """),
@@ -505,7 +518,10 @@ def publish_staged_creatives(
                     "assets": original["assets"] if original else [],
                     "name": entity["name"],
                     "operation_status": entity["operation_status"],
-                    "deleted": entity["operation_status"] in {"DELETE", "DELETED"},
+                    # 子对象ENABLE不能推翻父广告的明确删除；父状态在账户发布锁下
+                    # 从canonical读取，不要求父广告也出现在本轮部分子目录中。
+                    "deleted": entity["operation_status"] in {"DELETE", "DELETED"}
+                    or entity["parent_status"] in {"DELETE", "DELETED"},
                     "observed_at": entity["observed_at"],
                     "published_version": published_version,
                 }
