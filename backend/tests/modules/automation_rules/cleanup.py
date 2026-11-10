@@ -9,6 +9,7 @@ from app.core.db import engine
 # 子表在前。只列执行器测试会写入的表，避免误删共享基线数据。
 _TABLES = (
     "pending_dispatch",
+    "operation_observation",
     "dispatch_tenant_cursor",
     "automation_action_ledger",
     "automation_confirmation",
