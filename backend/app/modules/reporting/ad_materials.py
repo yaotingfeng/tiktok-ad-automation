@@ -26,7 +26,12 @@ from app.modules.reporting.carousel_links import (
     FrozenCarouselLink,
     frozen_carousel_links,
 )
-from app.modules.reporting.creative_query import creative_states, read_facts
+from app.modules.reporting.creative_query import (
+    UNALLOCATED_NOTE,
+    creative_states,
+    read_facts,
+    read_unallocated,
+)
 from app.modules.reporting.dimension_query import (
     COMPLETE_COVERAGE_STATUSES,
     _coverage,
@@ -133,6 +138,21 @@ def list_ad_materials(
     coverage = _coverage(
         states, advertisers={advertiser_id}, filters=filters, kind="creative_material"
     )
+    missing = read_unallocated(
+        session,
+        tenant_id=context.tenant_id,
+        advertisers=[advertiser_id],
+        filters=filters,
+        exact_ad=ad_id,
+    )
+    if missing:
+        coverage.update(
+            status="INCOMPLETE",
+            unallocated_note=UNALLOCATED_NOTE,
+            unallocated_group_count=len(
+                {(m["adgroup_id"], m["currency"], m["timezone"]) for m in missing}
+            ),
+        )
     incomplete = coverage["status"] not in COMPLETE_COVERAGE_STATUSES
     account = session.get(AdvertiserAccount, (context.tenant_id, advertiser_id))
     empty = empty_metric_values(
@@ -158,13 +178,19 @@ def list_ad_materials(
             )
             for f in items_for_use
         )
+        # 缺口的币种/时区也独立保留，不能借已有另一日金额把空桶吞掉。
+        vectors += tuple(
+            metric_vector(
+                dict.fromkeys(METRIC_COLUMNS), currency=currency, timezone=timezone
+            )
+            for currency, timezone in {(m["currency"], m["timezone"]) for m in missing}
+            - {(f["currency"], f["timezone"]) for f in items_for_use}
+        )
         if not vectors and account is not None:
-            # 无数据的素材按账户覆盖填 0 或空，与报表其他维度一致。
+            # 无数据且无未分摊缺口时，按账户覆盖填 0 或空。
             vectors = (
                 metric_vector(
-                    empty,
-                    currency=account.currency,
-                    timezone=account.timezone,
+                    empty, currency=account.currency, timezone=account.timezone
                 ),
             )
         items.append(

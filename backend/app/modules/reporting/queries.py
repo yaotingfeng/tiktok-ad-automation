@@ -112,6 +112,11 @@ def _summary(totals: SnapshotTotals) -> dict[str, Any]:
         "buckets": buckets,
         "incomplete_advertiser_count": len(totals.incomplete_advertisers),
         "incomplete_dates": list(totals.incomplete_dates),
+        **(
+            {"unallocated_group_count": totals.unallocated_group_count}
+            if totals.unallocated_group_count
+            else {}
+        ),
     }
 
 
@@ -258,9 +263,12 @@ def _build_snapshot(
         )
         snapshot.coverage = {
             **snapshot.coverage,
+            "unallocated_group_count": totals.unallocated_group_count,
             "projection": projected,
             "status": "BUILDING"
             if projected["unavailable_bucket_count"]
+            else "INCOMPLETE"
+            if not totals.complete
             else snapshot.coverage["status"],
         }
     session.add(snapshot)

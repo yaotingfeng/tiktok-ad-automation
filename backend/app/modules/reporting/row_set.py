@@ -126,6 +126,7 @@ class SnapshotTotals:
     incomplete_dates: tuple[str, ...]
     complete: bool
     account_versions: tuple[UUID, ...] = ()
+    unallocated_group_count: int = 0
 
 
 class _Params:
@@ -452,6 +453,12 @@ def _material_member_buckets() -> str:
         SELECT ra.row_key,ra.adv,a.currency,a.tz,NOT c.complete AS incomplete,{empty_values}
         FROM row_advs ra JOIN acc a ON a.adv=ra.adv JOIN cov c ON c.adv=ra.adv
         WHERE NOT EXISTS (SELECT 1 FROM fk WHERE fk.row_key=ra.row_key AND fk.adv=ra.adv)
+            AND NOT EXISTS (SELECT 1 FROM unallocated_rows u WHERE u.row_key=ra.row_key AND u.advertiser_id=ra.adv)
+        UNION ALL
+        SELECT DISTINCT u.row_key,u.advertiser_id,u.currency,u.timezone,true,
+            {", ".join(f"NULL::numeric AS {m},true AS {m}_hn" for m in METRIC_COLUMNS)}
+        FROM unallocated_rows u JOIN row_advs ra ON ra.row_key=u.row_key AND ra.adv=u.advertiser_id
+        WHERE NOT EXISTS (SELECT 1 FROM facts f WHERE f.rid=u.row_key AND f.adv=u.advertiser_id AND f.currency=u.currency AND (f.tz=u.timezone OR f.tz='MIXED'))
     )"""
 
 
@@ -836,7 +843,7 @@ def _dimension_rows(
 
 def _material_rows(filters: ReportingFilter, params: _Params) -> tuple[str, str]:
     """逐创意筛选后汇总；仅精确当前视频位置附带不可变动作证据。"""
-    from app.modules.reporting.creative_query import filtered_ctes
+    from app.modules.reporting.creative_query import filtered_ctes, material_name_sql
 
     values = ",".join(
         f"sum(f.{m}) AS {m},bool_or(f.{m}_has_null OR f.{m} IS NULL) AS {m}_hn"
@@ -848,14 +855,14 @@ def _material_rows(filters: ReportingFilter, params: _Params) -> tuple[str, str]
         f"""facts AS (
             SELECT advertiser_id AS adv,row_key AS rid,currency,
                 CASE WHEN min(timezone)=max(timezone) THEN min(timezone) ELSE 'MIXED' END AS tz,
-                bool_or(source_status<>'COMPLETE' OR unallocated) AS source_incomplete,{values}
+                bool_or(source_status<>'COMPLETE' OR unallocated OR EXISTS (SELECT 1 FROM unallocated_rows u WHERE u.row_key=f.row_key AND u.advertiser_id=f.advertiser_id AND u.currency=f.currency)) AS source_incomplete,{values}
             FROM creative_filtered f GROUP BY advertiser_id,row_key,currency
         )""",
-        """fk AS (SELECT DISTINCT adv,rid AS row_key FROM facts),
+        f"""fk AS (SELECT DISTINCT adv,rid AS row_key FROM facts),
         row_advs AS (SELECT row_key,adv FROM fk UNION SELECT row_key,advertiser_id FROM creative_directory),
         names AS (
             SELECT row_key,min(name) AS name FROM (
-                SELECT row_key,material_name AS name FROM creative_filtered
+                SELECT row_key,{material_name_sql("row_key", "material_name")} AS name FROM creative_filtered
                 UNION ALL SELECT row_key,name FROM creative_directory
             ) n GROUP BY row_key
         ),
@@ -1057,6 +1064,7 @@ def insert_snapshot_rows(
     ),
     bad AS (
         SELECT DISTINCT mb.adv FROM {bad_source} WHERE mb.incomplete
+        {"UNION SELECT advertiser_id FROM unallocated_groups" if filters.dimension == "material" else ""}
     )
     SELECT
         (SELECT count(*) FROM ins) AS total,
@@ -1067,7 +1075,8 @@ def insert_snapshot_rows(
            WHERE NOT EXISTS (SELECT 1 FROM ({coverage_source}) s WHERE s.tenant_id = :tenant
                AND s.advertiser_id = b.adv AND s.report_kind = '{"creative_material" if filters.dimension == "material" else "ad_day"}'
                AND s.stat_date = d.day::date AND s.status = 'COMPLETE')) AS bad_dates,
-        {account_versions} AS account_versions
+        {account_versions} AS account_versions,
+        {"(SELECT count(DISTINCT (advertiser_id,adgroup_id,currency,timezone)) FROM unallocated_groups)" if filters.dimension == "material" else "0"} AS unallocated_group_count
     """
     # 大范围目录条件会把复合身份JOIN误估为1行，进而对物化CTE做N²扫描。
     # 仅此集合聚合语句偏好Hash/Merge，不影响分页点查与连接池后续业务。
@@ -1096,4 +1105,5 @@ def insert_snapshot_rows(
         incomplete_dates=tuple(day.isoformat() for day in bad_dates),
         complete=not row.bad_advs,
         account_versions=tuple(row.account_versions),
+        unallocated_group_count=row.unallocated_group_count,
     )

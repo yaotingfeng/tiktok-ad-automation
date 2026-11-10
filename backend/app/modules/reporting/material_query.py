@@ -9,7 +9,13 @@ from sqlmodel import select
 
 from app.integrations.tiktok.contracts.ads import MaterialUseRef
 from app.modules.accounts.models import AdvertiserAccount
-from app.modules.reporting.creative_query import creative_states, read_facts
+from app.modules.reporting.creative_query import (
+    UNALLOCATED_NOTE,
+    creative_states,
+    material_display_name,
+    read_facts,
+    read_unallocated,
+)
 from app.modules.reporting.dimension_query import (
     _coverage,
     empty_metric_values,
@@ -56,6 +62,14 @@ def materialize_material_rows(
         row_keys=[m.row_key for m in members],
         exact_ad=exact_ad,
         directory=True,
+    )
+    missing = read_unallocated(
+        session,
+        tenant_id=tenant_id,
+        advertisers=advertisers,
+        filters=filters,
+        row_keys=[m.row_key for m in members],
+        exact_ad=exact_ad,
     )
     directory_by_key = defaultdict(list)
     for usage in directory:
@@ -136,6 +150,7 @@ def materialize_material_rows(
         key = json.loads(member.row_key)
         items = by_key[member.row_key]
         directory_items = directory_by_key[member.row_key]
+        row_missing = [m for m in missing if m["row_key"] == member.row_key]
         uses = tuple(_use(u) for u in member.material_uses)
         row_advs = sorted(
             scope
@@ -167,6 +182,7 @@ def materialize_material_rows(
         if (
             any(s != "COMPLETE" for s in statuses)
             or any(f["unallocated"] for f in items)
+            or row_missing
         ) and coverage["status"] == "COMPLETE":
             coverage["status"] = "INCOMPLETE"
         if key[0] == "unattributed":
@@ -188,6 +204,14 @@ def materialize_material_rows(
             coverage["unallocated_note"] = (
                 "广告组对账差额仅按广告组保留，无法分摊到单条广告或素材。"
             )
+        if row_missing:
+            coverage["unallocated_note"] = UNALLOCATED_NOTE
+            coverage["unallocated_group_count"] = len(
+                {
+                    (m["advertiser_id"], m["adgroup_id"], m["currency"], m["timezone"])
+                    for m in row_missing
+                }
+            )
         buckets = []
         for f in items:
             incomplete = (
@@ -208,10 +232,36 @@ def materialize_material_rows(
             buckets.append(
                 (
                     (vector,),
-                    incomplete or f["source_status"] != "COMPLETE" or f["unallocated"],
+                    incomplete
+                    or f["source_status"] != "COMPLETE"
+                    or f["unallocated"]
+                    or any(
+                        m["advertiser_id"] == f["advertiser_id"]
+                        and m["currency"] == f["currency"]
+                        for m in row_missing
+                    ),
                 )
             )
-        for adv in set(row_advs) - {f["advertiser_id"] for f in items}:
+        for currency, timezone in {
+            (m["currency"], m["timezone"]) for m in row_missing
+        } - {(f["currency"], f["timezone"]) for f in items}:
+            buckets.append(
+                (
+                    (
+                        metric_vector(
+                            dict.fromkeys(METRIC_COLUMNS),
+                            currency=currency,
+                            timezone=timezone,
+                        ),
+                    ),
+                    True,
+                )
+            )
+        for adv in (
+            set(row_advs)
+            - {f["advertiser_id"] for f in items}
+            - {m["advertiser_id"] for m in row_missing}
+        ):
             account = accounts[adv]
             buckets.append(
                 (
@@ -256,12 +306,7 @@ def materialize_material_rows(
             + [u.name for u in current_uses if u.name],
             default=mid,
         )
-        if key[0] == "unattributed":
-            name = "未归属到素材／对账差额"
-        elif key[0] == "unmapped_creative":
-            name = f"未关联创意 {mid}"
-        elif key[0] == "carousel":
-            name = f"轮播创意 {mid}"
+        name = material_display_name(key, name)
         single = row_advs[0] if len(row_advs) == 1 else None
         result.append(
             ReportRow(
