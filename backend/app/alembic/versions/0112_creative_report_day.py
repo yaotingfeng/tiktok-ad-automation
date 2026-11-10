@@ -25,6 +25,8 @@ def upgrade() -> None:
     op.execute("CREATE TABLE creative_report_day_default PARTITION OF creative_report_day DEFAULT")
     op.execute("CREATE INDEX ix_creative_report_day_period ON creative_report_day (tenant_id,stat_date,advertiser_id)")
     op.execute("CREATE INDEX ix_creative_report_day_group ON creative_report_day (tenant_id,advertiser_id,adgroup_id,stat_date)")
+    # 创意身份更新按 creative_id 反查所有历史日，不能退化为逐创意扫描账户全历史。
+    op.execute("CREATE INDEX ix_creative_report_identity ON creative_report_day (tenant_id,advertiser_id,creative_id,stat_date)")
     op.execute("CREATE INDEX ix_creative_report_default_date ON creative_report_day_default (stat_date)")
 
 
