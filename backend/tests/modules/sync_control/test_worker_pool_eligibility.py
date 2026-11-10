@@ -72,7 +72,7 @@ def test_multiple_quota_blocked_fact_heads_cannot_hold_idle_directory_pool(
     )
 
 
-def test_readiness_cursor_reaches_ready_material_after_sixty_five_blocked_fact_scopes(
+def test_readiness_cursor_reaches_other_endpoint_after_sixty_five_blocked_fact_scopes(
     session,
     sync_seed,
     redis_client,
@@ -145,7 +145,7 @@ def test_readiness_cursor_reaches_ready_material_after_sixty_five_blocked_fact_s
             batch.append(row)
     for model, rows in zip(models, batches, strict=True):
         session.connection().execute(insert(model), rows)
-    enqueue_job(session, kind="material_day", **common)
+    enqueue_job(session, kind="operation_log", **common)
     assert admit_call(
         redis_client,
         lease_id=uuid4(),

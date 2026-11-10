@@ -13,7 +13,7 @@ from app.modules.reporting.jobs import enqueue_job, execute_job
 from app.modules.reporting.store_models import (
     AccountReconciliationDay,
     AdReportDay,
-    MaterialReportDay,
+    CreativeReportDay,
     ReportSyncJob,
     ReportSyncState,
 )
@@ -32,7 +32,10 @@ from tests.modules.reporting.test_publish import HK
     "model,identity",
     [
         (AdReportDay, {"ad_id": "a", "campaign_id": "c", "adgroup_id": "g"}),
-        (MaterialReportDay, {"main_material_id": "m", "main_material_type": "VIDEO"}),
+        (
+            CreativeReportDay,
+            {"creative_id": "m", "campaign_id": "c", "adgroup_id": "g"},
+        ),
     ],
 )
 def test_partition_creation_moves_existing_default_rows(

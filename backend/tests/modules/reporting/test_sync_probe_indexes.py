@@ -10,7 +10,6 @@ from sqlalchemy import MetaData, Table, text
 from sqlmodel import Session
 
 from app.modules.ads.sync_models import AdDirectoryRun
-from app.modules.reporting.partitions import ensure_month_partitions_for_range
 from tests.migration_database import historical_database
 from tests.modules.ads.test_directory_requests import _route
 from tests.modules.reporting.sync_conftest import sync_seed
@@ -22,6 +21,20 @@ INDEXES = {
     "ad_report_day": "ix_ad_report_day_spending",
     "material_report_day": "ix_material_report_day_spending",
 }
+
+
+def ensure_month_partitions_for_range(session, start, end):
+    assert start == end
+    # 0044往返只验证当时两张事实表；已退役表不再调用今日的运行时维护器。
+    for table in ("ad_report_day", "material_report_day"):
+        name = f"{table}_{start:%Y_%m}"
+        following = date(start.year + start.month // 12, start.month % 12 + 1, 1)
+        session.execute(
+            text(
+                f"CREATE TABLE IF NOT EXISTS {name} PARTITION OF {table} "
+                f"FOR VALUES FROM ('{start.isoformat()}') TO ('{following.isoformat()}')"
+            )
+        )
 
 
 def _scanned(node, table):

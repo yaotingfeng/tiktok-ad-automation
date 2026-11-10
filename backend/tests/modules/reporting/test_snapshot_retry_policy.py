@@ -7,7 +7,7 @@ import pytest
 from app.core.errors import DomainError
 from app.modules.reporting import jobs
 from app.modules.reporting.store_models import ReportSyncJob
-from tests.modules.reporting.test_material_resume import enqueue
+from tests.modules.reporting.creative_job_helpers import enqueue
 
 NOW = datetime(2026, 10, 27, 18, tzinfo=UTC)
 LOCAL_TODAY = date(2026, 10, 28)  # fixture账户为Asia/Hong_Kong，不能用UTC日期替代。
@@ -26,56 +26,11 @@ def retry_clock(monkeypatch):
 @pytest.mark.parametrize(
     "kind,priority,day,error,delays",
     [
-        (
-            "material_day",
-            2,
-            LOCAL_TODAY,
-            "report_snapshot_changed",
-            [5, 10, 20, 30, 60],
-        ),
-        (
-            "material_day",
-            1,
-            LOCAL_TODAY,
-            "report_snapshot_changed",
-            [5, 10, 20, 30, 60],
-        ),
-        (
-            "material_day",
-            2,
-            date(2026, 10, 27),
-            "report_snapshot_changed",
-            [60, 120, 240, 480, 960],
-        ),
-        (
-            "material_day",
-            0,
-            date(2026, 10, 27),
-            "report_snapshot_changed",
-            [60, 120, 240, 480, 960],
-        ),
-        (
-            "material_day",
-            3,
-            LOCAL_TODAY,
-            "report_snapshot_changed",
-            [60, 120, 240, 480, 960],
-        ),
-        (
-            "material_links",
-            2,
-            LOCAL_TODAY,
-            "report_snapshot_changed",
-            [60, 120, 240, 480, 960],
-        ),
-        ("ad_day", 1, LOCAL_TODAY, "report_snapshot_changed", [60, 120, 240, 480, 960]),
-        (
-            "material_day",
-            2,
-            LOCAL_TODAY,
-            "tiktok_response_error",
-            [60, 120, 240, 480, 960],
-        ),
+        (kind, priority, day, error, [60, 120, 240, 480, 960])
+        for kind in ("creative_day", "ad_day")
+        for priority in (1, 2, 3)
+        for day in (LOCAL_TODAY, LOCAL_TODAY - timedelta(days=1))
+        for error in ("report_snapshot_changed", "tiktok_response_error")
     ],
 )
 @pytest.mark.usefixtures("retry_clock")
@@ -95,19 +50,11 @@ def test_snapshot_retry_delay_uses_actual_local_day_only(
             )
             assert job.attempts == attempt
             assert job.due_at == NOW + timedelta(seconds=seconds)
-        if kind == "material_links":
-            assert (
-                jobs._handle_error(session, job, DomainError(error, "synthetic"))
-                == "WAITING"
-            )
-            assert job.attempts == 0 and job.status == "WAITING"
-            assert job.due_at == NOW + timedelta(minutes=5)
-        else:
-            assert (
-                jobs._handle_error(session, job, DomainError(error, "synthetic"))
-                == "FAILED"
-            )
-            assert job.attempts == 5 and job.status == "FAILED"
+        assert (
+            jobs._handle_error(session, job, DomainError(error, "synthetic"))
+            == "FAILED"
+        )
+        assert job.attempts == 5 and job.status == "FAILED"
         session.commit()
 
 
@@ -122,10 +69,10 @@ def test_exhausted_today_snapshot_allows_new_periodic_job(committed_sync_seed):
         SyncRequirement,
         SyncSchedule,
     )
-    from tests.modules.reporting.test_material_resume import claim
+    from tests.modules.reporting.creative_job_helpers import claim
 
     class ChangingReader:
-        def material_day(self, **_kwargs):
+        def creative_day(self, **_kwargs):
             raise DomainError("report_snapshot_changed", "synthetic")
 
     current = original
@@ -156,26 +103,3 @@ def test_exhausted_today_snapshot_allows_new_periodic_job(committed_sync_seed):
             select(SyncSchedule).where(SyncSchedule.scope_id == old_child.scope_id)
         ).one()
         assert head.active and head.lease_execution_id == replacement.id
-
-
-@pytest.mark.usefixtures("retry_clock")
-def test_material_link_snapshot_drift_recycles_retry_budget(
-    committed_sync_seed,
-):
-    seed, factory = committed_sync_seed
-    original = enqueue(factory, seed, start=LOCAL_TODAY, end=LOCAL_TODAY)
-    with factory() as session:
-        job = session.get(ReportSyncJob, original.id)
-        job.kind = "material_links"
-        job.priority = 2
-        job.attempts = jobs.MAX_PROVIDER_RETRIES
-        job.status = "WAITING"
-        error = DomainError("report_snapshot_changed", "synthetic")
-
-        assert jobs._handle_error(session, job, error) == "WAITING"
-        assert job.status == "WAITING"
-        assert job.attempts == 0
-        assert job.finished_at is None
-        assert job.due_at == NOW + timedelta(minutes=5)
-        assert job.error_code == "report_snapshot_changed"
-        session.commit()

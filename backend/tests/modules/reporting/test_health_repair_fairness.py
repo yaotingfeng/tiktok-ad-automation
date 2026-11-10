@@ -52,7 +52,7 @@ def _pending(session, plan, report_kind, accounts, **changes):
 
 
 def _repair(session, plan, kind, accounts):
-    repairs = {"ad": set(), "material": set(), "links": set()}
+    repairs = {"ad": set(), "material": set(), "directory": set()}
     repairs["ad" if kind == "ad_day" else "material"] = set(accounts)
     health._repair_health(
         session, plan, SimpleNamespace(last_repair_at=None), repairs, NOW
@@ -60,7 +60,7 @@ def _repair(session, plan, kind, accounts):
     session.flush()
 
 
-@pytest.mark.parametrize("kind", ["ad_day", "material_day"])
+@pytest.mark.parametrize("kind", ["ad_day", "creative_day"])
 def test_inflight_first_fifty_do_not_consume_repair_slots(session, sync_seed, kind):
     plan, accounts = _case(session, sync_seed, 110)
     pending = [
@@ -83,7 +83,7 @@ def test_inflight_first_fifty_do_not_consume_repair_slots(session, sync_seed, ki
     session.flush()
     _repair(session, plan, kind, accounts)
     jobs = session.exec(select(ReportSyncJob)).all()
-    fresh = [job for job in jobs if job.id not in original_ids]
+    fresh = [job for job in jobs if job.id not in original_ids and job.kind == kind]
     # 两个当地日合计最多50，缺水位在先，其余按年龄；不能按ID取前50。
     assert {account for job in fresh for account in job.advertiser_ids} == set(
         accounts[60:]
@@ -101,7 +101,7 @@ def test_inflight_first_fifty_do_not_consume_repair_slots(session, sync_seed, ki
     after = session.exec(select(ReportSyncJob)).all()
     _repair(session, plan, kind, accounts)
     assert len(session.exec(select(ReportSyncJob)).all()) == len(after)
-    assert sum(len(job.advertiser_ids) for job in after) == 110
+    assert sum(len(job.advertiser_ids) for job in after if job.kind == kind) == 110
     assert (
         session.get(
             ReportSyncState,
@@ -134,7 +134,7 @@ def test_other_scope_or_terminal_work_cannot_hide_missing_fact(
         "route": {"frozen_route": plan.frozen_route | {"binding_revision": 999}},
         "actor": {"actor_id": uuid4()},
         "bc": {"bc_id": "other-bc"},
-        "kind": {"kind": "material_day"},
+        "kind": {"kind": "creative_day"},
         "window": {"start_date": NOW.date() - timedelta(days=1)},
         "campaign": {"campaign_ids": ["campaign"]},
         "priority": {"priority": 3},
@@ -157,7 +157,7 @@ def test_other_scope_or_terminal_work_cannot_hide_missing_fact(
     new = [
         job
         for job in session.exec(select(ReportSyncJob)).all()
-        if job.id != previous.id
+        if job.id != previous.id and job.kind == "ad_day"
     ]
     assert len(new) == 1 and new[0].advertiser_ids == [accounts[0]]
 
@@ -184,10 +184,14 @@ def test_missing_watermark_precedes_oldest_success_and_ignores_other_dates(
     session.flush()
     monkeypatch.setattr(health, "MAX_REPAIR_ACCOUNTS", 1)
     _repair(session, plan, "ad_day", accounts)
-    jobs = session.exec(select(ReportSyncJob)).all()
+    jobs = session.exec(
+        select(ReportSyncJob).where(ReportSyncJob.kind == "ad_day")
+    ).all()
     assert len(jobs) == 1 and jobs[0].advertiser_ids == [accounts[2]]
     _repair(session, plan, "ad_day", accounts)
-    jobs = session.exec(select(ReportSyncJob)).all()
+    jobs = session.exec(
+        select(ReportSyncJob).where(ReportSyncJob.kind == "ad_day")
+    ).all()
     assert len(jobs) == 2
     assert {account for job in jobs for account in job.advertiser_ids} == set(
         accounts[1:]

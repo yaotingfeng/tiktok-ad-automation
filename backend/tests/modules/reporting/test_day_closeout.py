@@ -14,7 +14,7 @@ from app.modules.reporting.lanes import report_workload
 from app.modules.reporting.store_models import (
     AdReportDay,
     AdSyncBc,
-    MaterialReportDay,
+    CreativeReportDay,
     ReportSyncJob,
     ReportSyncState,
 )
@@ -41,8 +41,8 @@ def seed_yesterday(session, seed, *, now=NOW, advertiser="acc-1", kind="ad_day")
     if kind == "ad_day":
         fact = AdReportDay(ad_id="ad1", campaign_id="c1", adgroup_id="g1", **common)
     else:
-        fact = MaterialReportDay(
-            main_material_id="p1", main_material_type="VIDEO", **common
+        fact = CreativeReportDay(
+            creative_id="p1", campaign_id="c1", adgroup_id="g1", **common
         )
     session.add(fact)
     session.add(
@@ -65,7 +65,7 @@ def plan_for(session, seed, now=NOW):
     return session.get(AdSyncBc, (seed.tenant_id, "bc-a"))
 
 
-@pytest.mark.parametrize("kind", ["ad_day", "material_day"])
+@pytest.mark.parametrize("kind", ["ad_day", "creative_day"])
 def test_first_hot_round_closes_yesterday_once_for_each_timezone(
     session, sync_seed, kind
 ):
@@ -84,7 +84,7 @@ def test_first_hot_round_closes_yesterday_once_for_each_timezone(
     ).all()
     assert len(jobs) == 4
     for job in jobs:
-        assert job.kind in {"ad_day", "material_day"}
+        assert job.kind in {"ad_day", "creative_day"}
         assert job.start_date == job.end_date == days[job.advertiser_ids[0]]
         assert report_workload(session, job, now=NOW) == "live"
         assert (
@@ -103,7 +103,7 @@ def test_closeout_skips_no_facts_and_already_successful_kinds(session, sync_seed
     jobs = session.exec(
         select(ReportSyncJob).where(ReportSyncJob.tenant_id == sync_seed.tenant_id)
     ).all()
-    assert [(j.kind, j.advertiser_ids) for j in jobs] == [("material_day", ["acc-1"])]
+    assert [(j.kind, j.advertiser_ids) for j in jobs] == [("creative_day", ["acc-1"])]
     # bc-b 可见 acc-2，但不拥有它，不能生成重复收尾。
     seed_yesterday(session, sync_seed, advertiser="acc-2")
     other = session.get(AdSyncBc, (sync_seed.tenant_id, "bc-b"))
@@ -144,7 +144,7 @@ def test_closeout_is_planned_by_due_hot_even_without_today_activity(
         jobs = session.exec(
             select(ReportSyncJob).where(ReportSyncJob.tenant_id == seed.tenant_id)
         ).all()
-        assert {j.kind for j in jobs} == {"ad_day", "material_day"}
+        assert {j.kind for j in jobs} == {"ad_day", "creative_day"}
         assert all(j.start_date == NOW.date() for j in jobs)  # 香港已经进入次日。
 
 
@@ -212,7 +212,7 @@ def test_closeout_publishes_success_and_daily_refresh_can_replace_it(
                 (ad_row("ad1", day, adv="acc-2", spend=self.spend),), 1, 1, 1
             )
 
-        def material_day(self, **_kwargs):
+        def creative_day(self, **_kwargs):
             return RawReportPage((), 1, 0, 0)
 
     reader = Reader()
@@ -225,7 +225,7 @@ def test_closeout_publishes_success_and_daily_refresh_can_replace_it(
         )
     with factory() as session, session.begin():
         plan = session.get(AdSyncBc, (seed.tenant_id, "bc-a"))
-        for kind in ("ad_day", "material_day"):
+        for kind in ("ad_day", "creative_day"):
             state = session.get(ReportSyncState, (seed.tenant_id, "acc-2", kind, day))
             assert state.status == "COMPLETE" and state.last_success_at > midnight
         assert planner.plan_day_closeout(session, plan, now=now) == 0

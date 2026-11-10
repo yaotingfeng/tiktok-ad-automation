@@ -1,6 +1,6 @@
 """系列小时报只在用户打开小时趋势时按需拉取，热刷新不再定时拉。"""
 
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, datetime, timedelta
 
 from sqlmodel import select
 
@@ -9,9 +9,9 @@ from app.modules.reporting.planner import ensure_bc_plans
 from app.modules.reporting.store_models import ReportSyncJob, ReportSyncState
 from app.modules.reporting.trend import build_trend
 
-# UTC 10-13 04:00 = 香港 10-13 12:00；acc-1 香港时区，本地今天 10-13。
-NOW = datetime(2026, 10, 13, 4, tzinfo=UTC)
-TODAY = date(2026, 10, 13)
+# 固定当天UTC上午，香港当地日一致；避免历史日期跨过小时趋势保留期。
+NOW = datetime.now(UTC).replace(hour=4, minute=0, second=0, microsecond=0)
+TODAY = NOW.date()
 
 
 def _hour_trend(session, seed, day, *, now=NOW):

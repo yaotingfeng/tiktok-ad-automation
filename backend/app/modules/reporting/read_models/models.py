@@ -63,6 +63,27 @@ class ReadBucketState(SQLModel, table=True):
             ],
         ),
         Index(
+            "ix_creative_material_dirty",
+            "observed_at",
+            "tenant_id",
+            "advertiser_id",
+            "bucket",
+            postgresql_where=text(
+                "source_revision > derived_revision AND kind='creative_material'"
+            ),
+        ),
+        Index(
+            "ix_read_bucket_active_dirty",
+            "observed_at",
+            "tenant_id",
+            "advertiser_id",
+            "kind",
+            "bucket",
+            postgresql_where=text(
+                "source_revision > derived_revision AND kind IN ('ad_day','creative_material')"
+            ),
+        ),
+        Index(
             "ix_read_bucket_dirty",
             "observed_at",
             "tenant_id",
@@ -340,6 +361,7 @@ class CreativeMaterialEntityDay(_ReadDay, table=True):
 
     __tablename__ = "creative_material_entity_day"
     __table_args__ = (
+        Index("ix_creative_material_period", "tenant_id", "stat_date", "advertiser_id"),
         account_reference(),
         Index(
             "ix_creative_material_page",

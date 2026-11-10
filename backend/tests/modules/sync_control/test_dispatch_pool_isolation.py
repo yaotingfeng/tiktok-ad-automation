@@ -17,7 +17,7 @@ from tests.modules.reporting.test_jobs import _route
 from tests.modules.sync_control.test_schedule_fencing import _directory
 
 
-@pytest.mark.parametrize("kind", ["material_day", "material_links"])
+@pytest.mark.parametrize("kind", ["ad_day", "creative_day"])
 def test_background_fairness_rejection_falls_through_to_live_report(
     session, sync_seed, redis_client, kind
 ):
@@ -84,7 +84,7 @@ def test_background_fairness_rejection_falls_through_to_live_report(
     assert live.execution_pool == "live-report" and live.claim_token is not None
     assert background_lease_count(session, now=now) == 1
     assert pool.fairness_state == {"directory": 100}
-    if kind == "material_day":
+    if kind == "creative_day":
         # 未获得后台轮次不是无需求；原历史份额不能因实时借用被清零。
         assert cursor.fairness_state[endpoint]["history"] == 100
         pool.fairness_state = {"facts": 100, "directory": -100}

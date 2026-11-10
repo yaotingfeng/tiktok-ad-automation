@@ -17,14 +17,14 @@ from app.modules.reporting.publish import (
     publish_account_reconciliation,
     publish_ad_day,
     publish_campaign_hour,
-    publish_material_day,
+    publish_creative_day,
 )
 from app.modules.reporting.store_models import (
     AccountReconciliationDay,
     AdReportDay,
     CampaignReportDay,
     CampaignReportHour,
-    MaterialReportDay,
+    CreativeReportDay,
     ReportSyncState,
 )
 from tests.modules.reporting.sync_conftest import ad_row
@@ -203,32 +203,36 @@ def material_row(day=D, spend="20", adv="acc-1"):
     return {
         "dimensions": {
             "stat_time_day": str(day),
-            "main_material_id": "m1",
-            "main_material_type": "VIDEO",
+            "ad_id": "m1",
         },
-        "metrics": {"spend": spend, "advertiser_id": adv},
+        "metrics": {
+            "spend": spend,
+            "advertiser_id": adv,
+            "campaign_id": "c1",
+            "adgroup_id": "g1",
+        },
     }
 
 
 @pytest.mark.parametrize("rows", [[], [material_row(spend="1")]])
 def test_material_watermark_keeps_new_facts_and_state(session, sync_seed, rows):
     tenant = sync_seed.tenant_id
-    publish_material_day(session, **args(tenant), rows=[material_row()])
-    before = state_values(session, tenant, "material_day")
+    publish_creative_day(session, **args(tenant), rows=[material_row()])
+    before = state_values(session, tenant, "creative_day")
     assert (
-        publish_material_day(session, **args(tenant), requested_at=OLD, rows=rows) == 0
+        publish_creative_day(session, **args(tenant), requested_at=OLD, rows=rows) == 0
     )
     session.expire_all()
-    assert session.get(MaterialReportDay, (tenant, "acc-1", D, "m1")).spend == Decimal(
+    assert session.get(CreativeReportDay, (tenant, "acc-1", D, "m1")).spend == Decimal(
         "20"
     )
-    assert state_values(session, tenant, "material_day") == before
+    assert state_values(session, tenant, "creative_day") == before
     assert (
-        publish_material_day(session, **args(tenant), rows=[material_row(spend="2")])
+        publish_creative_day(session, **args(tenant), rows=[material_row(spend="2")])
         == 1
     )
     session.expire_all()
-    assert session.get(MaterialReportDay, (tenant, "acc-1", D, "m1")).spend == Decimal(
+    assert session.get(CreativeReportDay, (tenant, "acc-1", D, "m1")).spend == Decimal(
         "2"
     )
 
@@ -286,7 +290,7 @@ def test_hourly_old_empty_response_preserves_each_accounts_local_day(
 @pytest.mark.parametrize(
     "publisher,row",
     [
-        (publish_material_day, material_row(D + timedelta(days=1))),
+        (publish_creative_day, material_row(D + timedelta(days=1))),
         (
             publish_account_reconciliation,
             {"dimensions": {"stat_time_day": "2026-10-06"}},
@@ -357,7 +361,7 @@ def test_old_failure_preserves_new_success_but_marks_missing_day_failed(
 @pytest.mark.parametrize(
     "publisher,model,kind",
     [
-        (publish_material_day, MaterialReportDay, "material_day"),
+        (publish_creative_day, CreativeReportDay, "creative_day"),
         (publish_account_reconciliation, AccountReconciliationDay, "account_day"),
     ],
 )
@@ -408,7 +412,7 @@ def test_simple_old_window_fills_missing_dates_and_accounts_only(
     "publisher,kind",
     [
         (publish_ad_day, "ad_day"),
-        (publish_material_day, "material_day"),
+        (publish_creative_day, "creative_day"),
         (publish_account_reconciliation, "account_day"),
     ],
 )

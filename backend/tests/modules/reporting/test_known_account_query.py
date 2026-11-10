@@ -7,7 +7,7 @@ from sqlalchemy import event, insert, text
 
 from app.modules.accounts.models import AdvertiserAccount
 from app.modules.reporting import planner
-from app.modules.reporting.store_models import AdReportDay, AdSyncBc, MaterialReportDay
+from app.modules.reporting.store_models import AdReportDay, AdSyncBc, CreativeReportDay
 
 
 def test_known_accounts_probe_one_fact_per_account(session, sync_seed):
@@ -35,7 +35,7 @@ def test_known_accounts_probe_one_fact_per_account(session, sync_seed):
         "sync_job_id": uuid4(),
         "spend": 0,
     }
-    for model in (AdReportDay, MaterialReportDay):
+    for model in (AdReportDay, CreativeReportDay):
         # 奇数账户仅有素材事实；偶数两表都有，仍只需找到第一条广告事实。
         rows = []
         for index, account in enumerate(accounts):
@@ -46,7 +46,11 @@ def test_known_accounts_probe_one_fact_per_account(session, sync_seed):
                 fields = (
                     {"ad_id": identity, "adgroup_id": "g", "campaign_id": "c"}
                     if model is AdReportDay
-                    else {"main_material_id": identity, "main_material_type": "VIDEO"}
+                    else {
+                        "creative_id": identity,
+                        "campaign_id": "c",
+                        "adgroup_id": "g",
+                    }
                 )
                 rows.append(common | {"advertiser_id": account} | fields)
         session.execute(insert(model), rows)
@@ -55,7 +59,7 @@ def test_known_accounts_probe_one_fact_per_account(session, sync_seed):
     queries = []
 
     def capture(_conn, _cursor, sql, params, _context, _many):
-        if "FROM ad_report_day r" in sql and "FROM material_report_day r" in sql:
+        if "FROM ad_report_day r" in sql and "FROM creative_report_day r" in sql:
             queries.append((sql, params))
 
     connection = session.connection()
@@ -75,7 +79,7 @@ def test_known_accounts_probe_one_fact_per_account(session, sync_seed):
     def fact_rows(node):
         count = 0
         if node.get("Relation Name", "").startswith(
-            ("ad_report_day", "material_report_day")
+            ("ad_report_day", "creative_report_day")
         ):
             count = (
                 node.get("Actual Rows", 0) + node.get("Rows Removed by Filter", 0)

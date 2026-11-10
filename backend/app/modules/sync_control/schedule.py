@@ -279,3 +279,38 @@ def pending_execution_dues(
         .group_by(col(SyncExecutionScope.scope_id), col(SyncRequirement.source))
     ).all()
     return {(scope_id, work_class): due for scope_id, work_class, due in rows}
+
+
+def check_report_grant(session: Session, job: ReportSyncJob, token: UUID) -> None:
+    """网关打开失败亦不可清除已被后继执行替换的调度租约。"""
+    from app.modules.sync_control.executions import ExecutionLost
+
+    heads = session.exec(
+        select(SyncSchedule)
+        .join(
+            SyncExecutionScope,
+            col(SyncExecutionScope.scope_id) == col(SyncSchedule.scope_id),
+        )
+        .join(
+            SyncRequirement,
+            col(SyncRequirement.id) == col(SyncExecutionScope.requirement_id),
+        )
+        .where(
+            SyncExecutionScope.report_job_id == job.id,
+            SyncSchedule.tenant_id == job.tenant_id,
+            SyncSchedule.work_class == SyncRequirement.source,
+        )
+        .order_by(col(SyncSchedule.scope_id), col(SyncSchedule.work_class))
+        .with_for_update(of=SyncSchedule)
+        .execution_options(populate_existing=True)
+    ).all()
+    now = datetime.now(UTC)
+    if not heads or any(
+        head.lease_token != token
+        or head.lease_execution_id != job.id
+        or head.lease_execution_generation != job.claim_generation
+        or head.leased_until is None
+        or head.leased_until <= now
+        for head in heads
+    ):
+        raise ExecutionLost()

@@ -130,50 +130,6 @@ def test_page_info_validation_and_empty_object():
         )
 
 
-def test_material_day_single_account():
-    reader, rec = _reader(PAGE)
-    reader.material_day(
-        advertiser_id="a", start=date(2026, 10, 5), end=date(2026, 10, 5), page=1
-    )
-    op, adv, args = rec.calls[0]
-    assert op == "reports.material_breakdown" and args["dimensions"] == [
-        "main_material_id",
-        "stat_time_day",
-    ]
-    assert args["page_size"] == 100
-    # 平台随行返回素材名称，请求 metrics 中带上它会被 40002 拒绝。
-    assert "main_material_name" not in args["metrics"]
-    assert "spend" in args["metrics"]
-
-
-def test_material_ad_links_reads_lifetime_ad_by_material():
-    reader, rec = _reader(PAGE)
-    reader.material_ad_links(advertiser_id="a", page=1)
-    op, adv, args = rec.calls[0]
-    # 概览按“广告 × 主素材”查全量历史，只为拿到广告内素材 ID 做对照。
-    assert op == "reports.material_overview" and adv == "a"
-    assert args["dimensions"] == ["smart_plus_ad_id", "main_material_id"]
-    assert args["query_lifetime"] is True and "start_date" not in args
-    assert "ad_material_id" in args["metrics"]
-
-
-def test_material_ad_posts_filters_breakdown_by_ad():
-    reader, rec = _reader(PAGE)
-    reader.material_ad_posts(
-        advertiser_id="a",
-        ad_ids=("ad-9",),
-        start=date(2026, 10, 1),
-        end=date(2026, 10, 13),
-        page=1,
-    )
-    op, adv, args = rec.calls[0]
-    # 按广告筛选的拆分报表用于定位概览已不再列出的旧帖子。
-    assert op == "reports.material_breakdown" and adv == "a"
-    assert args["dimensions"] == ["main_material_id"]
-    assert args["filtering"] == {"smart_plus_ad_ids": ["ad-9"]}
-    assert (args["start_date"], args["end_date"]) == ("2026-10-01", "2026-10-13")
-
-
 @pytest.mark.parametrize(
     "kind", ["ad", "bc", "utc", "material", "overview", "material_by_ad"]
 )
@@ -519,20 +475,6 @@ def test_batch_permission_check_runs_once_after_admission(monkeypatch):
     assert events == ["admission", "permissions", "http"]
 
 
-def test_material_overview_filters_exact_advertiser_ad_ids():
-    reader, rec = _reader(PAGE)
-    reader.material_ad_links(advertiser_id="a", page=1, ad_ids=("ad-1", "ad-2"))
-    assert rec.calls[0][2]["filtering"] == {"smart_plus_ad_ids": ["ad-1", "ad-2"]}
-
-
-@pytest.mark.parametrize("ids", [("ad-1", "ad-1"), tuple(map(str, range(201)))])
-def test_material_overview_rejects_invalid_ad_filter_before_send(ids):
-    reader, rec = _reader(PAGE)
-    with pytest.raises(DomainError, match="筛选"):
-        reader.material_ad_links(advertiser_id="a", page=1, ad_ids=ids)
-    assert rec.calls == []
-
-
 @pytest.mark.parametrize("gateway_case", ["OFFICIAL_API"], indirect=True)
 @pytest.mark.parametrize("workload", ["live", "background"])
 def test_report_service_class_reaches_each_physical_sdk_call(
@@ -622,8 +564,14 @@ def test_physical_report_aliases_share_quota_other_endpoints_remain_available(
                 page=1,
             )
         assert caught.value.admission_source == "local"
-        reader.material_ad_links(advertiser_id=advertiser, page=1)
-    assert len(gateway_wire["sdk_calls"]) == 2
+        with pytest.raises(AccountAdmissionDeferred):
+            reader.creative_day(
+                advertiser_ids=(advertiser,),
+                start=date(2026, 10, 5),
+                end=date(2026, 10, 5),
+                page=1,
+            )
+    assert len(gateway_wire["sdk_calls"]) == 1
 
 
 def test_api_read_policy_override_cannot_raise_mcp_policy(monkeypatch):
@@ -665,166 +613,3 @@ def test_api_read_policy_override_cannot_raise_mcp_policy(monkeypatch):
         ).endpoint_calls_per_window
         == 3
     )
-
-
-def test_non_spark_asset_identity_reads_exact_material_ids():
-    body = {
-        "list": [{"material_id": "mid", "video_id": "vid"}],
-        "page_info": {"page": 1, "page_size": 100, "total_page": 1, "total_number": 1},
-    }
-    reader, rec = _reader(body)
-    result = reader.material_videos(advertiser_id="a", material_ids=("mid",))
-    assert result.rows == ({"material_id": "mid", "video_id": "vid"},)
-    assert rec.calls == [
-        (
-            "materials.search_videos",
-            "a",
-            {
-                "advertiser_id": "a",
-                "filtering": {"material_ids": ["mid"]},
-                "page": 1,
-                "page_size": 100,
-            },
-        )
-    ]
-
-
-@pytest.mark.parametrize(
-    "rows",
-    [
-        [{"material_id": "other", "video_id": "vid"}],
-        [{"material_id": "mid", "video_id": "vid", "advertiser_id": "other-account"}],
-        [{"material_id": "mid", "video_id": ""}],
-        [
-            {"material_id": "mid", "video_id": "v1"},
-            {"material_id": "mid", "video_id": "v2"},
-        ],
-    ],
-)
-def test_asset_identity_rejects_foreign_or_ambiguous_pairs(rows):
-    body = {
-        "list": rows,
-        "page_info": {
-            "page": 1,
-            "page_size": 100,
-            "total_page": 1,
-            "total_number": len(rows),
-        },
-    }
-    reader, _ = _reader(body)
-    with pytest.raises(DomainError):
-        reader.material_videos(advertiser_id="a", material_ids=("mid",))
-
-
-def test_asset_identity_uses_official_sdk_scoped_physical_request(monkeypatch):
-    from contextlib import contextmanager
-    from datetime import UTC, datetime, timedelta
-
-    from urllib3.response import HTTPResponse
-
-    from app.integrations.tiktok.gateway import _sdk_report_send
-    from app.integrations.tiktok.sdk import official_client
-
-    calls, admissions = [], []
-
-    def wire(_pool, method, url, **kwargs):
-        calls.append((method, url, dict(kwargs["fields"])))
-        return HTTPResponse(
-            body=json.dumps(
-                {
-                    "code": 0,
-                    "data": {
-                        "list": [{"material_id": "mid", "video_id": "vid"}],
-                        "page_info": {
-                            "page": 1,
-                            "page_size": 100,
-                            "total_page": 1,
-                            "total_number": 1,
-                        },
-                    },
-                }
-            ).encode(),
-            status=200,
-        )
-
-    @contextmanager
-    def scope(adv, op, _deadline):
-        admissions.append((adv, op))
-        yield
-
-    monkeypatch.setattr("urllib3.PoolManager.request", wire)
-    with official_client(access_token="synthetic-test") as client:
-        reader = SdkReportReader(
-            send=_sdk_report_send(
-                client, scope, datetime.now(UTC) + timedelta(seconds=30)
-            )
-        )
-        assert (
-            reader.material_videos(advertiser_id="a", material_ids=("mid",)).rows[0][
-                "video_id"
-            ]
-            == "vid"
-        )
-        assert reader.request_count == 1
-    assert admissions == [("a", "materials.search_videos")]
-    method, url, fields = calls[0]
-    assert method == "GET" and url.endswith("/file/video/ad/search/")
-    assert fields["advertiser_id"] == "a"
-    assert json.loads(fields["filtering"]) == {"material_ids": ["mid"]}
-
-
-@pytest.mark.parametrize("gateway_case", ["OFFICIAL_API"], indirect=True)
-@pytest.mark.parametrize("kind", ["post", "asset"])
-def test_content_identity_reads_enforce_real_frozen_account_scope(
-    database_engine, redis_client, gateway_case, gateway_wire, kind
-):
-    from datetime import UTC, datetime, timedelta
-
-    from app.integrations.tiktok.gateway import open_tiktok_gateway
-
-    context, route, advertiser = gateway_case
-    content = {"signature": "a" * 32, "size": 123}
-    if kind == "post":
-        body = {
-            "video_detail": {
-                "item_id": "post",
-                "item_type": "VIDEO",
-                "video_info": content,
-            }
-        }
-        method = "spark_video_content"
-        args = {
-            "item_id": "post",
-            "identity_type": "BC_AUTH_TT",
-            "identity_id": "identity",
-            "identity_authorized_bc_id": route.bc_id,
-        }
-    else:
-        body = {"list": [{"video_id": "vid", **content}]}
-        method, args = "material_video_content", {"video_ids": ("vid",)}
-    gateway_wire["sdk_data"]["data"] = body
-    with open_tiktok_gateway(
-        database_engine=database_engine,
-        redis_client=redis_client,
-        context=context,
-        route=route,
-        workload="background",
-        task_deadline=datetime.now(UTC) + timedelta(seconds=30),
-    ) as client:
-        read = getattr(client.report_reader, method)
-        assert read(advertiser_id=advertiser, **args)
-        assert len(gateway_wire["sdk_calls"]) == 1
-        with pytest.raises(DomainError):
-            read(advertiser_id="outside-frozen-account", **args)
-        assert len(gateway_wire["sdk_calls"]) == 1
-
-
-@pytest.mark.parametrize("count", [0, 21])
-def test_material_search_enforces_twenty_mid_provider_limit(count):
-    reader, rec = _reader({})
-    with pytest.raises(DomainError) as caught:
-        reader.material_videos(
-            advertiser_id="a", material_ids=tuple(str(i) for i in range(count))
-        )
-    assert caught.value.code == "report_query_invalid"
-    assert rec.calls == []

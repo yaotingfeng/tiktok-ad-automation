@@ -15,7 +15,7 @@ WITH active AS (
 )
 SELECT a.advertiser_id,a.timezone,a.local_day,k.kind report_kind,
   s.last_success_at,previous.last_success_at previous_success_at
-FROM active a CROSS JOIN (VALUES ('ad_day'),('material_day')) k(kind)
+FROM active a CROSS JOIN (VALUES ('ad_day'),('creative_day')) k(kind)
 LEFT JOIN report_sync_state s ON s.tenant_id=:t AND s.advertiser_id=a.advertiser_id
   AND s.stat_date=a.local_day AND s.report_kind=k.kind
 LEFT JOIN report_sync_state previous ON previous.tenant_id=:t
@@ -61,7 +61,7 @@ def test_health_states_use_one_bounded_probe_per_account(session, sync_seed):
           CASE WHEN i%13=0 THEN NULL ELSE CAST(:now AS timestamptz)-interval '1 minute'*(i%40) END,
           :now
         FROM generate_series(0,999) i CROSS JOIN generate_series(-1,40) d
-        CROSS JOIN (VALUES ('ad_day'),('material_day')) k(kind)
+        CROSS JOIN (VALUES ('ad_day'),('creative_day')) k(kind)
         WHERE (i+d)%17<>0
         """),
         {"tenant": sync_seed.tenant_id, "now": now},

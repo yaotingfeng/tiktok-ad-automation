@@ -5,14 +5,12 @@ from uuid import uuid4
 
 import pytest
 from sqlalchemy import text
-from sqlmodel import select
 
 from app.modules.reporting import health, planner
 from app.modules.reporting.store_models import (
     AdSyncBc,
-    MaterialReportDay,
+    CreativeReportDay,
     ReportSyncHealth,
-    ReportSyncJob,
     ReportSyncState,
 )
 
@@ -24,12 +22,13 @@ def _case(session, seed):
     plan.active_screened_at = now
     plan.last_active_advertiser_ids = ["acc-2"]
     session.add(
-        MaterialReportDay(
+        CreativeReportDay(
             tenant_id=seed.tenant_id,
             advertiser_id="acc-2",
             stat_date=now.date(),
-            main_material_id="post",
-            main_material_type="VIDEO",
+            creative_id="post",
+            campaign_id="c1",
+            adgroup_id="g1",
             currency="USD",
             timezone="UTC",
             fetched_at=now,
@@ -37,7 +36,7 @@ def _case(session, seed):
             spend=1,
         )
     )
-    for kind in ("ad_day", "material_day"):
+    for kind in ("ad_day", "creative_day"):
         session.add(
             ReportSyncState(
                 tenant_id=seed.tenant_id,
@@ -51,62 +50,6 @@ def _case(session, seed):
         )
     session.flush()
     return now, plan
-
-
-@pytest.mark.parametrize(
-    "existing", ["covered", "different_route", "different_window", "none"]
-)
-def test_health_only_creates_missing_link_work(
-    session, sync_seed, monkeypatch, existing
-):
-    now, plan = _case(session, sync_seed)
-    if existing != "none":
-        route = plan.frozen_route | (
-            {"binding_revision": 99} if existing == "different_route" else {}
-        )
-        day = now.date() - timedelta(days=int(existing == "different_window"))
-        job = ReportSyncJob(
-            tenant_id=plan.tenant_id,
-            bc_id=plan.bc_id,
-            actor_id=plan.actor_id,
-            frozen_route=route,
-            advertiser_ids=["acc-2"],
-            kind="material_links",
-            priority=2,
-            status="WAITING",
-            start_date=day,
-            end_date=day,
-            due_at=now + timedelta(hours=1),
-            job_key=f"health-repair:{uuid4()}",
-            error_code="material_identity_unavailable",
-            progress={"waiting_ids": ["post"], "dependency_signature": "unchanged"},
-        )
-        session.add(job)
-        session.flush()
-    from app.modules.reporting import material_links
-
-    def unexpected(*_args, **_kwargs):
-        raise AssertionError("health repeated existing dependency scan")
-
-    monkeypatch.setattr(material_links, "dependency_changed", unexpected)
-    row = health.observe_health(session, plan, now=now)
-    assert row.metrics["unlinked_material_posts"] == 1
-    jobs = session.exec(
-        select(ReportSyncJob).where(ReportSyncJob.tenant_id == plan.tenant_id)
-    ).all()
-    if existing == "covered":
-        assert len(jobs) == 1 and job.due_at == now + timedelta(hours=1)
-        assert (
-            job.error_code == "material_identity_unavailable"
-            and job.progress["dependency_signature"] == "unchanged"
-        )
-    else:
-        assert len(jobs) == (1 if existing == "none" else 2)
-        assert any(
-            j.frozen_route == plan.frozen_route
-            and j.start_date == j.end_date == now.date()
-            for j in jobs
-        )
 
 
 def test_repair_budget_preserves_measurement_and_rolls_back_slow_repair(
@@ -124,7 +67,7 @@ def test_repair_budget_preserves_measurement_and_rolls_back_slow_repair(
     monkeypatch.setattr(health, "plan_hot", slow)
     row = health.observe_health(session, plan, now=now)
     assert not completed
-    assert row.metrics["unlinked_material_posts"] == 1 and row.observed_at == now
+    assert row.metrics["unmapped_creatives"] == 1 and row.observed_at == now
     assert row.last_repair_at is None
     assert session.execute(text("SELECT 1")).scalar_one() == 1
 
@@ -166,7 +109,7 @@ def test_unknown_candidate_timeout_preserves_freshness_and_previous_coverage(
                 "coverage_completed_at": coverage_at,
                 "coverage_scope": "scope",
                 "missing_directory_ads": 9,
-                "unlinked_material_posts": 8,
+                "unmapped_creatives": 8,
             },
         )
     )
@@ -197,7 +140,7 @@ def test_unknown_candidate_timeout_preserves_freshness_and_previous_coverage(
         row.metrics["stale_ad_accounts"] == row.metrics["stale_material_accounts"] == 0
     )
     assert row.metrics["missing_directory_ads"] == 9
-    assert row.metrics["unlinked_material_posts"] == 8
+    assert row.metrics["unmapped_creatives"] == 8
     assert row.metrics["coverage_status"] == "COMPLETE"
     assert row.metrics["coverage_observed_at"] == coverage_at
     assert row.status == "DEGRADED" and "ACCOUNT_SCREEN_STALE" in row.issues
@@ -234,9 +177,9 @@ def test_coverage_repair_does_not_repeat_unknown_account_selection(
         phase="coverage",
         scope="scope",
         measurement=(
-            {"missing_directory_ads": 0, "unlinked_material_posts": 0},
+            {"missing_directory_ads": 0, "unmapped_creatives": 0},
             [],
-            {"ad": set(), "material": set(), "links": set()},
+            {"ad": set(), "material": set(), "directory": set()},
         ),
     )
     assert "ACCOUNT_SCREEN_STALE" in row.issues

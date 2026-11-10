@@ -14,8 +14,8 @@ from tests.modules.reporting.test_directory_publish_recovery import _terminal
 
 def test_only_local_publish_task_has_extended_deadline():
     assert (tasks.publish_step.soft_time_limit, tasks.publish_step.time_limit) == (
-        195,
-        210,
+        660,
+        690,
     )
     for task in (tasks.sync_step, tasks.targeted_step):
         assert (task.soft_time_limit, task.time_limit) == (55, 60)
@@ -40,7 +40,12 @@ def test_publish_session_budget_preserves_statement_lock_and_lease_bounds():
             "idle_in_transaction_session_timeout": "10s",
         }
     # 本地发布租约独立于远端读取；事务、软限都在专用租约内。
-    assert 180 < tasks.publish_step.soft_time_limit < tasks._PUBLISH_LEASE_SECONDS
+    assert 180 < tasks._PUBLISH_LEASE_SECONDS
+    assert (
+        tasks._LARGE_PUBLISH_TRANSACTION_SECONDS
+        < tasks.publish_step.soft_time_limit
+        < tasks._LARGE_PUBLISH_LEASE_SECONDS
+    )
     assert tasks._LEASE_SECONDS == 90
 
 

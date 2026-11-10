@@ -73,7 +73,6 @@ def test_real_full_timeouts_do_not_regrow_into_repeated_dense_batches_or_next_cy
         assert second["metrics"] == {} and second["repairs"] == {
             "ad": [],
             "material": [],
-            "links": [],
             "directory": [],
         }
         assert all(stage["offset"] == 0 for stage in second["stages"].values())

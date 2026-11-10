@@ -16,7 +16,7 @@ def test_projection_drains_more_than_twenty_five_small_buckets(committed_sync_se
                 ReadBucketState(
                     tenant_id=seed.tenant_id,
                     advertiser_id="acc-1",
-                    kind="material_day",
+                    kind="creative_material",
                     bucket=date(2026, 8, 1) + timedelta(days=i),
                     source_revision=1,
                     derived_revision=0,
@@ -46,7 +46,7 @@ def test_projection_yields_on_time_and_keeps_committed_prefix(
                 ReadBucketState(
                     tenant_id=seed.tenant_id,
                     advertiser_id="acc-1",
-                    kind="material_day",
+                    kind="creative_material",
                     bucket=date(2026, 8, 1) + timedelta(days=i),
                     source_revision=1,
                     derived_revision=0,

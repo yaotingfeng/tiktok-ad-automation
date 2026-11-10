@@ -172,7 +172,7 @@ def test_full_measurement_keeps_real_stale_fact_repair_separate(
 
     monkeypatch.setattr(settings, "ADS_SYNC_ENABLED", True)
     now, plan, original = _case(session, sync_seed)
-    for kind in ("ad_day", "material_day"):
+    for kind in ("ad_day", "creative_day"):
         state = session.get(
             ReportSyncState, (plan.tenant_id, "acc-2", kind, now.date())
         )
@@ -194,11 +194,12 @@ def test_full_measurement_keeps_real_stale_fact_repair_separate(
         session, plan, now=now, measurement=(metrics, issues, repairs)
     )
     jobs = [j for j in session.exec(select(ReportSyncJob)).all() if j.id != original.id]
-    assert len(jobs) == 1 and jobs[0].kind == "ad_day"
+    assert {job.kind for job in jobs} == {"ad_day", "creative_day"}
+    assert all(job.advertiser_ids == ["acc-2"] for job in jobs)
     assert len(session.exec(select(AdDirectoryRun)).all()) == 3
 
 
-def test_old_coverage_redis_ad_set_continues_as_directory_only(
+def test_coverage_redis_checkpoint_continues_as_directory_only(
     committed_sync_seed, redis_client, monkeypatch
 ):
     import json
@@ -214,8 +215,8 @@ def test_old_coverage_redis_ad_set_continues_as_directory_only(
             session, plan, health.owned_accounts(session, plan), now=now
         )
         progress = health._new_coverage_progress(scope)
-        progress["repairs"] = {"ad": ["acc-2"], "material": [], "links": []}
-        progress["metrics"] = {"missing_directory_ads": 1, "unlinked_material_posts": 0}
+        progress["repairs"] = {"ad": [], "material": [], "directory": ["acc-2"]}
+        progress["metrics"] = {"missing_directory_ads": 1, "unmapped_creatives": 0}
         progress["issues"] = ["missing_directory_ads"]
         progress["offset"] = 2
         for part in progress["stages"].values():
@@ -264,7 +265,7 @@ def test_unknown_type_waits_for_normal_report_discovery_without_refresh_loop(
         planner.plan_hot(
             session, plan, active=sorted(known), now=now + timedelta(minutes=15)
         )
-        == 1
+        == 2
     )
     # 下一普通轮获得类型事实后可直接补目录，不需要健康再造日报。
     fact.campaign_automation_type = "UPGRADED_SMART_PLUS"
@@ -274,7 +275,7 @@ def test_unknown_type_waits_for_normal_report_discovery_without_refresh_loop(
     health.observe_health(
         session, plan, now=now, measurement=measurement, phase="coverage"
     )
-    assert len(session.exec(select(ReportSyncJob)).all()) == 2
+    assert len(session.exec(select(ReportSyncJob)).all()) == 3
     assert len(session.exec(select(AdDirectoryRun)).all()) == 3
 
 
@@ -337,81 +338,6 @@ def test_partial_id_chunk_commits_and_resumes_after_real_sql_cancel(
         assert [j.id for j in session.exec(select(ReportSyncJob)).all()] == [
             original_id
         ]
-
-
-def test_later_regular_lane_cancel_cannot_erase_directory_and_gets_full_next_turn(
-    committed_sync_seed, monkeypatch
-):
-    from uuid import uuid4
-
-    from sqlalchemy import event, text
-
-    from app.modules.reporting.store_models import MaterialReportDay, ReportSyncHealth
-
-    monkeypatch.setattr(settings, "ADS_SYNC_ENABLED", True)
-    seed, factory = committed_sync_seed
-    with factory() as session, session.begin():
-        now, plan, original = _case(session, seed)
-        original_id = original.id
-        session.add(
-            MaterialReportDay(
-                tenant_id=seed.tenant_id,
-                advertiser_id="acc-2",
-                stat_date=now.date(),
-                main_material_id="missing-video",
-                main_material_type="VIDEO",
-                currency="USD",
-                timezone="UTC",
-                fetched_at=now,
-                sync_job_id=uuid4(),
-                spend=1,
-            )
-        )
-        session.flush()
-        measurement = health.measure_coverage(session, plan, now=now)
-        assert measurement[2]["links"] == {"acc-2"}
-    for attempt in (1, 2):
-        slept = False
-        with factory() as session, session.begin():
-            plan = session.get(AdSyncBc, (seed.tenant_id, "bc-a"))
-            conn = session.connection()
-
-            def delay(
-                conn, _cursor, statement, _params, _context, _many, attempt=attempt
-            ):
-                nonlocal slept
-                if not slept and statement.startswith("INSERT INTO report_sync_job "):
-                    slept = True
-                    conn.execute(
-                        text(
-                            "SELECT pg_sleep(3)"
-                            if attempt == 1
-                            else "SELECT pg_sleep(1.1)"
-                        )
-                    )
-
-            event.listen(conn, "before_cursor_execute", delay)
-            try:
-                health.observe_health(
-                    session, plan, now=now, measurement=measurement, phase="coverage"
-                )
-            finally:
-                event.remove(conn, "before_cursor_execute", delay)
-        with factory() as session:
-            assert len(session.exec(select(AdDirectoryRun)).all()) == 3
-            new = [
-                j
-                for j in session.exec(select(ReportSyncJob)).all()
-                if j.id != original_id
-            ]
-            if attempt == 1:
-                assert not new
-                state = session.get(ReportSyncHealth, (seed.tenant_id, "bc-a")).metrics[
-                    health._DIRECTORY_REPAIR_KEY
-                ]
-                assert state["after"] == "acc-2" and state["next"] == "regular"
-            else:
-                assert len(new) == 1 and new[0].kind == "material_links"
 
 
 def _directory_accounts(session, seed, now, *, count, known):
@@ -562,7 +488,7 @@ def test_directory_success_cannot_delay_real_freshness_repair(
         ReportSyncState(
             tenant_id=plan.tenant_id,
             advertiser_id="acc-2",
-            report_kind="material_day",
+            report_kind="creative_day",
             stat_date=now.date(),
             status="COMPLETE",
             last_success_at=now,
@@ -587,7 +513,8 @@ def test_directory_success_cannot_delay_real_freshness_repair(
         phase="freshness",
     )
     jobs = [j for j in session.exec(select(ReportSyncJob)).all() if j.id != original.id]
-    assert len(jobs) == 1 and jobs[0].kind == "ad_day"
+    assert {job.kind for job in jobs} == {"ad_day", "creative_day"}
+    assert all(job.advertiser_ids == ["acc-2"] for job in jobs)
 
 
 def test_health_and_report_publication_share_directory_lock(

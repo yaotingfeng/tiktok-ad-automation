@@ -9,7 +9,7 @@ from sqlalchemy import event, insert
 from app.modules.accounts.models import AdvertiserAccount
 from app.modules.reporting import planner
 from app.modules.reporting.health import measure_health
-from app.modules.reporting.store_models import AdReportDay, AdSyncBc, MaterialReportDay
+from app.modules.reporting.store_models import AdReportDay, AdSyncBc, CreativeReportDay
 
 
 @pytest.mark.parametrize("kind", ["ad", "material"])
@@ -33,7 +33,7 @@ def test_health_batches_preserve_complete_scope(
         ],
     )
     session.execute(
-        insert(AdReportDay if kind == "ad" else MaterialReportDay),
+        insert(AdReportDay if kind == "ad" else CreativeReportDay),
         [
             {
                 "tenant_id": sync_seed.tenant_id,
@@ -47,7 +47,7 @@ def test_health_batches_preserve_complete_scope(
                 **(
                     {"ad_id": "ad", "adgroup_id": "group", "campaign_id": "campaign"}
                     if kind == "ad"
-                    else {"main_material_id": "post", "main_material_type": "VIDEO"}
+                    else {"creative_id": "post", "campaign_id": "c", "adgroup_id": "g"}
                 ),
             }
             for account in accounts
@@ -58,7 +58,7 @@ def test_health_batches_preserve_complete_scope(
     target = (
         "SELECT r.advertiser_id,r.ad_id,r.adgroup_id,r.campaign_id"
         if kind == "ad"
-        else "SELECT DISTINCT r.advertiser_id,r.main_material_id"
+        else "SELECT DISTINCT r.advertiser_id,r.creative_id"
     )
 
     def capture(_conn, _cursor, sql, params, _context, _many):
@@ -78,9 +78,10 @@ def test_health_batches_preserve_complete_scope(
                 session, plan, now=now, accounts=accounts
             )
             assert metrics[
-                "missing_directory_ads" if kind == "ad" else "unlinked_material_posts"
+                "missing_directory_ads" if kind == "ad" else "unmapped_creatives"
             ] == len(accounts)
-            assert repairs["ad" if kind == "ad" else "links"] == set(accounts)
+            assert repairs["ad"] == set(accounts)
+            assert "links" not in repairs
     finally:
         event.remove(connection, "before_cursor_execute", capture)
     assert len(queries) == (2 if fail_second_batch else 3)

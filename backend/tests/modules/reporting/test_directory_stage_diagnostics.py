@@ -1,106 +1,14 @@
-"""链接与目录子阶段旁观原返回、调用数和异常。"""
+"""目录子阶段旁观原返回、调用数和异常。"""
 
-from datetime import UTC, date, datetime
-from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
-from sqlalchemy import event
 
 from app.modules.ads.directory_requests import request_directory
-from app.modules.reporting import (
-    diagnostics,
-    material_identity,
-    material_links,
-    spark_identity,
-)
+from app.modules.reporting import diagnostics
 from tests.modules.ads.test_directory_requests import _route
 from tests.modules.reporting.test_reporting_stage_diagnostics import capture as capture
 from tests.modules.reporting.test_reporting_stage_diagnostics import records
-
-
-def test_empty_link_queries_keep_results_and_one_statement_each(
-    session, sync_seed, capture
-):
-    item = SimpleNamespace(
-        tenant_id=sync_seed.tenant_id,
-        advertiser_ids=["acc-1"],
-        start_date=date(2026, 10, 1),
-        end_date=date(2026, 10, 1),
-        progress={},
-    )
-    statements = []
-    connection = session.connection()
-
-    def observe(*_args):
-        statements.append(1)
-
-    event.listen(connection, "before_cursor_execute", observe)
-
-    @diagnostics.summarize_job
-    def step(*, job_id):
-        assert job_id is not None
-        assert not material_links.needs_material_links(
-            session,
-            tenant_id=item.tenant_id,
-            advertiser_id="acc-1",
-            start=item.start_date,
-            end=item.end_date,
-        )
-        assert not material_identity.resolve_asset_videos(session, item, object())
-        assert not spark_identity.resolve_spark_videos(session, item, object())
-        assert not material_links.wait_for_dependencies(
-            session, item, now=datetime.now(UTC)
-        )
-        return "WAITING"
-
-    try:
-        assert step(job_id=uuid4()) == "WAITING"
-    finally:
-        event.remove(connection, "before_cursor_execute", observe)
-    assert len(statements) == 4
-    (row,) = records(capture)
-    expected = {
-        "links_needs": 1,
-        "links_missing_ids": 1,
-        "links_asset_resolve": 1,
-        "links_asset_candidates": 1,
-        "links_spark_resolve": 1,
-        "links_spark_candidates": 1,
-        "links_wait_dependencies": 1,
-    }
-    assert {key: row["stages"][key]["calls"] for key in expected} == expected
-    assert not row["job_commit_confirmed"]
-
-
-def test_link_query_exception_once_and_private_message_not_logged(capture):
-    error = RuntimeError("private-token private-SQL private-route")
-    calls = []
-
-    class FailedSession:
-        def connection(self):
-            calls.append(1)
-            raise error
-
-    @diagnostics.summarize_job
-    def step(*, job_id):
-        assert job_id is not None
-        return material_links.needs_material_links(
-            FailedSession(),
-            tenant_id=uuid4(),
-            advertiser_id="private-account",
-            start=date(2026, 10, 1),
-            end=date(2026, 10, 1),
-        )
-
-    with pytest.raises(RuntimeError) as caught:
-        step(job_id=uuid4())
-    assert caught.value is error and calls == [1]
-    (row,) = records(capture)
-    assert "links_missing_ids" not in row["stages"]
-    assert row["stages"]["links_needs"]["failures"] == 1
-    assert not row["job_commit_confirmed"]
-    assert "private-" not in capture.text
 
 
 def test_directory_instrumentation_preserves_creation_and_idempotency(

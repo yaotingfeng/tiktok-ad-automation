@@ -371,7 +371,7 @@ def test_gateway_music_uses_real_route_permission_and_admission(
     assert len(calls) == 1
     keys = admission_keys(
         settings.TIKTOK_APP_ID,
-        "music.get",
+        "GET /open_api/v1.3/file/music/get/",
         context.tenant_id,
         account,
         "GET /open_api/v1.3/file/music/get/",
@@ -520,7 +520,7 @@ def test_each_music_method_shares_quota_and_denial_never_sends(
     assert len(calls) == 3
     keys = admission_keys(
         settings.TIKTOK_APP_ID,
-        "music.get",
+        "GET /open_api/v1.3/file/music/get/",
         context.tenant_id,
         account,
         "GET /open_api/v1.3/file/music/get/",

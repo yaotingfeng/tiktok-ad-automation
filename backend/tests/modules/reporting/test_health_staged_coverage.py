@@ -14,7 +14,7 @@ from app.modules.reporting import health
 from app.modules.reporting.store_models import (
     AdReportDay,
     AdSyncBc,
-    MaterialReportDay,
+    CreativeReportDay,
     ReportSyncHealth,
 )
 from tests.modules.reporting.test_health_continuation import _case
@@ -37,7 +37,7 @@ def test_material_timeout_does_not_remeasure_successful_directory(
         return original_directory(db, params)
 
     def fail_material_once(db, statement, *args, **kwargs):
-        if "WITH posts AS MATERIALIZED" in str(statement) and not failures:
+        if "SELECT DISTINCT r.advertiser_id,r.creative_id" in str(statement) and not failures:
             failures.append(True)
             with health.query_budget(db, seconds=0.05):
                 original_execute(db, text("SELECT pg_sleep(1)"))
@@ -123,8 +123,8 @@ def test_4859_accounts_complete_or_expire_including_queue_time(
         for model, fields in [
             (AdReportDay, {"ad_id": "ad", "adgroup_id": "g", "campaign_id": "c"}),
             (
-                MaterialReportDay,
-                {"main_material_id": "post", "main_material_type": "VIDEO"},
+                CreativeReportDay,
+                {"creative_id": "post", "campaign_id": "c", "adgroup_id": "g"},
             ),
         ]:
             db.execute(
@@ -181,7 +181,7 @@ def test_4859_accounts_complete_or_expire_including_queue_time(
             metrics = db.get(ReportSyncHealth, (seed.tenant_id, "bc-a")).metrics
             if expected == "COMPLETE":
                 assert metrics["missing_directory_ads"] == 4859
-                assert metrics["unlinked_material_posts"] == 4859
+                assert metrics["unmapped_creatives"] == 4859
                 assert metrics["coverage_observed_at"] == progress["at"]
                 assert invocation == 5  # 16 complete blocks/entry remains intact.
                 for stage in health.COVERAGE_STAGES:

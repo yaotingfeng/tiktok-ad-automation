@@ -273,29 +273,54 @@ def test_report_evidence_migration_round_trip_preserves_scope_and_payload(monkey
             command.upgrade(config, "head")
             with Session(engine) as session:
                 for identity, seed, bc in cases:
-                    snapshot = read_snapshot(
-                        session, context=seed.context, bc_id=bc, snapshot_id=identity
-                    )
+                    snapshot = session.get(QuerySnapshot, identity)
+                    if snapshot.filters["dimension"] == "material":
+                        # 旧素材快照保留审计证据，但新查询合同必须拒绝重用旧补链身份。
+                        with pytest.raises(HTTPException) as retired:
+                            read_snapshot(
+                                session,
+                                context=seed.context,
+                                bc_id=bc,
+                                snapshot_id=identity,
+                            )
+                        assert retired.value.status_code == 409
+                        assert retired.value.detail == "query_snapshot_contract_changed"
+                    else:
+                        snapshot = read_snapshot(
+                            session,
+                            context=seed.context,
+                            bc_id=bc,
+                            snapshot_id=identity,
+                        )
                     assert snapshot.id == identity
                     rows = session.exec(
                         select(QuerySnapshotRow).where(
                             QuerySnapshotRow.snapshot_id == identity
                         )
                     ).all()
-                    # 迁移可逆还不够：真实分页/选择/导出解析器必须立即接受旧证据。
-                    members = snapshot_members(session, snapshot=snapshot, rows=rows)
-                    for key, member in members.items():
-                        assert list(member.refs) == before_rows[identity, key]["refs"]
+                    if snapshot.filters["dimension"] == "material":
+                        with pytest.raises(HTTPException) as retired_members:
+                            snapshot_members(session, snapshot=snapshot, rows=rows)
+                        assert retired_members.value.status_code == 409
+                    else:
+                        # 迁移可逆还不够：真实分页/选择/导出解析器必须立即接受旧证据。
+                        members = snapshot_members(
+                            session, snapshot=snapshot, rows=rows
+                        )
+                        for key, member in members.items():
+                            assert (
+                                list(member.refs) == before_rows[identity, key]["refs"]
+                            )
+                            assert (
+                                list(member.material_uses)
+                                == before_rows[identity, key]["material_uses"]
+                            )
                         assert (
-                            list(member.material_uses)
-                            == before_rows[identity, key]["material_uses"]
+                            snapshot_names(
+                                session, snapshot=snapshot, rows=rows, members=members
+                            )
+                            == before_headers[identity]["naming_versions"]
                         )
-                    assert (
-                        snapshot_names(
-                            session, snapshot=snapshot, rows=rows, members=members
-                        )
-                        == before_headers[identity]["naming_versions"]
-                    )
                     with pytest.raises(HTTPException) as denied_bc:
                         read_snapshot(
                             session,

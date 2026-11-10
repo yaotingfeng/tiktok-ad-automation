@@ -67,7 +67,7 @@ def test_single_worker_slot_rotates_between_ready_physical_endpoints(
     monkeypatch.setattr(settings, "TIKTOK_CALL_POLICIES", quota_configuration("BASIC"))
     monkeypatch.setattr(settings, "TIKTOK_APP_ID", f"endpoint-turn-{uuid4()}")
     now = datetime.now(UTC)
-    for kind in ("ad_day", "material_day"):
+    for kind in ("ad_day", "creative_day"):
         for offset in range(2):
             day = date(2026, 9, 1) + timedelta(days=offset)
             enqueue_job(
@@ -105,7 +105,7 @@ def test_single_worker_slot_rotates_between_ready_physical_endpoints(
         record_report_outcome(session, claimed)
         claimed.claim_token = claimed.claimed_until = None
         session.flush()
-    assert set(kinds) == {"ad_day", "material_day"}
+    assert set(kinds) == {"ad_day", "creative_day"}
 
 
 def test_claimed_authorization_failure_retires_matching_child_generation(

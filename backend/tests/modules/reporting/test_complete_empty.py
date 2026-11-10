@@ -8,7 +8,7 @@ from app.modules.ads.models import AdMaterialReference, AdObject, CampaignNamePr
 from app.modules.reporting.publish import (
     AccountMeta,
     publish_ad_day,
-    publish_material_day,
+    publish_creative_day,
 )
 from app.modules.reporting.schemas import ReportingFilter
 from app.modules.reporting.store_models import METRIC_COLUMNS
@@ -146,7 +146,16 @@ def test_empty_directory_material_uses_own_coverage_and_unsupported_metrics(
         )
     )
     if complete:
-        publish_material_day(
+        publish_ad_day(
+            session,
+            tenant_id=sync_seed.tenant_id,
+            job_id=uuid4(),
+            accounts={"acc-1": AccountMeta("USD", "UTC")},
+            start=D,
+            end=D,
+            rows=[],
+        )
+        publish_creative_day(
             session,
             tenant_id=sync_seed.tenant_id,
             job_id=uuid4(),
@@ -160,13 +169,7 @@ def test_empty_directory_material_uses_own_coverage_and_unsupported_metrics(
     assert len(result) == 1
     vector = result[0].metric_buckets[0]
     for metric in METRIC_COLUMNS:
-        if metric in ("revenue_d3", "revenue_d30"):
-            assert (
-                vector.values[metric] is None
-                and vector.availability[metric] == "UNSUPPORTED"
-            )
-        else:
-            assert vector.values[metric] == (Decimal(0) if complete else None)
+        assert vector.values[metric] == (Decimal(0) if complete else None)
     assert vector.values["roas_d0"] is None
     assert result[0].coverage["status"] == ("COMPLETE" if complete else "MISSING")
 

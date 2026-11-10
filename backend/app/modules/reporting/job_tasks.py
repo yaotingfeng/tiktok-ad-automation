@@ -1183,6 +1183,13 @@ def _run_job_step(*, database_engine, redis_client, job_id, claim_token):
             with factory() as session:
                 current = session.get(ReportSyncJob, job_id, with_for_update=True)
                 if current is not None and current.claim_token == claim_token:
+                    from app.modules.sync_control.executions import ExecutionLost
+                    from app.modules.sync_control.schedule import check_report_grant
+
+                    try:
+                        check_report_grant(session, current, queued_token)
+                    except ExecutionLost:
+                        return "FAILED"
                     current.status = "WAITING"
                     current.error_code = "admission_deferred"
                     current.due_at = now + timedelta(
@@ -1200,6 +1207,13 @@ def _run_job_step(*, database_engine, redis_client, job_id, claim_token):
             with factory() as session:
                 current = session.get(ReportSyncJob, job_id, with_for_update=True)
                 if current is not None and current.claim_token == claim_token:
+                    from app.modules.sync_control.executions import ExecutionLost
+                    from app.modules.sync_control.schedule import check_report_grant
+
+                    try:
+                        check_report_grant(session, current, queued_token)
+                    except ExecutionLost:
+                        return "FAILED"
                     _failed(session, current, error.code)
                     with diagnostics.stage("job_commit"):
                         session.commit()

@@ -6,7 +6,7 @@ import pytest
 
 from app.integrations.tiktok.sdk import AccountAdmissionDeferred
 from app.modules.reporting.store_models import ReportSyncJob
-from tests.modules.reporting.test_material_resume import (
+from tests.modules.reporting.creative_job_helpers import (
     Pages,
     claim,
     enqueue,
@@ -31,7 +31,7 @@ def _wait(factory, job_id, expected):
             < 10
         )
         assert job.attempts == 0
-        assert job.progress["material_paging"]["observed_at"]
+        assert job.progress["basic_paging"]["observed_at"]
         return job.progress
 
 
@@ -66,8 +66,8 @@ def test_unknown_throttle_backoff_survives_claims_and_local_denial(
         assert run(factory, claim(factory, job.id), reader) == "WAITING"
         progress = _wait(factory, job.id, expected)
         assert (
-            progress["material_paging"]["observed_at"]
-            == original["material_paging"]["observed_at"]
+            progress["basic_paging"]["observed_at"]
+            == original["basic_paging"]["observed_at"]
         )
     assert facts(factory, seed.tenant_id) == []
     assert reader.calls.count(1) == 1
@@ -125,11 +125,11 @@ def test_real_sdk_shared_throttle_controls_different_jobs_due_at(
     from app.integrations.tiktok.official.accounts import OfficialReadRequests
     from app.integrations.tiktok.platform_quotas import sdk_endpoint
     from app.jobs.admission import AdmissionPolicy, admission_keys, admitted_scope
-    from tests.modules.reporting.test_material_resume import DAY
+    from tests.modules.reporting.creative_job_helpers import DAY
 
     seed, factory = committed_sync_seed
     app_scope = f"sdk-job-throttle-test-{uuid4()}"
-    endpoint = sdk_endpoint("reports.material_breakdown")
+    endpoint = sdk_endpoint("reports.integrated")
     policy = AdmissionPolicy(
         app_max_inflight=50,
         endpoint_max_inflight=50,
@@ -169,10 +169,10 @@ def test_real_sdk_shared_throttle_controls_different_jobs_due_at(
     )
 
     class Reader:
-        def material_day(self, *, advertiser_id, start, end, page):
+        def creative_day(self, *, advertiser_ids, start, end, page, campaign_ids=()):
             return requests.invoke(
-                "reports.material_breakdown",
-                advertiser_id,
+                "reports.integrated",
+                advertiser_ids[0],
                 lambda _: client.deserialize(response, "object"),
             )
 

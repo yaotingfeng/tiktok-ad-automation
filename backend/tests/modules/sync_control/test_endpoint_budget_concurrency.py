@@ -24,7 +24,7 @@ def test_idle_settlement_uses_same_endpoint_protocol(committed_sync_seed):
 
     seed, factory = committed_sync_seed
     now = datetime.now(UTC)
-    endpoint = report_endpoint("material_day")
+    endpoint = report_endpoint("creative_day")
     with factory() as db, db.begin():
         jobs = [
             enqueue_job(
@@ -32,7 +32,7 @@ def test_idle_settlement_uses_same_endpoint_protocol(committed_sync_seed):
                 tenant_id=seed.tenant_id,
                 actor_id=seed.actor_id,
                 bc_id="bc-a",
-                kind="material_day",
+                kind="creative_day",
                 tier="hot",
                 advertiser_ids=[advertiser],
                 start=now.date(),
@@ -269,7 +269,7 @@ def test_other_endpoint_can_commit_while_directory_prepares_next_claim(
             tenant_id=seed.tenant_id,
             actor_id=seed.actor_id,
             bc_id="bc-a",
-            kind="material_day",
+            kind="creative_day",
             tier="hot",
             advertiser_ids=["acc-1"],
             start=now.date(),
@@ -327,7 +327,7 @@ def test_other_endpoint_can_commit_while_directory_prepares_next_claim(
                 assert pending.result(timeout=10) == 2
         with factory() as db:
             cursor = db.get(ReportDispatchCursor, seed.tenant_id)
-            assert report_endpoint("material_day") in cursor.fairness_state
+            assert report_endpoint("creative_day") in cursor.fairness_state
             assert "GET /open_api/v1.3/smart_plus/ad/get/" in cursor.fairness_state
     finally:
         release.set()

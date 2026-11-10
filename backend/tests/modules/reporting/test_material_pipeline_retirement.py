@@ -114,3 +114,38 @@ def test_retirement_keeps_evidence_and_invalidates_only_legacy_work(session, syn
         .scalar_one()
         > 0
     )
+
+
+def test_retirement_downgrade_does_not_revive_cancelled_jobs(session, sync_seed):
+    import importlib
+    from uuid import uuid4
+
+    module = importlib.import_module(
+        "app.alembic.versions.0114_retire_material_pipeline"
+    )
+    old = ReportSyncJob(
+        tenant_id=sync_seed.tenant_id,
+        bc_id="bc-a",
+        kind="material_day",
+        priority=4,
+        advertiser_ids=["acc-1"],
+        start_date=D,
+        end_date=D,
+        frozen_route=_route(sync_seed),
+        actor_id=sync_seed.actor_id,
+        due_at=datetime.now(UTC),
+        job_key=str(uuid4()),
+    )
+    session.add(old)
+    session.flush()
+    module.retire(session.connection())
+    session.refresh(old)
+    retired = (old.status, old.claim_generation, old.finished_at)
+    from alembic.migration import MigrationContext
+    from alembic.operations import Operations
+
+    with Operations.context(MigrationContext.configure(session.connection())):
+        module.downgrade()
+    session.refresh(old)
+    assert retired == (old.status, old.claim_generation, old.finished_at)
+    assert old.status == "CANCELLED" and old.error_code == "report_kind_retired"

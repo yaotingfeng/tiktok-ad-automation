@@ -1,6 +1,6 @@
 """真实 PG 区分排队意图时间与实际完整读取的首页观测时间。"""
 
-from datetime import datetime, timedelta
+from datetime import datetime
 from decimal import Decimal
 from uuid import uuid4
 
@@ -10,33 +10,28 @@ from sqlmodel import select
 
 from app.core.errors import DomainError
 from app.integrations.tiktok.contracts.report_reader import RawReportPage
-from app.integrations.tiktok.sdk import AccountAdmissionDeferred
 from app.modules.reporting import jobs, publish
 from app.modules.reporting.store_models import (
     AccountReconciliationDay,
     AdReportDay,
     CampaignReportHour,
-    MaterialReportDay,
+    CreativeReportDay,
     ReportSyncJob,
     ReportSyncState,
 )
-from tests.modules.reporting.sync_conftest import ad_row
-from tests.modules.reporting.test_jobs import _route
-from tests.modules.reporting.test_material_resume import (
+from tests.modules.reporting.creative_job_helpers import (
     ACCOUNTS,
     DAY,
-    Pages,
     claim,
-    enqueue,
-    facts,
-    pages,
     row,
     run,
 )
+from tests.modules.reporting.sync_conftest import ad_row
+from tests.modules.reporting.test_jobs import _route
 
 MODELS = {
     "ad_day": AdReportDay,
-    "material_day": MaterialReportDay,
+    "creative_day": CreativeReportDay,
     "campaign_hour": CampaignReportHour,
     "account_day": AccountReconciliationDay,
 }
@@ -45,7 +40,7 @@ MODELS = {
 def report_row(kind, spend):
     if kind == "ad_day":
         return ad_row("a1", DAY, spend=spend)
-    if kind == "material_day":
+    if kind == "creative_day":
         return row("1", spend=spend)
     if kind == "campaign_hour":
         return {
@@ -55,7 +50,7 @@ def report_row(kind, spend):
     return {"dimensions": {"stat_time_day": str(DAY)}, "metrics": {"spend": spend}}
 
 
-def publish_previous(factory, seed, kind="material_day", *, day=DAY):
+def publish_previous(factory, seed, kind="creative_day", *, day=DAY):
     with factory() as session:
         kwargs = {"tenant_id": seed.tenant_id, "accounts": ACCOUNTS}
         if kind == "campaign_hour":
@@ -133,11 +128,9 @@ def test_old_queued_job_first_read_accepts_new_lower_or_empty_result(
         assert state.last_success_at > stamp
         assert state.last_success_at >= reader.observed[0]
         assert state.row_count == (0 if empty else 1)
-        if kind == "material_day":
+        if kind == "creative_day":
             observed = datetime.fromisoformat(
-                session.get(ReportSyncJob, job.id).progress["material_paging"][
-                    "observed_at"
-                ]
+                session.get(ReportSyncJob, job.id).progress["snapshot_observed_at"]
             )
             assert stamp < observed <= reader.observed[0]
         records = session.exec(
@@ -153,7 +146,7 @@ def test_old_queued_job_first_read_accepts_new_lower_or_empty_result(
 
 
 @pytest.mark.parametrize(
-    "kind", ["ad_day", "campaign_hour", "account_day", "material_day"]
+    "kind", ["ad_day", "campaign_hour", "account_day", "creative_day"]
 )
 def test_full_read_retry_takes_new_observation_after_later_publish(
     committed_sync_seed, kind
@@ -187,127 +180,3 @@ def test_full_read_retry_takes_new_observation_after_later_publish(
             ).last_success_at
             > stamp
         )
-
-
-def test_material_retry_keeps_first_page_observation_and_protects_new_publish(
-    committed_sync_seed, monkeypatch
-):
-    # 强制短步，验证跨步骤时首页观测不被新发布或准入重试刷新。
-    monkeypatch.setattr(jobs, "MATERIAL_BACKFILL_PAGES_PER_STEP", 5)
-    seed, factory = committed_sync_seed
-    job = enqueue(factory, seed)
-    reader = Pages(count=7)
-    assert run(factory, job, reader) == "WAITING"
-    with factory() as session:
-        first = session.get(ReportSyncJob, job.id).progress["material_paging"][
-            "observed_at"
-        ]
-    stamp = publish_previous(factory, seed)
-    assert datetime.fromisoformat(first) < stamp
-    reader.failure = (6, AccountAdmissionDeferred(1000))
-    assert run(factory, claim(factory, job.id), reader) == "WAITING"
-    with factory() as session:
-        assert (
-            session.get(ReportSyncJob, job.id).progress["material_paging"][
-                "observed_at"
-            ]
-            == first
-        )
-    reader.failure = None
-    assert run(factory, claim(factory, job.id), reader) == "COMPLETE"
-    with factory() as session:
-        assert (
-            session.get(ReportSyncJob, job.id).progress["material_paging"][
-                "observed_at"
-            ]
-            == first
-        )
-        assert (
-            session.get(
-                ReportSyncState, (seed.tenant_id, "acc-1", "material_day", DAY)
-            ).last_success_at
-            == stamp
-        )
-    assert [(r.main_material_id, r.spend) for r in facts(factory, seed.tenant_id)] == [
-        ("m1", Decimal("20"))
-    ]
-
-
-@pytest.mark.parametrize("legacy", [False, True])
-def test_material_rebuild_uses_new_first_read_and_preserves_facts_until_complete(
-    committed_sync_seed, monkeypatch, legacy
-):
-    # 水位保护必须经历多个步骤；默认历史页预算由独立执行预算用例覆盖。
-    monkeypatch.setattr(jobs, "MATERIAL_BACKFILL_PAGES_PER_STEP", 5)
-    seed, factory = committed_sync_seed
-    job = enqueue(factory, seed)
-    reader = Pages(count=7)
-    assert run(factory, job, reader) == "WAITING"
-    stamp = publish_previous(factory, seed)
-    if legacy:
-        with factory() as session:
-            stored = session.get(ReportSyncJob, job.id)
-            paging = dict(stored.progress["material_paging"])
-            paging.pop("observed_at", None)
-            stored.progress = stored.progress | {"material_paging": paging}
-            session.commit()
-    else:
-        reader.rows.append(row(7))
-        assert run(factory, claim(factory, job.id), reader) == "WAITING"
-        assert pages(factory, job.id) == []
-    reader.rows = [row(f"new{i}", spend="2") for i in range(len(reader.rows))]
-    assert run(factory, claim(factory, job.id), reader) == "WAITING"
-    with factory() as session:
-        observed = datetime.fromisoformat(
-            session.get(ReportSyncJob, job.id).progress["material_paging"][
-                "observed_at"
-            ]
-        )
-        assert observed > stamp
-        assert (
-            session.get(
-                ReportSyncState, (seed.tenant_id, "acc-1", "material_day", DAY)
-            ).last_success_at
-            == stamp
-        )
-    assert [(r.main_material_id, r.spend) for r in facts(factory, seed.tenant_id)] == [
-        ("m1", Decimal("20"))
-    ]
-    assert run(factory, claim(factory, job.id), reader) == "COMPLETE"
-    assert all(
-        r.main_material_id.startswith("mnew") and r.spend == Decimal("2")
-        for r in facts(factory, seed.tenant_id)
-    )
-    assert len(facts(factory, seed.tenant_id)) == len(reader.rows)
-    if legacy:
-        assert reader.calls == [1, 2, 3, 4, 5, 1, 2, 3, 4, 5, 6, 7]
-
-
-def test_split_material_child_reads_new_snapshot_without_inheriting_parent_observation(
-    committed_sync_seed, monkeypatch
-):
-    seed, factory = committed_sync_seed
-    monkeypatch.setattr(jobs, "MATERIAL_SPLIT_ROWS", 1)
-    parent = enqueue(factory, seed, end=DAY + timedelta(days=1))
-    stamp = publish_previous(factory, seed)
-    assert run(factory, parent, Pages(count=2)) == "COMPLETE"
-    with factory() as session:
-        child = session.exec(
-            select(ReportSyncJob).where(
-                ReportSyncJob.tenant_id == seed.tenant_id,
-                ReportSyncJob.id != parent.id,
-                ReportSyncJob.start_date == DAY,
-            )
-        ).one()
-        assert jobs.request_time(child) == jobs.request_time(parent) < stamp
-    assert (
-        run(
-            factory,
-            claim(factory, child.id),
-            Pages(count=1, rows=[row("new", spend="2")]),
-        )
-        == "COMPLETE"
-    )
-    assert [(r.main_material_id, r.spend) for r in facts(factory, seed.tenant_id)] == [
-        ("mnew", Decimal("2"))
-    ]

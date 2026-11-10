@@ -314,7 +314,9 @@ def _execute(
         covered = set(step.get("covered", []))
         requested = sorted(active.intersection(batch) - covered)
         if phase == "hot":
-            planner.plan_hot(session, plan, active=requested, now=at)
+            planner.plan_hot(
+                session, plan, active=requested, now=at, include_creative=False
+            )
             step["covered"] = sorted(covered | set(requested))
         elif phase == "material":
             planner.plan_creative(session, plan, active=requested, now=at)

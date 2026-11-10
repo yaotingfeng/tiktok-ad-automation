@@ -87,8 +87,8 @@ def test_cross_batch_duplicate_identity_rolls_back_entire_replacement(
 
 
 def test_material_stream_replacement_keeps_type_and_null_money(session, sync_seed):
-    from app.modules.reporting.publish import publish_material_day
-    from app.modules.reporting.store_models import MaterialReportDay
+    from app.modules.reporting.publish import publish_creative_day
+    from app.modules.reporting.store_models import CreativeReportDay
     from tests.modules.reporting.test_publish_watermark import material_row
 
     tenant = sync_seed.tenant_id
@@ -96,21 +96,19 @@ def test_material_stream_replacement_keeps_type_and_null_money(session, sync_see
     def rows():
         for i in range(1001):
             row = material_row(spend="-" if i == 1000 else "0.01")
-            row["dimensions"]["main_material_id"] = str(i)
-            row["dimensions"]["main_material_type"] = "IMAGE" if i % 2 else "VIDEO"
+            row["dimensions"]["ad_id"] = str(i)
             yield row
 
-    assert publish_material_day(session, **args(tenant), rows=rows()) == 1001
+    assert publish_creative_day(session, **args(tenant), rows=rows()) == 1001
     facts = session.exec(
-        select(MaterialReportDay).where(MaterialReportDay.tenant_id == tenant)
+        select(CreativeReportDay).where(CreativeReportDay.tenant_id == tenant)
     ).all()
     assert sum(row.spend or 0 for row in facts) == Decimal("10")
-    assert next(row for row in facts if row.main_material_id == "1000").spend is None
-    assert {row.main_material_type for row in facts} == {"VIDEO", "IMAGE"}
-    assert publish_material_day(session, **args(tenant), rows=iter(())) == 0
+    assert next(row for row in facts if row.creative_id == "1000").spend is None
+    assert publish_creative_day(session, **args(tenant), rows=iter(())) == 0
     assert (
         session.exec(
-            select(MaterialReportDay).where(MaterialReportDay.tenant_id == tenant)
+            select(CreativeReportDay).where(CreativeReportDay.tenant_id == tenant)
         ).first()
         is None
     )

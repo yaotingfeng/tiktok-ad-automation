@@ -33,7 +33,7 @@ def test_missing_current_data_is_degraded_and_repaired_without_fake_success(
     jobs = session.exec(
         select(ReportSyncJob).where(ReportSyncJob.tenant_id == sync_seed.tenant_id)
     ).all()
-    assert {j.kind for j in jobs} == {"ad_day", "material_day"}
+    assert {j.kind for j in jobs} == {"ad_day", "creative_day"}
     assert all(j.advertiser_ids == ["acc-2"] for j in jobs)
     assert (
         session.get(
@@ -44,7 +44,7 @@ def test_missing_current_data_is_degraded_and_repaired_without_fake_success(
     observe_health(session, p, now=now + timedelta(seconds=60))
     assert len(session.exec(select(ReportSyncHealthEvent)).all()) == 1
     assert len(session.exec(select(ReportSyncJob)).all()) == 2
-    for kind in ["ad_day", "material_day"]:
+    for kind in ["ad_day", "creative_day"]:
         session.add(
             ReportSyncState(
                 tenant_id=sync_seed.tenant_id,
@@ -82,7 +82,7 @@ def test_unknown_empty_active_scope_is_not_healthy(session, sync_seed):
     assert "ACCOUNT_SCREEN_STALE" in health.issues
     jobs = session.exec(select(ReportSyncJob)).all()
     assert {adv for job in jobs for adv in job.advertiser_ids} == {"acc-1", "acc-2"}
-    assert all(job.kind == "ad_day" for job in jobs)
+    assert {job.kind for job in jobs} == {"ad_day", "creative_day"}
 
 
 def test_zero_spend_facts_are_monitored_before_active_screen_catches_up(
@@ -97,7 +97,7 @@ def test_zero_spend_facts_are_monitored_before_active_screen_catches_up(
     plan.last_active_advertiser_ids = []
     plan.active_screened_at = now
     _zero_spend_fact(
-        session, sync_seed.tenant_id, "material_day", now.date() + timedelta(days=1)
+        session, sync_seed.tenant_id, "creative_day", now.date() + timedelta(days=1)
     )
     metrics, issues, repairs = measure_health(session, plan, now=now)
     assert metrics["stale_ad_accounts"] == metrics["stale_material_accounts"] == 1
@@ -173,7 +173,7 @@ def test_health_limits_history_scan_without_losing_local_date_boundaries(
     from sqlalchemy import event, insert, text
 
     from app.modules.reporting.health import measure_health
-    from app.modules.reporting.store_models import AdReportDay, MaterialReportDay
+    from app.modules.reporting.store_models import AdReportDay, CreativeReportDay
 
     # UTC 次日（+14）和前日（-12）都必须保留；同月历史不应参与当天覆盖查询。
     for hour, timezone, offset in [
@@ -193,7 +193,7 @@ def test_health_limits_history_scan_without_losing_local_date_boundaries(
             "sync_job_id": uuid4(),
             "spend": 1,
         }
-        for model in (AdReportDay, MaterialReportDay):
+        for model in (AdReportDay, CreativeReportDay):
             rows = []
             for index in range(5001):
                 row = common | {
@@ -205,18 +205,22 @@ def test_health_limits_history_scan_without_losing_local_date_boundaries(
                 row |= (
                     {"ad_id": identity, "campaign_id": "c", "adgroup_id": "g"}
                     if model is AdReportDay
-                    else {"main_material_id": identity, "main_material_type": "VIDEO"}
+                    else {
+                        "creative_id": identity,
+                        "campaign_id": "c",
+                        "adgroup_id": "g",
+                    }
                 )
                 rows.append(row)
             session.execute(insert(model), rows)
         session.flush()
         session.connection().execute(text("ANALYZE ad_report_day"))
-        session.connection().execute(text("ANALYZE material_report_day"))
+        session.connection().execute(text("ANALYZE creative_report_day"))
         queries = []
 
         def capture(_conn, _cursor, sql, params, _context, _many, queries=queries):
             if ("FROM ad_report_day r" in sql and "FROM ad_object" in sql) or (
-                "SELECT DISTINCT r.advertiser_id,r.main_material_id" in sql
+                "SELECT DISTINCT r.advertiser_id,r.creative_id" in sql
             ):
                 queries.append((sql, params))
 
@@ -228,16 +232,14 @@ def test_health_limits_history_scan_without_losing_local_date_boundaries(
             metrics, _, _ = measure_health(session, plan, now=now)
         finally:
             event.remove(connection, "before_cursor_execute", capture)
-        assert (
-            metrics["missing_directory_ads"] == metrics["unlinked_material_posts"] == 1
-        )
+        assert metrics["missing_directory_ads"] == metrics["unmapped_creatives"] == 1
         assert len(queries) == 2
 
         def scanned(node):
             value = (
                 node.get("Actual Rows", 0) + node.get("Rows Removed by Filter", 0)
                 if node.get("Relation Name", "").startswith(
-                    ("ad_report_day", "material_report_day")
+                    ("ad_report_day", "creative_report_day")
                 )
                 else 0
             )
@@ -256,7 +258,7 @@ def test_health_limits_history_scan_without_losing_local_date_boundaries(
 
                 def fact_conditions(node):
                     if node.get("Relation Name", "").startswith(
-                        ("ad_report_day", "material_report_day")
+                        ("ad_report_day", "creative_report_day")
                     ):
                         yield node.get("Index Cond", "")
                     for child in node.get("Plans", []):
@@ -269,7 +271,7 @@ def test_health_limits_history_scan_without_losing_local_date_boundaries(
                     for condition in fact_conditions(result[0]["Plan"])
                 ), result
         # 下一组使用同一租户时去掉上组事实，保持独立当地日期证据。
-        for model in (AdReportDay, MaterialReportDay):
+        for model in (AdReportDay, CreativeReportDay):
             session.execute(
                 model.__table__.delete().where(model.tenant_id == sync_seed.tenant_id)
             )
@@ -285,7 +287,7 @@ def test_health_allows_realtime_cycle_and_execution_margin(
     planner.ensure_bc_plans(session, now=now, tenant_id=sync_seed.tenant_id)
     plan = session.get(AdSyncBc, (sync_seed.tenant_id, "bc-a"))
     plan.last_active_advertiser_ids, plan.active_screened_at = ["acc-2"], now
-    for kind in ("ad_day", "material_day"):
+    for kind in ("ad_day", "creative_day"):
         session.add(
             ReportSyncState(
                 tenant_id=sync_seed.tenant_id,
@@ -395,7 +397,7 @@ def test_normal_hot_cycles_wait_for_directory_completion_without_ad_repairs(
     plan = session.get(AdSyncBc, (sync_seed.tenant_id, "bc-a"))
     plan.last_active_advertiser_ids, plan.active_screened_at = ["acc-2"], start
     states = []
-    for kind in ("ad_day", "material_day"):
+    for kind in ("ad_day", "creative_day"):
         state = session.get(
             ReportSyncState, (sync_seed.tenant_id, "acc-2", kind, start.date())
         )
@@ -465,7 +467,7 @@ def test_midnight_health_uses_same_freshness_as_rules(
     planner.ensure_bc_plans(session, now=now, tenant_id=sync_seed.tenant_id)
     plan = session.get(AdSyncBc, (sync_seed.tenant_id, "bc-a"))
     plan.last_active_advertiser_ids, plan.active_screened_at = ["acc-2"], now
-    for kind in ("ad_day", "material_day"):
+    for kind in ("ad_day", "creative_day"):
         session.add(
             ReportSyncState(
                 tenant_id=sync_seed.tenant_id,
@@ -480,7 +482,7 @@ def test_midnight_health_uses_same_freshness_as_rules(
     metrics, _, repairs = measure_health(session, plan, now=now)
     assert metrics["stale_ad_accounts"] == expected_stale
     assert metrics["stale_material_accounts"] == expected_stale
-    for kind in ("ad_day", "material_day"):
+    for kind in ("ad_day", "creative_day"):
         fresh, _ = _fresh_accounts(
             session,
             tenant_id=sync_seed.tenant_id,

@@ -8,7 +8,6 @@ from app.core.errors import DomainError
 from app.modules.reporting.metrics import (
     AD_DAY_METRICS,
     basic_metric_values,
-    material_metric_values,
     parse_decimal,
     parse_local_day,
     parse_local_hour,
@@ -49,23 +48,6 @@ def test_basic_mapping_uses_platform_day_offsets():
         "campaign_id" in AD_DAY_METRICS
         and "native_growth_ad_revenue_value_d29" in AD_DAY_METRICS
     )
-
-
-def test_material_has_no_d3_d30():
-    values = material_metric_values(
-        {
-            "spend": "1",
-            "impressions": "2",
-            "clicks": "1",
-            "onsite_total_ad_impression": "1",
-            "onsite_ad_impression_ad_revenue_day0": "0.5",
-            "onsite_ad_impression_ad_revenue_day6": "0.6",
-            "onsite_ad_impression_ad_revenue_day13": "0.7",
-            "onsite_total_ad_impression_value": "0.8",
-        }
-    )
-    assert values["revenue_d3"] is None and values["revenue_d30"] is None
-    assert values["revenue_d7"] == Decimal("0.6")
 
 
 def test_day_and_hour_parsing():

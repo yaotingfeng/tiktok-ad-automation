@@ -104,7 +104,7 @@ def test_history_lookup_does_not_read_other_dates(
            request_count,progress,created_at)
         SELECT gen_random_uuid(),:tenant,:bc,kind,0,'COMPLETE',
           '["acc-1"]','[]',:day,:day,kind,CAST(:route AS jsonb),:actor,now(),0,0,'{}',now()
-        FROM (VALUES ('ad_day'),('material_day')) k(kind)
+        FROM (VALUES ('ad_day'),('creative_day')) k(kind)
     """),
         {**parameters, "day": parameters["first_day"]},
     )
@@ -163,7 +163,7 @@ def test_history_dedup_preserves_all_statuses_and_exact_scope(
 ):
     plan = plan_for(session, sync_seed)
     day, _midnight = seed_yesterday(session, sync_seed)
-    for kind in ("ad_day", "material_day"):
+    for kind in ("ad_day", "creative_day"):
         session.add(
             ReportSyncJob(
                 tenant_id=uuid4() if mismatch == "tenant" else plan.tenant_id,

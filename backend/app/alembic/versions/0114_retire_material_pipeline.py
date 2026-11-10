@@ -62,10 +62,15 @@ def retire(connection):
 
 
 def upgrade():
+    # 新 Worker 合并两类有效桶后，仍须按原顺序只领取有限脏桶。
+    op.execute(
+        "CREATE INDEX ix_read_bucket_active_dirty ON read_bucket_state "
+        "(observed_at,tenant_id,advertiser_id,kind,bucket) "
+        "WHERE source_revision>derived_revision AND kind IN ('ad_day','creative_material')"
+    )
     retire(op.get_bind())
 
 
 def downgrade():
-    raise RuntimeError(
-        "Creative cutover requires reviewed forward recovery; cancelled legacy work must not be revived automatically"
-    )
+    # 只撤销本版本索引；降版本不能复活已取消的旧任务或旧租约。
+    op.execute("DROP INDEX IF EXISTS ix_read_bucket_active_dirty")

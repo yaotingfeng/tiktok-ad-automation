@@ -32,7 +32,10 @@ class MaterialAdMemberCurrent(SQLModel, table=True):
     __table_args__ = (
         account_reference(),
         _version_reference(),
-        CheckConstraint("material_type='VIDEO'", name="ck_material_ad_member_video"),
+        CheckConstraint(
+            "material_type='VIDEO'",
+            name="material_ad_member_current_material_type_check",
+        ),
         Index(
             "ix_material_ad_member_video",
             "tenant_id",
@@ -59,7 +62,9 @@ class MaterialAccountMemberCurrent(SQLModel, table=True):
     __table_args__ = (
         account_reference(),
         _version_reference(),
-        CheckConstraint("use_count>0", name="ck_material_account_member_count"),
+        CheckConstraint(
+            "use_count>0", name="material_account_member_current_use_count_check"
+        ),
         Index(
             "ix_material_account_member_video",
             "tenant_id",

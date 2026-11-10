@@ -200,6 +200,7 @@ def gateway_case(request, database_engine, redis_client, monkeypatch, policy, tm
         yield case
     finally:
         if not retain_history:
+            from app.modules.operation_logs.models import OperationObservation
             from app.modules.sync_control.models import (
                 SyncExecutionScope,
                 SyncRequirement,
@@ -209,6 +210,7 @@ def gateway_case(request, database_engine, redis_client, monkeypatch, policy, tm
 
             with Session(database_engine) as session:
                 for model in (
+                    OperationObservation,
                     SyncExecutionScope,
                     SyncSchedule,
                     SyncRequirement,

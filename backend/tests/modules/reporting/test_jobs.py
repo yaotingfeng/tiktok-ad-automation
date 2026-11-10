@@ -562,93 +562,6 @@ def test_split_timeout_eventually_fails(committed_sync_seed, code):
         ).status in ("FAILED", "STALE")
 
 
-def test_material_fact_commits_before_separately_claimed_link_job(committed_sync_seed):
-    # 素材金额先提交，再正常领取独立关联任务；概览读取不阻挡事实。
-    from app.modules.reporting.store_models import MaterialPostLink, MaterialReportDay
-
-    seed, factory = committed_sync_seed
-
-    class Reader(FakeReader):
-        def material_day(self, *, advertiser_id, start, end, page):
-            row = {
-                "dimensions": {
-                    "main_material_id": "p1",
-                    "main_material_type": "VIDEO_SPARK_ADS",
-                    "stat_time_day": str(D),
-                },
-                "metrics": {"spend": "3"},
-            }
-            return RawReportPage((row,), 1, 1, 1)
-
-        def material_ad_links(self, *, advertiser_id, page, ad_ids=()):
-            self.calls.append(("links", advertiser_id, page))
-            row = {
-                "dimensions": {
-                    "smart_plus_ad_id": "a1",
-                    "main_material_id": "p1",
-                    "main_material_type": "VIDEO_SPARK_ADS",
-                },
-                "metrics": {"ad_material_id": "m1"},
-            }
-            return RawReportPage((row,), 1, 1, 1)
-
-    with factory() as s:
-        enqueue_job(
-            s,
-            tenant_id=seed.tenant_id,
-            bc_id="bc-a",
-            kind="material_day",
-            tier="material",
-            advertiser_ids=["acc-1"],
-            start=D,
-            end=D,
-            frozen_route=_route(seed),
-            actor_id=seed.actor_id,
-        )
-        s.commit()
-        job = claim_jobs(s, now=datetime.now(UTC) + timedelta(seconds=1), limit=1)[0]
-        s.commit()
-    reader = Reader()
-    assert (
-        execute_job(factory, job_id=job.id, claim_token=job.claim_token, reader=reader)
-        == "COMPLETE"
-    )
-    assert reader.calls == []
-    with factory() as s:
-        assert s.get(ReportSyncJob, job.id).status == "COMPLETE"
-        fact = s.get(MaterialReportDay, (seed.tenant_id, "acc-1", D, "p1"))
-        assert fact is not None and fact.spend == 3
-        assert (
-            s.exec(
-                select(MaterialPostLink).where(
-                    MaterialPostLink.tenant_id == seed.tenant_id
-                )
-            ).all()
-            == []
-        )
-        linked_jobs = claim_jobs(
-            s, now=datetime.now(UTC) + timedelta(seconds=1), limit=10
-        )
-        assert len(linked_jobs) == 1 and linked_jobs[0].kind == "material_links"
-        link_job = linked_jobs[0]
-        s.commit()
-    assert (
-        execute_job(
-            factory, job_id=link_job.id, claim_token=link_job.claim_token, reader=reader
-        )
-        == "WAITING"
-    )
-    assert reader.calls == [("links", "acc-1", 1)]
-    with factory() as s:
-        assert (
-            s.get(ReportSyncJob, link_job.id).error_code == "material_directory_pending"
-        )
-        link = s.exec(
-            select(MaterialPostLink).where(MaterialPostLink.tenant_id == seed.tenant_id)
-        ).one()
-        assert (link.ad_remote_id, link.ad_material_id) == ("a1", "m1")
-
-
 def test_hot_report_queues_missing_ad_and_parent_directory(
     session, sync_seed, monkeypatch
 ):
@@ -801,7 +714,9 @@ def test_split_child_preserves_intent_but_publishes_its_new_observation(
             session, now=datetime.now(UTC) + timedelta(seconds=1), limit=10
         )
         child = next(job for job in children if job.advertiser_ids == ["acc-1"])
-        assert child.created_at > successful_at > request_time(child)
+        # created_at 使用应用时钟；业务水位只比较数据库观测，不能混用两者。
+        assert request_time(child) == request_time(parent)
+        assert successful_at > request_time(child)
         session.commit()
     assert (
         execute_job(
@@ -844,7 +759,7 @@ def test_admission_retry_keeps_original_fact_place_but_obeys_not_before(
         "actor_id": sync_seed.actor_id,
     }
     old = enqueue_job(
-        session, **common, kind="material_day", due_at=now + timedelta(seconds=5)
+        session, **common, kind="creative_day", due_at=now + timedelta(seconds=5)
     )
     new = enqueue_job(
         session, **common, kind="ad_day", due_at=now - timedelta(seconds=30)

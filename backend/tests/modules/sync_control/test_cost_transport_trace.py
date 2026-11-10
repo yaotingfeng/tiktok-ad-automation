@@ -147,7 +147,7 @@ def test_physical_fifty_vs_five_cost_and_success_throughput(
                         actor_id=context.actor_id,
                         frozen_route=route.model_dump(mode="json"),
                         advertiser_ids=[advertiser],
-                        kind="material_day",
+                        kind="creative_day",
                         tier=tier,
                         start=day,
                         end=day,

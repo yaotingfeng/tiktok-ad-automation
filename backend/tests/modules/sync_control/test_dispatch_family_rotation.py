@@ -68,7 +68,7 @@ def test_full_live_and_background_pools_do_not_offer_a_history_link_head(
         session,
         tenant_id=sync_seed.tenant_id,
         bc_id="bc-a",
-        kind="material_links",
+        kind="creative_day",
         tier="history",
         advertiser_ids=["acc-1"],
         campaign_ids=["campaign"],

@@ -289,36 +289,37 @@ def test_account_reconciliation_keeps_original_and_ad_sum(session, sync_seed):
 
 
 def test_material_daily_replace(session, sync_seed):
-    from app.modules.reporting.publish import publish_material_day
-    from app.modules.reporting.store_models import MaterialReportDay
+    from app.modules.reporting.publish import publish_creative_day
+    from app.modules.reporting.store_models import CreativeReportDay
 
     t = sync_seed.tenant_id
     args = {"tenant_id": t, "job_id": uuid4(), "accounts": HK, "start": D, "end": D}
-    publish_material_day(
+    publish_creative_day(
         session,
         **args,
         rows=[
             {
                 "dimensions": {
-                    "main_material_id": "m1",
-                    "main_material_type": "VIDEO",
+                    "ad_id": "m1",
                     "stat_time_day": str(D),
                 },
                 "metrics": {
                     "spend": "1.234567890123456789",
-                    "onsite_ad_impression_ad_revenue_day0": "0",
+                    "native_growth_ad_revenue_value_d0": "0",
+                    "campaign_id": "c1",
+                    "adgroup_id": "g1",
                     "main_material_name": "主素材",
                 },
             }
         ],
     )
-    row = session.get(MaterialReportDay, (t, "acc-1", D, "m1"))
+    row = session.get(CreativeReportDay, (t, "acc-1", D, "m1"))
     assert row.spend == Decimal("1.234567890123456789") and row.revenue_d0 == 0
     assert row.revenue_d3 is None and row.revenue_d30 is None
-    publish_material_day(session, **args, rows=[])
+    publish_creative_day(session, **args, rows=[])
     assert (
         session.exec(
-            select(MaterialReportDay).where(MaterialReportDay.tenant_id == t)
+            select(CreativeReportDay).where(CreativeReportDay.tenant_id == t)
         ).all()
         == []
     )

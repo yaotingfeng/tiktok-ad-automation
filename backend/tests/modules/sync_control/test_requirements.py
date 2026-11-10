@@ -204,7 +204,7 @@ def test_periodic_maintenance_cannot_expand_a_started_frozen_link_query(
     common = {
         "tenant_id": seed.tenant_id,
         "bc_id": "bc-a",
-        "kind": "material_links",
+        "kind": "creative_day",
         "tier": "history",
         "advertiser_ids": ["acc-1"],
         "frozen_route": _route(seed),

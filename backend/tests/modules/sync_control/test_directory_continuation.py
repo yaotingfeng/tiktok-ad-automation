@@ -255,7 +255,23 @@ def test_two_pages_reclaim_fairness_and_keep_complete_publication(
                 publish_generation,
             }
             assert sum(row.observed_units for row in costs) == 2
-            assert all(row.closed for row in costs)
+            if expire_grant:
+                # 恢复器只领取本地发布，零预算且无发送者；未产生远端回执不伪造闭合。
+                assert {row.generation for row in costs if not row.closed} == {
+                    publish_generation
+                }
+                tail = next(
+                    row for row in costs if row.generation == publish_generation
+                )
+                assert (
+                    tail.observed_units
+                    == tail.charged_units
+                    == tail.reserved_units
+                    == 0
+                )
+                assert tail.producers == {}
+            else:
+                assert all(row.closed for row in costs)
             publication = next(
                 row for row in costs if row.generation == publish_generation
             )

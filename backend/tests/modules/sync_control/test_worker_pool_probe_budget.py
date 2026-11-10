@@ -53,7 +53,10 @@ def test_slow_inventory_cannot_skip_every_competing_family(
 ):
     now = datetime.now(UTC)
     report(session, sync_seed, "ad_day", now)
-    report(session, sync_seed, "material_links", now)
+    run = _directory(session, sync_seed)
+    run.workload = "background"
+    session.flush()
+    now = datetime.now(UTC) + timedelta(seconds=1)
     connection, listener = slow_sql_clock(session, monkeypatch)
     seen = set()
     try:
@@ -71,7 +74,7 @@ def test_slow_inventory_cannot_skip_every_competing_family(
             )
     finally:
         event.remove(connection, "after_cursor_execute", listener)
-    assert "links" in seen
+    assert "directory" in seen
 
 
 def test_slow_page_skips_retired_owner_prefix_before_first_quota_probe(

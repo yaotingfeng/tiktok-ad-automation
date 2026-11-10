@@ -119,7 +119,7 @@ def test_dirty_claim_reads_ordered_index_without_sorting_entire_backlog(
         text("""
         INSERT INTO read_bucket_state
             (tenant_id,advertiser_id,kind,bucket,source_revision,derived_revision,observed_at)
-        SELECT CAST(:tenant AS uuid),'acc-1','material_day',DATE '2000-01-01'+i,1,0,
+        SELECT CAST(:tenant AS uuid),'acc-1','creative_material',DATE '2000-01-01'+i,1,0,
             clock_timestamp()+i*INTERVAL '1 second'
         FROM generate_series(1,1000) i
     """),
@@ -130,7 +130,7 @@ def test_dirty_claim_reads_ordered_index_without_sorting_entire_backlog(
         text("""
         EXPLAIN (ANALYZE,BUFFERS,FORMAT JSON)
         SELECT tenant_id,advertiser_id,kind,bucket,source_revision FROM read_bucket_state
-        WHERE source_revision>derived_revision AND kind IN ('ad_day','material_day')
+        WHERE source_revision>derived_revision AND kind IN ('ad_day','creative_material')
         ORDER BY observed_at,tenant_id,advertiser_id,kind,bucket
         LIMIT 1 FOR UPDATE SKIP LOCKED
     """)

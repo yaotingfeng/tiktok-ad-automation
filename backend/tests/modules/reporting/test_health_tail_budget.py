@@ -14,7 +14,7 @@ from app.jobs.models import PendingDispatch
 from app.modules.reporting import health
 from app.modules.reporting.store_models import (
     AdReportDay,
-    MaterialReportDay,
+    CreativeReportDay,
     ReportSyncHealth,
 )
 from tests.modules.reporting.test_health_continuation import _case
@@ -34,8 +34,8 @@ def _tail_case(seed, factory, monkeypatch, redis_client):
         for model, fields in [
             (AdReportDay, {"ad_id": "tail-ad", "adgroup_id": "g", "campaign_id": "c"}),
             (
-                MaterialReportDay,
-                {"main_material_id": "tail-post", "main_material_type": "VIDEO"},
+                CreativeReportDay,
+                {"creative_id": "tail-post", "campaign_id": "c", "adgroup_id": "g"},
             ),
         ]:
             db.execute(
@@ -92,7 +92,7 @@ def test_real_small_batches_use_the_remaining_one_second(
             row = db.get(ReportSyncHealth, (seed.tenant_id, "bc-a"))
             assert (
                 row.metrics["missing_directory_ads"]
-                == row.metrics["unlinked_material_posts"]
+                == row.metrics["unmapped_creatives"]
                 == 2
             )
             assert row.metrics["coverage_observed_at"] == progress["at"]

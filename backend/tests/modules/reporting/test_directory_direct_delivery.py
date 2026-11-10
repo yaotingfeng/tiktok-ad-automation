@@ -174,7 +174,7 @@ def test_nonterminal_page_refills_through_canonical_dispatcher(
 
             from tests.modules.reporting.test_background_execution_share import pending
 
-            pending(db, seed, "material_day", 0, datetime.now(UTC))
+            pending(db, seed, "creative_day", 0, datetime.now(UTC))
 
         register_pending(db, seed)
     generation = claim_current(factory, seed, redis_client, identity, monkeypatch)
@@ -251,8 +251,15 @@ def test_periodic_marker_stays_local_when_reading_and_continuing(
 
     def read(query):
         queries.append(query)
-        assert query.ids == () and query.page == 1 and query.include_deleted
-        return page(complete=False)
+        assert query.ids == () and query.page == len(queries) and query.include_deleted
+        return DirectoryPage(
+            page=query.page,
+            items=(),
+            materials=(),
+            next_page=query.page + 1,
+            complete=False,
+            evidence=CallEvidence(request_id="test-request"),
+        )
 
     @contextmanager
     def gateway(**_kwargs):
@@ -273,7 +280,11 @@ def test_periodic_marker_stays_local_when_reading_and_continuing(
         )
         == "CONTINUE"
     )
-    assert len(queries) == 1 and sent == ["ads.sync_step"]
+    assert queries and sent == ["ads.sync_step"]
+    with factory() as db:
+        continuation = db.get(AdDirectoryRun, identity)
+        assert continuation.next_page == len(queries) + 1
+        assert continuation.query["periodic_directory_v1"] is True
 
 
 def test_full_directory_publication_immediately_sends_targeted_material_child(
@@ -544,7 +555,7 @@ def test_background_continuation_returns_borrowed_slot_to_facts(
             bc_id="bc-a",
             actor_id=seed.actor_id,
             frozen_route=_route(seed),
-            kind="material_day",
+            kind="creative_day",
             tier="history",
             advertiser_ids=["acc-1"],
             start=day,
@@ -619,7 +630,7 @@ def test_concurrent_borrowed_pages_preserve_progress_and_single_successor(
             row.workload = "background"
             row.query = row.query | {"page_size": 100 + i}
             identities.append(row.id)
-        pending(db, seed, "material_day", 0, datetime.now(UTC))
+        pending(db, seed, "creative_day", 0, datetime.now(UTC))
         register_pending(db, seed)
     with factory() as db, db.begin():
         assert (

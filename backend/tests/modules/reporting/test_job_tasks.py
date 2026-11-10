@@ -165,7 +165,7 @@ def test_low_budget_preserves_realtime_and_pauses_cold(
         cold = [job for job in jobs if job.priority >= 3]
         assert [(job.id, job.status) for job in cold] == [(cold_id, "QUEUED")]
         live = [job for job in jobs if job.priority <= 2]
-        assert {job.kind for job in live} == {"ad_day", "material_day"}
+        assert {job.kind for job in live} == {"ad_day", "creative_day"}
         assert all(
             job.status == "RUNNING" and job.start_date == job.end_date == now.date()
             for job in live
@@ -1075,14 +1075,14 @@ def _lane_job_scope(now, lane, index):
     if lane == "backfill":
         return advertiser, "ad_day", day - timedelta(days=index + 1)
     if lane == "links":
-        return advertiser, "material_links", day
+        return advertiser, "creative_day", day
     if lane == "closeout":
         return (
             advertiser,
-            ("ad_day", "material_day")[index % 2],
+            ("ad_day", "creative_day")[index % 2],
             day - timedelta(days=1),
         )
-    return advertiser, ("ad_day", "material_day", "campaign_hour")[index // 2], day
+    return advertiser, ("ad_day", "creative_day", "campaign_hour")[index // 2], day
 
 
 @pytest.mark.parametrize("lane", ["live", "closeout", "links", "backfill"])
@@ -1593,7 +1593,7 @@ def test_directory_query_cancel_preserves_hot_and_material_jobs(
                 )
             ).all()
         )
-        assert {"ad_day", "material_day"} <= kinds
+        assert {"ad_day", "creative_day"} <= kinds
         assert (
             session.connection().execute(text("SHOW statement_timeout")).scalar_one()
             == "0"
@@ -1663,155 +1663,6 @@ def test_pending_full_directory_skips_object_scan_and_replanning(
         ).all()
         assert len(runs) == 20 and {run.status for run in runs} == {"QUEUED"}
         assert session.get(AdSyncBc, (seed.tenant_id, "bc-a")).next_directory_at > now
-
-
-def test_link_backlog_cannot_consume_fact_or_cold_windows(
-    monkeypatch, committed_sync_seed
-):
-    from datetime import timedelta
-    from zoneinfo import ZoneInfo
-
-    from app.core.db import engine
-    from app.modules.reporting.jobs import enqueue_job
-    from app.modules.reporting.store_models import ReportSyncJob
-    from tests.modules.reporting.test_jobs import _route
-
-    seed, factory = committed_sync_seed
-    now = datetime.now(UTC)
-    today = now.astimezone(ZoneInfo("Asia/Hong_Kong")).date()
-    monkeypatch.setattr(job_tasks, "REPORT_DISPATCH_WINDOW", 4)
-    with factory() as session, session.begin():
-        common = {
-            "tenant_id": seed.tenant_id,
-            "bc_id": "bc-a",
-            "advertiser_ids": ["acc-1"],
-            "frozen_route": _route(seed),
-            "actor_id": seed.actor_id,
-        }
-        for index in range(6):
-            day = today - timedelta(days=index)
-            enqueue_job(
-                session,
-                **common,
-                kind="material_links",
-                tier="material",
-                start=day,
-                end=day,
-                due_at=now - timedelta(hours=1),
-            )
-        first = enqueue_job(
-            session,
-            **common,
-            kind="ad_day",
-            tier="hot",
-            start=today,
-            end=today,
-            due_at=now,
-        )
-        second = enqueue_job(
-            session,
-            **common,
-            kind="material_day",
-            tier="material",
-            start=today,
-            end=today,
-            due_at=now,
-        )
-        cold = enqueue_job(
-            session,
-            **common,
-            kind="ad_day",
-            tier="history",
-            start=today - timedelta(days=40),
-            end=today - timedelta(days=40),
-            due_at=now,
-        )
-    assert job_tasks._dispatch_pending(engine, now) == 4
-    with factory() as session, session.begin():
-        running = session.exec(
-            select(ReportSyncJob).where(
-                ReportSyncJob.tenant_id == seed.tenant_id,
-                ReportSyncJob.status == "RUNNING",
-            )
-        ).all()
-        assert {row.kind for row in running} == {
-            "ad_day",
-            "material_day",
-            "material_links",
-        }
-        assert session.get(ReportSyncJob, first).status == "RUNNING"
-        assert session.get(ReportSyncJob, cold).status == "RUNNING"
-        _finish_report_dispatch(session, session.get(ReportSyncJob, first), now)
-    assert job_tasks._dispatch_pending(engine, now) == 0
-    with factory() as session:
-        assert session.get(ReportSyncJob, second).status == "RUNNING"
-    assert job_tasks._dispatch_pending(engine, now) == 0
-
-
-@pytest.mark.parametrize(
-    "historical_running,missing_timezone",
-    [(False, False), (True, False), (False, True)],
-)
-def test_low_budget_links_only_claim_current_day_with_shared_capacity(
-    monkeypatch, committed_sync_seed, historical_running, missing_timezone
-):
-    from datetime import timedelta
-    from uuid import uuid4
-    from zoneinfo import ZoneInfo
-
-    from app.core.db import engine
-    from app.modules.accounts.models import AdvertiserAccount
-    from app.modules.reporting.jobs import enqueue_job
-    from app.modules.reporting.store_models import ReportSyncJob
-    from tests.modules.reporting.test_jobs import _route
-
-    seed, factory = committed_sync_seed
-    now = datetime.now(UTC)
-    today = now.astimezone(ZoneInfo("Asia/Hong_Kong")).date()
-    monkeypatch.setattr(job_tasks, "REPORT_DISPATCH_WINDOW", 1)
-    with factory() as session, session.begin():
-        common = {
-            "tenant_id": seed.tenant_id,
-            "bc_id": "bc-a",
-            "actor_id": seed.actor_id,
-            "frozen_route": _route(seed),
-            "kind": "material_links",
-            "tier": "material",
-            "advertiser_ids": ["acc-1"],
-        }
-        old = enqueue_job(
-            session,
-            **common,
-            start=today - timedelta(days=1),
-            end=today - timedelta(days=1),
-            due_at=now - timedelta(hours=1),
-        )
-        current = enqueue_job(session, **common, start=today, end=today, due_at=now)
-        if historical_running:
-            row = session.get(ReportSyncJob, old)
-            row.status, row.claim_token, row.claimed_until = (
-                "RUNNING",
-                uuid4(),
-                now + timedelta(minutes=4),
-            )
-        if missing_timezone:
-            session.get(AdvertiserAccount, (seed.tenant_id, "acc-1")).timezone = ""
-    first_count = job_tasks._dispatch_pending(engine, now, allow_backfill=False)
-    assert first_count == (0 if missing_timezone or historical_running else 1)
-    with factory() as session, session.begin():
-        assert session.get(ReportSyncJob, old).status == (
-            "RUNNING" if historical_running else "QUEUED"
-        )
-        assert session.get(ReportSyncJob, current).status == (
-            "QUEUED" if missing_timezone or historical_running else "RUNNING"
-        )
-        if historical_running:
-            _finish_report_dispatch(session, session.get(ReportSyncJob, old), now)
-    if historical_running:
-        assert job_tasks._dispatch_pending(engine, now, allow_backfill=False) == 1
-        with factory() as session:
-            assert session.get(ReportSyncJob, current).status == "RUNNING"
-    assert job_tasks._dispatch_pending(engine, now, allow_backfill=False) == 0
 
 
 @pytest.mark.parametrize("full_slots,targeted_slots", [(2, 1), (0, 1), (2, 0)])
@@ -2069,7 +1920,7 @@ def test_screening_deferral_cannot_skip_due_live_reports(
         jobs = s.exec(
             select(ReportSyncJob).where(
                 ReportSyncJob.tenant_id == seed.tenant_id,
-                ReportSyncJob.kind == "material_day",
+                ReportSyncJob.kind == "creative_day",
             )
         ).all()
         assert {tuple(j.advertiser_ids) for j in jobs} == {("acc-1",), ("acc-2",)}
@@ -2123,7 +1974,7 @@ def test_screening_backoff_does_not_expand_refresh_to_idle_rule_accounts(
             plan.active_screened_at = now - timedelta(
                 minutes=1 if screen_state == "recent" else 16
             )
-            for kind in ("ad_day", "material_day", "account_day"):
+            for kind in ("ad_day", "creative_day", "account_day"):
                 s.add(
                     ReportSyncState(
                         tenant_id=seed.tenant_id,
@@ -2181,8 +2032,8 @@ def test_screening_backoff_does_not_expand_refresh_to_idle_rule_accounts(
         jobs = s.exec(
             select(ReportSyncJob).where(ReportSyncJob.tenant_id == seed.tenant_id)
         ).all()
-        for kind in ("ad_day", "material_day"):
-            expected = {"acc-1"} if screen_ok or kind == "material_day" else set()
+        for kind in ("ad_day", "creative_day"):
+            expected = {"acc-1"} if screen_ok or kind == "creative_day" else set()
             assert {
                 a for j in jobs if j.kind == kind for a in j.advertiser_ids
             } == expected

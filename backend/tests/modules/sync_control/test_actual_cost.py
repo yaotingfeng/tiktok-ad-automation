@@ -130,7 +130,7 @@ def test_old_generation_late_receipt_only_changes_old_cost_row(session, sync_see
     ).all()
 
 
-def test_real_dispatch_reserves_the_unchanged_physical_page_budget(
+def test_creative_dispatch_reserves_generic_request_then_accounts_actual_pages(
     session, sync_seed, redis_client
 ):
     from zoneinfo import ZoneInfo
@@ -147,7 +147,7 @@ def test_real_dispatch_reserves_the_unchanged_physical_page_budget(
             bc_id="bc-a",
             actor_id=sync_seed.actor_id,
             frozen_route=_route(sync_seed),
-            kind="material_day",
+            kind="creative_day",
             tier=tier,
             advertiser_ids=["acc-1"],
             start=day,
@@ -159,8 +159,8 @@ def test_real_dispatch_reserves_the_unchanged_physical_page_budget(
         select(SyncCostLedger).where(SyncCostLedger.tenant_id == sync_seed.tenant_id)
     ).all()
     assert {row.work_class: row.reserved_units for row in rows} == {
-        "history": 50,
-        "realtime": 5,
+        "history": 1,
+        "realtime": 1,
     }
     assert all(
         row.generation == 1 and row.charged_units == row.reserved_units for row in rows

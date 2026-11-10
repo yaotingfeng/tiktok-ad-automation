@@ -28,8 +28,11 @@ def test_platform_fields_and_names_exist_in_official_doc():
 
 def test_metrics_module_reads_catalog_fields():
     assert metrics._BASIC["revenue_d3"] == "native_growth_ad_revenue_value_d2"
-    assert metrics._MATERIAL["ad_impression_events"] == "onsite_total_ad_impression"
-    assert "revenue_d3" not in metrics._MATERIAL
+    assert (
+        metrics._BASIC["ad_impression_events"]
+        == "native_growth_total_ad_impression_event_count"
+    )
+    assert set(metrics.COLUMNS) == set(metrics._BASIC)
 
 
 def test_names_follow_official_day_numbering():

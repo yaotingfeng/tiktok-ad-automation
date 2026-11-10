@@ -39,7 +39,7 @@ from app.modules.reporting.exports import (
 from app.modules.reporting.publish import (
     AccountMeta,
     publish_ad_day,
-    publish_material_day,
+    publish_creative_day,
 )
 from app.modules.reporting.queries import query_ads
 from app.modules.reporting.schemas import (
@@ -49,7 +49,6 @@ from app.modules.reporting.schemas import (
     SelectionRequest,
 )
 from app.modules.reporting.selection import freeze_selection
-from app.modules.reporting.store_models import MaterialPostLink
 from app.modules.tenants.models import Tenant, TenantMembership
 from tests.modules.reporting.sync_conftest import ad_row
 
@@ -250,7 +249,7 @@ def _external_material(session: Session, *, scope: _Scope, ref: EntityRef) -> No
     )
     session.flush()
     day = date(2026, 9, 30)
-    publish_material_day(
+    publish_creative_day(
         session,
         tenant_id=scope.context.tenant_id,
         job_id=uuid4(),
@@ -261,26 +260,35 @@ def _external_material(session: Session, *, scope: _Scope, ref: EntityRef) -> No
             {
                 "dimensions": {
                     "advertiser_id": scope.advertiser_id,
-                    "main_material_id": "post-external-1",
-                    "main_material_type": "VIDEO_SPARK_ADS",
+                    "ad_id": "creative-external-1",
                     "stat_time_day": str(day),
                 },
-                "metrics": {"spend": "7"},
+                "metrics": {
+                    "spend": "7",
+                    "campaign_id": ref.remote_id,
+                    "adgroup_id": "external-group",
+                },
             }
         ],
     )
-    # 素材日报主素材是帖子 ID；对照把它归到广告内素材，进而归到视频。
-    session.add(
-        MaterialPostLink(
-            tenant_id=scope.context.tenant_id,
-            advertiser_id=scope.advertiser_id,
-            main_material_id="post-external-1",
-            ad_remote_id=ad_id,
-            main_material_type="VIDEO_SPARK_ADS",
-            ad_material_id="ad-material-1",
-            platform_material_id="vid-external-1",
-            observed_at=datetime.now(UTC),
-        )
+    from app.modules.ads.creatives import upsert_creatives
+
+    upsert_creatives(
+        session,
+        tenant_id=scope.context.tenant_id,
+        advertiser_id=scope.advertiser_id,
+        rows=[
+            {
+                "creative_id": "creative-external-1",
+                "ad_remote_id": ad_id,
+                "ad_material_id": "ad-material-1",
+                "assets": [
+                    {"material_type": "VIDEO", "platform_material_id": "vid-external-1"}
+                ],
+            }
+        ],
+        observed_at=datetime.now(UTC),
+        published_version=1,
     )
     session.flush()
 
@@ -648,15 +656,22 @@ def test_workspace_snapshot_contract(
     assert len(csv.splitlines()) == 4
     assert "campaign-added-after-snapshot" not in csv
 
+    from tests.modules.reporting.query_helpers import finish_projections
+
+    finish_projections(session)
     material_rows = build_rows(
         session,
         context=case.primary.context,
         bc_id=case.primary.bc_id,
         filters=_filters("material"),
     )
-    assert len(material_rows) == 1
-    assert material_rows[0].coverage["status"] == "COMPLETE"
-    assert material_rows[0].material_uses[0].platform_material_id == "vid-external-1"
+    video = next(row for row in material_rows if row.material_uses)
+    assert video.metric_buckets[0].values["spend"] == Decimal("7")
+    assert video.material_uses[0].platform_material_id == "vid-external-1"
+    assert any(
+        "RESIDUAL" in row.coverage.get("attribution_statuses", [])
+        for row in material_rows
+    )
 
     other_page = query_ads(
         session,

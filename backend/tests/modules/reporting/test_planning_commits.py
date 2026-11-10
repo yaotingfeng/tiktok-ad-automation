@@ -92,7 +92,7 @@ def test_late_sql_cancel_keeps_screen_and_both_live_facts(
                 )
             ).all()
         )
-        assert {"ad_day", "material_day"} <= kinds
+        assert {"ad_day", "creative_day"} <= kinds
 
 
 @pytest.mark.parametrize("page_seconds", [0, 5])
@@ -228,7 +228,7 @@ def test_thousands_of_accounts_progress_many_batches_and_cover_both_facts(
             ).all()
             covered = {
                 kind: {a for k, ids in rows if k == kind for a in ids}
-                for kind in ("ad_day", "material_day")
+                for kind in ("ad_day", "creative_day")
             }
             plan = session.get(AdSyncBc, (seed.tenant_id, "bc-a"))
             samples.append(
@@ -245,9 +245,9 @@ def test_thousands_of_accounts_progress_many_batches_and_cover_both_facts(
             )
             if attempt == 0:
                 assert len(covered["ad_day"]) > (0 if page_seconds else 64)
-                assert len(covered["material_day"]) > (0 if page_seconds else 64)
+                assert len(covered["creative_day"]) > (0 if page_seconds else 64)
                 assert (
-                    "acc-2" in covered["ad_day"] and "acc-2" in covered["material_day"]
+                    "acc-2" in covered["ad_day"] and "acc-2" in covered["creative_day"]
                 )
             screened = plan.screening_progress["planning_steps_v1"]["screen_hot"][
                 "done"
@@ -318,12 +318,12 @@ def test_soft_timeout_does_not_replay_completed_screen_or_hot_batch(
             )
 
     monkeypatch.setattr(job_tasks, "_reader_for", lambda **kwargs: _ctx(Reader()))
-    original = planner.plan_material
+    original = planner.plan_creative
 
     def timeout(*_args, **_kwargs):
         raise SoftTimeLimitExceeded()
 
-    monkeypatch.setattr(planner, "plan_material", timeout)
+    monkeypatch.setattr(planner, "plan_creative", timeout)
     with pytest.raises(SoftTimeLimitExceeded):
         job_tasks._plan_one(
             engine,
@@ -345,7 +345,7 @@ def test_soft_timeout_does_not_replay_completed_screen_or_hot_batch(
         )
         assert before
         assert session.get(AdSyncBc, (seed.tenant_id, "bc-a")).active_screened_at == now
-    monkeypatch.setattr(planner, "plan_material", original)
+    monkeypatch.setattr(planner, "plan_creative", original)
     job_tasks._plan_one(
         engine,
         redis_client,
@@ -362,7 +362,7 @@ def test_soft_timeout_does_not_replay_completed_screen_or_hot_batch(
             select(ReportSyncJob).where(ReportSyncJob.tenant_id == seed.tenant_id)
         ).all()
         assert {r.id for r in rows if r.kind == "ad_day"} == before
-        assert any(r.kind == "material_day" for r in rows)
+        assert any(r.kind == "creative_day" for r in rows)
 
 
 def test_history_shards_resume_before_marking_account_complete(session, sync_seed):
@@ -441,7 +441,7 @@ def test_late_screen_page_only_adds_new_accounts_after_prior_jobs_complete(
             ).all():
                 row.status = "COMPLETE"
     with factory() as session:
-        for kind in ("ad_day", "material_day"):
+        for kind in ("ad_day", "creative_day"):
             rows = session.exec(
                 select(ReportSyncJob).where(
                     ReportSyncJob.tenant_id == seed.tenant_id,
@@ -636,7 +636,7 @@ def test_old_screen_finishes_after_new_live_day_without_reverting_fact_window(
             )
         ).all()
         added = [r for r in rows if "acc-2" in r.advertiser_ids]
-        assert {r.kind for r in added} == {"ad_day", "material_day"}
+        assert {r.kind for r in added} == {"ad_day", "creative_day"}
         assert all(r.start_date == r.end_date == at.date() for r in added)
 
 
@@ -683,7 +683,7 @@ def test_unknown_timezone_waits_for_metadata_without_blocking_valid_accounts(
         rows = session.exec(
             select(ReportSyncJob).where(ReportSyncJob.tenant_id == seed.tenant_id)
         ).all()
-        assert {r.kind for r in rows} == {"ad_day", "material_day"}
+        assert {r.kind for r in rows} == {"ad_day", "creative_day"}
         assert all(r.advertiser_ids == ["acc-1"] for r in rows)
         plan = session.get(AdSyncBc, (seed.tenant_id, "bc-a"))
         assert plan.active_screened_at is None
@@ -782,7 +782,7 @@ def test_scope_expansion_schedules_new_account_history_and_preserves_rule_grid(
             select(ReportSyncJob).where(ReportSyncJob.tenant_id == seed.tenant_id)
         ).all()
         required = {now.date() - timedelta(days=i) for i in range(101)}
-        for kind in ("ad_day", "material_day"):
+        for kind in ("ad_day", "creative_day"):
             covered = {
                 r.start_date + timedelta(days=i)
                 for r in rows
@@ -906,8 +906,8 @@ def test_daily_completion_crossing_midnight_immediately_catches_up(
             for row in rows
             if row.end_date == before.date()
             and "acc-1" in row.advertiser_ids
-            and row.kind in {"ad_day", "material_day"}
-        } == {"ad_day", "material_day"}
+            and row.kind in {"ad_day", "creative_day"}
+        } == {"ad_day", "creative_day"}
 
 
 def test_live_batches_get_a_turn_between_each_background_phase(

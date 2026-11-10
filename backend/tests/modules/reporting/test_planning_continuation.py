@@ -182,7 +182,6 @@ def test_continuation_is_coalesced_durable_realtime_only_and_not_recursive(
     from sqlmodel import select
 
     from app.jobs.models import PendingDispatch
-    from app.modules.reporting import link_work
 
     seed, factory = committed_sync_seed
     now = datetime.now(UTC)
@@ -215,7 +214,6 @@ def test_continuation_is_coalesced_durable_realtime_only_and_not_recursive(
 
     monkeypatch.setattr(planner, "ensure_bc_plans", forbidden)
     monkeypatch.setattr(job_tasks, "_dispatch_directories", forbidden)
-    monkeypatch.setattr(link_work, "wake_link_dependencies", forbidden)
 
     class Reader:
         def bc_spend(self, **_):
@@ -382,7 +380,6 @@ def test_real_pg_slow_dispatch_preserves_maintenance_facts_and_continuation(
     from sqlmodel import select
 
     from app.jobs.models import PendingDispatch
-    from app.modules.reporting import link_work
     from app.modules.reporting.store_models import ReportSyncJob
 
     seed, factory = committed_sync_seed
@@ -390,11 +387,6 @@ def test_real_pg_slow_dispatch_preserves_maintenance_facts_and_continuation(
     monkeypatch.setattr(job_tasks.settings, "ADS_SYNC_ENABLED", True)
     monkeypatch.setattr(job_tasks, "_dispatch_directories", lambda *_a, **_kw: 0)
     maintenance = []
-    monkeypatch.setattr(
-        link_work,
-        "wake_link_dependencies",
-        lambda *_a, **_kw: maintenance.append("wake"),
-    )
     original_entry = job_tasks._run_planning_entry
 
     def bounded_entry(**kw):
@@ -407,7 +399,9 @@ def test_real_pg_slow_dispatch_preserves_maintenance_facts_and_continuation(
         state["screen_hot"] = {**state["screen_hot"], "done": True}
         plan.screening_progress = {steps.KEY: state}
         plan.last_active_advertiser_ids = ["acc-1", "acc-2"]
-    monkeypatch.setattr(planner, "ensure_bc_plans", lambda *_a, **_kw: None)
+    monkeypatch.setattr(
+        planner, "ensure_bc_plans", lambda *_a, **_kw: maintenance.append("wake")
+    )
     calls = []
 
     def slow_tail(session, *_a, **_kw):
@@ -430,7 +424,7 @@ def test_real_pg_slow_dispatch_preserves_maintenance_facts_and_continuation(
                 )
             ).all()
         )
-        assert {"ad_day", "material_day"} <= kinds
+        assert {"ad_day", "creative_day"} <= kinds
         signals = session.exec(
             select(PendingDispatch).where(
                 PendingDispatch.tenant_id == seed.tenant_id,
@@ -559,7 +553,6 @@ def test_four_bc_capacity_with_real_pg_pages_facts_and_slow_directory(
     from app.modules.accounts.connection_models import BCConnectionBinding
     from app.modules.accounts.models import AdvertiserAccount, TenantBC
     from app.modules.accounts.routing import verify_route
-    from app.modules.reporting import link_work
     from app.modules.reporting.query_budget import QueryBudgetExceeded
     from app.modules.reporting.store_models import AdSyncAccount, ReportSyncJob
 
@@ -664,9 +657,7 @@ def test_four_bc_capacity_with_real_pg_pages_facts_and_slow_directory(
         clock[0] += seconds
 
     monkeypatch.setattr(planner, "ensure_bc_plans", lambda *_a, **_kw: consume(2.0))
-    monkeypatch.setattr(
-        link_work, "wake_link_dependencies", lambda *_a, **_kw: consume(0.6)
-    )
+    monkeypatch.setattr(planner, "ensure_bc_plans", lambda *_a, **_kw: consume(2.0))
     dispatch_costs = []
     dispatch_call = [0]
 
@@ -825,7 +816,7 @@ def test_four_bc_capacity_with_real_pg_pages_facts_and_slow_directory(
                     ReportSyncJob.priority <= 2,
                 )
             ).all()
-            for kind in ("ad_day", "material_day"):
+            for kind in ("ad_day", "creative_day"):
                 assert {a for k, ids in jobs if k == kind for a in ids} == {
                     a for accounts in pools.values() for a in accounts
                 }

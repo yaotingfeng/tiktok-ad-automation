@@ -12,10 +12,10 @@ from sqlalchemy.exc import DBAPIError
 
 from app.modules.reporting import publish
 from app.modules.reporting.partitions import ensure_month_partitions_for_range
-from app.modules.reporting.store_models import AdReportDay, MaterialReportDay
+from app.modules.reporting.store_models import AdReportDay, CreativeReportDay
 from tests.modules.reporting.sync_conftest import ad_row
 
-TABLES = {"ad": "ad_report_day", "material": "material_report_day"}
+TABLES = {"ad": "ad_report_day", "material": "creative_report_day"}
 
 
 @pytest.fixture
@@ -47,14 +47,18 @@ def _publish(session, seed, kind, day, account="acc-1"):
         if kind == "ad"
         else {
             "dimensions": {
-                "main_material_id": f"new-{account}",
-                "main_material_type": "VIDEO",
+                "ad_id": f"new-{account}",
                 "stat_time_day": str(day),
             },
-            "metrics": {"advertiser_id": account, "spend": "1"},
+            "metrics": {
+                "advertiser_id": account,
+                "spend": "1",
+                "campaign_id": "c",
+                "adgroup_id": "g",
+            },
         }
     )
-    function = publish.publish_ad_day if kind == "ad" else publish.publish_material_day
+    function = publish.publish_ad_day if kind == "ad" else publish.publish_creative_day
     return function(
         session,
         tenant_id=seed.tenant_id,
@@ -67,11 +71,11 @@ def _publish(session, seed, kind, day, account="acc-1"):
 
 
 def _default_row(session, seed, kind, day):
-    model = AdReportDay if kind == "ad" else MaterialReportDay
+    model = AdReportDay if kind == "ad" else CreativeReportDay
     identity = (
         {"ad_id": "existing", "campaign_id": "c", "adgroup_id": "g"}
         if kind == "ad"
-        else {"main_material_id": "existing", "main_material_type": "VIDEO"}
+        else {"creative_id": "existing", "campaign_id": "c", "adgroup_id": "g"}
     )
     session.add(
         model(

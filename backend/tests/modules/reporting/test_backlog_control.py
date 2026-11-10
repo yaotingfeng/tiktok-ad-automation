@@ -20,7 +20,7 @@ def request(session, seed, day, **overrides):
         "bc_id": "bc-a",
         "actor_id": seed.actor_id,
         "frozen_route": _route(seed),
-        "kind": "material_links",
+        "kind": "creative_day",
         "tier": "material",
         "advertiser_ids": ["acc-1"],
         "start": day,
@@ -97,91 +97,6 @@ def test_running_work_keeps_a_successor_for_new_same_day_demand(session, sync_se
     assert [j.id for j in active] == [successor]
 
 
-def test_missing_video_waits_for_directory_without_recreating_work(committed_sync_seed):
-    from app.modules.reporting.store_models import MaterialPostLink
-    from tests.modules.reporting.test_material_link_resume import step
-    from tests.modules.reporting.test_material_query import D, material_row, publish
-
-    seed, factory = committed_sync_seed
-    with factory() as session:
-        publish(session, seed, "acc-1", [material_row("post", "5", "file.mp4")])
-        session.add(
-            MaterialPostLink(
-                tenant_id=seed.tenant_id,
-                advertiser_id="acc-1",
-                main_material_id="post",
-                ad_remote_id="ad",
-                main_material_type="VIDEO_SPARK_ADS",
-                observed_at=datetime.now(UTC),
-                material_name="file.mp4",
-            )
-        )
-        job_id = request(session, seed, D)
-        session.commit()
-
-    class BridgeOverview:
-        calls = 0
-
-        def material_ad_links(self, **kwargs):
-            from tests.modules.reporting.test_material_links import overview
-
-            assert kwargs["advertiser_id"] == "acc-1" and kwargs["page"] == 1
-            self.calls += 1
-            return overview()
-
-    reader = BridgeOverview()
-    assert step(factory, job_id, reader) == "WAITING"
-    assert reader.calls == 1, "缺桥接需有界复核概览，不能只等待目录"
-    with factory() as session:
-        job = session.get(ReportSyncJob, job_id)
-        assert job.error_code == "material_directory_pending"
-        assert job.due_at > datetime.now(UTC) + timedelta(minutes=9)
-        due = job.due_at
-        successor = request(session, seed, D)
-        assert successor is not None and successor != job_id
-        for _ in range(10):
-            assert request(session, seed, D) is None
-        assert job.due_at == due
-        session.commit()
-    with factory() as session:
-        assert (
-            len(
-                session.exec(
-                    select(ReportSyncJob).where(
-                        ReportSyncJob.tenant_id == seed.tenant_id
-                    )
-                ).all()
-            )
-            == 2
-        )
-
-
-def test_new_post_wakes_waiting_work_without_losing_existing_demand(session, sync_seed):
-    from tests.modules.reporting.test_material_query import D, material_row, publish
-
-    publish(session, sync_seed, "acc-1", [material_row("old", "5")])
-    job_id = request(session, sync_seed, D)
-    job = session.get(ReportSyncJob, job_id)
-    job.status, job.error_code = "WAITING", "material_identity_unavailable"
-    job.due_at = datetime.now(UTC) + timedelta(minutes=10)
-    job.progress = {
-        "coalesced_v1": True,
-        "waiting_ids": ["old"],
-        "dependency_checked_at": datetime.now(UTC).isoformat(),
-    }
-    publish(
-        session,
-        sync_seed,
-        "acc-1",
-        [material_row("old", "5"), material_row("new", "2")],
-    )
-    from app.modules.reporting.link_work import wake_link_dependencies
-
-    assert wake_link_dependencies(session, now=datetime.now(UTC)) == 1
-    assert job.due_at <= datetime.now(UTC)
-    assert job.error_code is None
-
-
 def test_concurrent_requests_merge_and_do_not_wait_for_running_reader(
     committed_sync_seed,
 ):
@@ -232,7 +147,7 @@ def test_legacy_adoption_preserves_each_frozen_scope_and_checkpoint(session, syn
         "bc_id": "bc-a",
         "actor_id": sync_seed.actor_id,
         "frozen_route": _route(sync_seed),
-        "kind": "material_links",
+        "kind": "creative_day",
         "priority": 3,
         "advertiser_ids": ["acc-1"],
         "due_at": datetime.now(UTC),
@@ -264,144 +179,6 @@ def test_legacy_adoption_preserves_each_frozen_scope_and_checkpoint(session, syn
     assert adopt_report_job(session, old) == 0
 
 
-@pytest.mark.parametrize("complete", [True, False])
-def test_directory_evidence_wakes_same_work_and_completes_without_api(
-    committed_sync_seed,
-    complete,
-):
-    from app.modules.ads.models import AdMaterialReference
-    from app.modules.reporting.store_models import MaterialPostLink
-    from tests.modules.reporting.test_material_link_resume import step
-    from tests.modules.reporting.test_material_query import D, material_row, publish
-
-    seed, factory = committed_sync_seed
-    with factory() as session:
-        publish(session, seed, "acc-1", [material_row("p", "5", "file.mp4")])
-        session.add(
-            MaterialPostLink(
-                tenant_id=seed.tenant_id,
-                advertiser_id="acc-1",
-                main_material_id="p",
-                ad_remote_id="ad",
-                main_material_type="VIDEO_SPARK_ADS",
-                ad_material_id="m",
-                observed_at=datetime.now(UTC),
-            )
-        )
-        job_id = request(session, seed, D)
-        session.commit()
-
-    class NoRemote:
-        calls = 0
-
-        def material_ad_links(self, **kwargs):
-            raise AssertionError("本地目录证据足以解析")
-
-    assert step(factory, job_id, NoRemote()) == "WAITING"
-    with factory() as session:
-        session.add(
-            AdMaterialReference(
-                tenant_id=seed.tenant_id,
-                advertiser_id="acc-1",
-                ad_remote_id="ad",
-                ad_material_id="m",
-                platform_material_id="v",
-                material_type="VIDEO",
-                name="file.mp4",
-                complete=complete,
-                published_version=1,
-            )
-        )
-        session.flush()
-        from app.modules.reporting.link_work import wake_link_dependencies
-
-        assert wake_link_dependencies(session, now=datetime.now(UTC)) == 1
-        job = session.get(ReportSyncJob, job_id)
-        assert job.due_at <= datetime.now(UTC) and job.error_code is None
-        session.commit()
-    assert step(factory, job_id, NoRemote()) == "COMPLETE"
-    with factory() as session:
-        row = session.get(MaterialPostLink, (seed.tenant_id, "acc-1", "p", "ad"))
-        assert row.platform_material_id == "v"
-
-
-def test_missing_directory_is_requested_and_new_evidence_wakes_without_fact_refresh(
-    committed_sync_seed, monkeypatch
-):
-    from app.core.config import settings
-    from app.modules.ads.models import AdMaterialReference, AdObject
-    from app.modules.ads.sync_models import AdDirectoryRun
-    from app.modules.reporting import link_work
-    from app.modules.reporting.store_models import MaterialPostLink
-    from tests.modules.reporting.test_material_link_resume import step
-    from tests.modules.reporting.test_material_query import D, material_row, publish
-
-    seed, factory = committed_sync_seed
-    monkeypatch.setattr(settings, "ADS_SYNC_ENABLED", True)
-    with factory() as session:
-        publish(session, seed, "acc-1", [material_row("p", "5", "file.mp4")])
-        session.add(
-            AdObject(
-                tenant_id=seed.tenant_id,
-                advertiser_id="acc-1",
-                kind="ad",
-                remote_id="ad",
-                ad_type="SMART_PLUS",
-                name="known-ad",
-                observed_at=datetime.now(UTC),
-                published_version=1,
-            )
-        )
-        session.add(
-            MaterialPostLink(
-                tenant_id=seed.tenant_id,
-                advertiser_id="acc-1",
-                main_material_id="p",
-                ad_remote_id="ad",
-                main_material_type="VIDEO_SPARK_ADS",
-                ad_material_id="m",
-                observed_at=datetime.now(UTC),
-            )
-        )
-        job_id = request(session, seed, D)
-        session.commit()
-
-    class NoRemote:
-        calls = 0
-
-        def material_ad_links(self, **kwargs):
-            raise AssertionError("无需再次读取帖子概览")
-
-    assert step(factory, job_id, NoRemote()) == "WAITING"
-    with factory() as session:
-        runs = session.exec(
-            select(AdDirectoryRun).where(AdDirectoryRun.tenant_id == seed.tenant_id)
-        ).all()
-        assert len(runs) == 1 and runs[0].query["ids"] == ["ad"]
-        assert runs[0].actor_id == seed.actor_id and runs[0].frozen_route == _route(
-            seed
-        )
-        session.add(
-            AdMaterialReference(
-                tenant_id=seed.tenant_id,
-                advertiser_id="acc-1",
-                ad_remote_id="ad",
-                ad_material_id="m",
-                platform_material_id="v",
-                material_type="VIDEO",
-                name="file.mp4",
-                complete=True,
-                published_version=1,
-            )
-        )
-        session.flush()
-        link_work.wake_link_dependencies(session, now=datetime.now(UTC))
-        job = session.get(ReportSyncJob, job_id)
-        assert job.due_at <= datetime.now(UTC) and job.error_code is None
-        session.commit()
-    assert step(factory, job_id, NoRemote()) == "COMPLETE"
-
-
 def test_history_keeps_progress_when_every_round_adds_more_current_work(
     session, sync_seed, monkeypatch
 ):
@@ -431,54 +208,6 @@ def test_history_keeps_progress_when_every_round_adds_more_current_work(
         session.flush()
         now += timedelta(seconds=1)
     assert seen == {"history", "current"}
-
-
-def test_dependency_probe_uses_name_identity_index_in_large_account(session, sync_seed):
-    from sqlalchemy import event, text
-
-    from app.modules.reporting.material_links import directory_signature
-    from tests.modules.reporting.test_material_query import D, material_row, publish
-
-    publish(session, sync_seed, "acc-1", [material_row("old-post", "5", "needle.mp4")])
-    job_id = request(session, sync_seed, D)
-    session.connection().execute(
-        text("""
-        INSERT INTO ad_material_reference (id,tenant_id,advertiser_id,ad_remote_id,platform_material_id,
-          ad_material_id,material_type,name,creative_ids,complete,published_version)
-        SELECT gen_random_uuid(),:tenant,'acc-1','ad-'||n::text,'video-'||n::text,
-          'material-'||n::text,'VIDEO',CASE WHEN n=123 THEN 'needle.mp4' ELSE 'file-'||n::text END,
-          '[]'::jsonb,true,1 FROM generate_series(1,20000) n
-    """),
-        {"tenant": sync_seed.tenant_id},
-    )
-    session.connection().execute(text("ANALYZE ad_material_reference"))
-    connection = session.connection()
-
-    def explain(_conn, _cursor, statement, parameters, *_rest):
-        if "missing AS MATERIALIZED" in statement:
-            statement = "EXPLAIN (ANALYZE, FORMAT JSON) " + statement
-        return statement, parameters
-
-    event.listen(connection, "before_cursor_execute", explain, retval=True)
-    try:
-        plan = directory_signature(session, session.get(ReportSyncJob, job_id))[0][
-            "Plan"
-        ]
-    finally:
-        event.remove(connection, "before_cursor_execute", explain)
-
-    def nodes(node):
-        yield node
-        for child in node.get("Plans", []):
-            yield from nodes(child)
-
-    probes = [
-        n
-        for n in nodes(plan)
-        if n.get("Relation Name") == "ad_material_reference"
-        and "md5" in n.get("Index Cond", "")
-    ]
-    assert probes and all(n["Actual Rows"] <= 1 for n in probes), plan
 
 
 @pytest.mark.parametrize("facts", [0, 6])
@@ -529,7 +258,7 @@ def test_historical_links_use_backfill_pool_and_share_with_facts(
             record_report_outcome(session, row)
             row.claim_token = row.claimed_until = None
         session.flush()
-    assert {("material_links", False), ("material_links", True)} <= seen
+    assert {("creative_day", False), ("creative_day", True)} <= seen
     if facts:
         assert ("ad_day", True) in seen
 

@@ -46,7 +46,7 @@ def test_overlapping_unstarted_merge_reuses_only_unfrozen_children(
         "bc_id": "bc-a",
         "actor_id": seed.actor_id,
         "frozen_route": _route(seed),
-        "kind": "material_links",
+        "kind": "creative_day",
         "tier": "history",
         "advertiser_ids": ["acc-1"],
     }
@@ -486,7 +486,7 @@ def test_date_merge_requires_every_account_to_keep_the_frozen_query_scope(
     assert session.get(ReportSyncJob, first).end_date == D
 
 
-@pytest.mark.parametrize("kind", ["material_links", "ad_day", "material_day"])
+@pytest.mark.parametrize("kind", ["ad_day", "creative_day"])
 @pytest.mark.parametrize("tier", ["hot", "material"])
 def test_single_day_refresh_reuses_unstarted_history_without_duplicate_children(
     session, sync_seed, kind, tier
@@ -534,7 +534,7 @@ def test_single_day_refresh_reuses_unstarted_history_without_duplicate_children(
 
 
 @pytest.mark.parametrize("days_ago", [0, 1])
-@pytest.mark.parametrize("kind", ["ad_day", "material_day"])
+@pytest.mark.parametrize("kind", ["ad_day", "creative_day"])
 def test_recent_amount_refresh_still_splits_from_unstarted_history(
     session, sync_seed, days_ago, kind
 ):

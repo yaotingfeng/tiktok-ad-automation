@@ -9,10 +9,10 @@ from sqlalchemy import insert
 
 from app.modules.accounts.models import AdvertiserAccount
 from app.modules.reporting import health
-from app.modules.reporting.store_models import AdReportDay, MaterialReportDay
+from app.modules.reporting.store_models import AdReportDay, CreativeReportDay
 
 
-@pytest.mark.parametrize("model", [AdReportDay, MaterialReportDay])
+@pytest.mark.parametrize("model", [AdReportDay, CreativeReportDay])
 def test_known_scope_keeps_zero_spend_inactive_facts_and_excludes_foreign_active(
     session, sync_seed, monkeypatch, model
 ):
@@ -44,7 +44,7 @@ def test_known_scope_keeps_zero_spend_inactive_facts_and_excludes_foreign_active
                 **(
                     {"ad_id": "ad", "campaign_id": "c", "adgroup_id": "g"}
                     if model is AdReportDay
-                    else {"main_material_id": "post", "main_material_type": "VIDEO"}
+                    else {"creative_id": "post", "campaign_id": "c", "adgroup_id": "g"}
                 ),
             }
             for account, spend in [

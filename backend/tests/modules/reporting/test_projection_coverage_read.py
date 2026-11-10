@@ -31,7 +31,7 @@ def test_projection_coverage_raw_read_matches_models(
                 ReadBucketState(
                     tenant_id=sync_seed.tenant_id,
                     advertiser_id=adv,
-                    kind="material_day",
+                    kind="creative_material",
                     bucket=day,
                     source_revision=source,
                     derived_revision=derived,
@@ -50,6 +50,7 @@ def test_projection_coverage_raw_read_matches_models(
         "advertisers": ["acc-2", "acc-1"],
         "start": day,
         "end": day,
+        "kind": "creative_material",
     }
     _, models = coverage.projected_states(session, **kwargs)
     expected = coverage.projection_coverage(models)
@@ -68,7 +69,7 @@ def test_projection_coverage_does_not_construct_sync_or_bucket_models(
         ReadBucketState(
             tenant_id=sync_seed.tenant_id,
             advertiser_id="acc-1",
-            kind="material_day",
+            kind="creative_material",
             bucket=day,
             source_revision=1,
             derived_revision=1,
@@ -93,6 +94,7 @@ def test_projection_coverage_does_not_construct_sync_or_bucket_models(
             advertisers=["acc-1"],
             start=day,
             end=day,
+            kind="creative_material",
         )
     finally:
         event.remove(ReadBucketState, "load", track_bucket)

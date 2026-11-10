@@ -588,7 +588,13 @@ def known_reporting_accounts(session, plan, *, accounts, now) -> set[str]:
 
 
 def plan_hot(
-    session, plan: AdSyncBc, *, active: Sequence[str], now: datetime, tier: str = "hot"
+    session,
+    plan: AdSyncBc,
+    *,
+    active: Sequence[str],
+    now: datetime,
+    tier: str = "hot",
+    include_creative: bool = True,
 ) -> int:
     count = 0
     for (start, end), advertisers in _group_by_window(
@@ -611,7 +617,10 @@ def plan_hot(
                 **_common(plan),
             )
         )
-        # 创意事实与同一广告窗口一起规划，独立单账户分页。
+        # 分阶段规划器已单独维护创意的 covered/deferred 游标，不能在广告阶段重放。
+        # 其他入口仍将创意事实与同一广告窗口一起规划，独立单账户分页。
+        if not include_creative:
+            continue
         count += len(
             enqueue_jobs(
                 session,

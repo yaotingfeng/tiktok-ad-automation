@@ -130,7 +130,7 @@ def test_4859_finished_accounts_only_need_91_late_additions(
             state = _run(factory, seed, accounts, now, phase, redis_client)
         assert state[phase]["done"]
         assert set(state[phase]["covered"]) == set(covered + added)
-    for kind in ("ad_day", "material_day"):
+    for kind in ("ad_day", "creative_day"):
         assert {
             a for j in _jobs(factory, seed) if j.kind == kind for a in j.advertiser_ids
         } == set(added)
@@ -255,7 +255,7 @@ def test_late_screen_does_not_open_hot_when_only_material_was_due(
     assert not state["hot"]["deferred"]
     state = _run(factory, seed, accounts, now, "material", redis_client)
     assert state["material"]["done"]
-    assert {j.kind for j in _jobs(factory, seed)} == {"material_day"}
+    assert {j.kind for j in _jobs(factory, seed)} == {"creative_day"}
 
 
 def test_old_screen_after_new_live_keeps_current_day_and_tail_known_facts(

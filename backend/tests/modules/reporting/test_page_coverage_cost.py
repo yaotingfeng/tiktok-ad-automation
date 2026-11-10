@@ -26,17 +26,17 @@ def coverage_page_case(session, sync_seed):
     )
     session.connection().execute(
         text("""INSERT INTO report_sync_state
-        (tenant_id,advertiser_id,report_kind,stat_date,status,row_count,publication_version,updated_at,last_success_at)
-        SELECT :tenant,'coverage-'||i,kind,CAST(:start AS date)+day,'COMPLETE',0,1,now(),now()
+        (tenant_id,advertiser_id,report_kind,stat_date,status,row_count,publication_version,updated_at,last_success_at,observed_at)
+        SELECT :tenant,'coverage-'||i,kind,CAST(:start AS date)+day,'COMPLETE',0,1,now(),now(),now()
         FROM generate_series(0,519) i CROSS JOIN generate_series(0,6) day
-        CROSS JOIN (VALUES('ad_day'),('material_day')) k(kind)
+        CROSS JOIN (VALUES('ad_day'),('creative_day')) k(kind)
         WHERE i<>519 OR day<>6"""),
         {"tenant": sync_seed.tenant_id, "start": D},
     )
     session.connection().execute(
         text("""UPDATE read_bucket_state SET derived_revision=source_revision,
         derived_status='COMPLETE',derived_observed_at=observed_at
-        WHERE tenant_id=:tenant AND kind='material_day'"""),
+        WHERE tenant_id=:tenant AND kind='creative_material'"""),
         {"tenant": sync_seed.tenant_id},
     )
     return session, sync_seed
@@ -54,7 +54,7 @@ def _ref(seed, index, kind):
 def _material_members(seed):
     return [
         SnapshotMember(
-            json.dumps(["material", f"vid-{i}"]),
+            json.dumps(["material", "VIDEO", f"vid-{i}"]),
             (_ref(seed, i, "ad"),),
             (
                 {

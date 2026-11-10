@@ -10,7 +10,7 @@ from app.jobs.models import PendingDispatch
 from app.modules.reporting import job_tasks, planner
 from app.modules.reporting.jobs import enqueue_job, execute_job
 from app.modules.reporting.store_models import (
-    MaterialReportDay,
+    CreativeReportDay,
     ReportSyncJob,
     ReportSyncState,
 )
@@ -69,7 +69,7 @@ def test_material_facts_publish_without_waiting_for_historical_link_lookup(
 ):
     seed, factory = committed_sync_seed
     with factory() as session:
-        job = enqueue(session, seed, kind="material_day", tier="material")
+        job = enqueue(session, seed, kind="creative_day", tier="material")
         session.commit()
         job = claim_jobs(
             session, now=datetime.now(UTC) + timedelta(seconds=1), limit=1
@@ -77,17 +77,18 @@ def test_material_facts_publish_without_waiting_for_historical_link_lookup(
         session.commit()
 
     class Reader:
-        def material_day(self, **kwargs):
+        def creative_day(self, **kwargs):
             return RawReportPage(
                 (
                     {
                         "dimensions": {
-                            "main_material_id": "p1",
-                            "main_material_type": "VIDEO_SPARK_ADS",
+                            "ad_id": "p1",
                             "stat_time_day": str(job.start_date),
                         },
                         "metrics": {
                             "spend": "27",
+                            "campaign_id": "c1",
+                            "adgroup_id": "g1",
                             "native_growth_total_ad_impression_value": "4",
                         },
                     },
@@ -110,14 +111,14 @@ def test_material_facts_publish_without_waiting_for_historical_link_lookup(
         assert (
             session.get(
                 ReportSyncState,
-                (seed.tenant_id, "acc-2", "material_day", job.start_date),
+                (seed.tenant_id, "acc-2", "creative_day", job.start_date),
             ).status
             == "COMPLETE"
         )
         assert (
             session.exec(
-                select(MaterialReportDay).where(
-                    MaterialReportDay.tenant_id == seed.tenant_id
+                select(CreativeReportDay).where(
+                    CreativeReportDay.tenant_id == seed.tenant_id
                 )
             )
             .one()
@@ -130,7 +131,7 @@ def test_material_facts_publish_without_waiting_for_historical_link_lookup(
                 ReportSyncJob.kind == "material_links",
             )
         ).all()
-        assert len(repairs) == 1 and repairs[0].advertiser_ids == ["acc-2"]
+        assert repairs == []
 
 
 def test_realtime_planning_refreshes_current_day_every_fifteen_minutes():

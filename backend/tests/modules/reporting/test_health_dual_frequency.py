@@ -100,7 +100,7 @@ def test_coverage_starts_after_three_minutes_and_expires_at_five(
                         now - timedelta(seconds=age - 1)
                     ).isoformat(),
                     "missing_directory_ads": 0,
-                    "unlinked_material_posts": 0,
+                    "unmapped_creatives": 0,
                 },
             )
         )
@@ -224,7 +224,7 @@ def test_interleaved_stage_merges_keep_newer_freshness_and_coverage(
     seed, factory = committed_sync_seed
     _case(seed, factory, monkeypatch)
     now = datetime.now(UTC)
-    repairs = {"ad": set(), "material": set(), "links": set()}
+    repairs = {"ad": set(), "material": set(), "directory": set()}
     fresh = {
         "stale_ad_accounts": 0,
         "stale_material_accounts": 0,
@@ -266,7 +266,7 @@ def test_interleaved_stage_merges_keep_newer_freshness_and_coverage(
             phase="coverage",
             scope="scope",
             measurement=(
-                {"missing_directory_ads": 2, "unlinked_material_posts": 3},
+                {"missing_directory_ads": 2, "unmapped_creatives": 3},
                 [],
                 repairs,
             ),
@@ -291,7 +291,7 @@ def test_interleaved_stage_merges_keep_newer_freshness_and_coverage(
             phase="coverage",
             scope="scope",
             measurement=(
-                {"missing_directory_ads": 99, "unlinked_material_posts": 99},
+                {"missing_directory_ads": 99, "unmapped_creatives": 99},
                 [],
                 repairs,
             ),

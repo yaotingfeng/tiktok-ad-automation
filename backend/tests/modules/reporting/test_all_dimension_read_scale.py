@@ -165,10 +165,16 @@ def _seed_days(session, seed, first, last, count):
         session,
         seed,
         f"material days {first}-{last}",
-        f"""INSERT INTO material_entity_day
-        ({base_fields},{flags},row_key,main_material_type,main_material_name,post_ids,post_names,source_revision)
-        SELECT {base_values},{false_flags},json_build_array('material','scale-video-'||((i-1)%100+1))::text,'VIDEO',
-            '合成视频'||((i-1)%100+1),ARRAY['post-'||i],jsonb_build_object('post-'||i,'合成视频'||((i-1)%100+1)),1
+        f"""INSERT INTO creative_material_entity_day
+        ({base_fields},{flags},fact_key,row_key,creative_id,ad_remote_id,ad_material_id,
+         campaign_id,adgroup_id,material_type,platform_material_id,material_name,
+         assets,attribution_status,source_status,source_info,source_revision)
+        SELECT {base_values},{false_flags},'creative-'||i,
+            json_build_array('material','VIDEO','scale-video-'||((i-1)%100+1))::text,
+            'creative-'||i,'a'||i,'asset-'||i,'c'||i,'g'||i,'VIDEO',
+            'scale-video-'||((i-1)%100+1),'合成视频'||((i-1)%100+1),
+            jsonb_build_array(jsonb_build_object('material_type','VIDEO','platform_material_id','scale-video-'||((i-1)%100+1))),
+            'RESOLVED','COMPLETE','{{}}'::jsonb,1
         {series}""",
         **{**params, "n": min(MATERIAL_USES, count)},
     )
@@ -180,7 +186,7 @@ def _seed_days(session, seed, first, last, count):
         (tenant_id,advertiser_id,report_kind,stat_date,status,row_count,last_success_at,observed_at,publication_version,updated_at)
         SELECT :t,'scale-'||i,k,CAST(:end AS date)-d,'COMPLETE',20,now(),now(),1,now()
         FROM generate_series(1,5000)i CROSS JOIN generate_series(CAST(:first AS integer),CAST(:last AS integer))d
-        CROSS JOIN unnest(ARRAY['ad_day','material_day'])k""",
+        CROSS JOIN unnest(ARRAY['ad_day','creative_day'])k""",
         **params,
     )
     _write(
@@ -189,7 +195,7 @@ def _seed_days(session, seed, first, last, count):
         f"derived coverage days {first}-{last}",
         """INSERT INTO read_bucket_state
         (tenant_id,advertiser_id,kind,bucket,source_revision,derived_revision,observed_at,derived_observed_at,derived_status)
-        SELECT :t,'scale-'||i,'material_day',CAST(:end AS date)-d,1,1,now(),now(),'COMPLETE'
+        SELECT :t,'scale-'||i,'creative_material',CAST(:end AS date)-d,1,1,now(),now(),'COMPLETE'
         FROM generate_series(1,5000)i CROSS JOIN generate_series(CAST(:first AS integer),CAST(:last AS integer))d
         ON CONFLICT(tenant_id,advertiser_id,kind,bucket) DO UPDATE
             SET derived_revision=read_bucket_state.source_revision,derived_status='COMPLETE',derived_observed_at=now()""",
@@ -208,7 +214,7 @@ def _analyze(session):
         "campaign_report_day",
         "adgroup_report_day",
         "ad_report_day",
-        "material_entity_day",
+        "creative_material_entity_day",
         "entity_metric_day",
         "report_sync_state",
         "read_bucket_state",
@@ -347,7 +353,7 @@ def scale_case():
             canonical = (
                 "campaign_report_day",
                 "ad_report_day",
-                "material_report_day",
+                "creative_report_day",
                 "ad_object",
                 "campaign_name_projection",
                 "ad_material_reference",

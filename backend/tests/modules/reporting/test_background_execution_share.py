@@ -43,8 +43,7 @@ def test_real_registered_queues_share_four_live_execution_slots(
 
     now = datetime.now(UTC) + timedelta(seconds=1)
     for i in range(8):
-        pending(session, sync_seed, "material_day", i, now)
-        pending(session, sync_seed, "material_links", i, now)
+        pending(session, sync_seed, "creative_day", i, now)
         run = directory(session, sync_seed)
         run.workload = "background"
         # 独立查询scope避免把单头串行误当成共享池容量保护。
@@ -92,8 +91,7 @@ def pool_backlog(session, seed, now, *, facts=True, future=False):
 
     for i in range(8):
         if facts:
-            pending(session, seed, "material_day", i, now, future=future)
-        pending(session, seed, "material_links", i, now)
+            pending(session, seed, "creative_day", i, now, future=future)
         run = directory(session, seed)
         run.workload = "background"
         run.query = run.query | {"page_size": 100 + i}
@@ -228,7 +226,7 @@ def test_shared_pool_gives_every_backlogged_kind_progress(
         kinds.update(kind for kind, _ in active)
         for kind, run in active:
             finish_pool_step(session, redis_client, kind, run, now)
-    assert kinds == {"material_day", "material_links", "directory"}
+    assert kinds == {"creative_day", "directory"}
 
 
 @pytest.mark.parametrize("future", [False, True])
@@ -240,7 +238,7 @@ def test_idle_or_future_fact_share_can_be_borrowed(
     dispatch_pool(session, redis_client, now)
     active = pool_running(session, sync_seed, now)
     assert len(active) == 4
-    assert {kind for kind, _ in active} <= {"material_links", "directory"}
+    assert {kind for kind, _ in active} <= {"directory"}
 
 
 def test_arriving_facts_reclaim_next_released_slot_without_cancelling_work(
@@ -251,14 +249,14 @@ def test_arriving_facts_reclaim_next_released_slot_without_cancelling_work(
     dispatch_pool(session, redis_client, now, directory_first=True)
     active = pool_running(session, sync_seed, now)
     assert len(active) == 4
-    pending(session, sync_seed, "material_day", 50, now)
+    pending(session, sync_seed, "creative_day", 50, now)
     held = {run.id for _, run in active[1:]}
     finish_pool_step(session, redis_client, *active[0], now)
     dispatch_pool(session, redis_client, now, directory_first=True)
     current = pool_running(session, sync_seed, now)
     assert len(current) == 4
     assert held <= {run.id for _, run in current}
-    assert any(kind == "material_day" for kind, _ in current)
+    assert any(kind == "creative_day" for kind, _ in current)
 
 
 @pytest.mark.parametrize("service", [None, "status"])

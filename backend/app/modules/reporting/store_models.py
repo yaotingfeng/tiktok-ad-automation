@@ -105,6 +105,13 @@ class CreativeReportDay(_Fact, table=True):
             "adgroup_id",
             "stat_date",
         ),
+        Index(
+            "ix_creative_report_identity",
+            "tenant_id",
+            "advertiser_id",
+            "creative_id",
+            "stat_date",
+        ),
         {"postgresql_partition_by": "RANGE (stat_date)"},
     )
     stat_date: date = Field(primary_key=True)

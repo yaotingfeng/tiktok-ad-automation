@@ -2,14 +2,12 @@
 
 import json
 from contextlib import contextmanager
-from datetime import timedelta
 from uuid import uuid4
 
 import pytest
 from sqlalchemy import text
 
 from tests.modules.reporting.test_material_query import D
-from tests.modules.reporting.test_material_value import fact
 
 
 def _nodes(plan):
@@ -75,7 +73,7 @@ def _seed(session, seed, family, tag, n):
     session.execute(text(statement), {"tenant": seed.tenant_id, "tag": tag, "n": n})
 
 
-@pytest.mark.parametrize("family", ["link", "reference"])
+@pytest.mark.parametrize("family", ["reference"])
 @pytest.mark.parametrize("operation", ["INSERT", "UPDATE", "DELETE"])
 def test_transition_estimate_tracks_small_large_small_on_one_backend(
     session, sync_seed, family, operation, record_property
@@ -138,54 +136,6 @@ def _buckets(session, tenant):
             {"tenant": tenant},
         )
     }
-
-
-def test_link_identity_move_dirties_old_new_dates_and_rollback_is_atomic(
-    session, sync_seed
-):
-    fact(session, sync_seed, "old", "1", "0", day=D)
-    fact(session, sync_seed, "new", "1", "0", day=D - timedelta(days=60), adv="acc-2")
-    fact(session, sync_seed, "unrelated", "1", "0", day=D - timedelta(days=1))
-    initial = _buckets(session, sync_seed.tenant_id)
-    sp = session.begin_nested()
-    session.execute(
-        text("""INSERT INTO material_post_link
-        (tenant_id,advertiser_id,main_material_id,ad_remote_id,main_material_type,observed_at)
-        VALUES(:tenant,'acc-1','old','ad','VIDEO_SPARK_ADS',now())"""),
-        {"tenant": sync_seed.tenant_id},
-    )
-    inserted = _buckets(session, sync_seed.tenant_id)
-    old = ("acc-1", "material_day", D)
-    new = ("acc-2", "material_day", D - timedelta(days=60))
-    unrelated = ("acc-1", "material_day", D - timedelta(days=1))
-    assert inserted[old][0] == initial[old][0] + 1
-    assert inserted[new] == initial[new]
-    session.execute(
-        text(
-            "UPDATE material_post_link SET advertiser_id='acc-2',main_material_id='new' WHERE tenant_id=:tenant"
-        ),
-        {"tenant": sync_seed.tenant_id},
-    )
-    moved = _buckets(session, sync_seed.tenant_id)
-    assert (
-        moved[old][0] == inserted[old][0] + 1 and moved[new][0] == inserted[new][0] + 1
-    )
-    assert moved[unrelated] == initial[unrelated]
-    session.execute(
-        text("DELETE FROM material_post_link WHERE tenant_id=:tenant"),
-        {"tenant": sync_seed.tenant_id},
-    )
-    deleted = _buckets(session, sync_seed.tenant_id)
-    assert deleted[old] == moved[old] and deleted[new][0] == moved[new][0] + 1
-    sp.rollback()
-    assert _buckets(session, sync_seed.tenant_id) == initial
-    assert (
-        session.execute(
-            text("SELECT count(*) FROM material_post_link WHERE tenant_id=:tenant"),
-            {"tenant": sync_seed.tenant_id},
-        ).scalar_one()
-        == 0
-    )
 
 
 def test_reference_identity_move_keeps_precise_latest_ties_and_atomic_rollback(
