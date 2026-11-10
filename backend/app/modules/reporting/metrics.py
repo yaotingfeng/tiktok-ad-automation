@@ -2,7 +2,7 @@
 """平台报表字段 → 存储列。
 
 基础报表 dN = 点击后 N+1 天累计，因此 D3/D7/D14/D30 取 d2/d6/d13/d29；
-素材报表字段名不同且没有 D3、D30，恒为 NULL，页面显示“平台未提供”。
+创意与广告使用同一套基础报表字段，事实粒度分别保存。
 """
 
 from datetime import UTC, date, datetime
@@ -10,10 +10,9 @@ from decimal import Decimal, InvalidOperation
 from zoneinfo import ZoneInfo
 
 from app.core.errors import DomainError
-from app.modules.reporting.metric_catalog import basic_fields, material_fields
+from app.modules.reporting.metric_catalog import basic_fields
 
 _BASIC = basic_fields()
-_MATERIAL = material_fields()
 COLUMNS = tuple(_BASIC)
 
 # 广告报表随行带回上级 ID、名称和类型，新建对象无需等待目录同步即可归组。
@@ -28,9 +27,6 @@ AD_DAY_METRICS = (
 )
 CAMPAIGN_METRICS = (*_BASIC.values(), "campaign_name")
 ACCOUNT_METRICS = ("spend", "native_growth_total_ad_impression_value")
-# 素材细分接口会随每行自动返回 main_material_name / main_material_type，
-# 但它们不是可请求的指标：写进 metrics 会让平台以 40002 拒绝整个请求。
-MATERIAL_METRICS = tuple(_MATERIAL.values())
 
 
 def parse_decimal(value: object) -> Decimal | None:
@@ -50,15 +46,6 @@ def parse_decimal(value: object) -> Decimal | None:
 def basic_metric_values(metrics: dict[str, object]) -> dict[str, Decimal | None]:
     return {
         column: parse_decimal(metrics.get(field)) for column, field in _BASIC.items()
-    }
-
-
-def material_metric_values(metrics: dict[str, object]) -> dict[str, Decimal | None]:
-    return {
-        column: parse_decimal(metrics.get(_MATERIAL[column]))
-        if column in _MATERIAL
-        else None
-        for column in COLUMNS
     }
 
 

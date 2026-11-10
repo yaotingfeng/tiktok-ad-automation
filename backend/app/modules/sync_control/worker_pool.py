@@ -6,42 +6,25 @@ from datetime import datetime
 from time import monotonic
 from typing import cast
 from uuid import UUID
-from zoneinfo import ZoneInfo
 
 from redis import Redis
 from sqlalchemy import text
 from sqlalchemy.dialects.postgresql import insert
-from sqlmodel import Session, col, select
+from sqlmodel import Session
 
 from app.modules.reporting.store_models import ReportSyncJob
 from app.modules.sync_control.models import (
-    SyncExecutionScope,
-    SyncScope,
     SyncWorkerPool,
 )
 
-POOL_WEIGHTS = {"facts": 2, "links": 1, "directory": 1, "maintenance": 1}
+POOL_WEIGHTS = {"facts": 2, "directory": 1, "maintenance": 1}
 
 
 def report_background_category(
-    session: Session, job: ReportSyncJob, *, work_class: str, now: datetime
+    _session: Session, _job: ReportSyncJob, *, work_class: str, now: datetime
 ) -> str | None:
-    if job.kind != "material_links":
-        return "facts" if work_class == "history" else None
-    timezones = session.exec(
-        select(col(SyncScope.timezone))
-        .join(SyncExecutionScope, col(SyncExecutionScope.scope_id) == col(SyncScope.id))
-        .where(col(SyncExecutionScope.report_job_id) == job.id)
-        .distinct()
-    ).all()
-    current = (
-        bool(timezones)
-        and job.start_date == job.end_date
-        and all(
-            job.end_date == now.astimezone(ZoneInfo(zone)).date() for zone in timezones
-        )
-    )
-    return None if current else "links"
+    del now
+    return "facts" if work_class == "history" else None
 
 
 def background_lease_count(session: Session, *, now: datetime) -> int:
@@ -93,19 +76,10 @@ def _readiness_candidates(
 ) -> list[tuple[UUID, UUID, str, str, bool]]:
     # 先固定窄head页再检查执行资格。先过滤EXISTS再LIMIT会让Merge Join
     # 每次从头重扫执行引用；游标越靠后，持公共池锁的时间反而越长。
-    if category in {"facts", "links"}:
+    if category == "facts":
         parent, reference = "report_sync_job", "report_job_id"
-        family = (
-            "h.work_class='history' AND s.resource<>'material_links'"
-            if category == "facts"
-            else "s.resource='material_links'"
-        )
-        condition = "p.status IN ('QUEUED','WAITING','RUNNING') AND p.due_at<=:now"
-        condition += (
-            " AND h.work_class='history' AND p.kind<>'material_links'"
-            if category == "facts"
-            else " AND p.kind='material_links' AND NOT (p.start_date=p.end_date AND p.end_date=(:now AT TIME ZONE s.timezone)::date)"
-        )
+        family = "h.work_class='history'"
+        condition = "p.status IN ('QUEUED','WAITING','RUNNING') AND p.due_at<=:now AND h.work_class='history'"
     elif category == "directory":
         parent, reference = "ad_directory_run", "directory_run_id"
         family = "s.resource LIKE 'directory:%'"
@@ -174,7 +148,7 @@ def _ready_categories(
     # 直接探测有界head页，并按当前调用类轮换同行起点，慢页不能固定遮住另一类。
     peers = sorted(POOL_WEIGHTS.keys() - {category})
     if not allow_backfill:
-        peers = [peer for peer in peers if peer not in {"facts", "links"}]
+        peers = [peer for peer in peers if peer != "facts"]
     if not peers:
         return eligible
     with redis.pipeline() as sequence:

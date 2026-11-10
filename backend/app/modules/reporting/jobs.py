@@ -3,7 +3,7 @@
 - 领取按租户轮转、按优先级与到期时间排序，大租户不能挤占小租户。
 - 各报表逐页断点，额度让出不重读旧页；完整一致后才原子发布。
 - 额度/限流延后不计重试次数；读取错误最多 5 次指数退避；合同错误立即失败。
-- 广告综合报表 2 万行触顶先拆账户/系列；素材拆分报表按分页证据续读，大跨日范围拆日期。
+- 广告与创意综合报表 2 万行触顶先拆账户/系列，完整发布后才更新覆盖。
 """
 
 import hashlib
@@ -12,10 +12,9 @@ import logging
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from random import randint
-from time import monotonic
 from uuid import UUID
 
-from sqlalchemy import delete, text
+from sqlalchemy import delete
 from sqlmodel import Session, col, select
 
 from app.core.errors import DomainError
@@ -24,27 +23,15 @@ from app.integrations.tiktok.sdk import AccountAdmissionDeferred
 from app.modules.accounts.models import AdvertiserAccount
 from app.modules.reporting import (
     diagnostics,
-    material_identity,
-    material_links,
     publish,
-    spark_identity,
 )
 from app.modules.reporting.checkpoints import BASIC_KINDS, CheckpointReader
 from app.modules.reporting.directory_refresh import (
     refresh_report_directory,
-    request_link_directory,
 )
 from app.modules.reporting.lanes import (
     CLOSEOUT_PRIORITY,
-    report_workload,
 )
-from app.modules.reporting.link_policy import complete_material_link
-from app.modules.reporting.material_value import (
-    TYPED_MATERIAL_WINDOW_VALUES_SQL,
-    material_value_parameters,
-    valuable_material_condition,
-)
-from app.modules.reporting.metrics import material_metric_values, parse_local_day
 from app.modules.reporting.store_models import ReportSyncJob, ReportSyncPage
 from app.modules.sync_control.executions import ExecutionLost, TransactionBoundaryReader
 
@@ -59,20 +46,12 @@ PRIORITY = {
     "closeout": CLOSEOUT_PRIORITY,
 }
 TRUNCATION_ROWS = 20_000
-MATERIAL_PAGES_PER_STEP = 5
-MATERIAL_BACKFILL_PAGES_PER_STEP = 50
-MATERIAL_BACKFILL_STEP_SECONDS = 30
-MATERIAL_SPLIT_ROWS = 5_000
 MAX_PROVIDER_RETRIES = 5
-MATERIAL_SNAPSHOT_RETRY_SECONDS = (5, 10, 20, 30, 60)
-MATERIAL_LINK_SNAPSHOT_RECOVERY_DELAY = timedelta(minutes=5)
-# 就绪历史关联在同一20秒绝对期限内连续推进，摊销领取/补派开销。
-# 每步仍独立提交并校验原grant，实际HTTP仍逐次受共享频控和真实成本约束。
-MATERIAL_LINK_STEPS_PER_QUANTUM = 10
-MATERIAL_LINK_QUANTUM_SECONDS = 20
 LEASE = timedelta(seconds=240)
 _CONTRACT_ERRORS = frozenset(
     {
+        "report_job_kind_invalid",
+        "report_kind_retired",
         "report_query_invalid",
         "report_response_invalid",
         "report_row_invalid",
@@ -192,6 +171,8 @@ def enqueue_jobs(
     """同一冻结范围整批去重、整批写入；每个账户组仍是一条独立同步任务。"""
     from app.modules.sync_control.report_demand import enqueue_report_requirements
 
+    if kind in {"material_day", "material_links"}:
+        raise DomainError("report_kind_retired", "旧素材报表及补链任务已退休")
     return enqueue_report_requirements(
         session,
         tenant_id=tenant_id,
@@ -273,7 +254,7 @@ def _split(session, job: ReportSyncJob) -> bool:
     return False
 
 
-def _material_scope(job):
+def _basic_scope(job):
     # 暂存严格绑定租户、账户、授权代数和日期；修改冻结范围不能续用旧页。
     key = _key(
         job.tenant_id,
@@ -290,404 +271,6 @@ def _material_scope(job):
     return hashlib.sha256(f"{key}:{request_time(job).isoformat()}".encode()).hexdigest()
 
 
-def _log_material_snapshot_change(job, result, *, page, reason):
-    # 失败会回滚并删除私有页；只保留小型分页诊断，不记录素材身份、正文或额外查库。
-    saved = job.progress.get("material_paging") or {}
-    age = None
-    try:
-        observed = datetime.fromisoformat(saved["observed_at"])
-        if observed.utcoffset() is not None:
-            elapsed = (datetime.now(UTC) - observed).total_seconds()
-            if elapsed >= 0:
-                age = round(elapsed, 3)
-    except KeyError, TypeError, ValueError:
-        pass
-    details = {
-        "job_id": str(job.id),
-        "reason": reason,
-        "page": page,
-        "saved_total_page": saved.get("total_page"),
-        "saved_total_number": saved.get("total_number"),
-        "current_total_page": result.total_page,
-        "current_total_number": result.total_number,
-        "first_page_age_seconds": age,
-    }
-    logger.warning(
-        "material snapshot changed %s",
-        json.dumps(details),
-        extra={"snapshot_failure": details},
-    )
-
-
-def _validate_material_page(session, job, accounts, result, page):
-    if (
-        any(
-            type(value) is not int
-            for value in (result.page, result.total_page, result.total_number)
-        )
-        or result.page != page
-        or result.total_page < 0
-        or result.total_number < 0
-        or (
-            result.total_number == 0
-            and (result.rows or result.total_page not in (0, 1) or page != 1)
-        )
-        or (result.total_number > 0 and (not result.rows or page > result.total_page))
-    ):
-        raise DomainError("report_response_invalid", "素材分页证据无效")
-    keys = []
-    for row in result.rows:
-        publish._account(row, accounts)
-        dims = row.get("dimensions") or {}
-        day = publish._in_range(
-            parse_local_day(dims.get("stat_time_day")), job.start_date, job.end_date
-        )
-        if not dims.get("main_material_id") or not dims.get("main_material_type"):
-            raise DomainError("report_row_invalid", "素材行缺少主素材身份")
-        material_metric_values(row.get("metrics") or {})
-        keys.append(
-            json.dumps(
-                [day.isoformat(), str(dims["main_material_id"])], separators=(",", ":")
-            )
-        )
-    if len(set(keys)) != len(keys):
-        raise DomainError("report_row_invalid", "素材分页包含重复日期与主素材")
-    if (
-        keys
-        and session.connection()
-        .execute(
-            text("""
-        SELECT EXISTS(SELECT 1 FROM report_sync_page
-          WHERE job_id=:job AND tenant_id=:tenant AND row_keys ?| CAST(:keys AS text[]))
-    """),
-            {"job": job.id, "tenant": job.tenant_id, "keys": keys},
-        )
-        .scalar_one()
-    ):
-        _log_material_snapshot_change(
-            job, result, page=page, reason="cross_page_duplicate"
-        )
-        raise DomainError(
-            "report_snapshot_changed", "素材跨页内容变化，需要重建完整快照"
-        )
-    return keys
-
-
-def _split_material_dates(session, job, result: RawReportPage):
-    days = (job.end_date - job.start_date).days + 1
-    # 小账户保留批量请求；仅大范围缩小，最多七天且下一层仍可按首分页继续拆。
-    chunk_days = max(1, min(7, days * MATERIAL_SPLIT_ROWS // result.total_number))
-    job.progress = job.progress | {
-        "material_split": {
-            "total_number": result.total_number,
-            "total_page": result.total_page,
-            "chunk_days": chunk_days,
-        }
-    }
-    job.status, job.finished_at = "COMPLETE", datetime.now(UTC)
-    session.flush()
-    session.connection().execute(
-        delete(ReportSyncPage).where(col(ReportSyncPage.job_id) == job.id)
-    )
-    cursor = job.start_date
-    while cursor <= job.end_date:
-        end = min(job.end_date, cursor + timedelta(days=chunk_days - 1))
-        enqueue_job(
-            session,
-            tenant_id=job.tenant_id,
-            bc_id=job.bc_id,
-            kind=job.kind,
-            tier=next(
-                tier for tier, priority in PRIORITY.items() if priority == job.priority
-            ),
-            advertiser_ids=job.advertiser_ids,
-            start=cursor,
-            end=end,
-            frozen_route=job.frozen_route,
-            actor_id=job.actor_id,
-            requested_at=request_time(job),
-            execution_window_days=chunk_days,
-        )
-        cursor = end + timedelta(days=1)
-
-
-def _run_material(session, job, reader, accounts):
-    if len(accounts) != 1 or job.campaign_ids:
-        raise DomainError("report_query_invalid", "素材日报要求一个账户且不能限定系列")
-    started = monotonic()
-    # 沿用执行器的账户当地日/收尾分类；过期热报才使用补数预算，今日与昨日
-    # 收尾仍每步最多5页。历史5页往往只读数秒，却要等数千任务轮转才能续页，
-    # 拉长完整快照窗口并增加重建。连续读仍有限额，不能一直占用后台执行槽。
-    background = report_workload(session, job, now=datetime.now(UTC)) == "background"
-    page_limit = (
-        MATERIAL_BACKFILL_PAGES_PER_STEP if background else MATERIAL_PAGES_PER_STEP
-    )
-    deadline = started + MATERIAL_BACKFILL_STEP_SECONDS if background else None
-    scope = _material_scope(job)
-    progress = job.progress.get("material_paging")
-    if progress is None:
-        progress = {"scope": scope, "next_page": 1}
-    if (
-        progress.get("scope") != scope
-        or type(progress.get("next_page")) is not int
-        or progress["next_page"] < 1
-    ):
-        raise DomainError("report_query_invalid", "素材暂存与冻结请求范围不一致")
-    page = progress["next_page"]
-    stored_pages = session.exec(
-        select(ReportSyncPage.page)
-        .where(col(ReportSyncPage.job_id) == job.id)
-        .order_by(col(ReportSyncPage.page))
-    ).all()
-    if stored_pages != list(range(1, page)):
-        raise DomainError("report_response_invalid", "素材暂存分页不连续")
-    if page > 1 and progress.get("observed_at") is None:
-        # 旧版本暂存没有首页观测证据，不能以当前时间冒充旧页的新鲜度。
-        # 只重建私有快照；正式事实保留到新快照完整读取并通过发布水位校验。
-        session.connection().execute(
-            delete(ReportSyncPage).where(col(ReportSyncPage.job_id) == job.id)
-        )
-        progress = {"scope": scope, "next_page": 1}
-        page = 1
-    if page == 1:
-        # 已持有账户事务锁；从头读取的每个 attempt 都以实际首页开始为水位。
-        observed_at = publish._database_now(session)
-        job.progress = job.progress | {"snapshot_observed_at": observed_at.isoformat()}
-    else:
-        try:
-            saved_observation = progress["observed_at"]
-            if not isinstance(saved_observation, str):
-                raise ValueError("invalid observation type")
-            observed_at = datetime.fromisoformat(saved_observation)
-            if observed_at.utcoffset() is None:
-                raise ValueError("missing timezone")
-        except (KeyError, TypeError, ValueError) as error:
-            raise DomainError("report_query_invalid", "素材首页观测时间无效") from error
-    for _ in range(page_limit):
-        # 只在完整页边界让出，已存断点按原due_at轮转；正在执行的单次请求继续
-        # 受SDK原期限和每次准入约束。拒绝仍立即退出，不重试或扩大平台配额。
-        if deadline is not None and monotonic() >= deadline:
-            return None
-        result = reader.material_day(
-            advertiser_id=job.advertiser_ids[0],
-            start=job.start_date,
-            end=job.end_date,
-            page=page,
-        )
-        snapshot_changed = (
-            page > 1
-            and type(result.page) is int
-            and result.page == page
-            and all(
-                type(v) is int and v >= 0
-                for v in (result.total_page, result.total_number)
-            )
-            and (
-                result.total_page != progress.get("total_page")
-                or result.total_number != progress.get("total_number")
-            )
-        )
-        if snapshot_changed and not result.rows:
-            # 缩页会让旧游标返回合法空页；保留正式事实，按已有有限预算重建暂存。
-            _log_material_snapshot_change(
-                job, result, page=page, reason="total_changed"
-            )
-            raise DomainError(
-                "report_snapshot_changed", "素材分页总数变化，需要重建完整快照"
-            )
-        # 非空页先校验账户、日期及页内唯一性，不能被总数变化掩盖永久坏行。
-        keys = _validate_material_page(session, job, accounts, result, page)
-        if snapshot_changed:
-            _log_material_snapshot_change(
-                job, result, page=page, reason="total_changed"
-            )
-            raise DomainError(
-                "report_snapshot_changed", "素材分页总数变化，需要重建完整快照"
-            )
-        if (
-            page == 1
-            and result.total_number > MATERIAL_SPLIT_ROWS
-            and job.start_date < job.end_date
-        ):
-            _split_material_dates(session, job, result)
-            return 0
-        session.add(
-            ReportSyncPage(
-                job_id=job.id,
-                tenant_id=job.tenant_id,
-                page=page,
-                scope_key=scope,
-                rows=list(result.rows),
-                row_keys=keys,
-                total_page=result.total_page,
-                total_number=result.total_number,
-            )
-        )
-        progress = {
-            "scope": scope,
-            "next_page": page + 1,
-            "total_page": result.total_page,
-            "total_number": result.total_number,
-            # 续页与限流重试不能刷新首页时间，否则旧页会覆盖期间完成的热刷。
-            "observed_at": observed_at.isoformat(),
-        }
-        job.progress = job.progress | {"material_paging": progress}
-        session.flush()
-        if result.next_page is None:
-            evidence = (
-                session.connection()
-                .execute(
-                    text("""SELECT coalesce(sum(jsonb_array_length(rows)),0),
-                    coalesce(bool_and(scope_key=:scope AND tenant_id=:tenant),true)
-                    FROM report_sync_page WHERE job_id=:job"""),
-                    {"scope": scope, "tenant": job.tenant_id, "job": job.id},
-                )
-                .one()
-            )
-            if not evidence[1]:
-                raise DomainError("report_query_invalid", "素材暂存证据超出冻结范围")
-            if evidence[0] != result.total_number:
-                raise DomainError("report_response_invalid", "素材完整页数与行数不一致")
-            # 单遍服务器游标逐页解码；发布器分批规范化暂存，不把大日桶拼成Python列表。
-            payloads = session.exec(
-                select(ReportSyncPage.rows)
-                .where(ReportSyncPage.job_id == job.id)
-                .order_by(ReportSyncPage.page)
-                .execution_options(stream_results=True)
-            ).yield_per(1)
-            rows = (row for payload in payloads for row in payload)
-            count = publish.publish_material_day(
-                session,
-                tenant_id=job.tenant_id,
-                job_id=job.id,
-                accounts=accounts,
-                start=job.start_date,
-                end=job.end_date,
-                rows=rows,
-                requested_at=observed_at,
-            )
-            with diagnostics.stage("links_enqueued"):
-                if material_links.needs_material_links(
-                    session,
-                    tenant_id=job.tenant_id,
-                    advertiser_id=job.advertiser_ids[0],
-                    start=job.start_date,
-                    end=job.end_date,
-                ):
-                    enqueue_job(
-                        session,
-                        tenant_id=job.tenant_id,
-                        bc_id=job.bc_id,
-                        kind="material_links",
-                        tier=next(
-                            tier
-                            for tier, priority in PRIORITY.items()
-                            if priority == job.priority
-                        ),
-                        advertiser_ids=job.advertiser_ids,
-                        start=job.start_date,
-                        end=job.end_date,
-                        frozen_route=job.frozen_route,
-                        actor_id=job.actor_id,
-                    )
-            return count
-        page = result.next_page
-    # 只有完整页边界才让出账户锁；已提交页和游标在同一事务中持久化。
-    return None
-
-
-def cleanup_material_pages(session, *, now: datetime, retention_days: int = 7) -> int:
-    """仅清理已终结七天的任务暂存；WAITING/RUNNING/QUEUED 均保留以便恢复。"""
-    terminal = select(ReportSyncJob.id).where(
-        col(ReportSyncJob.status).in_(["COMPLETE", "FAILED", "CANCELLED"]),
-        col(ReportSyncJob.finished_at) < now - timedelta(days=retention_days),
-    )
-    result = session.connection().execute(
-        delete(ReportSyncPage).where(col(ReportSyncPage.job_id).in_(terminal))
-    )
-    return result.rowcount
-
-
-def _material_link_overview_ads(session, job):
-    """复用同日期报表的广告范围，避免为少量当天帖子扫描全账户历史。"""
-    if not job.progress.get("overview_complete") and not job.progress.get(
-        "overview_owner_scoped"
-    ):
-        owners = list(
-            session.connection()
-            .execute(
-                text(f"""
-                WITH material_values AS ({TYPED_MATERIAL_WINDOW_VALUES_SQL}), missing AS (
-                  SELECT DISTINCT d.main_material_id,d.main_material_type FROM material_report_day d
-                  WHERE d.tenant_id=:tenant AND d.advertiser_id=:advertiser
-                    AND d.stat_date BETWEEN :start AND :end
-                    AND {valuable_material_condition("d", typed=True)}
-                    AND NOT {complete_material_link("d", tenant=":tenant")})
-                SELECT DISTINCT l.ad_remote_id FROM missing m
-                LEFT JOIN material_post_link l ON l.tenant_id=:tenant
-                  AND l.advertiser_id=:advertiser AND l.main_material_id=m.main_material_id
-                  AND l.main_material_type=m.main_material_type AND NULLIF(l.ad_remote_id, '') IS NOT NULL
-                ORDER BY l.ad_remote_id NULLS FIRST LIMIT 201
-                """),
-                {
-                    **material_value_parameters(
-                        job.tenant_id,
-                        [(job.advertiser_ids[0], job.start_date, job.end_date)],
-                    ),
-                    "tenant": job.tenant_id,
-                    "advertiser": job.advertiser_ids[0],
-                    "start": job.start_date,
-                    "end": job.end_date,
-                },
-            )
-            .scalars()
-        )
-        if owners and None not in owners and len(owners) <= 200:
-            # 全部缺口已有正向归属证据，概览只读这些广告。切换范围须从第一页开始；
-            # 之后冻结分页，不能随着每页补齐而缩小过滤集合，导致跳页或漏读。
-            job.progress = job.progress | {
-                "overview_ad_ids": owners,
-                "overview_owner_scoped": True,
-                "next_page": 1,
-            }
-    if "overview_ad_ids" not in job.progress or (
-        not job.progress["overview_ad_ids"]
-        and "owner_lookup_first" not in job.progress
-        and not job.progress.get("overview_complete")
-    ):
-        ids = list(
-            session.connection()
-            .execute(
-                text("""
-                SELECT DISTINCT ad_id FROM ad_report_day
-                WHERE tenant_id=:tenant AND advertiser_id=:advertiser
-                  AND stat_date BETWEEN :start AND :end
-                  AND campaign_automation_type='UPGRADED_SMART_PLUS'
-                ORDER BY ad_id LIMIT 201
-                """),
-                {
-                    "tenant": job.tenant_id,
-                    "advertiser": job.advertiser_ids[0],
-                    "start": job.start_date,
-                    "end": job.end_date,
-                },
-            )
-            .scalars()
-        )
-        # 宽范围先用缺口自己的日期/候选广告定位，精确内容解析后仍缺失才补概览。
-        # 避免几条旧帖被月份内超过200广告触发的全账户百页扫描挡住。
-        progress = job.progress | {
-            "overview_ad_ids": ids if len(ids) <= 200 else [],
-            "owner_lookup_first": len(ids) > 200,
-        }
-        if ids and len(ids) <= 200 and not progress.get("overview_complete"):
-            # 旧的全账户页不能与筛选页混接；已写入的真实映射保留。
-            progress["next_page"] = 1
-        job.progress = progress
-    # 首次选定后随分页持久化，期间新增广告由下一轮补齐，不改变本轮查询。
-    return tuple(job.progress["overview_ad_ids"])
-
-
 def _run(
     session, job: ReportSyncJob, reader: _CountingReader | CheckpointReader
 ) -> int | None:
@@ -700,7 +283,7 @@ def _run(
         return run_step(session, job, reader, accounts, external=reader.reader.external)
     if job.kind in BASIC_KINDS:
         reader = CheckpointReader(
-            session, job, reader, scope=_material_scope(job), row_limit=TRUNCATION_ROWS
+            session, job, reader, scope=_basic_scope(job), row_limit=TRUNCATION_ROWS
         )
         observed_at = reader.observed_at
     if job.kind == "ad_day":
@@ -780,53 +363,6 @@ def _run(
             rows=rows,
             requested_at=observed_at,
         )
-    if job.kind == "material_day":
-        return _run_material(session, job, reader, accounts)
-    if job.kind == "material_links":
-        # 旧等待任务按新金额范围自然复核结束；不能再为零金额帖子读目录或平台身份。
-        if not material_links.needs_material_links(
-            session, tenant_id=t, advertiser_id=advertisers[0], start=s, end=e
-        ):
-            return 0
-        # 库MID与帖子ID是不同命名空间；每步单独回读非Spark的精确视频身份。
-        if material_identity.resolve_asset_videos(session, job, reader):
-            return None
-        if spark_identity.resolve_spark_videos(session, job, reader):
-            return None
-        with diagnostics.stage("links_overview_candidates"):
-            overview_ads = _material_link_overview_ads(session, job)
-        complete = material_links.refresh_material_links(
-            session,
-            tenant_id=t,
-            advertiser_id=advertisers[0],
-            read_overview=lambda p: reader.material_ad_links(
-                advertiser_id=advertisers[0], page=p, ad_ids=overview_ads
-            ),
-            read_ad_posts=lambda ads, first, last, p: reader.material_ad_posts(
-                advertiser_id=advertisers[0], ad_ids=ads, start=first, end=last, page=p
-            ),
-            now=datetime.now(UTC),
-            start=s,
-            end=e,
-            progress=job.progress,
-            overview_ad_ids=overview_ads,
-        )
-        # 本页已证实的广告身份立即补目录，不能被后续概览分页或旧帖二分搜索挡住。
-        # 补读与本页关联同事务提交；复用有界、含删除对象且按冻结路由去重的原请求。
-        with diagnostics.stage("links_directory_request"):
-            request_link_directory(session, job, now=datetime.now(UTC))
-        # JSONB 的原地修改需要显式通知 ORM；每个续步都持久化已经完成的页和关联。
-        from sqlalchemy.orm.attributes import flag_modified
-
-        flag_modified(job, "progress")
-        # 最后一页或最后一个归属查询可能刚产生可读取的身份。先提交本次单请求，
-        # 立即续步读取新身份；不能把尚未执行的读取误当外部依赖，提前退避十分钟。
-        if complete and (
-            material_identity.pending_asset_ids(session, job)
-            or spark_identity.pending_spark_links(session, job)
-        ):
-            return None
-        return None if not complete else 0
     if job.kind == "account_day":
         rows = _read_all(
             lambda p: reader.account_day(
@@ -953,60 +489,17 @@ def _admission_delay(
     return delays[attempts - 1] + randint(0, 1000)
 
 
-def material_link_granted_steps(session: Session, job: ReportSyncJob) -> int:
-    """步骤上限来自原代主端点预留；部署升级不能给旧的一步grant增权。"""
-    if job.kind != "material_links" or job.execution_pool != "background":
-        return 1
-    from app.modules.sync_control.models import SyncCostLedger
-    from app.modules.sync_control.schedule import report_endpoint
-
-    reserved = session.exec(
-        select(SyncCostLedger.reserved_units).where(
-            SyncCostLedger.tenant_id == job.tenant_id,
-            SyncCostLedger.report_job_id == job.id,
-            SyncCostLedger.generation == job.claim_generation,
-            SyncCostLedger.physical_endpoint == report_endpoint(job.kind),
-        )
-    ).one_or_none()
-    return min(MATERIAL_LINK_STEPS_PER_QUANTUM, reserved or 0)
-
-
-def _check_link_grant(session: Session, job: ReportSyncJob, token: UUID) -> None:
-    from app.modules.sync_control.models import (
-        SyncExecutionScope,
-        SyncRequirement,
-        SyncSchedule,
+def cancel_retired_report(session, job):
+    """退役消息只留审计终态，不能打开网关或重新签发执行需求。"""
+    job.status, job.error_code, job.finished_at = (
+        "CANCELLED",
+        "report_kind_retired",
+        datetime.now(UTC),
     )
+    job.claim_token = job.claimed_until = None
+    from app.modules.sync_control.schedule import record_report_outcome
 
-    heads = session.exec(
-        select(SyncSchedule)
-        .join(
-            SyncExecutionScope,
-            col(SyncExecutionScope.scope_id) == col(SyncSchedule.scope_id),
-        )
-        .join(
-            SyncRequirement,
-            col(SyncRequirement.id) == col(SyncExecutionScope.requirement_id),
-        )
-        .where(
-            SyncExecutionScope.report_job_id == job.id,
-            SyncSchedule.tenant_id == job.tenant_id,
-            SyncSchedule.work_class == SyncRequirement.source,
-        )
-        .order_by(col(SyncSchedule.scope_id), col(SyncSchedule.work_class))
-        .with_for_update(of=SyncSchedule)
-        .execution_options(populate_existing=True)
-    ).all()
-    now = datetime.now(UTC)
-    if not heads or any(
-        head.lease_token != token
-        or head.lease_execution_id != job.id
-        or head.lease_execution_generation != job.claim_generation
-        or head.leased_until is None
-        or head.leased_until <= now
-        for head in heads
-    ):
-        raise ExecutionLost()
+    record_report_outcome(session, job)
 
 
 @diagnostics.timed("execute")
@@ -1016,9 +509,6 @@ def execute_job(
     job_id: UUID,
     claim_token: UUID,
     reader: ReportReader,
-    max_steps: int = 1,
-    quantum_deadline: datetime | None = None,
-    grant_token: UUID | None = None,
 ) -> str:
     with session_factory() as session:
         job = session.exec(
@@ -1026,6 +516,10 @@ def execute_job(
         ).one()
         if job.claim_token != claim_token or job.status != "RUNNING":
             return "FAILED"  # 旧领取者：不得改写新领取的任务
+        if job.kind in {"material_day", "material_links"}:
+            cancel_retired_report(session, job)
+            session.commit()
+            return "CANCELLED"
         boundary = TransactionBoundaryReader(session, job, reader)
         counted = _CountingReader(boundary)
         committed_count = 0
@@ -1034,44 +528,10 @@ def execute_job(
             # 关闭expire避免commit后访问冻结job属性隐式打开跨HTTP事务。
             session.expire_on_commit = False
             boundary._check()
-            if grant_token is not None:
-                _check_link_grant(session, job, grant_token)
-            steps = min(max_steps, material_link_granted_steps(session, job))
-            if grant_token is None or quantum_deadline is None:
-                steps = min(1, steps)
-            more = True
-            for step in range(steps):
-                if grant_token is not None:
-                    _check_link_grant(session, job, grant_token)
-                if (
-                    quantum_deadline is not None
-                    and (quantum_deadline - datetime.now(UTC)).total_seconds() < 3
-                ):
-                    break
-                more = _run(session, job, counted) is None
-                if grant_token is not None:
-                    _check_link_grant(session, job, grant_token)
-                if not more or step + 1 >= steps or counted.count >= steps:
-                    break
-                # 每个已验证小步独立落库；保持原RUNNING/token/head资格，不能
-                # 先outcome清租约再靠旧消息自行续领。后步错误只回滚本步。
-                boundary._check()
-                job.request_count += counted.count - committed_count
-                session.commit()
-                committed_count = counted.count
-                boundary._check()
+            more = _run(session, job, counted) is None
             with diagnostics.stage("job_finalize"):
                 _clear_completed_throttle(job, counted)
-                if (
-                    job.kind == "material_links"
-                    and not more
-                    and material_links.wait_for_dependencies(
-                        session, job, now=datetime.now(UTC)
-                    )
-                ):
-                    job.status = "WAITING"
-                    result = "WAITING"
-                elif more:
+                if more:
                     job.status, job.error_code = "WAITING", None
                     if job.kind != "operation_log":
                         job.due_at = datetime.now(UTC)
@@ -1083,10 +543,7 @@ def execute_job(
                         datetime.now(UTC),
                     )
                     result = "COMPLETE"
-                    if (
-                        job.kind in {"material_links", "operation_log"}
-                        or job.campaign_ids
-                    ):
+                    if job.kind == "operation_log" or job.campaign_ids:
                         from app.modules.sync_control.contracts import ExecutionFence
                         from app.modules.sync_control.requirements import (
                             satisfy_requirements,
@@ -1126,17 +583,11 @@ def execute_job(
             return "FAILED"
         except AccountAdmissionDeferred as deferred:
             # 完整的私有页可以保留；额度退避不能迫使多页报表反复从首页开始。
-            if job.kind not in BASIC_KINDS | {"material_day"}:
+            if job.kind not in BASIC_KINDS:
                 session.rollback()
             job = session.get(ReportSyncJob, job_id, with_for_update=True)
             if job is None or job.claim_token != claim_token or job.status != "RUNNING":
                 return "FAILED"
-            if grant_token is not None:
-                try:
-                    _check_link_grant(session, job, grant_token)
-                except ExecutionLost:
-                    session.rollback()
-                    return "FAILED"
             job.status, job.error_code = "WAITING", "admission_deferred"
             delay = _admission_delay(job, counted, deferred)
             now = datetime.now(UTC)
@@ -1155,12 +606,6 @@ def execute_job(
             job = session.get(ReportSyncJob, job_id, with_for_update=True)
             if job is None or job.claim_token != claim_token or job.status != "RUNNING":
                 return "FAILED"
-            if grant_token is not None:
-                try:
-                    _check_link_grant(session, job, grant_token)
-                except ExecutionLost:
-                    session.rollback()
-                    return "FAILED"
             result = _handle_error(session, job, error)
         job.request_count += counted.count - committed_count
         from app.modules.sync_control.schedule import record_report_outcome
@@ -1175,46 +620,13 @@ def execute_job(
 
 def _handle_error(session, job: ReportSyncJob, error: DomainError) -> str:
     job.error_code = error.code
-    if error.code == "report_snapshot_changed" and job.kind == "material_links":
-        # 重建当前旧帖查询并消耗既有有限重试预算；不能在不断变化的分页上无限续步。
-        # 已证实的关联和完整概览保留，未完成集合绝不成为负缓存。
-        job.progress = {
-            key: value
-            for key, value in job.progress.items()
-            if key not in {"locate_post", "locate_queries"}
-        }
-    if error.code == "report_snapshot_changed" and job.kind in BASIC_KINDS | {
-        "material_day"
-    }:
+    if error.code == "report_snapshot_changed" and job.kind in BASIC_KINDS:
         session.connection().execute(
             delete(ReportSyncPage).where(col(ReportSyncPage.job_id) == job.id)
         )
         job.progress = {
-            key: value
-            for key, value in job.progress.items()
-            if key not in {"material_paging", "basic_paging"}
+            key: value for key, value in job.progress.items() if key != "basic_paging"
         }
-    if (
-        error.code == "report_snapshot_changed"
-        and job.kind == "material_links"
-        and job.attempts >= MAX_PROVIDER_RETRIES
-    ):
-        # 素材帖子集合会随平台新数据持续变化；把这种一致性重建失败写成终态，
-        # 会让历史缺口永久停在 FAILED。清掉本轮定位游标并循环等待，下一轮
-        # 重新建立完整证据；正向映射仍只在完整查询通过后发布。
-        now = datetime.now(UTC)
-        job.attempts = 0
-        job.status = "WAITING"
-        job.finished_at = None
-        job.due_at = now + MATERIAL_LINK_SNAPSHOT_RECOVERY_DELAY
-        recovery = job.progress.get("snapshot_recovery", {})
-        job.progress = job.progress | {
-            "snapshot_recovery": {
-                "count": int(recovery.get("count", 0)) + 1,
-                "at": now.isoformat(),
-            }
-        }
-        return "WAITING"
     if error.code == "operation_log_export_too_large" and job.kind == "operation_log":
         if job.start_date < job.end_date:
             job.status, job.finished_at = "COMPLETE", datetime.now(UTC)
@@ -1252,15 +664,6 @@ def _handle_error(session, job: ReportSyncJob, error: DomainError) -> str:
         job.status = "WAITING"
         now = datetime.now(UTC)
         delay = min(1800, 60 * 2 ** (job.attempts - 1))
-        # 今日素材集合会在秒级变化；重建仍完整校验且最多五次，但不沿用上游故障的
-        # 分钟级退避。按账户当地日核验，历史、昨日收尾及真实provider错误保持原策略。
-        if (
-            error.code == "report_snapshot_changed"
-            and job.kind == "material_day"
-            and job.priority in {1, 2}
-            and report_workload(session, job, now=now) == "live"
-        ):
-            delay = MATERIAL_SNAPSHOT_RETRY_SECONDS[job.attempts - 1]
         job.due_at = now + timedelta(seconds=delay)
         return "WAITING"
     job.status, job.finished_at = "FAILED", datetime.now(UTC)

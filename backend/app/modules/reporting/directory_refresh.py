@@ -1,6 +1,5 @@
 """热报发现的在投对象优先补目录，避免全量历史队列遮蔽自动规则。"""
 
-import json
 from collections import defaultdict
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -14,7 +13,6 @@ from app.core.config import settings
 from app.integrations.tiktok.contracts.ads import EntityKind, EntityRef
 from app.modules.ads.directory_requests import request_directory
 from app.modules.ads.directory_services import (
-    IDENTITY_SERVICE,
     pending_directory_condition,
     promote_status_requests,
 )
@@ -22,13 +20,6 @@ from app.modules.ads.material_directory_children import is_material_child
 from app.modules.ads.sync_models import AdDirectoryRun
 from app.modules.automation_rules.models import AutomationRule
 from app.modules.reporting import diagnostics
-from app.modules.reporting.lanes import report_workload
-from app.modules.reporting.link_policy import complete_material_link
-from app.modules.reporting.material_value import (
-    TYPED_MATERIAL_WINDOW_VALUES_SQL,
-    VIDEO_REPORT_TYPES,
-    material_value_parameters,
-)
 from app.modules.reporting.store_models import ReportSyncJob
 
 # 素材关联补读保持原有单轮上限；广告日报刷新不截断账户对象集合。
@@ -294,100 +285,3 @@ def refresh_account_directory(
         directory_created=created,
     )
     return DirectoryRefreshResult(created, complete)
-
-
-def request_link_directory(
-    session: Session, job: ReportSyncJob, *, now: datetime
-) -> int:
-    """已确认广告但缺视频时补读含删除对象的目录，不依赖本地广告本体先存在。"""
-    if not settings.ADS_SYNC_ENABLED:
-        return 0
-    workload = report_workload(session, job, now=now)
-    rows = (
-        session.connection()
-        .execute(
-            text(f"""
-        -- 金额窗口只聚合一次，避免相关 EXISTS 在每个映射帖子上重做聚合/去重。
-        WITH material_values AS MATERIALIZED ({TYPED_MATERIAL_WINDOW_VALUES_SQL}),
-        blocking_runs AS MATERIALIZED (
-          -- 同冻结范围只读一次可遮挡任务，避免每个帖子反复扫描宽终态历史。
-          -- 保留 ids 的原 JSONB 类型及 ? 成员语义，不扩大父级或全量范围。
-          SELECT r.ad_type, r.query->'ids' AS ids FROM ad_directory_run r
-          WHERE r.tenant_id=:t AND r.bc_id=:bc AND r.actor_id=:actor
-            AND r.frozen_route=CAST(:route AS jsonb) AND r.advertiser_id=:adv
-            AND (:workload='background' OR r.workload='live')
-            AND r.kind='ad' AND r.query->>'include_deleted'='true'
-            AND (r.status IN ('QUEUED','RUNNING','ADMISSION_WAIT','WAITING_REMOTE')
-              OR r.created_at>=:cutoff)
-        )
-        SELECT DISTINCT l.ad_remote_id, COALESCE(a.ad_type, 'SMART_PLUS') AS ad_type
-        -- 此处恰好一个 job 日期窗：has_value 已证明同租户/账户/MID 在窗内有事实。
-        -- 直接关联唯一金额键，避免再读逐日事实并复制相同帖子候选后 DISTINCT。
-        FROM material_values v
-        JOIN material_post_link l ON l.tenant_id=:t AND l.advertiser_id=v.advertiser_id
-          AND l.main_material_id=v.main_material_id AND l.main_material_type=v.main_material_type
-        LEFT JOIN ad_object a ON a.tenant_id=l.tenant_id AND a.advertiser_id=l.advertiser_id
-          AND a.kind='ad' AND a.remote_id=l.ad_remote_id
-        WHERE v.advertiser_id=:adv AND v.has_value
-          AND CAST(:start AS date) IS NOT NULL AND CAST(:end AS date) IS NOT NULL
-          AND l.main_material_type IN ('VIDEO_SPARK_ADS','VIDEO_NON_SPARK_ADS')
-          AND NULLIF(l.platform_material_id, '') IS NULL
-          AND (a.ad_type IS NULL OR a.ad_type IN ('SMART_PLUS','LEGACY_SMART_PLUS','REGULAR'))
-          -- Spark 缺精确桥接且已有完整目录时，重读同一目录不能恢复旧帖身份。
-          -- 缺本体/完整素材、已有桥接、非 Spark 仍保留原补读路径。
-          AND NOT (l.main_material_type='VIDEO_SPARK_ADS'
-            AND NULLIF(l.ad_material_id, '') IS NULL AND a.remote_id IS NOT NULL
-            AND EXISTS (SELECT 1 FROM ad_material_reference u
-              WHERE u.tenant_id=l.tenant_id AND u.advertiser_id=l.advertiser_id
-                AND u.ad_remote_id=l.ad_remote_id AND u.complete))
-          AND NOT {complete_material_link("l", tenant=":t")}
-          AND NOT EXISTS (SELECT 1 FROM blocking_runs r
-            WHERE r.ad_type=COALESCE(a.ad_type, 'SMART_PLUS')
-              AND r.ids ? l.ad_remote_id)
-        ORDER BY l.ad_remote_id, ad_type LIMIT :limit
-    """),
-            {
-                "workload": workload,
-                **material_value_parameters(
-                    job.tenant_id,
-                    [(job.advertiser_ids[0], job.start_date, job.end_date)],
-                    material_types=VIDEO_REPORT_TYPES,
-                ),
-                "t": job.tenant_id,
-                "adv": job.advertiser_ids[0],
-                "start": job.start_date,
-                "end": job.end_date,
-                "bc": job.bc_id,
-                "actor": job.actor_id,
-                "route": json.dumps(job.frozen_route),
-                "cutoff": now - timedelta(minutes=10),
-                "limit": MAX_REFRESH_ADS,
-            },
-        )
-        .all()
-    )
-    count = 0
-    # material_post_link 的唯一生产写入源是升级 Smart+ 素材概览/拆分报表，
-    # 其中 smart_plus_ad_id 已证明类型；缺本地 AdObject 时仍可按该证据回读。
-    # 历史报表保留已删除广告的消耗，普通定向刷新默认排除删除对象，不能用于补历史身份。
-    for ad_type in sorted({r.ad_type for r in rows}):
-        count += request_directory(
-            session,
-            tenant_id=job.tenant_id,
-            bc_id=job.bc_id,
-            actor_id=job.actor_id,
-            frozen_route=job.frozen_route,
-            advertiser_ids=job.advertiser_ids,
-            scope="targeted",
-            dispatch_immediately=False,
-            include_deleted=True,
-            workload=workload,
-            service=IDENTITY_SERVICE,
-            refs=tuple(
-                EntityRef(job.tenant_id, job.advertiser_ids[0], "ad", r.ad_remote_id)
-                for r in rows
-                if r.ad_type == ad_type
-            ),
-            ad_types={job.advertiser_ids[0]: {ad_type: {"ad"}}},
-        )
-    return count

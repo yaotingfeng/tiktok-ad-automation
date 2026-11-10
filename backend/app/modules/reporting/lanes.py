@@ -26,26 +26,22 @@ def current_day_predicate(alias: str = "report_sync_job") -> str:
 
 def closeout_predicate(alias: str = "report_sync_job") -> str:
     yesterday = _day_predicate(alias, days_ago=1)
-    return f"({alias}.priority={CLOSEOUT_PRIORITY} AND {alias}.kind IN ('ad_day','creative_day','material_day') AND {yesterday})"
+    return f"({alias}.priority={CLOSEOUT_PRIORITY} AND {alias}.kind IN ('ad_day','creative_day') AND {yesterday})"
 
 
 def live_predicate(alias: str = "report_sync_job") -> str:
     day = current_day_predicate(alias)
-    return f"({alias}.priority BETWEEN 1 AND 2 AND {alias}.kind IN ('ad_day','creative_day','material_day','campaign_hour') AND {day})"
+    return f"({alias}.priority BETWEEN 1 AND 2 AND {alias}.kind IN ('ad_day','creative_day','campaign_hour') AND {day})"
 
 
 def lane_predicate(*, lane: str, alias: str = "report_sync_job") -> str:
     predicate = live_predicate(alias)
-    links = f"({alias}.kind = 'material_links' AND {current_day_predicate(alias)})"
     if lane == "live":
         return predicate
     if lane == "closeout":
         return closeout_predicate(alias)
-    if lane == "links":
-        # 当前关联留在实时池，历史关联与历史事实共用独立补数池。
-        return links
     if lane == "backfill":
-        return f"NOT ({predicate} OR {links} OR {closeout_predicate(alias)})"
+        return f"NOT ({predicate} OR {closeout_predicate(alias)})"
     raise ValueError("invalid report lane")
 
 
@@ -56,7 +52,7 @@ def lane_condition(*, lane: str, now: datetime):
 
 def report_workload(session, job, *, now):
     """实际执行时按账户当地日分类；午夜后旧热任务不会永久占用实时配额。"""
-    if job.kind != "material_links" and job.priority > 2:
+    if job.priority > 2:
         return "background"
     current = (
         session.connection()
@@ -72,7 +68,7 @@ def report_workload(session, job, *, now):
 
 
 def has_background_facts(session, now: datetime) -> bool:
-    """共享后台池有可运行事实时，目录/补链各只占一个候选槽。
+    """共享后台池有可运行事实时，目录只占一个候选槽。
 
     只探测是否存在，不统计积压、不加载 progress；未来退避中的事实不占保底。
     RUNNING 包含尚未到期的在途工作和待恢复的过期租约。
@@ -82,8 +78,7 @@ def has_background_facts(session, now: datetime) -> bool:
         .execute(
             text(f"""SELECT EXISTS (
             SELECT 1 FROM report_sync_job j
-            WHERE j.kind <> 'material_links'
-              AND j.status IN ('QUEUED','WAITING','RUNNING')
+            WHERE j.status IN ('QUEUED','WAITING','RUNNING')
               AND (j.status='RUNNING' OR (j.due_at<=:lane_now
                 AND (j.claimed_until IS NULL OR j.claimed_until<=:lane_now)))
               AND (j.priority>2 OR {lane_predicate(lane="backfill", alias="j")})

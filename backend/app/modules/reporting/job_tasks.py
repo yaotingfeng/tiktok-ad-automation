@@ -42,6 +42,7 @@ from app.modules.ads.sync_models import AdDirectoryPage, AdDirectoryRun
 from app.modules.reporting import diagnostics, planner, publish
 from app.modules.reporting.jobs import (
     LEASE,
+    cancel_retired_report,
     execute_job,
     request_time,
 )
@@ -470,25 +471,7 @@ def _run_planning_entry(
         include_directories=not realtime_only,
     )
     dispatch_seconds = time.monotonic() - dispatch_started
-    # 关联需求在创建时统一归并；维护只能唤醒依赖，不能再扩大已冻结执行的查询。
-    from app.modules.reporting.link_work import wake_link_dependencies
-
     maintenance_started = time.monotonic()
-    if not realtime_only and stop - time.monotonic() >= 1.2:
-        try:
-            with (
-                Session(database_engine) as session,
-                session.begin(),
-                query_budget(session, seconds=min(1, stop - time.monotonic())),
-            ):
-                session.connection().execute(text("SET LOCAL statement_timeout='1s'"))
-                session.connection().execute(text("SET LOCAL lock_timeout='100ms'"))
-                maintenance_deadline = datetime.now(UTC) + timedelta(seconds=1)
-                wake_link_dependencies(session, now=now, deadline=maintenance_deadline)
-        except Exception:
-            logger.exception(
-                "report link maintenance deferred phase=wake_link_dependencies"
-            )
     # 每轮每BC只推进一个阶段，预算有余继续下一轮；不以账户数量人为限速。
     remaining = list(keys)
     metrics = {"completed": 0, "deferred": 0}
@@ -1122,14 +1105,6 @@ def run_job_step(*, database_engine, redis_client, job_id, claim_token):
 
 
 def _run_job_step(*, database_engine, redis_client, job_id, claim_token):
-    from app.modules.reporting.jobs import (
-        MATERIAL_LINK_QUANTUM_SECONDS,
-        _check_link_grant,
-        material_link_granted_steps,
-    )
-    from app.modules.sync_control.executions import ExecutionLost
-
-    entered_at = datetime.now(UTC)
     queued_token = claim_token
     with diagnostics.stage("step_prepare"):
         with Session(database_engine, expire_on_commit=False) as session:
@@ -1138,6 +1113,11 @@ def _run_job_step(*, database_engine, redis_client, job_id, claim_token):
             if job is None or job.claim_token != claim_token or job.status != "RUNNING":
                 return "FAILED"
             diagnostics.set_job_scope(job.kind, len(job.advertiser_ids))
+            if job.kind in {"material_day", "material_links"}:
+                cancel_retired_report(session, job)
+                session.commit()
+                return "CANCELLED"
+
             # 旧积压消息不能越过有界派发窗口自行续租；只结束本条消息，
             # 业务运行仍留给扫描器按当前优先级重新领取，不记终态失败。
             if job.claimed_until is None or job.claimed_until <= now:
@@ -1172,42 +1152,17 @@ def _run_job_step(*, database_engine, redis_client, job_id, claim_token):
                 return "FAILED"
             workload = report_workload(session, job, now=now)
             before = job.request_count
-            max_steps = material_link_granted_steps(session, job)
-            quantum = (
-                job.kind == "material_links" and job.execution_pool == "background"
-            )
-            if max_steps == 0:
-                from app.modules.sync_control.schedule import record_report_outcome
-
-                try:
-                    _check_link_grant(session, job, queued_token)
-                except ExecutionLost:
-                    return "FAILED"
-                # 没有持久预留就没有额外读取资格；规范交回而非空占240秒。
-                # 不补造ledger、不退款，下一次canonical领取会签发新代预算。
-                job.status, job.due_at = "WAITING", now + timedelta(seconds=1)
-                record_report_outcome(session, job)
-                job.claim_token = job.claimed_until = None
+            # 消费queued身份，旧消息不能越过同代执行围栏。
+            job.claim_token = claim_token = uuid4()
+            job.claimed_until = now + LEASE
+            with diagnostics.stage("claim_commit"):
                 session.commit()
-            else:
-                # 原子消费queued身份：同代重投不能成为第二消费者。
-                job.claim_token = claim_token = uuid4()
-                job.claimed_until = now + LEASE
-                with diagnostics.stage("claim_commit"):
-                    session.commit()
 
     def factory():
         return Session(database_engine)
 
     with _report_refill_after(database_engine, redis_client, job):
-        if max_steps == 0:
-            diagnostics.committed("WAITING")
-            return "WAITING"
         deadline = now + timedelta(seconds=170)
-        if quantum:
-            deadline = min(
-                deadline, entered_at + timedelta(seconds=MATERIAL_LINK_QUANTUM_SECONDS)
-            )
         try:
             with _reader_for(
                 database_engine=database_engine,
@@ -1223,19 +1178,11 @@ def _run_job_step(*, database_engine, redis_client, job_id, claim_token):
                     job_id=job_id,
                     claim_token=claim_token,
                     reader=reader,
-                    max_steps=max_steps,
-                    quantum_deadline=deadline if quantum else None,
-                    grant_token=queued_token if quantum else None,
                 )
         except AccountAdmissionDeferred as error:
             with factory() as session:
                 current = session.get(ReportSyncJob, job_id, with_for_update=True)
                 if current is not None and current.claim_token == claim_token:
-                    if quantum:
-                        try:
-                            _check_link_grant(session, current, queued_token)
-                        except ExecutionLost:
-                            return "FAILED"
                     current.status = "WAITING"
                     current.error_code = "admission_deferred"
                     current.due_at = now + timedelta(
@@ -1253,11 +1200,6 @@ def _run_job_step(*, database_engine, redis_client, job_id, claim_token):
             with factory() as session:
                 current = session.get(ReportSyncJob, job_id, with_for_update=True)
                 if current is not None and current.claim_token == claim_token:
-                    if quantum:
-                        try:
-                            _check_link_grant(session, current, queued_token)
-                        except ExecutionLost:
-                            return "FAILED"
                     _failed(session, current, error.code)
                     with diagnostics.stage("job_commit"):
                         session.commit()

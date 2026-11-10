@@ -2,7 +2,6 @@
 """官方 SDK 报表请求。每个物理请求都经网关传入的 send（冻结路由 + 额度准入）。"""
 
 import json
-import re
 from collections.abc import Callable
 from datetime import date
 from typing import Any
@@ -17,7 +16,6 @@ from app.modules.reporting.metrics import (
     ACCOUNT_METRICS,
     AD_DAY_METRICS,
     CAMPAIGN_METRICS,
-    MATERIAL_METRICS,
 )
 
 Send = Callable[[str, str | None, dict[str, Any]], dict]
@@ -49,121 +47,6 @@ class SdkReportReader(SdkChangeLogReader):
     @property
     def request_count(self) -> int:
         return getattr(self._send, "request_count", 0)
-
-    def material_video_content(self, *, advertiser_id, video_ids):
-        from app.integrations.tiktok.contracts.common import CallEvidence
-        from app.modules.materials.sdk_assets import video_record
-
-        if not 1 <= len(video_ids) <= 50 or len(set(video_ids)) != len(video_ids):
-            raise DomainError("report_query_invalid", "视频内容批量范围无效")
-        data = self._send(
-            "materials.get_videos",
-            advertiser_id,
-            {"advertiser_id": advertiser_id, "video_ids": list(video_ids)},
-        )
-        rows = (
-            ([] if data == {} else data.get("list")) if isinstance(data, dict) else None
-        )
-        if not isinstance(rows, list):
-            raise DomainError("report_response_invalid", "视频内容回执无效")
-        result, seen = [], set()
-        for row in rows:
-            record = video_record(
-                row, advertiser_id=advertiser_id, evidence=CallEvidence()
-            )
-            if record.video_id not in video_ids or record.video_id in seen:
-                raise DomainError("report_response_invalid", "视频内容回执越界或有歧义")
-            seen.add(record.video_id)
-            result.append(
-                {
-                    "video_id": record.video_id,
-                    "signature": record.md5,
-                    "size": record.size,
-                }
-            )
-        return result
-
-    def spark_video_content(
-        self,
-        *,
-        advertiser_id,
-        item_id,
-        identity_type,
-        identity_id,
-        identity_authorized_bc_id=None,
-    ):
-        args = {
-            "advertiser_id": advertiser_id,
-            "item_id": item_id,
-            "identity_type": identity_type,
-            "identity_id": identity_id,
-        }
-        if identity_authorized_bc_id is not None:
-            args["identity_authorized_bc_id"] = identity_authorized_bc_id
-        try:
-            data = self._send("scene.get_identity_video", advertiser_id, args)
-        except DomainError as error:
-            if error.code == "tiktok_identity_item_unavailable":
-                return None
-            raise
-        detail = data.get("video_detail")
-        if not detail:
-            return None
-        if not isinstance(detail, dict) or detail.get("item_id") != item_id:
-            raise DomainError("report_response_invalid", "帖子内容身份不匹配")
-        if detail.get("item_type") != "VIDEO":
-            return None
-        info = detail.get("video_info") or {}
-        if not isinstance(info, dict):
-            raise DomainError("report_response_invalid", "帖子内容回执无效")
-        digest, size = info.get("signature"), info.get("size")
-        if digest is None or size is None:
-            return None
-        if (
-            not isinstance(digest, str)
-            or not re.fullmatch(r"[0-9a-fA-F]{32}", digest)
-            or type(size) is not int
-            or size <= 0
-        ):
-            raise DomainError("report_response_invalid", "帖子内容摘要无效")
-        return {"signature": digest.lower(), "size": size}
-
-    def material_videos(self, *, advertiser_id, material_ids):
-        """非 Spark 报表主素材 MID 与素材库 VID 由同一官方回执成对证明。"""
-        from app.integrations.tiktok.contracts.common import CallEvidence
-        from app.modules.materials.sdk_assets import video_record
-
-        if not 1 <= len(material_ids) <= 20 or len(set(material_ids)) != len(
-            material_ids
-        ):
-            raise DomainError(
-                "report_query_invalid", "素材身份读取一次须带1–20个不同MID"
-            )
-        data = self._send(
-            "materials.search_videos",
-            advertiser_id,
-            {
-                "advertiser_id": advertiser_id,
-                "filtering": {"material_ids": list(material_ids)},
-                "page": 1,
-                "page_size": 100,
-            },
-        )
-        result = page_from_data(data, requested_page=1)
-        rows, seen = [], set()
-        for row in result.rows:
-            record = video_record(
-                row, advertiser_id=advertiser_id, evidence=CallEvidence()
-            )
-            if record.mid not in material_ids or record.mid in seen:
-                raise DomainError("report_response_invalid", "素材身份回执越界或有歧义")
-            seen.add(record.mid)
-            rows.append({"material_id": record.mid, "video_id": record.video_id})
-        if result.next_page is not None:
-            raise DomainError("report_response_invalid", "素材身份精确查询未完整返回")
-        return RawReportPage(
-            tuple(rows), result.page, result.total_page, result.total_number
-        )
 
     def _basic(
         self,
@@ -299,63 +182,3 @@ class SdkReportReader(SdkChangeLogReader):
             end=end,
             page=page,
         )
-
-    def material_day(self, *, advertiser_id, start, end, page):
-        _check_range(start, end, max_days=30)
-        data = self._send(
-            "reports.material_breakdown",
-            advertiser_id,
-            {
-                "advertiser_id": advertiser_id,
-                "dimensions": ["main_material_id", "stat_time_day"],
-                "metrics": list(MATERIAL_METRICS),
-                "start_date": start.isoformat(),
-                "end_date": end.isoformat(),
-                "page": page,
-                "page_size": 100,
-            },
-        )
-        return page_from_data(data, requested_page=page)
-
-    def material_ad_links(self, *, advertiser_id, page, ad_ids=()):
-        # 概览按“广告 × 主素材”分组时不返回收入，只用于对照；平台按帖子 ID 筛选
-        # 不生效。按已确认广告 ID 筛选其当前素材；不传日期，仍查广告的完整生命周期。
-        if len(ad_ids) > 200 or len(set(ad_ids)) != len(ad_ids):
-            raise DomainError("report_query_invalid", "素材概览广告筛选范围无效")
-        data = self._send(
-            "reports.material_overview",
-            advertiser_id,
-            {
-                "advertiser_id": advertiser_id,
-                "dimensions": ["smart_plus_ad_id", "main_material_id"],
-                "metrics": ["spend", "ad_material_id"],
-                "query_lifetime": True,
-                "page": page,
-                "page_size": 100,
-                **(
-                    {"filtering": {"smart_plus_ad_ids": list(ad_ids)}} if ad_ids else {}
-                ),
-            },
-        )
-        return page_from_data(data, requested_page=page)
-
-    def material_ad_posts(self, *, advertiser_id, ad_ids, start, end, page):
-        # 按广告筛选的拆分报表能查到概览已不再列出的旧帖子，用于定位它们所属的广告。
-        _check_range(start, end, max_days=365)
-        if not 1 <= len(ad_ids) <= 200:
-            raise DomainError("report_query_invalid", "按广告筛选一次须带 1–200 个广告")
-        data = self._send(
-            "reports.material_breakdown",
-            advertiser_id,
-            {
-                "advertiser_id": advertiser_id,
-                "dimensions": ["main_material_id"],
-                "metrics": ["spend"],
-                "filtering": {"smart_plus_ad_ids": list(ad_ids)},
-                "start_date": start.isoformat(),
-                "end_date": end.isoformat(),
-                "page": page,
-                "page_size": 100,
-            },
-        )
-        return page_from_data(data, requested_page=page)

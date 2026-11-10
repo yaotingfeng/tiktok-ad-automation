@@ -15,7 +15,6 @@ from sqlmodel import Session, col, select
 from app.core.config import settings
 from app.core.context import TenantContext
 from app.jobs.admission import admission_policy
-from app.modules.accounts.models import AdvertiserAccount
 from app.modules.reporting.store_models import (
     ReportSyncJob,
 )
@@ -47,17 +46,10 @@ from app.modules.sync_control.worker_pool import (
 )
 
 
-def _current_link(now: datetime) -> ColumnElement[bool]:
-    return and_(
-        col(ReportSyncJob.start_date) == col(ReportSyncJob.end_date),
-        col(ReportSyncJob.end_date)
-        == func.date(func.timezone(col(SyncScope.timezone), now)),
-    )
-
-
 def _pool_ready_heads(
     *, live_remaining: int, background_remaining: int, now: datetime
 ) -> list[ColumnElement[bool]]:
+    del now
     # 所属池已满不算租户获得了机会；发现和领取共用容量条件。
     if not live_remaining and not background_remaining:
         return [false()]
@@ -66,32 +58,6 @@ def _pool_ready_heads(
         predicates.append(col(SyncSchedule.work_class) != "realtime")
     if not background_remaining:
         predicates.append(col(SyncSchedule.work_class) != "history")
-    if not live_remaining or not background_remaining:
-        pool_link = _current_link(now)
-        if not live_remaining:
-            pool_link = ~pool_link
-        has_pool_link = (
-            select(col(SyncExecutionScope.id))
-            .join(
-                ReportSyncJob,
-                col(ReportSyncJob.id) == col(SyncExecutionScope.report_job_id),
-            )
-            .join(SyncScope, col(SyncScope.id) == col(SyncExecutionScope.scope_id))
-            .where(
-                col(SyncExecutionScope.scope_id) == col(SyncSchedule.scope_id),
-                col(SyncExecutionScope.status) == "PENDING",
-                col(SyncExecutionScope.owner_epoch) == col(SyncScope.owner_epoch),
-                col(ReportSyncJob.owner_epoch) == col(SyncScope.owner_epoch),
-                pool_link,
-            )
-            .correlate(SyncSchedule)
-            .limit(1)
-            .offset(0)
-            .exists()
-        )
-        predicates.append(
-            or_(col(SyncSchedule.work_class) != "directory", has_pool_link)
-        )
     return predicates
 
 
@@ -209,7 +175,7 @@ def _dispatch_due(
     endpoints: Sequence[str] = tuple(
         dict.fromkeys(
             report_endpoint(kind)
-            for kind in ("ad_day", "material_day", "material_links", "operation_log")
+            for kind in ("ad_day", "creative_day", "operation_log")
         )
     )
     # Worker槽不足时跨物理接口轮转；某接口提额不能永远占满全部槽。
@@ -335,40 +301,6 @@ def _dispatch_due(
                 )
                 head = next(row for row in heads if row.work_class == work_class)
                 low_budget = []
-                current_link = _current_link(now)
-                if work_class == "directory":
-                    if not live_remaining:
-                        low_budget.append(~current_link)
-                    elif not background_remaining:
-                        low_budget.append(current_link)
-                if not allow_backfill:
-                    # 目录工作类包含历史关联；低预算仍只允许账户当地当天的关联需求。
-                    valid_timezone = (
-                        select(col(AdvertiserAccount.advertiser_id))
-                        .where(
-                            col(AdvertiserAccount.tenant_id)
-                            == col(SyncScope.tenant_id),
-                            col(AdvertiserAccount.advertiser_id)
-                            == col(SyncScope.advertiser_id),
-                            col(AdvertiserAccount.timezone) == col(SyncScope.timezone),
-                        )
-                        .correlate(SyncScope)
-                        .exists()
-                    )
-                    low_budget.append(
-                        or_(
-                            col(ReportSyncJob.kind) != "material_links",
-                            and_(
-                                col(ReportSyncJob.start_date)
-                                == col(ReportSyncJob.end_date),
-                                col(ReportSyncJob.start_date)
-                                == func.date(
-                                    func.timezone(col(SyncScope.timezone), now)
-                                ),
-                                valid_timezone,
-                            ),
-                        )
-                    )
                 busy_child = aliased(SyncExecutionScope)
                 # 在途执行ID受物理窗口约束；空集合直接短路，不能让优化器
                 # 为每个候选重扫全部lease/child表。不同日桶仍可并行。
@@ -577,23 +509,7 @@ def _dispatch_due(
                     sibling.lease_execution_generation = job.claim_generation
                     sibling.last_dispatched_at, sibling.wait_reason = now, None
                 cursor.last_dispatched_at = now
-                from app.modules.reporting.jobs import (
-                    MATERIAL_BACKFILL_PAGES_PER_STEP,
-                    MATERIAL_LINK_STEPS_PER_QUANTUM,
-                    MATERIAL_PAGES_PER_STEP,
-                )
-
-                expected = (
-                    (
-                        MATERIAL_BACKFILL_PAGES_PER_STEP
-                        if work_class == "history"
-                        else MATERIAL_PAGES_PER_STEP
-                    )
-                    if job.kind == "material_day"
-                    else MATERIAL_LINK_STEPS_PER_QUANTUM
-                    if job.kind == "material_links" and category == "links"
-                    else 1
-                )
+                expected = 1
                 assert work_class is not None
                 reserve_execution_cost(
                     session,

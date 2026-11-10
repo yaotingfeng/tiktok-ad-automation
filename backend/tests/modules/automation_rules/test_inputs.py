@@ -4,6 +4,7 @@ from uuid import uuid4
 
 import pytest
 
+from app.modules.ads.creatives import upsert_creatives
 from app.modules.ads.models import (
     AdMaterialReference,
     AdObject,
@@ -20,7 +21,7 @@ from app.modules.automation_rules.inputs import (
 )
 from app.modules.automation_rules.schemas import AccountScope, RuleDefinition
 from app.modules.reporting.publish import AccountMeta, publish_ad_day
-from app.modules.reporting.store_models import MaterialPostLink, ReportSyncState
+from app.modules.reporting.store_models import ReportSyncState
 from tests.modules.automation_rules.test_definition import base
 from tests.modules.reporting.sync_conftest import ad_row
 
@@ -240,8 +241,8 @@ def test_account_timezone_rules_judge_each_account_at_its_local_time(
     assert sorted(preview.accounts) == ["acc-1", "acc-2"]
 
 
-def test_materials_carry_video_from_report_links(session, sync_seed):
-    # 视频归属与素材报表同源（主素材 → 视频对照）；对不上视频的主素材为空，不参与视频合计。
+def test_materials_carry_video_from_creative_identity(session, sync_seed):
+    # 视频归属来自官方创意身份；尚无创意身份的使用位置不可执行。
     _seed(session, sync_seed)
     tenant = sync_seed.tenant_id
     for main, ad in (("p1", "a1"), ("p2", "a1")):
@@ -259,16 +260,20 @@ def test_materials_carry_video_from_report_links(session, sync_seed):
                 published_version=1,
             )
         )
-    session.add(
-        MaterialPostLink(
-            tenant_id=tenant,
-            advertiser_id="acc-1",
-            main_material_id="p1",
-            ad_remote_id="a1",
-            main_material_type="VIDEO_SPARK_ADS",
-            platform_material_id="v-p1",
-            observed_at=NOW,
-        )
+    upsert_creatives(
+        session,
+        tenant_id=tenant,
+        advertiser_id="acc-1",
+        rows=[
+            {
+                "creative_id": "p1",
+                "ad_remote_id": "a1",
+                "ad_material_id": "am-p1",
+                "assets": [{"material_type": "VIDEO", "platform_material_id": "v-p1"}],
+            }
+        ],
+        observed_at=NOW,
+        published_version=1,
     )
     session.flush()
     accounts = {"acc-1": AccountInfo("acc-1", "bc", "UTC", "USD", "A")}
@@ -278,10 +283,10 @@ def test_materials_carry_video_from_report_links(session, sync_seed):
     by_video = {entity.video: entity for entity in found.values()}
     assert by_video["v-p1"].report_ids == ("p1",)
     assert by_video["v-p1"].judgement_issue is None
-    assert by_video["v-p2"].judgement_issue == "MATERIAL_LINK_MISSING"
+    assert by_video["v-p2"].judgement_issue == "MATERIAL_CREATIVE_MISSING"
 
 
-@pytest.mark.parametrize("kind", ["ad_day", "material_day"])
+@pytest.mark.parametrize("kind", ["ad_day", "creative_day"])
 @pytest.mark.parametrize(
     "age_seconds,expected_fresh",
     [(900, True), (1199, True), (1200, True), (1201, False)],

@@ -18,12 +18,6 @@ from app.modules.automation_rules.schedule import due_at, next_run_at
 from app.modules.automation_rules.schemas import AccountScope, RuleDefinition
 from app.modules.automation_rules.statuses import hierarchy_statuses
 from app.modules.reporting.freshness import fresh_report_success
-from app.modules.reporting.material_value import (
-    MATERIAL_WINDOW_VALUES_SQL,
-    VIDEO_REPORT_TYPES,
-    material_value_parameters,
-    valuable_material_condition,
-)
 from app.modules.reporting.metric_catalog import STORED_KEYS
 
 _PAST = {"PAST_3_DAYS": 3, "PAST_5_DAYS": 5, "PAST_7_DAYS": 7}
@@ -60,7 +54,7 @@ class Entity:
     material_uses: tuple[dict[str, Any], ...] = ()
     # 素材所属视频，与素材报表按视频跨账户合并的口径一致；对不上视频时为空。
     video: str | None = None
-    # 日报帖子可因重建出现多个；判断按广告内视频合计，操作只用当前身份。
+    # 一个视频可能对应多个历史创意；金额按本广告内视频合计，操作只用当前身份。
     report_ids: tuple[str, ...] = ()
     judgement_issue: str | None = None
     # 素材自身启用不等于可投放：其广告、广告组、系列也须启用。
@@ -194,7 +188,7 @@ def _fresh_accounts(
     rows = session.connection().execute(
         text(
             "SELECT advertiser_id, stat_date, last_success_at FROM report_sync_state "
-            "WHERE tenant_id = :t AND report_kind = :k AND advertiser_id = ANY(:advs) "
+            "WHERE tenant_id = :t AND report_kind = :k AND status='COMPLETE' AND advertiser_id = ANY(:advs) "
             "AND stat_date >= :since"
         ),
         {
@@ -361,7 +355,6 @@ def _materials(
     *,
     definition: RuleDefinition | None = None,
     now: datetime | None = None,
-    ignored_posts: list[dict[str, str]] | None = None,
 ) -> dict[str, Entity]:
     # 延迟导入避免 Entity 数据合同与素材加载器循环导入。
     from app.modules.automation_rules.material_inputs import load_material_entities
@@ -373,7 +366,6 @@ def _materials(
         ads,
         definition=definition,
         now=now,
-        ignored_posts=ignored_posts,
     )
 
 
@@ -412,40 +404,20 @@ def _facts(
         for key in STORED_KEYS
     )
     table, ids = (
-        ("material_report_day", "f.main_material_id")
+        ("creative_report_day", "f.creative_id")
         if material
         else ("ad_report_day", "f.campaign_id, f.adgroup_id, f.ad_id")
-    )
-    # 付费效率只汇总窗口内有金额的帖子；零金额曝光保留在页面事实中，不稀释规则指标。
-    value_cte = (
-        f"WITH material_values AS ({MATERIAL_WINDOW_VALUES_SQL}) " if material else ""
-    )
-    # 窗口价值与实际求和必须同时限制事实类型；同 MID 的跨日类型不能借旧链接混入。
-    value_filter = (
-        f" AND {valuable_material_condition('f')}"
-        " AND f.main_material_type=ANY(CAST(:value_material_types AS text[]))"
-        if material
-        else ""
     )
     rows = (
         session.connection()
         .execute(
             text(
-                value_cte + f"SELECT f.advertiser_id, {ids}, {sums} FROM {table} f "
+                f"SELECT f.advertiser_id, {ids}, {sums} FROM {table} f "
                 "JOIN unnest(CAST(:advs AS text[]), CAST(:starts AS date[]), CAST(:ends AS date[])) "
                 "AS w(adv, s, e) ON w.adv = f.advertiser_id AND f.stat_date BETWEEN w.s AND w.e "
-                f"WHERE f.tenant_id = :t {value_filter} GROUP BY f.advertiser_id, {ids}"
+                f"WHERE f.tenant_id = :t GROUP BY f.advertiser_id, {ids}"
             ),
             {
-                **(
-                    material_value_parameters(
-                        tenant_id,
-                        [(adv, *w) for adv, w in zip(accounts, windows, strict=True)],
-                        material_types=VIDEO_REPORT_TYPES,
-                    )
-                    if material
-                    else {}
-                ),
                 "t": tenant_id,
                 "advs": list(accounts),
                 "starts": [w[0] for w in windows],
@@ -459,7 +431,7 @@ def _facts(
         adv = row.advertiser_id
         if material:
             _add(
-                result[f"material:{adv}:{row.main_material_id}"],
+                result[f"creative:{adv}:{row.creative_id}"],
                 row,
                 strict_facts=strict_facts,
             )
@@ -493,10 +465,15 @@ def load_inputs(
             if due_at(definition.schedule, slot_at=slot_at, timezone=info.timezone)
         }
     level = definition.apply_to.level
-    kind = "material_day" if level == "material" else "ad_day"
+    kind = "creative_day" if level == "material" else "ad_day"
     accounts, skipped = _fresh_accounts(
         session, tenant_id=tenant_id, accounts=accounts, kind=kind, now=now
     )
+    if level == "material" and accounts:
+        accounts, ledger_skipped = _fresh_accounts(
+            session, tenant_id=tenant_id, accounts=accounts, kind="ad_day", now=now
+        )
+        skipped.extend(ledger_skipped)
     if not accounts:
         return Inputs(accounts={}, entities={}, facts={}, skipped_accounts=skipped)
     entities = _objects(session, tenant_id, accounts, now)
@@ -509,7 +486,6 @@ def load_inputs(
                 entities,
                 definition=definition if level == "material" else None,
                 now=now,
-                ignored_posts=skipped if level == "material" else None,
             )
         )
     ranges: list[str] = sorted(

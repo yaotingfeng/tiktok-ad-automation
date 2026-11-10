@@ -267,7 +267,6 @@ REPORT_KINDS = (
     "creative_day",
     "ad_day",
     "campaign_hour",
-    "material_day",
     "account_day",
 )
 

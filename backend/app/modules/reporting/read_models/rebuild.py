@@ -108,11 +108,13 @@ def enqueue_fact_buckets(
             text("""
         SELECT DISTINCT 'ad_day' AS kind,stat_date FROM ad_report_day
         WHERE tenant_id=:tenant AND advertiser_id=:advertiser AND stat_date BETWEEN :start AND :end
-        UNION SELECT DISTINCT 'material_day',stat_date FROM material_report_day
+        UNION SELECT DISTINCT 'creative_material',stat_date FROM ad_report_day
         WHERE tenant_id=:tenant AND advertiser_id=:advertiser AND stat_date BETWEEN :start AND :end
-        UNION SELECT report_kind,stat_date FROM report_sync_state
+        UNION SELECT DISTINCT 'creative_material',stat_date FROM creative_report_day
         WHERE tenant_id=:tenant AND advertiser_id=:advertiser AND stat_date BETWEEN :start AND :end
-            AND report_kind IN ('ad_day','material_day')
+        UNION SELECT CASE WHEN report_kind='creative_day' THEN 'creative_material' ELSE report_kind END,stat_date FROM report_sync_state
+        WHERE tenant_id=:tenant AND advertiser_id=:advertiser AND stat_date BETWEEN :start AND :end
+            AND report_kind IN ('ad_day','creative_day')
     """),
             {
                 "tenant": tenant_id,
@@ -207,7 +209,7 @@ def main() -> None:
                     text("""
                 SELECT kind,bucket,source_revision FROM read_bucket_state
                 WHERE tenant_id=:tenant AND advertiser_id=:advertiser
-                    AND kind IN ('ad_day','material_day') AND bucket BETWEEN :start AND :end
+                    AND kind IN ('ad_day','creative_material') AND bucket BETWEEN :start AND :end
                     AND source_revision>derived_revision ORDER BY kind,bucket LIMIT 1 FOR UPDATE
             """),
                     {

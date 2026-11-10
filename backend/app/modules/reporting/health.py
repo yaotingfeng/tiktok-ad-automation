@@ -28,8 +28,6 @@ from app.modules.reporting.directory_refresh import (
     rule_accounts,
 )
 from app.modules.reporting.freshness import FRESHNESS, fresh_report_success
-from app.modules.reporting.jobs import enqueue_job
-from app.modules.reporting.link_policy import material_link_query
 from app.modules.reporting.planner import (
     REFRESH_MARGIN,
     _common,
@@ -37,8 +35,8 @@ from app.modules.reporting.planner import (
     _hot_window,
     known_reporting_accounts,
     owned_accounts,
+    plan_creative,
     plan_hot,
-    plan_material,
 )
 from app.modules.reporting.query_budget import QueryBudgetExceeded, query_budget
 from app.modules.reporting.store_models import (
@@ -68,7 +66,7 @@ COVERAGE_STAGES = ("directory", "material")
 FRESHNESS_BATCH_SIZE = 512
 COVERAGE_REFRESH = timedelta(minutes=3)
 COVERAGE_MAX_AGE = timedelta(minutes=5)
-COVERAGE_COUNTS = {"missing_directory_ads", "unlinked_material_posts"}
+COVERAGE_COUNTS = {"missing_directory_ads", "unmapped_creatives"}
 COVERAGE_ISSUES = {"COVERAGE_PENDING", "COVERAGE_STALE", "COVERAGE_QUERY_FAILED"}
 
 
@@ -254,13 +252,13 @@ def measure_freshness(session, plan, *, now, accounts=None):
                   AND s.stat_date=a.local_day) AS ad_at,
                 max(s.last_success_at) FILTER (WHERE s.report_kind='ad_day'
                   AND s.stat_date=a.local_day-1) AS ad_previous_at,
-                max(s.last_success_at) FILTER (WHERE s.report_kind='material_day'
+                max(s.last_success_at) FILTER (WHERE s.report_kind='creative_day'
                   AND s.stat_date=a.local_day) AS material_at,
-                max(s.last_success_at) FILTER (WHERE s.report_kind='material_day'
+                max(s.last_success_at) FILTER (WHERE s.report_kind='creative_day'
                   AND s.stat_date=a.local_day-1) AS material_previous_at
               FROM report_sync_state s
               WHERE s.tenant_id=:t AND s.advertiser_id=a.advertiser_id
-                AND s.report_kind IN ('ad_day','material_day')
+                AND s.report_kind IN ('ad_day','creative_day')
                 AND s.stat_date BETWEEN CASE
                   WHEN (CAST(:now AS timestamptz) AT TIME ZONE a.timezone)
                     < a.local_day + CAST(:previous_grace AS interval)
@@ -268,7 +266,7 @@ def measure_freshness(session, plan, *, now, accounts=None):
             ) recent ON true
             CROSS JOIN LATERAL (VALUES
               ('ad_day',recent.ad_at,recent.ad_previous_at),
-              ('material_day',recent.material_at,recent.material_previous_at)
+              ('creative_day',recent.material_at,recent.material_previous_at)
             ) kinds(kind,last_success_at,previous_success_at)
         """),
                 {
@@ -281,7 +279,7 @@ def measure_freshness(session, plan, *, now, accounts=None):
             .mappings()
             .all()
         )
-    stale = {"ad_day": set(), "material_day": set()}
+    stale = {"ad_day": set(), "creative_day": set()}
     times = []
     for row in rows:
         at = fresh_report_success(
@@ -308,7 +306,7 @@ def measure_freshness(session, plan, *, now, accounts=None):
     ).scalar_one()
     metrics = {
         "stale_ad_accounts": len(stale["ad_day"]),
-        "stale_material_accounts": len(stale["material_day"]),
+        "stale_material_accounts": len(stale["creative_day"]),
         "pending_actions": pending,
         "oldest_data_at": min(times).isoformat() if times else None,
     }
@@ -317,8 +315,7 @@ def measure_freshness(session, plan, *, now, accounts=None):
     ]
     repairs = {
         "ad": stale["ad_day"],
-        "material": stale["material_day"],
-        "links": set(),
+        "material": stale["creative_day"],
         "directory": set(),
     }
     if owned and (
@@ -354,23 +351,19 @@ def measure_coverage(session, plan, *, now, accounts=None, stage=None):
                 {**params, "ids": directory_accounts[offset : offset + 256]},
             )
         )
-    # 素材关联同样逐账户主键前缀短探测，避免反连接扫描所有历史映射。
+    # 创意身份缺口仅展示，正常目录发布负责已知身份；不再为旧帖追逐补链。
     unlinked = []
     for offset in range(0, len(directory_accounts) if stage != "directory" else 0, 256):
         unlinked.extend(
             session.execute(
-                text(f"""
-            WITH posts AS MATERIALIZED (
-              SELECT DISTINCT r.advertiser_id,r.main_material_id,r.main_material_type FROM material_report_day r
-              WHERE r.tenant_id=:t AND r.advertiser_id=ANY(:ids) AND r.spend>0
-                AND r.stat_date BETWEEN :first_day AND :last_day
-                AND r.stat_date=(CAST(:now AS timestamptz) AT TIME ZONE r.timezone)::date
-            )
-            SELECT r.advertiser_id,r.main_material_id FROM posts r
-            LEFT JOIN LATERAL (
-              {material_link_query("r", tenant=":t")} LIMIT 1
-            ) linked ON true
-            WHERE linked.found IS NULL
+                text("""
+          SELECT DISTINCT r.advertiser_id,r.creative_id FROM creative_report_day r
+          LEFT JOIN ad_creative c ON c.tenant_id=r.tenant_id AND c.advertiser_id=r.advertiser_id AND c.creative_id=r.creative_id
+          WHERE r.tenant_id=:t AND r.advertiser_id=ANY(:ids)
+            AND r.stat_date BETWEEN :first_day AND :last_day
+            AND r.stat_date=(CAST(:now AS timestamptz) AT TIME ZONE r.timezone)::date
+            AND (r.spend IS NULL OR r.spend<>0 OR r.revenue_total IS NULL OR r.revenue_total<>0)
+            AND COALESCE(c.identity_status,'UNRESOLVED') NOT IN ('RESOLVED','COMPOSITE')
         """),
                 {**params, "ids": directory_accounts[offset : offset + 256]},
             )
@@ -381,14 +374,13 @@ def measure_coverage(session, plan, *, now, accounts=None, stage=None):
     if stage != "material":
         metrics["missing_directory_ads"] = len(missing)
     if stage != "directory":
-        metrics["unlinked_material_posts"] = len(unlinked)
+        metrics["unmapped_creatives"] = len(unlinked)
     return (
         metrics,
         [key for key, value in metrics.items() if value],
         {
             "ad": set(),
             "material": set(),
-            "links": {r["advertiser_id"] for r in unlinked},
             "directory": {r["advertiser_id"] for r in missing},
         },
     )
@@ -620,9 +612,7 @@ def _repair_health_units(session, plan, row, repairs, now, *, scope, screen_unkn
     """同2秒内轮转两类修复；后续单元失败不能撤销先前已完成的请求。"""
     stop = monotonic() + REPAIR_BUDGET_SECONDS - 0.2
     directory = sorted(repairs.get("directory", ()))
-    regular = screen_unknown or any(
-        repairs[name] for name in ("ad", "material", "links")
-    )
+    regular = screen_unknown or any(repairs[name] for name in ("ad", "material"))
     regular = regular or bool(row.metrics.get("pending_actions"))
     state = dict(row.metrics.get(_DIRECTORY_REPAIR_KEY) or {})
     if directory:
@@ -838,66 +828,14 @@ def _repair_health(session, plan, row, repairs, now, *, screen_unknown=False):
         ),
         now=now,
     )
-    count += plan_material(
+    count += plan_creative(
         session,
         plan,
         active=_repair_fact_accounts(
-            session, plan, repairs["material"], kind="material_day", now=now
+            session, plan, repairs["material"], kind="creative_day", now=now
         ),
         now=now,
     )
-    for (start, end), ids in _group_by_window(
-        session,
-        plan,
-        sorted(repairs["links"])[:MAX_REPAIR_ACCOUNTS],
-        lambda tz: _hot_window(tz, now),
-    ).items():
-        # 已有同冻结范围、同当前日窗口的待领工作保留原退避；证据变化交给
-        # wake_link_dependencies复核，健康告警本身不是重新扫描素材的证据。
-        covered = set(
-            session.connection()
-            .execute(
-                text("""
-            SELECT a.advertiser_id FROM unnest(CAST(:ids AS text[])) a(advertiser_id)
-            JOIN LATERAL (
-              SELECT j.id FROM report_sync_job j
-              WHERE j.tenant_id=:tenant AND j.bc_id=:bc AND j.actor_id=:actor
-                AND j.frozen_route=CAST(:route AS jsonb)
-                AND j.kind='material_links' AND j.status IN ('QUEUED','WAITING')
-                AND j.advertiser_ids=jsonb_build_array(a.advertiser_id)
-                AND j.campaign_ids='[]'::jsonb AND j.priority<=2
-                AND j.start_date=:start AND j.end_date=:end
-                AND (j.claimed_until IS NULL OR j.claimed_until<=:now)
-              LIMIT 1 FOR UPDATE SKIP LOCKED
-            ) pending ON true
-        """),
-                {
-                    "tenant": plan.tenant_id,
-                    "bc": plan.bc_id,
-                    "actor": plan.actor_id,
-                    "route": json.dumps(plan.frozen_route),
-                    "ids": ids,
-                    "start": start,
-                    "end": end,
-                    "now": now,
-                },
-            )
-            .scalars()
-        )
-        for advertiser in ids:
-            if advertiser in covered:
-                continue
-            count += bool(
-                enqueue_job(
-                    session,
-                    kind="material_links",
-                    tier="material",
-                    advertiser_ids=[advertiser],
-                    start=start,
-                    end=end,
-                    **_common(plan),
-                )
-            )
     count += _rescue_queued_actions(session, plan, now=now)
     if count:
         row.last_repair_at = now
@@ -1022,7 +960,7 @@ def _new_coverage_progress(scope, hints=None):
         "offset": 0,
         "metrics": {},
         "issues": [],
-        "repairs": {"ad": [], "material": [], "links": [], "directory": []},
+        "repairs": {"ad": [], "material": [], "directory": []},
         "stages": stages,
         "continuation_seq": 0,
         "retry_not_before": None,

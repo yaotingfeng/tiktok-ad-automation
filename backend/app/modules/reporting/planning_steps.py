@@ -317,7 +317,7 @@ def _execute(
             planner.plan_hot(session, plan, active=requested, now=at)
             step["covered"] = sorted(covered | set(requested))
         elif phase == "material":
-            planner.plan_material(session, plan, active=requested, now=at)
+            planner.plan_creative(session, plan, active=requested, now=at)
             step["covered"] = sorted(covered | set(requested))
         else:
             active.update(step["active"])
@@ -333,6 +333,7 @@ def _execute(
         planner.plan_day_closeout(session, plan, now=at, accounts=batch)
     elif phase == "daily":
         from app.modules.operation_logs.planning import plan_logs
+
         plan_logs(session, plan, now=at, accounts=batch)
         planner.plan_daily(
             session,

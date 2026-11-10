@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from collections.abc import Iterable, Sequence
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
@@ -10,7 +9,6 @@ from uuid import UUID, uuid4
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import and_, func, or_
-from sqlalchemy.dialects.postgresql import array
 from sqlalchemy.sql.elements import ColumnElement
 from sqlmodel import Session, col, select
 
@@ -58,276 +56,6 @@ def _strictly_unstarted() -> tuple[ColumnElement[bool], ...]:
     )
 
 
-def _idle_link_dependency_wait(now: datetime) -> ColumnElement[bool]:
-    # 只承接已经结束网络扫描、清掉分页续点且正在等待目录证据的补链任务。
-    # 在途网络读取和普通WAITING均不适用；不改查询日期/账户/授权范围。
-    allowed = [
-        "coalesced_v1",
-        "requested_at",
-        "initial_window",
-        "dependency_recovery_sequences",
-        "waiting_ids",
-        "dependency_checked_at",
-        "dependency_signature",
-        "dependency_attempts",
-        "dependency_probed_at",
-    ]
-    return and_(
-        col(ReportSyncJob.kind) == "material_links",
-        col(ReportSyncJob.status) == "WAITING",
-        col(ReportSyncJob.error_code).in_(
-            ["material_directory_pending", "material_identity_unavailable"]
-        ),
-        col(ReportSyncJob.claim_token).is_(None),
-        col(ReportSyncJob.claimed_until).is_(None),
-        func.jsonb_typeof(col(ReportSyncJob.progress)["waiting_ids"]) == "array",
-        col(ReportSyncJob.progress).op("?")("dependency_checked_at"),
-        col(ReportSyncJob.progress).op("-")(array(allowed)) == {},
-        ~select(col(ReportSyncPage.job_id))
-        .where(ReportSyncPage.job_id == ReportSyncJob.id)
-        .exists(),
-        ~select(col(SyncSchedule.scope_id))
-        .where(
-            SyncSchedule.lease_execution_id == ReportSyncJob.id,
-            col(SyncSchedule.lease_token).is_not(None),
-            col(SyncSchedule.leased_until) > now,
-        )
-        .exists(),
-        execution_owner_current(ReportSyncJob, "report_job_id"),
-    )
-
-
-def _valid_link_continuation_progress(progress: dict[str, Any]) -> bool:
-    """锁定后只读校验嵌套续点；非法证据不能承接新需求，也不能被顺手清空。"""
-
-    def require(condition: bool) -> None:
-        if not condition:
-            raise ValueError("invalid link cursor")
-
-    def strings(value: Any) -> bool:
-        return type(value) is list and all(
-            type(item) is str and bool(item) for item in value
-        )
-
-    def number(value: Any, minimum: int = 0) -> bool:
-        return type(value) is int and value >= minimum
-
-    def identities(value: Any) -> bool:
-        if not strings(value):
-            return False
-        return all(
-            strings(pair := json.loads(item)) and len(pair) == 2 for item in value
-        )
-
-    def signature(value: Any) -> bool:
-        return (
-            type(value) is list
-            and len(value) == 2
-            and all(number(item) for item in value)
-        )
-
-    try:
-        for key in (
-            "overview_ad_ids",
-            "asset_identity_checked",
-            "scan_evidence_ids",
-            "waiting_ids",
-        ):
-            if key in progress:
-                require(strings(progress[key]))
-        if "checked_ids" in progress:
-            require(identities(progress["checked_ids"]))
-        if "spark_identity_checked" in progress:
-            require(strings(progress["spark_identity_checked"]))
-            for value in progress["spark_identity_checked"]:
-                identity = json.loads(value)
-                require(strings(identity) and len(identity) == 3)
-        if "locate_post" in progress:
-            state = progress["locate_post"]
-            require(
-                type(state) is dict
-                and set(state)
-                <= {
-                    "key",
-                    "mid",
-                    "mtype",
-                    "candidates",
-                    "preferred_count",
-                    "next_batch",
-                    "search_stack",
-                    "query",
-                }
-            )
-            require(strings([state["mid"], state["mtype"]]))
-            require(json.loads(state["key"]) == [state["mid"], state["mtype"]])
-            candidates = state["candidates"]
-            require(strings(candidates))
-            candidate_set = set(candidates)
-            require(len(candidate_set) == len(candidates))
-            require(
-                number(state["next_batch"]) and state["next_batch"] <= len(candidates)
-            )
-            require(
-                number(state.get("preferred_count", 0))
-                and state.get("preferred_count", 0) <= len(candidates)
-            )
-            require(type(state["search_stack"]) is list)
-            for node in state["search_stack"]:
-                require(type(node) is dict and set(node) == {"ads", "confirmed"})
-                require(
-                    strings(node["ads"])
-                    and bool(node["ads"])
-                    and set(node["ads"]) <= candidate_set
-                )
-                require(type(node["confirmed"]) is bool)
-            if "query" in state:
-                query = state["query"]
-                require(
-                    type(query) is dict and set(query) <= {"page", "found", "signature"}
-                )
-                require(number(query["page"], 1) and type(query["found"]) is bool)
-                require("signature" not in query or signature(query["signature"]))
-        if "locate_queries" in progress:
-            cache = progress["locate_queries"]
-            require(
-                type(cache) is dict
-                and set(cache) <= {"typed", "targets", "entries", "pending"}
-            )
-            require(cache["typed"] is True and identities(cache["targets"]))
-            # 完整目标可能有数千项；多缓存条目只共享一次集合，避免重复全量构造。
-            target_set = set(cache["targets"])
-            require(type(cache["entries"]) is dict)
-            for key, entry in cache["entries"].items():
-                require(
-                    type(key) is str
-                    and type(entry) is dict
-                    and set(entry) == {"at", "members"}
-                )
-                require(type(entry["at"]) in (int, float) and entry["at"] >= 0)
-                require(
-                    identities(entry["members"]) and set(entry["members"]) <= target_set
-                )
-            if "pending" in cache:
-                pending = cache["pending"]
-                require(
-                    type(pending) is dict
-                    and set(pending)
-                    == {"key", "at", "next_page", "signature", "seen", "members"}
-                )
-                require(type(pending["key"]) is str and bool(pending["key"]))
-                require(type(pending["at"]) in (int, float) and pending["at"] >= 0)
-                require(
-                    number(pending["next_page"], 1) and signature(pending["signature"])
-                )
-                require(strings(pending["seen"]) and identities(pending["members"]))
-                require(set(pending["members"]) <= target_set)
-        if "spark_asset_content" in progress:
-            cache = progress["spark_asset_content"]
-            require(type(cache) is dict and set(cache) == {"scope", "at", "rows"})
-            require(
-                strings([cache["scope"], cache["at"]]) and type(cache["rows"]) is list
-            )
-            for row in cache["rows"]:
-                require(
-                    type(row) is dict and set(row) == {"video_id", "signature", "size"}
-                )
-                require(type(row["video_id"]) is str and bool(row["video_id"]))
-                require(row["signature"] is None or type(row["signature"]) is str)
-                require(row["size"] is None or number(row["size"]))
-        return True
-    except KeyError, TypeError, ValueError, AttributeError:
-        return False
-
-
-def _idle_link_continuation(now: datetime) -> ColumnElement[bool]:
-    # 只承接无报表快照的补链续步。新需求不是旧分页的新观察；真正完成前
-    # 仍由needs_material_links/wait_for_dependencies检查当前事实缺口。
-    progress = col(ReportSyncJob.progress)
-    arrays = (
-        "overview_ad_ids",
-        "checked_ids",
-        "scan_evidence_ids",
-        "asset_identity_checked",
-        "spark_identity_checked",
-        "waiting_ids",
-    )
-    objects = ("locate_post", "locate_queries", "spark_asset_content", "last_admission")
-    booleans = (
-        "overview_complete",
-        "overview_owner_scoped",
-        "owner_lookup_first",
-        "owner_lookup_finished",
-        "typed_link_search",
-        "scan_evidence_valid",
-    )
-    allowed = [
-        "coalesced_v1",
-        "requested_at",
-        "initial_window",
-        "dependency_recovery_sequences",
-        "dependency_checked_at",
-        "dependency_signature",
-        "dependency_attempts",
-        "dependency_probed_at",
-        "scan_evidence_at",
-        "scan_evidence_signature",
-        "next_page",
-        *arrays,
-        *objects,
-        *booleans,
-    ]
-    shapes = [
-        or_(~progress.op("?")(key), func.jsonb_typeof(progress[key]) == kind)
-        for fields, kind in (
-            (arrays, "array"),
-            (objects, "object"),
-            (booleans, "boolean"),
-        )
-        for key in fields
-    ]
-    return and_(
-        col(ReportSyncJob.kind) == "material_links",
-        col(ReportSyncJob.contract_version) == 2,
-        col(ReportSyncJob.status) == "WAITING",
-        col(ReportSyncJob.error_code).is_(None),
-        col(ReportSyncJob.claim_generation) > 0,
-        col(ReportSyncJob.claim_token).is_(None),
-        col(ReportSyncJob.claimed_until).is_(None),
-        progress.op("-")(array(allowed)) == {},
-        progress.op("?|")(
-            array(
-                [
-                    "next_page",
-                    "locate_post",
-                    "asset_identity_checked",
-                    "spark_identity_checked",
-                    "overview_complete",
-                    "owner_lookup_finished",
-                ]
-            )
-        ),
-        *shapes,
-        or_(
-            ~progress.op("?")("next_page"),
-            and_(
-                func.jsonb_typeof(progress["next_page"]) == "number",
-                progress["next_page"].astext.op("~")("^[1-9][0-9]*$"),
-            ),
-        ),
-        ~select(col(ReportSyncPage.job_id))
-        .where(col(ReportSyncPage.job_id) == col(ReportSyncJob.id))
-        .exists(),
-        ~select(col(SyncSchedule.scope_id))
-        .where(
-            col(SyncSchedule.lease_execution_id) == col(ReportSyncJob.id),
-            col(SyncSchedule.lease_token).is_not(None),
-            col(SyncSchedule.leased_until) > now,
-        )
-        .exists(),
-        execution_owner_current(ReportSyncJob, "report_job_id"),
-    )
-
-
 def _adjacent_unstarted(
     session: Session,
     *,
@@ -338,7 +66,6 @@ def _adjacent_unstarted(
     end: date,
     cutoff: date,
 ) -> ReportSyncJob | None:
-    from sqlalchemy import func, or_
 
     # 当天及实时金额保持短查询；小时报表合同仍为单日，不扩成跨日。
     if end >= cutoff or kind == "campaign_hour":
@@ -370,13 +97,12 @@ def _adjacent_unstarted(
             )
         ),
     ]
-    if kind != "material_links":
-        eligible.append(
-            or_(
-                col(ReportSyncJob.priority) > 2,
-                col(ReportSyncJob.end_date) < cutoff - timedelta(days=1),
-            )
+    eligible.append(
+        or_(
+            col(ReportSyncJob.priority) > 2,
+            col(ReportSyncJob.end_date) < cutoff - timedelta(days=1),
         )
+    )
     return session.exec(
         select(ReportSyncJob)
         .where(*eligible)
@@ -431,13 +157,16 @@ def enqueue_report_requirements(
     execution_window_days: int | None = None,
 ) -> list[UUID]:
     """按业务批批量归并；SQL往返数随批次增长，不随账户×日期逐行增长。"""
-    from sqlalchemy import case, func
+    from sqlalchemy import case
     from sqlalchemy.dialects.postgresql import insert
 
+    from app.core.errors import DomainError
     from app.integrations.tiktok.contracts.context import FrozenTikTokRoute
-    from app.modules.sync_control.models import SyncSchedule, SyncScope
+    from app.modules.sync_control.models import SyncScope
     from app.modules.sync_control.scopes import scope_key
 
+    if kind in {"material_day", "material_links"}:
+        raise DomainError("report_kind_retired", "旧素材报表及补链任务已退休")
     if execution_window_days is not None and not 1 <= execution_window_days <= 30:
         raise ValueError("execution_window_days must be within 1..30")
     now = datetime.now(UTC)
@@ -494,15 +223,9 @@ def enqueue_report_requirements(
         )
         local_today = now.astimezone(ZoneInfo(account.timezone)).date()
         classes[advertiser] = (
-            "directory"
-            if kind == "material_links"
-            else (
-                "realtime"
-                if priority <= 2
-                and start == end
-                and end >= local_today - timedelta(days=1)
-                else "history"
-            )
+            "realtime"
+            if priority <= 2 and start == end and end >= local_today - timedelta(days=1)
+            else "history"
         )
     session.connection().execute(
         insert(SyncScope).on_conflict_do_nothing(index_elements=["identity_digest"]),
@@ -603,36 +326,11 @@ def enqueue_report_requirements(
                 select(ReportSyncJob)
                 .where(
                     col(ReportSyncJob.id).in_({job.id for job, _ in existing.values()}),
-                    or_(
-                        and_(*_strictly_unstarted()),
-                        _idle_link_dependency_wait(now),
-                        and_(
-                            _idle_link_continuation(now),
-                            # 续步只吸收相同查询的新需求版本；不扩大日期或账户，
-                            # 不改变冻结路由，也不把子范围相交当作整个父查询相同。
-                            col(ReportSyncJob.tenant_id) == tenant_id,
-                            col(ReportSyncJob.bc_id) == bc_id,
-                            col(ReportSyncJob.actor_id) == actor_id,
-                            col(ReportSyncJob.start_date) == start,
-                            col(ReportSyncJob.end_date) == end,
-                            col(ReportSyncJob.campaign_ids) == list(campaign_ids),
-                            col(ReportSyncJob.frozen_route) == frozen_route,
-                            or_(
-                                *(
-                                    col(ReportSyncJob.advertiser_ids) == group
-                                    for group in groups
-                                )
-                            ),
-                        ),
-                    )
-                    if kind == "material_links"
-                    else and_(*_strictly_unstarted()),
+                    and_(*_strictly_unstarted()),
                 )
                 .with_for_update(of=ReportSyncJob, skip_locked=True)
                 .execution_options(populate_existing=True)
             ).all()
-            if not (locked.status == "WAITING" and locked.error_code is None)
-            or _valid_link_continuation_progress(locked.progress)
         }
         if existing
         else set()
@@ -696,9 +394,8 @@ def enqueue_report_requirements(
             max_days=1 if kind == "campaign_hour" else (execution_window_days or 30),
         ):
             merged = None
-            if execution_window_days is None and (
-                kind == "material_links"
-                or all(classes[account] == "history" for account in window_accounts)
+            if execution_window_days is None and all(
+                classes[account] == "history" for account in window_accounts
             ):
                 merged = _adjacent_unstarted(
                     session,
@@ -854,6 +551,8 @@ def enqueue_report_requirements(
 
 def adopt_report_job(session: Session, job: ReportSyncJob) -> int:
     """离线迁移原执行：不更换ID、不动页正文或游标、不发任何外部请求。"""
+    if job.kind in {"material_day", "material_links"}:
+        return 0
     existing = session.exec(
         select(col(SyncExecutionScope.id))
         .where(col(SyncExecutionScope.report_job_id) == job.id)
@@ -866,9 +565,7 @@ def adopt_report_job(session: Session, job: ReportSyncJob) -> int:
         if job.progress.get("requested_at")
         else job.created_at
     )
-    paging = (
-        job.progress.get("material_paging") or job.progress.get("basic_paging") or {}
-    )
+    paging = job.progress.get("basic_paging") or {}
     observed = paging.get("observed_at") or job.progress.get("snapshot_observed_at")
     observed = datetime.fromisoformat(observed) if observed else None
     revisions = []

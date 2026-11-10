@@ -49,7 +49,6 @@ from app.modules.reporting.planner import (
     local_today,
     owned_accounts,
     plan_hot,
-    plan_material,
 )
 from app.modules.reporting.preferences import (
     delete_view,
@@ -302,6 +301,7 @@ def ad_trend_route(
     granularity: Literal["day", "hour"] = "day",
     advertiser_ids: Annotated[str | None, Query(max_length=20000)] = None,
     ids: Annotated[str | None, Query(max_length=20000)] = None,
+    snapshot_id: UUID | None = None,
 ) -> TrendPublic:
     context = _context(session, user, tenant_id)
     trend = build_trend(
@@ -314,6 +314,7 @@ def ad_trend_route(
         start=start_date,
         end=end_date,
         granularity=granularity,
+        snapshot_id=snapshot_id,
     )
     # 小时趋势可能排入了按需拉取任务，需提交后才会被调度派发。
     session.commit()
@@ -606,7 +607,6 @@ def request_ad_sync_refresh_route(
         set(body.advertiser_ids or owned_accounts(session, plan)) & allowed
     )
     count = plan_hot(session, plan, active=accounts, now=now, tier="manual")
-    count += plan_material(session, plan, active=accounts, now=now, tier="manual")
     session.commit()
     return SyncRefreshPublic(status="QUEUED", queued=count, accounts=len(accounts))
 

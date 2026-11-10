@@ -1,5 +1,5 @@
 # backend/app/modules/reporting/partitions.py
-"""按月分区：大表（广告日、素材日、紧凑指标日）每月一个分区，另有 DEFAULT 兜底。"""
+"""按月分区：大表（广告日、创意日、紧凑指标日）每月一个分区，另有 DEFAULT 兜底。"""
 
 from datetime import date
 
@@ -9,7 +9,6 @@ from sqlmodel import Session
 PARTITIONED_TABLES = (
     "ad_report_day",
     "creative_report_day",
-    "material_report_day",
     "entity_metric_day",
 )
 

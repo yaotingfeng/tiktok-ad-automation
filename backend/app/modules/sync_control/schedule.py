@@ -28,15 +28,11 @@ def report_endpoint(kind: str) -> str:
     return sdk_endpoint(
         {
             "operation_log": "changelog.create",
-            "material_day": "reports.material_breakdown",
-            "material_links": "reports.material_overview",
         }.get(kind, "reports.integrated")
     )
 
 
-def report_class(kind: str, priority: int) -> str:
-    if kind == "material_links":
-        return "directory"
+def report_class(_kind: str, priority: int) -> str:
     return "realtime" if priority <= 2 else "history"
 
 

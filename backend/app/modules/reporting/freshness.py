@@ -4,12 +4,12 @@ from collections.abc import Mapping
 from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
-from app.modules.reporting.planner import HOT_INTERVAL, MATERIAL_INTERVAL
+from app.modules.reporting.planner import HOT_INTERVAL
 
 # 报表仍以一个热轮次加五分钟执行余量为 SLO，独立于目录的规划提前量。
 FRESHNESS = {
     "ad_day": HOT_INTERVAL + timedelta(minutes=5),
-    "material_day": MATERIAL_INTERVAL + timedelta(minutes=5),
+    "creative_day": HOT_INTERVAL + timedelta(minutes=5),
 }
 
 

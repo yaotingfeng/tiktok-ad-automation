@@ -117,7 +117,7 @@ def test_hot_plan_uses_current_local_day_and_daily_excludes_it(
 ):
     from zoneinfo import ZoneInfo
 
-    from app.modules.reporting.planner import plan_material
+    from app.modules.reporting.planner import plan_creative
     from app.modules.sync_control import report_demand
 
     class Clock(datetime):
@@ -132,7 +132,7 @@ def test_hot_plan_uses_current_local_day_and_daily_excludes_it(
     ensure_bc_plans(session, now=now)
     plan = session.get(AdSyncBc, (sync_seed.tenant_id, "bc-a"))
     plan_hot(session, plan, active=["acc-1", "acc-2"], now=now)
-    plan_material(session, plan, active=["acc-1", "acc-2"], now=now)
+    plan_creative(session, plan, active=["acc-1", "acc-2"], now=now)
     plan_daily(session, plan, active_32d=["acc-1", "acc-2"], now=now)
     jobs = session.exec(
         select(ReportSyncJob).where(ReportSyncJob.tenant_id == sync_seed.tenant_id)
@@ -143,8 +143,8 @@ def test_hot_plan_uses_current_local_day_and_daily_excludes_it(
     }
     live = [job for job in jobs if job.priority <= 2]
     cold = [job for job in jobs if job.priority >= 3]
-    assert {job.kind for job in live} == {"ad_day", "creative_day", "material_day"}
-    assert {job.kind for job in cold} == {"ad_day", "creative_day", "material_day", "account_day"}
+    assert {job.kind for job in live} == {"ad_day", "creative_day"}
+    assert {job.kind for job in cold} == {"ad_day", "creative_day", "account_day"}
     for job in live:
         assert all(
             job.start_date == job.end_date == today[advertiser]
@@ -174,7 +174,7 @@ def test_inactive_account_keeps_published_rows_until_daily_refresh(session, sync
             select(ReportSyncJob).where(ReportSyncJob.tenant_id == sync_seed.tenant_id)
         ).all()
     }
-    assert kinds == {"ad_day", "creative_day", "material_day", "account_day"}
+    assert kinds == {"ad_day", "creative_day", "account_day"}
 
 
 def test_history_shards_30_days_from_account_creation(session, sync_seed):
@@ -230,16 +230,16 @@ def test_ten_thousand_accounts_one_round_call_budget():
 
 
 def test_after_utc_noon_days_only_today(session, sync_seed):
-    from app.modules.reporting.planner import plan_material
+    from app.modules.reporting.planner import plan_creative
 
     ensure_bc_plans(session, now=NOW)
     plan = session.get(AdSyncBc, (sync_seed.tenant_id, "bc-a"))
     plan_hot(session, plan, active=["acc-1", "acc-2"], now=NOW.replace(hour=13))
-    plan_material(session, plan, active=["acc-1", "acc-2"], now=NOW.replace(hour=13))
+    plan_creative(session, plan, active=["acc-1", "acc-2"], now=NOW.replace(hour=13))
     jobs = session.exec(
         select(ReportSyncJob).where(ReportSyncJob.tenant_id == sync_seed.tenant_id)
     ).all()
-    for kind in ("ad_day", "material_day"):
+    for kind in ("ad_day", "creative_day"):
         assert {(j.start_date, j.end_date) for j in jobs if j.kind == kind} == {
             (date(2026, 10, 12), date(2026, 10, 12))
         }
@@ -436,7 +436,7 @@ def _zero_spend_fact(session, tenant_id, kind, day):
     from decimal import Decimal
     from uuid import uuid4
 
-    from app.modules.reporting.store_models import AdReportDay, MaterialReportDay
+    from app.modules.reporting.store_models import AdReportDay, CreativeReportDay
 
     common = {
         "tenant_id": tenant_id,
@@ -452,8 +452,8 @@ def _zero_spend_fact(session, tenant_id, kind, day):
     fact = (
         AdReportDay(**common, ad_id="zero-ad", campaign_id="c", adgroup_id="g")
         if kind == "ad_day"
-        else MaterialReportDay(
-            **common, main_material_id="zero-post", main_material_type="VIDEO"
+        else CreativeReportDay(
+            **common, creative_id="zero-creative", campaign_id="c", adgroup_id="g"
         )
     )
     session.add(fact)
@@ -461,7 +461,7 @@ def _zero_spend_fact(session, tenant_id, kind, day):
     return fact
 
 
-@pytest.mark.parametrize("kind", ["ad_day", "material_day"])
+@pytest.mark.parametrize("kind", ["ad_day", "creative_day"])
 def test_zero_spend_actual_facts_stay_hot_without_fabricating_watermark(
     session, sync_seed, kind
 ):
@@ -490,7 +490,7 @@ def test_zero_spend_actual_facts_stay_hot_without_fabricating_watermark(
     assert active == {"acc-1"}
     for _ in range(2):
         planner.plan_hot(session, plan, active=sorted(active), now=now)
-        planner.plan_material(session, plan, active=sorted(active), now=now)
+        planner.plan_creative(session, plan, active=sorted(active), now=now)
     planner.mark_confirmed_empty(
         session,
         plan,
@@ -501,7 +501,7 @@ def test_zero_spend_actual_facts_stay_hot_without_fabricating_watermark(
     jobs = session.exec(
         select(ReportSyncJob).where(ReportSyncJob.tenant_id == sync_seed.tenant_id)
     ).all()
-    assert len(jobs) == 3 and {job.kind for job in jobs} == {"ad_day", "creative_day", "material_day"}
+    assert len(jobs) == 2 and {job.kind for job in jobs} == {"ad_day", "creative_day"}
     assert all(
         job.advertiser_ids == ["acc-1"]
         and job.start_date == job.end_date == day
@@ -517,7 +517,7 @@ def test_zero_spend_actual_facts_stay_hot_without_fabricating_watermark(
     assert empty.status == "COMPLETE" and empty.row_count == 0
 
 
-@pytest.mark.parametrize("kind", ["ad_day", "material_day"])
+@pytest.mark.parametrize("kind", ["ad_day", "creative_day"])
 @pytest.mark.parametrize(
     "excluded", ["yesterday", "tomorrow", "tenant", "ownership", "unknown_timezone"]
 )
@@ -608,7 +608,7 @@ def test_material_cycle_enqueues_accounts_with_bounded_database_round_trips(
     from sqlalchemy import event
 
     from app.modules.accounts.models import AdvertiserAccount
-    from app.modules.reporting.planner import plan_material
+    from app.modules.reporting.planner import plan_creative
     from app.modules.sync_control import report_demand
 
     class Clock(datetime):
@@ -636,10 +636,10 @@ def test_material_cycle_enqueues_accounts_with_bounded_database_round_trips(
     connection = session.connection()
     event.listen(connection, "before_cursor_execute", collect)
     try:
-        assert plan_material(session, plan, active=accounts, now=NOW) == account_count
+        assert plan_creative(session, plan, active=accounts, now=NOW) == account_count
         first_count = len(statements)
         statements.clear()
-        assert plan_material(session, plan, active=accounts, now=NOW) == 0
+        assert plan_creative(session, plan, active=accounts, now=NOW) == 0
         repeated_count = len(statements)
     finally:
         event.remove(connection, "before_cursor_execute", collect)
@@ -650,7 +650,7 @@ def test_material_cycle_enqueues_accounts_with_bounded_database_round_trips(
     ).all()
     assert len(jobs) == account_count
     assert all(
-        job.kind == "material_day" and len(job.advertiser_ids) == 1 for job in jobs
+        job.kind == "creative_day" and len(job.advertiser_ids) == 1 for job in jobs
     )
 
 

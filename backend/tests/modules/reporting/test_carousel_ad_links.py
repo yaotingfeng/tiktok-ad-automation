@@ -122,7 +122,7 @@ def test_shared_images_do_not_expand_ad_metrics(session, sync_seed, native, part
     assert result.items == ()
     assert len(result.carousel_creatives) == (1 if partial else 2)
     assert result.carousel_linkage_complete is not partial
-    assert result.metric_scope == "AD"
+    assert result.metric_scope == "CREATIVE"
     assert all(
         "metric_buckets" not in x for x in result.model_dump()["carousel_creatives"]
     )
@@ -154,9 +154,9 @@ def test_images_never_enter_video_material_rules(session, sync_seed):
 
 
 def test_image_id_never_resolves_non_spark_video_identity(session, sync_seed):
+    from app.modules.reporting.material_links import _resolve_videos
     from sqlmodel import select
 
-    from app.modules.reporting.material_links import _resolve_videos
     from app.modules.reporting.store_models import MaterialPostLink
     from tests.modules.reporting.test_material_query import material_row, publish, use
 
@@ -372,7 +372,7 @@ def test_flat_image_directory_stays_incomplete_without_unit_money(session, sync_
         start=D,
         end=D,
     )
-    assert result.metric_scope == "AD" and not result.carousel_linkage_complete
+    assert result.metric_scope == "CREATIVE" and not result.carousel_linkage_complete
     assert result.items == () and result.carousel_creatives == ()
 
 

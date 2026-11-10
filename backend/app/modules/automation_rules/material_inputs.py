@@ -1,4 +1,4 @@
-"""广告内素材输入：报表帖子归到广告内视频，执行只引用当前唯一使用身份。"""
+"""广告内素材输入：创意事实按官方创意身份归到视频，缺口时停止自动判断。"""
 
 import hashlib
 import json
@@ -11,22 +11,18 @@ from uuid import UUID
 
 from sqlmodel import Session, col, select
 
+from app.modules.ads.creative_models import AdCreative
 from app.modules.ads.directory import latest_ad_materials
 from app.modules.ads.models import AdMaterialReference
+from app.modules.automation_rules.creative_integrity import group_issues
 from app.modules.automation_rules.inputs import (
     AccountInfo,
     Entity,
     in_rule_scope,
-    local_window,
 )
 from app.modules.automation_rules.schemas import RuleDefinition
 from app.modules.automation_rules.statuses import known_status
-from app.modules.reporting.material_value import (
-    VIDEO_REPORT_TYPES,
-    material_window_values,
-)
 from app.modules.reporting.metric_catalog import DERIVED_RATIOS, STORED_KEYS
-from app.modules.reporting.store_models import MaterialPostLink
 
 
 def material_use_id(ad_id: str, video_id: str, material_type: str) -> str:
@@ -59,74 +55,37 @@ def load_material_entities(
     *,
     definition: RuleDefinition | None = None,
     now: datetime | None = None,
-    ignored_posts: list[dict[str, str]] | None = None,
 ) -> dict[str, Entity]:
     if not accounts:
         return {}
-    links = session.exec(
-        select(MaterialPostLink).where(
-            MaterialPostLink.tenant_id == tenant_id,
-            col(MaterialPostLink.main_material_type).in_(VIDEO_REPORT_TYPES),
-            col(MaterialPostLink.advertiser_id).in_(list(accounts)),
+    creatives = session.exec(
+        select(AdCreative).where(
+            AdCreative.tenant_id == tenant_id,
+            col(AdCreative.advertiser_id).in_(list(accounts)),
         )
     ).all()
-    ranges = (
-        {str(c.range) for c in definition.conditions if c.range}
-        if definition
-        else set()
-    )
-    windows = (
-        [
-            (adv, *local_window(r, info.timezone, now))
-            for adv, info in accounts.items()
-            for r in sorted(ranges)
-        ]
-        if now is not None
-        else []
-    )
-    values = (
-        material_window_values(
-            session, tenant_id, windows, material_types=VIDEO_REPORT_TYPES
+    by_video = defaultdict(list)
+    conflicted_ads = set()
+    for creative in creatives:
+        if creative.identity_status == "RESOLVED" and creative.material_type == "VIDEO":
+            by_video[
+                creative.advertiser_id,
+                creative.ad_remote_id,
+                creative.platform_material_id,
+            ].append(creative.creative_id)
+        elif creative.identity_status == "CONFLICT":
+            conflicted_ads.add((creative.advertiser_id, creative.ad_remote_id))
+    issues = (
+        group_issues(
+            session,
+            tenant_id=tenant_id,
+            accounts=accounts,
+            definition=definition,
+            now=now,
         )
-        if windows
+        if definition and now
         else {}
     )
-    by_video = defaultdict(list)
-    owners = defaultdict(set)
-    unresolved_ads = set()
-    for link in links:
-        owners[link.advertiser_id, link.main_material_id].add(
-            (link.ad_remote_id, link.platform_material_id)
-        )
-        if not link.platform_material_id:
-            # 只有窗口合计有金额的帖子身份缺口会影响止损；零金额曝光不能阻断广告。
-            if values.get((link.advertiser_id, link.main_material_id), False):
-                unresolved_ads.add((link.advertiser_id, link.ad_remote_id))
-        else:
-            by_video[
-                link.advertiser_id, link.ad_remote_id, link.platform_material_id
-            ].append(link)
-    unlinked_accounts = unlinked_report_accounts(values, set(owners))
-    if ignored_posts is not None:
-        mapped = {
-            (link.advertiser_id, link.main_material_id)
-            for link in links
-            if link.platform_material_id
-        }
-        counts = Counter(
-            adv
-            for (adv, mid), valuable in values.items()
-            if not valuable and (adv, mid) not in mapped
-        )
-        # 按账户+帖子去重，不按事实日期/关联行/规则条件重复计数；仅留审计说明，不报缺数。
-        ignored_posts.extend(
-            {
-                "advertiser_id": adv,
-                "reason": "ZERO_VALUE_UNLINKED_POSTS_IGNORED",
-                "count": str(count),
-            }
-            for adv, count in sorted(counts.items())
-        )
     # 按广告顺序分批读取，当前广告选完身份后释放历史ORM行；不要把整个租户
     # 数万条素材及旧身份同时装进 by_ad。完整广告组仍交给共用选择器判定歧义。
     rows = session.exec(
@@ -151,22 +110,19 @@ def load_material_entities(
         info = accounts[adv]
         parents_enabled = _parents_enabled(ad, ads)
         for use in latest_ad_materials(list(candidates)):
-            refs = by_video[adv, ad_id, use.platform_material_id]
+            ids = by_video[adv, ad_id, use.platform_material_id]
             issue = None
+            group_id = (ad.parent_key or "").rsplit(":", 1)[-1]
             if not use.ad_material_id or use.operation_status is None:
                 issue = "MATERIAL_IDENTITY_AMBIGUOUS"
             elif parents_enabled is None:
                 issue = "MATERIAL_PARENT_UNKNOWN"
-            elif adv in unlinked_accounts:
-                issue = "MATERIAL_REPORT_UNLINKED"
-            elif (adv, ad_id) in unresolved_ads:
-                # 同一广告有尚不能定位视频的旧帖子，不能少算历史消耗后作止损。
-                issue = "MATERIAL_LINK_UNRESOLVED"
-            elif not refs:
-                issue = "MATERIAL_LINK_MISSING"
-            elif any(len(owners[adv, link.main_material_id]) != 1 for link in refs):
-                # 主素材被多条广告共用时，现有事实是合计，不能冒充单广告数据。
-                issue = "MATERIAL_SHARED_REPORT"
+            elif (adv, group_id) in issues:
+                issue = issues[adv, group_id]
+            elif (adv, ad_id) in conflicted_ads:
+                issue = "MATERIAL_CREATIVE_CONFLICT"
+            elif not ids:
+                issue = "MATERIAL_CREATIVE_MISSING"
             rid = material_use_id(ad_id, use.platform_material_id, use.material_type)
             key = f"material:{adv}:{rid}"
             entities[key] = Entity(
@@ -201,7 +157,7 @@ def load_material_entities(
                     },
                 ),
                 video=use.platform_material_id,
-                report_ids=tuple(sorted({link.main_material_id for link in refs})),
+                report_ids=tuple(sorted(set(ids))),
                 judgement_issue=issue,
                 parents_enabled=parents_enabled,
             )
@@ -212,18 +168,18 @@ def material_facts(
     entities: dict[str, Entity],
     posts: dict[str, dict[str, Decimal | None]],
 ) -> dict[str, dict[str, Decimal | None]]:
-    """每笔帖子金额只归到它唯一的广告内视频；未知/共享数据不参与判断。"""
+    """每个创意只归到其所属广告的视频；未知或不完整数据不参与判断。"""
     result = {}
     for entity in entities.values():
         if entity.kind != "material" or entity.judgement_issue:
             continue
         rows = [
-            posts[f"material:{entity.advertiser_id}:{pid}"]
+            posts[f"creative:{entity.advertiser_id}:{pid}"]
             for pid in entity.report_ids
-            if f"material:{entity.advertiser_id}:{pid}" in posts
+            if f"creative:{entity.advertiser_id}:{pid}" in posts
         ]
         if rows:
-            # 任一有事实的帖子缺指标时保留 NULL，不能用其他帖子的金额掩盖缺数。
+            # 任一创意缺指标时保留 NULL，不能用其他创意的金额掩盖缺数。
             result[entity.key] = {
                 key: sum((row[key] or Decimal(0) for row in rows), Decimal(0))
                 if all(row.get(key) is not None for row in rows)
@@ -268,15 +224,3 @@ def mark_missing_metrics(
                     entity, judgement_issue="MATERIAL_METRIC_MISSING"
                 )
                 break
-
-
-def unlinked_report_accounts(
-    values: dict[tuple[str, str], bool],
-    linked_posts: set[tuple[str, str]],
-) -> set[str]:
-    """共用窗口金额判定：只有有价值且无广告归属的帖子才使账户缺数。"""
-    return {
-        adv
-        for (adv, mid), valuable in values.items()
-        if valuable and (adv, mid) not in linked_posts
-    }

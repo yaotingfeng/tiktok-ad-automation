@@ -38,7 +38,7 @@ def project_bucket(
         )
 
         return project_creative_bucket(session, key, expected_version=expected_version)
-    if key.kind not in {"ad_day", "material_day"}:
+    if key.kind != "ad_day":
         raise ValueError("unsupported read bucket kind")
     params = parameters(key) | {"revision": expected_version}
     state = (
@@ -57,7 +57,7 @@ def project_bucket(
         return ProjectionResult(False, state.source_revision if state else 0)
     if state.derived_revision == expected_version:
         return ProjectionResult(True, expected_version)
-    table = "adgroup_report_day" if key.kind == "ad_day" else "material_entity_day"
+    table = "adgroup_report_day"
     # 该行锁同时约束源写触发器：后继写入只能在重建提交后推进N+1，不会被清掉。
     session.connection().execute(
         text(
@@ -65,42 +65,16 @@ def project_bucket(
         ),
         params,
     )
-    if key.kind == "ad_day":
-        sql = f"""
-            INSERT INTO adgroup_report_day
-                (tenant_id,advertiser_id,stat_date,adgroup_id,currency,timezone,
-                 campaign_id,campaign_name,adgroup_name,{_metric_columns()},fetched_at,source_revision)
-            SELECT f.tenant_id,f.advertiser_id,f.stat_date,f.adgroup_id,f.currency,f.timezone,
-                (array_agg(f.campaign_id ORDER BY f.fetched_at DESC,f.ad_id COLLATE "C"))[1],
-                MAX(f.campaign_name),MAX(f.adgroup_name),{_metric_select()},MAX(f.fetched_at),:revision
-            FROM ad_report_day f WHERE f.tenant_id=:tenant AND f.advertiser_id=:advertiser AND f.stat_date=:bucket
-            GROUP BY f.tenant_id,f.advertiser_id,f.stat_date,f.adgroup_id,f.currency,f.timezone
-        """
-    else:
-        sql = f"""
-            INSERT INTO material_entity_day
-                (tenant_id,advertiser_id,stat_date,row_key,main_material_type,currency,timezone,
-                 main_material_name,post_ids,post_names,{_metric_columns()},fetched_at,source_revision)
-            SELECT f.tenant_id,f.advertiser_id,f.stat_date,
-                CASE WHEN v.vid IS NULL THEN jsonb_build_array('post',f.advertiser_id,f.main_material_id)::text
-                    ELSE jsonb_build_array('material',v.vid)::text END AS row_key,
-                f.main_material_type,f.currency,f.timezone,
-                MAX(f.main_material_name),array_agg(f.main_material_id ORDER BY f.main_material_id COLLATE "C"),
-                COALESCE(jsonb_object_agg(f.main_material_id,f.main_material_name)
-                    FILTER (WHERE f.main_material_name IS NOT NULL),'{{}}'::jsonb),
-                {_metric_select()},MAX(f.fetched_at),:revision
-            FROM material_report_day f
-            LEFT JOIN LATERAL (
-                SELECT l.platform_material_id AS vid FROM material_post_link l
-                WHERE l.tenant_id=f.tenant_id AND l.advertiser_id=f.advertiser_id
-                    AND l.main_material_id=f.main_material_id AND l.main_material_type=f.main_material_type
-                    AND l.main_material_type IN ('VIDEO_SPARK_ADS','VIDEO_NON_SPARK_ADS')
-                    AND l.platform_material_id IS NOT NULL
-                ORDER BY l.platform_material_id COLLATE "C" LIMIT 1
-            ) v ON TRUE
-            WHERE f.tenant_id=:tenant AND f.advertiser_id=:advertiser AND f.stat_date=:bucket
-            GROUP BY f.tenant_id,f.advertiser_id,f.stat_date,row_key,f.main_material_type,f.currency,f.timezone
-        """
+    sql = f"""
+        INSERT INTO adgroup_report_day
+            (tenant_id,advertiser_id,stat_date,adgroup_id,currency,timezone,
+             campaign_id,campaign_name,adgroup_name,{_metric_columns()},fetched_at,source_revision)
+        SELECT f.tenant_id,f.advertiser_id,f.stat_date,f.adgroup_id,f.currency,f.timezone,
+            (array_agg(f.campaign_id ORDER BY f.fetched_at DESC,f.ad_id COLLATE "C"))[1],
+            MAX(f.campaign_name),MAX(f.adgroup_name),{_metric_select()},MAX(f.fetched_at),:revision
+        FROM ad_report_day f WHERE f.tenant_id=:tenant AND f.advertiser_id=:advertiser AND f.stat_date=:bucket
+        GROUP BY f.tenant_id,f.advertiser_id,f.stat_date,f.adgroup_id,f.currency,f.timezone
+    """
     result = session.connection().execute(text(sql), params)
     session.connection().execute(
         text("""
@@ -126,7 +100,7 @@ def rebuild_pending(session: Session, *, limit: int = 25) -> list[ProjectionResu
         .execute(
             text("""
         SELECT tenant_id,advertiser_id,kind,bucket,source_revision FROM read_bucket_state
-        WHERE source_revision>derived_revision AND kind IN ('ad_day','material_day','creative_material')
+        WHERE source_revision>derived_revision AND kind IN ('ad_day','creative_material')
         ORDER BY observed_at,tenant_id,advertiser_id,kind,bucket
         LIMIT :limit FOR UPDATE SKIP LOCKED
     """),

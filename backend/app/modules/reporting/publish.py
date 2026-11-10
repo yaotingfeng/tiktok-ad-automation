@@ -18,7 +18,6 @@ from app.core.errors import DomainError
 from app.modules.reporting import diagnostics
 from app.modules.reporting.metrics import (
     basic_metric_values,
-    material_metric_values,
     parse_decimal,
     parse_local_day,
     parse_local_hour,
@@ -30,7 +29,6 @@ from app.modules.reporting.store_models import (
     CampaignReportDay,
     CampaignReportHour,
     CreativeReportDay,
-    MaterialReportDay,
     ReportSyncState,
 )
 
@@ -601,39 +599,6 @@ def publish_campaign_hour(
         rows=rows,
         value_parser=values,
         time_filter=window,
-        requested_at=requested_at,
-    )
-
-
-@diagnostics.timed("financial_publish")
-def publish_material_day(
-    session, *, tenant_id, job_id, accounts, start, end, rows, requested_at=None
-) -> int:
-    def keys(row, _meta):
-        dims, metrics = row.get("dimensions") or {}, row.get("metrics") or {}
-        day = _in_range(parse_local_day(dims.get("stat_time_day")), start, end)
-        if not dims.get("main_material_id") or not dims.get("main_material_type"):
-            raise DomainError("report_row_invalid", "素材行缺少主素材身份")
-        return {
-            "stat_date": day,
-            "main_material_id": str(dims["main_material_id"]),
-            "main_material_type": str(dims["main_material_type"]),
-            "main_material_name": metrics.get("main_material_name"),
-        }, day
-
-    return _publish_simple(
-        session,
-        model=MaterialReportDay,
-        kind="material_day",
-        key_builder=keys,
-        tenant_id=tenant_id,
-        job_id=job_id,
-        accounts=accounts,
-        start=start,
-        end=end,
-        rows=rows,
-        value_parser=material_metric_values,
-        time_filter=_bucket_filter,
         requested_at=requested_at,
     )
 

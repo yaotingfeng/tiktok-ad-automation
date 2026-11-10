@@ -55,24 +55,6 @@ def page_from_data(data: dict, *, requested_page: int) -> RawReportPage:
 
 
 class ReportReader(Protocol):
-    def material_video_content(
-        self, *, advertiser_id: str, video_ids: tuple[str, ...]
-    ) -> list[dict]: ...
-
-    def spark_video_content(
-        self,
-        *,
-        advertiser_id: str,
-        item_id: str,
-        identity_type: str,
-        identity_id: str,
-        identity_authorized_bc_id: str | None = None,
-    ) -> dict | None: ...
-
-    def material_videos(
-        self, *, advertiser_id: str, material_ids: tuple[str, ...]
-    ) -> RawReportPage: ...
-
     def bc_spend(
         self, *, bc_id: str, start: date, end: date, page: int
     ) -> RawReportPage: ...
@@ -102,19 +84,4 @@ class ReportReader(Protocol):
     ) -> RawReportPage: ...
     def account_day(
         self, *, advertiser_ids: tuple[str, ...], start: date, end: date, page: int
-    ) -> RawReportPage: ...
-    def material_day(
-        self, *, advertiser_id: str, start: date, end: date, page: int
-    ) -> RawReportPage: ...
-    def material_ad_links(
-        self, *, advertiser_id: str, page: int, ad_ids: tuple[str, ...] = ()
-    ) -> RawReportPage: ...
-    def material_ad_posts(
-        self,
-        *,
-        advertiser_id: str,
-        ad_ids: tuple[str, ...],
-        start: date,
-        end: date,
-        page: int,
     ) -> RawReportPage: ...

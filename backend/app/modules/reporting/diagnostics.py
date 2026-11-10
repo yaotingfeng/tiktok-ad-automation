@@ -75,9 +75,7 @@ _COUNTS = frozenset(
         "refill_jobs",
     }
 )
-_KINDS = frozenset(
-    {"ad_day", "material_day", "material_links", "campaign_hour", "account_day"}
-)
+_KINDS = frozenset({"ad_day", "creative_day", "campaign_hour", "account_day"})
 _RESULTS = frozenset({"COMPLETE", "WAITING", "FAILED"})
 P = ParamSpec("P")
 R = TypeVar("R")
