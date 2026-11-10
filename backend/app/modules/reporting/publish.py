@@ -454,11 +454,13 @@ def publish_creative_day(
     if not buckets:
         return 0
     statement = delete(CreativeReportDay).where(
-        CreativeReportDay.tenant_id == tenant_id,
+        col(CreativeReportDay.tenant_id) == tenant_id,
         _bucket_filter(CreativeReportDay, buckets),
     )
     if campaign_ids:
-        statement = statement.where(CreativeReportDay.campaign_id.in_(campaign_ids))
+        statement = statement.where(
+            col(CreativeReportDay.campaign_id).in_(campaign_ids)
+        )
     session.connection().execute(statement)
     count = _publish_staged(
         session, CreativeReportDay, staged, _bucket_filter(staged.c, buckets)

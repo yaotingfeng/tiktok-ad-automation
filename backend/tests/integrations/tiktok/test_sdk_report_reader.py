@@ -562,7 +562,8 @@ def test_report_service_class_reaches_each_physical_sdk_call(
         )
     keys = admission_keys(
         settings.TIKTOK_APP_ID,
-        "reports.integrated",
+        # SDK admission 的操作桶以物理端点命名，逻辑 operation 只决定策略。
+        "GET /open_api/v1.3/report/integrated/get/",
         context.tenant_id,
         advertiser,
         "GET /open_api/v1.3/report/integrated/get/",

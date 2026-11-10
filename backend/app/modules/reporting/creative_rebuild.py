@@ -51,8 +51,10 @@ def enqueue_backfill(session, *, tenant_id, bc_id, start, end, now):
         days = [row.stat_date for row in rows if row.advertiser_id == account]
         left = right = None
         for day in days:
-            if left is not None and (
-                day != right + timedelta(days=1) or (day - left).days >= 7
+            if (
+                left is not None
+                and right is not None
+                and (day != right + timedelta(days=1) or (day - left).days >= 7)
             ):
                 windows.append((account, left, right))
                 left = None

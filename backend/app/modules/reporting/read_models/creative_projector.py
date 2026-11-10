@@ -2,6 +2,7 @@
 
 import json
 from datetime import timedelta
+from typing import Any
 
 from sqlalchemy import text
 
@@ -126,7 +127,7 @@ def project_creative_bucket(session, key, *, expected_version):
     observed = [s.observed_at for s in states if s.observed_at]
     if ready:
         ready = max(observed) - min(observed) <= COMPARABLE_OBSERVATION_SKEW
-    info = {
+    info: dict[str, Any] = {
         s.report_kind: {
             "status": s.status,
             "observed_at": s.observed_at.isoformat() if s.observed_at else None,

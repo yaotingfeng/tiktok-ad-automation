@@ -41,6 +41,8 @@ def _check_accounts(ids: tuple[str, ...]) -> None:
 
 
 class SdkReportReader(SdkChangeLogReader):
+    _send: Send
+
     def __init__(self, *, send: Send) -> None:
         self._send = send
 
