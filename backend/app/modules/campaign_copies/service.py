@@ -8,13 +8,15 @@ from typing import Any
 from uuid import UUID, uuid4, uuid5
 
 from sqlalchemy import text
-from sqlmodel import Session, select
+from sqlmodel import Session, col, select
 
 from app.core.context import TenantContext
 from app.core.errors import DomainError
 from app.integrations.tiktok.contracts.context import FrozenTikTokRoute
 from app.modules.accounts.access import resolve_account_access
 from app.modules.accounts.routing import freeze_route, verify_route
+from app.modules.builds.execution_models import Submission
+from app.modules.builds.models import BuildDraft
 from app.modules.builds.preview_models import BuildPreview
 from app.modules.campaign_copies.models import CampaignCopyDraft, CampaignCopyRequest
 from app.modules.campaign_copies.schemas import (
@@ -308,6 +310,57 @@ def _validate_rows(
         raise DomainError("copy_limit_exceeded", "一次复制最多生成 1000 条新系列")
 
 
+def _invalidate_child_previews(session: Session, row: CampaignCopyDraft) -> None:
+    """先锁子草稿再核验提交，与普通提交的锁序一致，防止旧链接并发漏过。
+
+    父修订号不属于独立子草稿；必须推进子草稿修订，复用数据库现有触发器
+    将其冻结预览标为OBSOLETE。已受理的提交不能被编辑丢弃或伪装成未提交。
+    """
+    ids = [UUID(c["preview_id"]) for c in row.children if c.get("preview_id")]
+    if not ids:
+        return
+    previews = session.exec(
+        select(BuildPreview).where(
+            BuildPreview.tenant_id == row.tenant_id,
+            BuildPreview.bc_id == row.bc_id,
+            col(BuildPreview.id).in_(ids),
+        )
+    ).all()
+    if len(previews) != len(set(ids)):
+        raise DomainError("copy_preview_invalid", "复制子预览不属于当前范围")
+    drafts = session.exec(
+        select(BuildDraft)
+        .where(
+            BuildDraft.tenant_id == row.tenant_id,
+            BuildDraft.bc_id == row.bc_id,
+            col(BuildDraft.id).in_({p.draft_id for p in previews}),
+        )
+        .order_by(col(BuildDraft.id))
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    ).all()
+    if len(drafts) != len({p.draft_id for p in previews}):
+        raise DomainError("copy_preview_invalid", "复制子草稿不存在")
+    # 锁等待后重新查询提交事实：直提子预览如果先完成，父编辑必须拒绝。
+    submitted = session.exec(
+        select(Submission.id)
+        .where(
+            Submission.tenant_id == row.tenant_id,
+            col(Submission.preview_id).in_(ids),
+        )
+        .limit(1)
+    ).first()
+    if submitted is not None:
+        raise DomainError("copy_already_submitted", "已有副本提交搭建，请新建复制批次")
+    for draft in drafts:
+        draft.revision += 1
+        session.add(draft)
+    session.flush()
+    # 触发器更新了预览状态，不能让同事务的ORM缓存继续返回旧FROZEN。
+    for preview in previews:
+        session.expire(preview, ["status"])
+
+
 def patch(
     session: Session, *, context: TenantContext, draft_id: UUID, body: CopyPatchRequest
 ) -> CampaignCopyDraft:
@@ -329,6 +382,7 @@ def patch(
         if item["row_id"] in replacements:
             item["configuration"] = replacements[item["row_id"]]
     _validate_rows(session, context, row, members, strict=False)
+    _invalidate_child_previews(session, row)
     row.rows, row.children, row.preview_digest, row.error_code = members, [], None, None
     row.revision += 1
     row.status = "DRAFT"
@@ -355,21 +409,31 @@ def preview(
         return row
     _validate_rows(session, context, row, row.rows, strict=True)
     started_at = datetime.now(UTC).isoformat()
-    row.children = [
-        {
-            "row_id": r["row_id"],
-            "advertiser_id": a,
-            "ordinal": n,
-            "preview_id": None,
-            "submission_id": None,
-            "status": "PENDING",
-            "error_code": None,
-            "started_at": started_at,
-        }
-        for r in row.rows
-        for a in r["configuration"]["target_advertiser_ids"]
-        for n in range(1, r["configuration"]["copies"] + 1)
-    ]
+    if row.status == "FAILED" and row.children:
+        # 已准备好的副本仍属于同一修订，必须保留关联，不能因重试抹掉。
+        # 否则再失败后父编辑找不到旧预览，旧链接可以绕过修订保护。
+        children = deepcopy(row.children)
+        for child in children:
+            if child["status"] != "READY":
+                child.update(status="PENDING", error_code=None, started_at=started_at)
+        row.children = children
+    else:
+        row.children = [
+            {
+                "row_id": r["row_id"],
+                "advertiser_id": a,
+                "ordinal": n,
+                "preview_id": None,
+                "submission_id": None,
+                "status": "PENDING",
+                "error_code": None,
+                "started_at": started_at,
+            }
+            for r in row.rows
+            for a in r["configuration"]["target_advertiser_ids"]
+            for n in range(1, r["configuration"]["copies"] + 1)
+        ]
+    row.preview_digest = None
     row.status, row.error_code = "PREPARING", None
     row.generation += 1
     from app.modules.campaign_copies.tasks import queue

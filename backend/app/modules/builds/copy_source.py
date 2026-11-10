@@ -327,6 +327,7 @@ def load_copy_source(
                 ExecutionStep.unit_id == unit.id,
                 ExecutionStep.kind == "CTA",
                 ExecutionStep.status == "SUCCEEDED",
+                col(ExecutionStep.mismatch).is_(False),
                 ExecutionStep.remote_id == next(iter(portfolios)),
             )
             .limit(2)
