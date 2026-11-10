@@ -19,6 +19,7 @@ from app.integrations.tiktok.contracts.builds import (
 from app.integrations.tiktok.contracts.common import (
     CallEvidence,
     RemoteCallError,
+    safe_remote_message,
 )
 from app.integrations.tiktok.gateway import open_tiktok_gateway
 from app.integrations.tiktok.sdk import AccountAdmissionDeferred
@@ -742,6 +743,7 @@ def _prepare_scene_dependency(
                 claim=claim,
                 status="PENDING" if error.retryable else "FAILED",
                 code=error.code,
+                local_message=error.message,
                 delay=15,
             )
 
@@ -842,7 +844,10 @@ def process_step(
                 step=step,
                 claim=None,
                 conclusion="LOCAL_FAILED",
-                summary={"reason_code": error.code},
+                summary={
+                    "reason_code": error.code,
+                    "local_message": safe_remote_message(error.message),
+                },
             )
             session.add(step)
             return "FAILED"
@@ -983,6 +988,7 @@ def process_step(
                     claim=claim,
                     status="PENDING" if error.retryable else "FAILED",
                     code=error.code,
+                    local_message=error.message,
                     delay=15,
                 )
 

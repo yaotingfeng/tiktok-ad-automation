@@ -19,6 +19,7 @@ from app.integrations.tiktok.contracts.common import (
     CallEvidence,
     RemoteCallError,
     safe_identifier,
+    safe_remote_message,
 )
 from app.integrations.tiktok.transport_diagnostics import safe_transport_summary
 from app.modules.accounts.access import resolve_account_access
@@ -95,18 +96,42 @@ def evidence(
             safe_summary.setdefault("remote_code", call_evidence.remote_code)
         if call_evidence.remote_message is not None:
             safe_summary["remote_message"] = call_evidence.remote_message
-    session.add(
-        StepEvidence(
-            tenant_id=step.tenant_id,
-            submission_id=step.submission_id,
-            step_id=step.id,
-            attempt=claim.attempt if claim else step.attempt,
-            lease_token=claim.lease_token if claim else step.lease_token,
-            request_id=request_id,
-            conclusion=conclusion,
-            summary=safe_summary,
-        )
+    failed = conclusion in {
+        "LOCAL_FAILED",
+        "REMOTE_REJECTED",
+        "RESULT_UNKNOWN",
+        "LOCAL_UNKNOWN",
+    }
+    if failed:
+        from .failure_diagnostics import failure_context
+
+        safe_summary["failure_context"] = failure_context(session, step)
+    row = StepEvidence(
+        tenant_id=step.tenant_id,
+        submission_id=step.submission_id,
+        step_id=step.id,
+        attempt=claim.attempt if claim else step.attempt,
+        lease_token=claim.lease_token if claim else step.lease_token,
+        request_id=request_id,
+        conclusion=conclusion,
+        summary=safe_summary,
     )
+    session.add(row)
+    if failed:
+        # 普通日志只留关联编号和安全业务码；详情持久保存在同事务的证据中。
+        # 此事件表示记录已加入当前事务，最终结果以数据库提交为准。
+        emit(
+            "build_failure_recorded",
+            tenant_id=str(step.tenant_id),
+            bc_id=step.bc_id,
+            submission_id=str(step.submission_id),
+            step_id=str(step.id),
+            evidence_id=str(row.id),
+            attempt=row.attempt,
+            conclusion=conclusion,
+            error_code=safe_summary.get("reason_code"),
+            remote_code=safe_summary.get("remote_code"),
+        )
 
 
 def arm_request(
@@ -316,6 +341,7 @@ def finish_local(
     code: str | None = None,
     resolved: dict[str, Any] | None = None,
     delay: int = 0,
+    local_message: str | None = None,
 ) -> str:
     """Pre-network failure, a queued material dependency, or a verified mapping."""
     step = _step(session, claim)
@@ -359,7 +385,14 @@ def finish_local(
             step=step,
             claim=claim,
             conclusion="LOCAL_" + status,
-            summary={"reason_code": code},
+            summary={
+                "reason_code": code,
+                "local_message": safe_remote_message(local_message)
+                or {
+                    "cover_source_unavailable": "未找到可用来源封面，来源和目标任务状态见 failure_context",
+                    "cover_result_unknown": "封面请求结果未知，需核查原任务回执与图片库存",
+                }.get(code or ""),
+            },
         )
     session.flush()
     return status
