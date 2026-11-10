@@ -53,6 +53,7 @@ from app.modules.builds import scene_models  # noqa: E402, F401
 from app.modules.builds import preview_models  # noqa: E402, F401
 from app.modules.builds import mutation_models  # noqa: E402, F401
 from app.modules.ads import models as ads_models  # noqa: E402, F401
+from app.modules.ads import creative_models  # noqa: E402, F401
 from app.modules.ads import sync_models as ads_sync_models  # noqa: E402, F401
 from app.modules.reporting import models as reporting_models  # noqa: E402, F401
 from app.modules.reporting import query_models as reporting_query_models  # noqa: E402, F401

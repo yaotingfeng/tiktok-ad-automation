@@ -502,7 +502,8 @@ def _material_stage(session):
         text(f"""
         CREATE TEMP TABLE {name} (LIKE ad_material_reference INCLUDING DEFAULTS
             INCLUDING CONSTRAINTS, PRIMARY KEY(id),
-            UNIQUE NULLS NOT DISTINCT ({",".join(_MATERIAL_IDENTITY)})) ON COMMIT DROP
+            UNIQUE NULLS NOT DISTINCT ({",".join(_MATERIAL_IDENTITY)}),
+            creative_asset_ordinal bigint GENERATED ALWAYS AS IDENTITY) ON COMMIT DROP
     """)
     )
     return name
@@ -1080,6 +1081,17 @@ def publish_directory(
             run,
             staged_materials,
             statement_timeout_ms=material_statement_timeout_ms,
+        )
+        from app.modules.ads.creatives import publish_staged_creatives
+
+        publish_staged_creatives(
+            session,
+            tenant_id=run.tenant_id,
+            advertiser_id=run.advertiser_id,
+            materials_table=staged_materials,
+            entities_table=staged,
+            published_version=version,
+            observed_at=run.observed_at or min(page.observed_at for page in ordered),
         )
         material_incomplete = stale_materials or any(
             page.coverage in {"PARTIAL_MATERIALS", "MATERIALS_INCOMPLETE"}

@@ -19,6 +19,7 @@ from app.integrations.tiktok.contracts.ads import (
     MaterialUseRef,
 )
 from app.jobs.models import PendingDispatch
+from app.modules.ads.creative_models import AdCreative
 from app.modules.ads.models import AdMaterialReference, AdObject
 from app.modules.ads.sync import (
     directory_run_superseded,
@@ -207,7 +208,13 @@ def test_primary_read_defers_supplement_without_second_provider_call(
 def durable_material_case(gateway_case, database_engine):
     yield gateway_case
     with Session(database_engine) as session, session.begin():
-        for model in (AdDirectoryPage, AdDirectoryRun, AdMaterialReference, AdObject):
+        for model in (
+            AdDirectoryPage,
+            AdDirectoryRun,
+            AdMaterialReference,
+            AdCreative,
+            AdObject,
+        ):
             session.connection().execute(
                 delete(model).where(col(model.tenant_id) == gateway_case[0].tenant_id)
             )
