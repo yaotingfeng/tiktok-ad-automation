@@ -285,7 +285,8 @@ def _common_ctes(cov_kind: str, *, account: bool = False) -> str:
         state = "SELECT tenant_id,advertiser_id,stat_date,status FROM account_report_day_state"
     elif cov_kind == "material_day":
         state = """SELECT tenant_id,advertiser_id,bucket AS stat_date,derived_status AS status
-            FROM read_bucket_state WHERE kind='material_day' AND derived_revision>0"""
+            FROM read_bucket_state WHERE kind='material_day' AND derived_revision>0
+                AND derived_status='COMPLETE'"""
     else:
         state = f"SELECT tenant_id,advertiser_id,stat_date,status FROM report_sync_state WHERE report_kind='{cov_kind}'"
     return f"""acc AS NOT MATERIALIZED (
@@ -373,7 +374,7 @@ def _metrics_only(filters: ReportingFilter) -> bool:
     翻页补全时只为当前页读取（materialize_rows），页面显示不变。
     """
     return (
-        filters.dimension in ("campaign", "adgroup", "ad")
+        filters.dimension in ("campaign", "adgroup", "ad", "drama")
         and not filters.include_empty
         and not filters.ids
         and not _search_terms(filters)
@@ -580,11 +581,52 @@ def _metric_dimension_rows(
     ), "base"
 
 
+def _drama_row_key(params: _Params, bc_id: str, naming: str, drama: str) -> str:
+    return (
+        f"CASE WHEN {naming} = 'VALID' THEN {params.add('drama_prefix', f'{bc_id}:drama:')} "
+        f"|| '[' || COALESCE(to_json({drama})::text, 'null') || ']' "
+        f"ELSE {params.add('external_prefix', f'{bc_id}:external:')} "
+        "|| '[' || to_json(e.adv)::text || ',' || to_json(e.rid)::text || ']' END"
+    )
+
+
+def _drama_metric_rows(params: _Params, bc_id: str) -> tuple[str, str]:
+    """剧目默认查询仅冻结分组与成员，展示目录留到当前页补全。"""
+    key = _drama_row_key(params, bc_id, "p.status", "p.drama_name")
+    return ",\n".join(
+        [
+            _common_ctes("ad_day"),
+            _facts_cte(
+                "campaign_metric_day",
+                "campaign_id",
+                include_metadata=False,
+                period_scan=len(params.values["advs"]) >= 1000,
+            ),
+            _proj_cte(),
+            f"""members AS (
+                SELECT {key} AS row_key,e.adv,e.rid
+                FROM (SELECT DISTINCT adv,rid FROM facts) e
+                JOIN acc a ON a.adv=e.adv
+                LEFT JOIN proj p ON p.adv=e.adv AND p.cid=e.rid
+            )""",
+            """base AS (
+                SELECT row_key,count(*)::int AS member_count,
+                    jsonb_agg(jsonb_build_array(adv,rid)
+                        ORDER BY adv COLLATE "C",rid COLLATE "C") AS member_keys
+                FROM members GROUP BY row_key
+            )""",
+            _member_buckets("members", unsupported=frozenset()),
+        ]
+    ), "base"
+
+
 def _dimension_rows(
     filters: ReportingFilter, params: _Params, bc_id: str
 ) -> tuple[str, str]:
     """返回维度 CTE 序列与行 CTE 名，冻结列由 _ctes 统一投影。"""
     if _metrics_only(filters):
+        if filters.dimension == "drama":
+            return _drama_metric_rows(params, bc_id)
         return _metric_dimension_rows(
             filters, period_scan=len(params.values["advs"]) >= 1000
         )
@@ -717,6 +759,8 @@ def _dimension_rows(
     # 让层级连接保留约束与统计；先 UNION 多层目录会把十万行误估为个位数，
     # 再只按账户 merge、逐行过滤 parent ID，宽搜索退化为账户内笛卡尔积。
     obj = f"obj AS NOT MATERIALIZED ({_obj_select('advertiser_id = ANY(:advs) AND kind = ANY(:kinds)')})"
+    if dim == "drama" and not filters.include_empty:
+        obj = _obj_ctes(filters, (("campaign", "SELECT adv,rid FROM idn"),))
     # 账户维度只在筛选需要时按首个事实系列取版权方；账户池可达数千个，
     # 无搜索的默认首屏不能为整个租户读取系列名称与历史事实名称数组。
     if dim == "account":
@@ -759,12 +803,7 @@ def _dimension_rows(
             FROM ent e LEFT JOIN account_refs ar ON ar.adv = e.adv
         )""")
     elif dim == "drama":
-        drama_key = (
-            f"CASE WHEN e.naming = 'VALID' THEN {params.add('drama_prefix', f'{bc_id}:drama:')} "
-            "|| '[' || COALESCE(to_json(e.p_drama)::text, 'null') || ']' "
-            f"ELSE {params.add('external_prefix', f'{bc_id}:external:')} "
-            "|| '[' || to_json(e.adv)::text || ',' || to_json(e.rid)::text || ']' END"
-        )
+        drama_key = _drama_row_key(params, bc_id, "e.naming", "e.p_drama")
         ctes.append(f"""members AS (
             SELECT {drama_key} AS row_key, e.*,
                 row_number() OVER (PARTITION BY {drama_key} ORDER BY e.adv COLLATE "C", e.rid COLLATE "C") AS member_order
@@ -929,6 +968,7 @@ def _material_rows(filters: ReportingFilter, params: _Params) -> tuple[str, str]
                 SELECT l.* FROM material_post_link l
                 WHERE l.tenant_id = :tenant AND l.advertiser_id = k.adv
                     AND l.main_material_id = (k.rid::jsonb)->>2 AND l.main_material_type = k.mtype
+                    AND l.ad_material_id IS NOT NULL
                 OFFSET 0
             ) l
             CROSS JOIN LATERAL (
@@ -937,6 +977,7 @@ def _material_rows(filters: ReportingFilter, params: _Params) -> tuple[str, str]
                 SELECT {_USE_COLUMNS} FROM material_ad_member_current u
                 WHERE u.tenant_id=:tenant AND u.advertiser_id=l.advertiser_id
                     AND u.ad_remote_id=l.ad_remote_id AND u.material_type='VIDEO'
+                    AND u.ad_material_id=l.ad_material_id
                 OFFSET 0
             ) u
             WHERE k.vid IS NULL AND u.ad_material_id = l.ad_material_id

@@ -96,6 +96,20 @@ class CampaignReportDay(_Fact, table=True):
     __tablename__ = "campaign_report_day"
     __table_args__ = (
         Index(
+            "ix_campaign_report_day_object",
+            "tenant_id",
+            "advertiser_id",
+            "campaign_id",
+            "stat_date",
+            postgresql_include=[
+                "currency",
+                "timezone",
+                "fetched_at",
+                "campaign_name",
+                *METRIC_COLUMNS,
+            ],
+        ),
+        Index(
             "ix_campaign_report_day_period", "tenant_id", "stat_date", "advertiser_id"
         ),
     )
@@ -152,6 +166,15 @@ class MaterialPostLink(SQLModel, table=True):
 
     __tablename__ = "material_post_link"
     __table_args__ = (
+        Index(
+            "ix_material_post_link_member",
+            "tenant_id",
+            "advertiser_id",
+            "main_material_id",
+            "main_material_type",
+            postgresql_include=["ad_remote_id", "ad_material_id"],
+            postgresql_where=text("ad_material_id IS NOT NULL"),
+        ),
         Index("ix_material_post_link_ad", "tenant_id", "advertiser_id", "ad_remote_id"),
         Index(
             "ix_material_post_link_video_page",

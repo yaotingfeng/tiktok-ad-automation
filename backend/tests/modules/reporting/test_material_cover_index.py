@@ -82,3 +82,55 @@ def test_cover_index_roundtrip_preserves_members_and_supports_index_only_reads(
     """)
     ).scalar_one()
     assert "INCLUDE (remote_id, variant, currency, timezone, spend," in inherited
+
+
+def test_lookup_cover_roundtrip_preserves_coverage_and_post_members(session, sync_seed):
+    from tests.modules.reporting.test_dimension_query import _seed
+
+    _seed(session, sync_seed)
+    publish(session, sync_seed, "acc-1", [material_row("post", "10")])
+    use(
+        session,
+        sync_seed,
+        adv="acc-1",
+        ad="ad",
+        video="video",
+        ad_material="position",
+        post="post",
+    )
+    before = query(session, sync_seed, include_empty=False)
+    path = (
+        Path(__file__).resolve().parents[3]
+        / "app/alembic/versions/0108_report_lookup_cover.py"
+    )
+    spec = importlib.util.spec_from_file_location("lookup_cover_migration", path)
+    migration = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(migration)
+    connection = session.connection()
+    with Operations.context(MigrationContext.configure(connection)):
+        migration.downgrade()
+        assert query(session, sync_seed, include_empty=False) == before
+        migration.upgrade()
+    assert query(session, sync_seed, include_empty=False) == before
+    connection.execute(text("SET LOCAL enable_seqscan=off"))
+    connection.execute(text("SET LOCAL enable_bitmapscan=off"))
+    for statement in (
+        """SELECT campaign_name,currency,timezone,fetched_at,spend
+            FROM campaign_report_day WHERE tenant_id=:tenant
+                AND advertiser_id='acc-1' AND campaign_id='c1'
+                AND stat_date='2026-10-05'""",
+        """SELECT advertiser_id,bucket FROM read_bucket_state
+            WHERE tenant_id=:tenant AND kind='material_day'
+                AND bucket='2026-10-05' AND derived_revision>0
+                AND derived_status='COMPLETE'""",
+        """SELECT advertiser_id,ad_remote_id,ad_material_id FROM material_post_link
+            WHERE tenant_id=:tenant AND advertiser_id='acc-1'
+                AND main_material_id='post' AND main_material_type='VIDEO_SPARK_ADS'
+                AND ad_material_id IS NOT NULL""",
+    ):
+        plan = connection.execute(
+            text("EXPLAIN (ANALYZE,FORMAT JSON) " + statement),
+            {"tenant": sync_seed.tenant_id},
+        ).scalar_one()[0]["Plan"]
+        assert plan["Node Type"] == "Index Only Scan", plan
+        assert plan["Actual Rows"] == 1

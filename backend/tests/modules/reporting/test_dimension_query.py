@@ -181,6 +181,13 @@ def test_drama_merges_same_currency_timezones_partial_sums_and_avoids_delimiter_
         session, context=sync_seed.context, bc_id="bc-a", filters=_filters("drama")
     )
     assert len(rows) == 2
+    canonical = build_rows(
+        session,
+        context=sync_seed.context,
+        bc_id="bc-a",
+        filters=_filters("drama", sort_by="drama_name"),
+    )
+    assert {row.row_key: row for row in rows} == {row.row_key: row for row in canonical}
     for p in session.exec(
         __import__("sqlmodel")
         .select(CampaignNameProjection)
