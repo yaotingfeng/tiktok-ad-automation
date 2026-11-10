@@ -18,4 +18,10 @@
 
 无数据库迁移、配置、队列、依赖或Kubernetes清单变更。使用干净独立发布副本构建精确版本；协调项目 Jenkins 与共享发布锁，通过资源版本/spec 比较保护仅更新镜像，保留正常退出宽限与原更新策略。按现行快速发布要求不创建新备份或执行恢复演练。完成后核对11角色镜像摘要和Ready、配置/资源保持、释放锁并恢复CI原状态。
 
-状态：已获推送发布授权，待执行。私有执行证据位于 `.runtime/xingyu-build-release-20261110/`。
+## 实际结果
+
+应用 `4cd98958878694e33a94536b697ac9f1bed31a8c` 已推送公司 main 与 GitHub 并发布生产。11角色全部Ready、镜像摘要一致、最终Deployment仅镜像变化，原更新策略和正常退出宽限保持，运行配置未变；schema仍为 `0109_snapshot_inline_evidence`。共享发布锁已释放。
+
+新API读取既有失败批次，已返回具体平台说明 `Invalid landing page URL. Please check and try again.` 和错误码40002；既有恢复任务仍为COMPLETED。公网首页与 `/demo/` 均200。切换阶段未执行生产测试或逐服务长验收，未创建新备份/恢复演练。发布后仅作上述已有业务与公网观察。
+
+私有执行证据位于 `.runtime/xingyu-build-release-20261110/`。本次发布记录为后续文档提交，运行镜像对应上述精确应用版本。项目Jenkins按原状态恢复。
