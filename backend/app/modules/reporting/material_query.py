@@ -242,9 +242,10 @@ def materialize_material_rows(
                     ),
                 )
             )
-        for currency, timezone in {
-            (m["currency"], m["timezone"]) for m in row_missing
-        } - {(f["currency"], f["timezone"]) for f in items}:
+        # 先保留每个账户的缺失贡献，不能用共享 VID 另一账户的同币种事实抵消。
+        for _, currency, timezone in {
+            (m["advertiser_id"], m["currency"], m["timezone"]) for m in row_missing
+        } - {(f["advertiser_id"], f["currency"], f["timezone"]) for f in items}:
             buckets.append(
                 (
                     (

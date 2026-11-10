@@ -308,3 +308,96 @@ def test_unallocated_days_preserve_currency_and_timezone_buckets(
             assert by_currency["USD"]["timezone"] == "Asia/Hong_Kong"
             assert by_currency["EUR"]["timezone"] == "UTC"
             assert by_currency["EUR"]["values"]["spend"] is None
+
+
+@pytest.mark.parametrize("unknown", [False, True])
+@pytest.mark.parametrize("missing_video", ["vid-1", "other-vid"])
+def test_missing_account_contribution_is_not_hidden_by_shared_currency_bucket(
+    session, sync_seed, unknown, missing_video
+):
+    from uuid import uuid4
+
+    from app.modules.accounts.models import AdvertiserAccount
+    from app.modules.reporting.publish import (
+        AccountMeta,
+        publish_ad_day,
+        publish_creative_day,
+    )
+    from tests.modules.reporting.sync_conftest import ad_row
+
+    use(session, sync_seed, adv="acc-1", ad="ad-1", video="vid-1", ad_material="am-1")
+    identity(session, sync_seed, "known")
+    build(session, sync_seed, ad_spend="20", rows=[creative_row("known", "20", "30")])
+    use(
+        session,
+        sync_seed,
+        adv="acc-2",
+        ad="ad-2",
+        video=missing_video,
+        ad_material="am-2",
+    )
+    account = session.get(AdvertiserAccount, (sync_seed.tenant_id, "acc-2"))
+    account.timezone = "Asia/Hong_Kong"
+    session.add(account)
+    accounts = {"acc-2": AccountMeta("USD", "Asia/Hong_Kong")}
+    missing = creative_row("unknown", "80", "40")
+    missing["metrics"]["advertiser_id"] = "acc-2"
+    publish_ad_day(
+        session,
+        tenant_id=sync_seed.tenant_id,
+        job_id=uuid4(),
+        accounts=accounts,
+        start=D,
+        end=D,
+        rows=[ad_row("ad-2", D, adv="acc-2", spend="80", total="40")],
+    )
+    publish_creative_day(
+        session,
+        tenant_id=sync_seed.tenant_id,
+        job_id=uuid4(),
+        accounts=accounts,
+        start=D,
+        end=D,
+        rows=[missing] if unknown else [],
+    )
+    filters = ReportingFilter(
+        dimension="material",
+        start_date=D,
+        end_date=D,
+        include_empty=True,
+        advertiser_ids=("acc-1", "acc-2"),
+        ids=("ad-1", "ad-2"),
+    )
+    page = query_ads(session, context=sync_seed.context, bc_id="bc-a", filters=filters)
+    video = next(row for row in page.items if json.loads(row.row_key)[2] == "vid-1")
+    assert page.summary["incomplete_advertiser_count"] == 1
+    assert page.summary["buckets"][0]["availability"]["spend"] == "PARTIAL"
+    for metric, expected in (("spend", 20), ("revenue_total", 30)):
+        assert video.metric_buckets[0].values[metric] == expected
+        assert Decimal(page.summary["buckets"][0]["values"][metric]) == expected
+        assert video.metric_buckets[0].availability[metric] == (
+            "PARTIAL" if missing_video == "vid-1" else "AVAILABLE"
+        )
+    if missing_video != "vid-1":
+        other = next(
+            row for row in page.items if json.loads(row.row_key)[2] == missing_video
+        )
+        assert other.metric_buckets[0].values["spend"] is None
+
+    # 收窄账户、广告或不同 VID 后，其他账户的缺口不能污染完整的 A。
+    isolated_filters = [
+        filters.model_copy(update={"advertiser_ids": ("acc-1",)}),
+        filters.model_copy(update={"ids": ("ad-1",)}),
+    ]
+    if missing_video != "vid-1":
+        isolated_filters.append(filters.model_copy(update={"query": "vid-1"}))
+    for isolated in isolated_filters:
+        result = query_ads(
+            session, context=sync_seed.context, bc_id="bc-a", filters=isolated
+        )
+        assert result.total == 1
+        assert result.items[0].metric_buckets[0].values["spend"] == 20
+        assert result.items[0].metric_buckets[0].availability["spend"] == "AVAILABLE"
+        assert Decimal(result.summary["buckets"][0]["values"]["spend"]) == 20
+        assert result.summary["buckets"][0]["availability"]["spend"] == "AVAILABLE"
+        assert result.summary["incomplete_advertiser_count"] == 0
