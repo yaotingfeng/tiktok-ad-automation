@@ -156,6 +156,7 @@ from app.modules.ad_management import (  # noqa: E402
 )
 from app.modules.ad_management import models as ad_management_models  # noqa: E402, F401
 from app.modules.ads import creative_models as ad_creative_models  # noqa: E402, F401
+from app.modules.ai_workbench import models as ai_workbench_models  # noqa: E402, F401
 from app.modules.builds import (  # noqa: E402
     carousel_music_models,  # noqa: E402,F401
     image_composition_models,  # noqa: E402, F401
