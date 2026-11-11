@@ -71,6 +71,10 @@ def wake_scope(
                 "oldest_pending_at": func.least(
                     col(SyncSchedule.oldest_pending_at), oldest_pending_at
                 ),
+                "last_dispatched_at": case(
+                    (col(SyncSchedule.work_class) == "realtime", None),
+                    else_=col(SyncSchedule.last_dispatched_at),
+                ),
             },
         )
     )

@@ -542,6 +542,12 @@ def enqueue_report_requirements(
                         col(SyncSchedule.oldest_pending_at),
                         statement.excluded.oldest_pending_at,
                     ),
+                    # 新实时需求必须重新进入服务年龄队列；历史头的积压不能
+                    # 让同一账户下一轮需求继续排在数千个旧实时头之后。
+                    "last_dispatched_at": case(
+                        (col(SyncSchedule.work_class) == "realtime", None),
+                        else_=col(SyncSchedule.last_dispatched_at),
+                    ),
                 },
             ),
             heads,
