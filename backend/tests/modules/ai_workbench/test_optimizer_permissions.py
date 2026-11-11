@@ -1,8 +1,15 @@
+import pytest
 from sqlmodel import select
 
 from app.modules.tenants.permissions import PERMISSIONS
+from tests.modules.conftest import create_context
 
 from .test_optimizer import api_headers, create_body, seed_optimizer_dependencies
+
+
+@pytest.fixture
+def viewer_context(session):
+    return create_context(session, role="viewer")
 
 
 def test_viewer_is_read_only_for_optimizer_configuration():
