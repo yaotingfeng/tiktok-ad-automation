@@ -49,6 +49,9 @@ def upgrade() -> None:
             name="fk_ai_binding_strategy_version",
         ),
         sa.PrimaryKeyConstraint("id"),
+        sa.UniqueConstraint(
+            "tenant_id", "optimizer_id", "id", name="uq_ai_binding_tenant_optimizer_id"
+        ),
     )
     op.create_index(
         "uq_ai_binding_one_active",
@@ -89,8 +92,12 @@ def upgrade() -> None:
             name="fk_ai_version_optimizer",
         ),
         sa.ForeignKeyConstraint(
-            ["tenant_id", "strategy_binding_id"],
-            ["ai_optimizer_strategy_binding.tenant_id", "ai_optimizer_strategy_binding.id"],
+            ["tenant_id", "optimizer_id", "strategy_binding_id"],
+            [
+                "ai_optimizer_strategy_binding.tenant_id",
+                "ai_optimizer_strategy_binding.optimizer_id",
+                "ai_optimizer_strategy_binding.id",
+            ],
             name="fk_ai_version_binding",
         ),
         sa.PrimaryKeyConstraint("id"),

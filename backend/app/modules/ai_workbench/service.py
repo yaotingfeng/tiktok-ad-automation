@@ -7,15 +7,18 @@ immutable version snapshot created by these short database transactions.
 
 import hashlib
 import json
-from typing import Any
-from uuid import UUID, uuid4
+from typing import Any, cast
+from uuid import UUID
 
+from sqlalchemy import text
+from sqlalchemy.orm import Session as SQLAlchemySession
 from sqlmodel import Session, col, select
 
 from app.core.context import TenantContext
 from app.core.errors import DomainError
 from app.core.pagination import count_rows
-from app.modules.accounts.models import BCAccountAccess, TenantBC
+from app.modules.accounts.access import usable_grants
+from app.modules.accounts.models import BCAccountAccess
 from app.modules.ai_workbench.models import (
     AIOptimizer,
     AIOptimizerRuleBinding,
@@ -50,6 +53,17 @@ def _digest(payload: dict[str, Any]) -> str:
     ).hexdigest()
 
 
+def _request_lock(session: Session, *, tenant_id: UUID, request_id: UUID) -> None:
+    """Serialize one tenant/request before checking the idempotency row."""
+    key = int.from_bytes(
+        hashlib.sha256(f"ai-optimizer:{tenant_id}:{request_id}".encode()).digest()[:8],
+        signed=True,
+    )
+    cast(SQLAlchemySession, session).execute(
+        text("SELECT pg_advisory_xact_lock(:key)"), {"key": key}
+    )
+
+
 def _optimizer(
     session: Session, context: TenantContext, optimizer_id: UUID, *, lock: bool = False
 ) -> AIOptimizer:
@@ -68,19 +82,14 @@ def _optimizer(
 def _validate_scope(
     session: Session, *, tenant_id: UUID, bc_id: str, advertiser_ids: tuple[str, ...]
 ) -> None:
-    bc = session.get(TenantBC, (tenant_id, bc_id), populate_existing=True)
-    if bc is None or bc.ownership_conflict:
-        raise DomainError("ai_invalid_scope", "ai_invalid_scope")
+    # Reuse the canonical access contract: BC ownership, active connection,
+    # authorized/VERIFIED evidence, and advertiser metadata are all required.
     grants = session.exec(
-        select(BCAccountAccess.advertiser_id).where(
-            BCAccountAccess.tenant_id == tenant_id,
-            BCAccountAccess.bc_id == bc_id,
-            col(BCAccountAccess.advertiser_id).in_(advertiser_ids),
-            BCAccountAccess.in_bc.is_(True),
-            BCAccountAccess.active.is_(True),
+        usable_grants(tenant_id=tenant_id, bc_id=bc_id, action="build").where(
+            col(BCAccountAccess.advertiser_id).in_(advertiser_ids)
         )
     ).all()
-    if set(grants) != set(advertiser_ids):
+    if {grant.advertiser_id for grant in grants} != set(advertiser_ids):
         raise DomainError("ai_invalid_scope", "ai_invalid_scope")
 
 
@@ -107,15 +116,25 @@ def _guard_shared_strategy(
 ) -> None:
     # A shared immutable strategy version cannot silently inherit one optimizer's
     # authorization. Callers must append an optimizer-owned version explicitly.
+    strategy = session.exec(
+        select(StrategyVersion)
+        .where(
+            StrategyVersion.tenant_id == tenant_id,
+            StrategyVersion.id == strategy_version_id,
+        )
+        .with_for_update()
+    ).one_or_none()
+    if strategy is None:
+        raise DomainError("ai_strategy_binding_required", "ai_strategy_binding_required")
     existing = session.exec(
-        select(AIOptimizerStrategyBinding).where(
+        select(AIOptimizerStrategyBinding)
+        .where(
             AIOptimizerStrategyBinding.tenant_id == tenant_id,
             AIOptimizerStrategyBinding.strategy_version_id == strategy_version_id,
-            AIOptimizerStrategyBinding.active.is_(True),
-            AIOptimizerStrategyBinding.optimizer_id != optimizer_id,
         )
-    ).first()
-    if existing is not None:
+        .with_for_update()
+    ).all()
+    if any(row.optimizer_id != optimizer_id for row in existing):
         raise DomainError("ai_strategy_shared", "ai_strategy_shared")
 
 
@@ -262,12 +281,15 @@ def create_optimizer(
 ) -> OptimizerPublic:
     _authorize(session, context, write=True)
     fields = _fields(body)
-    _validate_scope(session, tenant_id=context.tenant_id, bc_id=fields.bc_id, advertiser_ids=fields.advertiser_ids)
-    _validate_strategy(session, tenant_id=context.tenant_id, strategy_version_id=fields.strategy_version_id)
-    _validate_rules(session, tenant_id=context.tenant_id, rule_ids=fields.rule_ids)
-    request_id = body.request_id or uuid4()
-    payload = {"kind": "create", "name": body.name.strip(), **fields.model_dump(mode="json")}
+    request_id = body.request_id
+    payload = {
+        "kind": "create",
+        "name": body.name.strip(),
+        "active": body.active,
+        **fields.model_dump(mode="json"),
+    }
     digest = _digest(payload)
+    _request_lock(session, tenant_id=context.tenant_id, request_id=request_id)
     existing = session.exec(
         select(AIOptimizerVersion).where(
             AIOptimizerVersion.tenant_id == context.tenant_id,
@@ -279,6 +301,9 @@ def create_optimizer(
             raise DomainError("idempotency_conflict", "idempotency_conflict")
         optimizer = _optimizer(session, context, existing.optimizer_id)
         return _public(session, optimizer, existing)
+    _validate_scope(session, tenant_id=context.tenant_id, bc_id=fields.bc_id, advertiser_ids=fields.advertiser_ids)
+    _validate_strategy(session, tenant_id=context.tenant_id, strategy_version_id=fields.strategy_version_id)
+    _validate_rules(session, tenant_id=context.tenant_id, rule_ids=fields.rule_ids)
     optimizer = AIOptimizer(
         tenant_id=context.tenant_id,
         name=body.name.strip(),
@@ -361,7 +386,11 @@ def update_optimizer(
     )
     values = {
         "daily_spend": body.daily_spend if body.daily_spend is not None else current.daily_spend,
-        "target_roas": body.target_roas if body.target_roas is not None else current.target_roas,
+        "target_roas": (
+            body.target_roas
+            if "target_roas" in body.model_fields_set
+            else current.target_roas
+        ),
         "priority": body.priority or current.priority,
         "bc_id": body.bc_id or current.bc_id,
         "advertiser_ids": body.advertiser_ids if body.advertiser_ids is not None else tuple(current.advertiser_ids),
@@ -375,9 +404,10 @@ def update_optimizer(
     _validate_strategy(session, tenant_id=context.tenant_id, strategy_version_id=fields.strategy_version_id)
     _validate_rules(session, tenant_id=context.tenant_id, rule_ids=fields.rule_ids)
     _guard_shared_strategy(session, tenant_id=context.tenant_id, optimizer_id=optimizer.id, strategy_version_id=fields.strategy_version_id)
-    request_id = body.request_id or uuid4()
     payload = {"kind": "update", "optimizer_id": str(optimizer.id), "name": body.name, "active": body.active, **fields.model_dump(mode="json")}
     digest = _digest(payload)
+    request_id = body.request_id
+    _request_lock(session, tenant_id=context.tenant_id, request_id=request_id)
     existing = session.exec(
         select(AIOptimizerVersion).where(
             AIOptimizerVersion.tenant_id == context.tenant_id,

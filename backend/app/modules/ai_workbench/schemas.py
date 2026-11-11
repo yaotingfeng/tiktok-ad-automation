@@ -35,7 +35,7 @@ class OptimizerFields(BaseModel):
 
 class OptimizerCreate(OptimizerFields):
     name: str = Field(min_length=1, max_length=120)
-    request_id: UUID | None = None
+    request_id: UUID
     active: bool = True
 
 
@@ -53,7 +53,7 @@ class OptimizerUpdate(BaseModel):
     strategy_version_id: UUID | None = None
     rule_ids: tuple[UUID, ...] | None = Field(default=None, max_length=1000)
     active: bool | None = None
-    request_id: UUID | None = None
+    request_id: UUID
 
     @model_validator(mode="after")
     def require_change(self) -> OptimizerUpdate:

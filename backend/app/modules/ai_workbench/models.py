@@ -48,6 +48,9 @@ class AIOptimizerStrategyBinding(SQLModel, table=True):
 
     __tablename__ = "ai_optimizer_strategy_binding"
     __table_args__ = (
+        UniqueConstraint(
+            "tenant_id", "optimizer_id", "id", name="uq_ai_binding_tenant_optimizer_id"
+        ),
         ForeignKeyConstraint(
             ["tenant_id", "optimizer_id"],
             ["ai_optimizer.tenant_id", "ai_optimizer.id"],
@@ -93,8 +96,12 @@ class AIOptimizerVersion(SQLModel, table=True):
             name="fk_ai_version_optimizer",
         ),
         ForeignKeyConstraint(
-            ["tenant_id", "strategy_binding_id"],
-            ["ai_optimizer_strategy_binding.tenant_id", "ai_optimizer_strategy_binding.id"],
+            ["tenant_id", "optimizer_id", "strategy_binding_id"],
+            [
+                "ai_optimizer_strategy_binding.tenant_id",
+                "ai_optimizer_strategy_binding.optimizer_id",
+                "ai_optimizer_strategy_binding.id",
+            ],
             name="fk_ai_version_binding",
         ),
         CheckConstraint(
