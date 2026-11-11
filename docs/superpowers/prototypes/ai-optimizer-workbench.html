@@ -148,8 +148,39 @@
 @media(max-width:760px){#tkada-ai-optimizer .tk-app{grid-template-columns:142px minmax(0,1fr)}#tkada-ai-optimizer .tk-nav button{white-space:normal;text-align:left}#tkada-ai-optimizer .tk-mode-grid{grid-template-columns:1fr}}
 @media(max-width:530px){#tkada-ai-optimizer .tk-app{display:block}#tkada-ai-optimizer .tk-nav:not([aria-label]){display:none}#tkada-ai-optimizer .tk-side>div.tk-small{display:none}#tkada-ai-optimizer .tk-nav-static{display:none}#tkada-ai-optimizer .tk-nav button{font-size:11px;padding:7px 8px}#tkada-ai-optimizer .tk-tabs{gap:12px}#tkada-ai-optimizer .tk-tabs button{font-size:11px}}
 
+/* 第三版：AI 独立一级入口，工作区内保留优化师二级左栏。 */
+#tkada-ai-optimizer .tk-app{display:grid;grid-template-columns:178px minmax(0,1fr)}
+#tkada-ai-optimizer .tk-workbody{display:block;min-width:0}
+#tkada-ai-optimizer .tk-workbody.has-ai-nav{display:grid;grid-template-columns:154px minmax(0,1fr);min-height:660px}
+#tkada-ai-optimizer .tk-subside{min-width:0;background:var(--tk-panel);border-right:1px solid var(--tk-line);padding:19px 9px}
+#tkada-ai-optimizer .tk-subside .tk-nav button{padding:9px 7px;gap:7px;font-size:12px;white-space:normal}
+#tkada-ai-optimizer .tk-subside .tk-nav-label{padding:20px 7px 8px}
+#tkada-ai-optimizer .tk-current-optimizer{display:block;margin:19px 4px 15px;font-size:11px;color:var(--tk-muted)}
+#tkada-ai-optimizer .tk-current-optimizer .tk-select{margin-top:6px;padding:7px 6px;font-size:12px;width:100%;min-width:0}
+#tkada-ai-optimizer .tk-context-caption{margin:24px 7px 0;font-size:11px;line-height:1.8}
+#tkada-ai-optimizer .tk-module-toolbar{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px}
+#tkada-ai-optimizer .tk-scope-switch{display:inline-flex;background:var(--tk-soft);padding:3px;border-radius:7px;gap:3px}
+#tkada-ai-optimizer .tk-scope-switch button{border:0;background:transparent;color:var(--tk-muted);border-radius:5px;padding:6px 10px;font-size:12px}
+#tkada-ai-optimizer .tk-scope-switch button.is-active{background:var(--tk-panel);color:var(--tk-ink);box-shadow:0 1px 3px #0001;font-weight:500}
+#tkada-ai-optimizer .tk-highlight-row{background:var(--tk-bluebg)}
+#tkada-ai-optimizer .tk-selection-panel{margin-bottom:16px;border-color:var(--tk-ink)}
+#tkada-ai-optimizer .tk-binding input{accent-color:var(--tk-ink)}
+@media(max-width:1000px){#tkada-ai-optimizer .tk-content{padding:20px 16px}#tkada-ai-optimizer .tk-grid{grid-template-columns:1fr}}
+@media(max-width:760px){#tkada-ai-optimizer .tk-app{grid-template-columns:178px minmax(0,1fr)}#tkada-ai-optimizer .tk-workbody.has-ai-nav{display:block}#tkada-ai-optimizer .tk-subside{border-right:0;border-bottom:1px solid var(--tk-line);padding:12px}#tkada-ai-optimizer .tk-subside .tk-nav{display:flex;flex-direction:row;flex-wrap:wrap;gap:3px}#tkada-ai-optimizer .tk-subside .tk-nav button{padding:7px 8px}#tkada-ai-optimizer .tk-current-optimizer{margin:10px 4px;display:flex;gap:8px;align-items:center}#tkada-ai-optimizer .tk-current-optimizer .tk-select{margin:0;width:auto;max-width:220px}#tkada-ai-optimizer .tk-subside .tk-nav-label{padding:10px 4px 6px}#tkada-ai-optimizer .tk-context-caption{display:none}}
+@media(max-width:530px){#tkada-ai-optimizer .tk-app{display:block}#tkada-ai-optimizer .tk-side{padding:12px;border-right:0;border-bottom:1px solid var(--tk-line)}#tkada-ai-optimizer .tk-side .tk-nav{display:flex;flex-direction:row;flex-wrap:wrap}#tkada-ai-optimizer .tk-side .tk-nav-label{display:none}#tkada-ai-optimizer .tk-subside .tk-nav-label{display:block}#tkada-ai-optimizer .tk-subside .tk-nav button svg{display:none}#tkada-ai-optimizer .tk-content{padding:16px 12px}#tkada-ai-optimizer .tk-topbar{padding:10px 12px}#tkada-ai-optimizer .tk-module-toolbar>.tk-button{white-space:normal}}
+
+#tkada-ai-optimizer .tk-ai-footer{padding:24px 0 0;margin-top:auto;display:block}
+#tkada-ai-optimizer .tk-experience-entry{display:flex;align-items:center;gap:8px;padding:10px;font-size:12px;color:var(--tk-muted)}
+#tkada-ai-optimizer .tk-experience-entry svg{width:16px;height:16px}
+#tkada-ai-optimizer .tk-experience-entry small{font-size:11px;margin-left:auto}
+#tkada-ai-optimizer .tk-footer-tenant{padding:12px 10px 0;font-size:11px}
+@media(max-width:530px){#tkada-ai-optimizer .tk-ai-footer{padding-top:10px}#tkada-ai-optimizer .tk-ai-footer .tk-nav{margin-top:0}#tkada-ai-optimizer .tk-footer-tenant{display:none}}
+
+#tkada-ai-optimizer .tk-config-steps{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:18px}
+
 </style>
 <script>
+
 (() => {
   const root = document.getElementById('tkada-ai-optimizer');
   const esc = v => String(v == null ? '' : v).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -178,7 +209,14 @@
       {id:id+'o1',name:'起量优化师',dailySpend:500,roas:1.10,priority:'balanced',bc:'示例 BC-' + id.toUpperCase(),accounts:['账户 01','账户 02'],strategyId:strategies[0].id,ruleIds:[rules[0].id],reviewMode:'auto',active:true,buildAt:'10:00',reviewAt:'13:00',maxBudget:150,maxChange:10,version:1,plans:[],builds:[],proposals:[]},
       {id:id+'o2',name:'回收优化师',dailySpend:180,roas:1.35,priority:'roas',bc:'示例 BC-' + id.toUpperCase(),accounts:['账户 03'],strategyId:strategies[1].id,ruleIds:[rules[1].id],reviewMode:'manual',active:true,buildAt:'10:00',reviewAt:'13:00',maxBudget:80,maxChange:10,version:1,plans:[],builds:[],proposals:[]}
     ];
-    optimizers.forEach(o => {
+    strategies.push({id:id+'s3',name:'版权方 B 标准结构',version:1,groups:1,ads:5,budget:80,bid:1.20});
+    optimizers.forEach((o,index) => {
+      const originalId=o.strategyId;
+      o.schemes=index===0?[
+        {id:id+'scheme1',name:'版权方 A · 首轮',strategyId:strategies[0].id,publisher:'示例版权方 A',round:1,delayMinutes:0,enabled:true,version:1},
+        {id:id+'scheme2',name:'版权方 B · 首轮',strategyId:id+'s3',publisher:'示例版权方 B',round:1,delayMinutes:0,enabled:true,version:1}
+      ]:[{id:id+'scheme3',name:'稳投 · 标准轮',strategyId:originalId,publisher:'全部',round:1,delayMinutes:0,enabled:true,version:1}];
+      o.experiments=[];delete o.strategyId;
       o.plans = [
         {...emptyRow(),date:'2026-11-12',time:'10:00',title:'月光照进旧时光',provider:'示例版权方 A',confirmed:true,status:'已排期'},
         {...emptyRow(),date:'2026-11-12',time:'10:00',title:'他的第二封来信',provider:'示例版权方 B',order:true,confirmed:true,status:'待素材订单'},
@@ -189,51 +227,48 @@
   }
   const initial = [makeTenant('a','演示租户 A'),makeTenant('b','演示租户 B')];
   initial[1].optimizers = initial[1].optimizers.slice(0,1);
-  const state = {revision:0,tenants:initial,tenant:'a',selected:'ao1',view:'optimizers',tab:'goals',date:'2026-11-12',draft:null,edit:null,returnContext:null,grid:null,gridKey:'',history:[],notice:'',error:false,executionRecord:null,proposalId:null};
+  const state = {area:'ai',moduleScope:'bound',highlightId:null,highlightScheme:null,picker:null,schemeEdit:null,abEdit:null,revision:0,tenants:initial,tenant:'a',selected:'ao1',view:'optimizers',tab:'goals',date:'2026-11-12',draft:null,edit:null,returnContext:null,grid:null,gridKey:'',history:[],notice:'',error:false,executionRecord:null,proposalId:null};
   const tenant = () => state.tenants.find(t => t.id === state.tenant) || state.tenants[0];
   const optimizer = () => tenant().optimizers.find(o => o.id === state.selected) || tenant().optimizers[0];
-  const strategy = o => tenant().strategies.find(s => s.id === o.strategyId);
   const rules = o => tenant().rules.filter(r => o.ruleIds.includes(r.id));
   const pending = o => o.proposals.filter(p => p.status === 'pending');
   function restore(snapshot) {
     const p = snapshot && snapshot.privateContent;
-    if (!p || p.schema !== 2 || p.revision <= state.revision) return;
+    if (!p || p.schema !== 3 || p.revision <= state.revision) return;
     state.revision = p.revision;
     state.tenants = p.tenants;
-    state.tenant = p.tenant;
+    state.area=p.area||'ai';state.moduleScope=p.moduleScope||'bound';state.tenant = p.tenant;
     state.selected = p.selected;
-    state.view = ['optimizers','overview','schedule','execution','review','pending','strategies','rules'].includes(p.view) ? p.view : 'optimizers';
+    state.view = ['optimizers','overview','schedule','execution','review','pending','strategies','rules','schemes'].includes(p.view) ? p.view : 'optimizers';
   }
   restore(window.openai && window.openai.widgetState);
   function persist() {
     if (!window.openai || !window.openai.setWidgetState) return;
     const o = optimizer();
-    const snapshot = {modelContent:{tenant:tenant().name,optimizer:o.name,view:state.view,optimizationMode:o.reviewMode},privateContent:{schema:2,revision:++state.revision,tenant:state.tenant,selected:state.selected,view:state.view,tenants:state.tenants}};
+    const snapshot = {modelContent:{tenant:tenant().name,optimizer:o.name,view:state.view,optimizationMode:o.reviewMode},privateContent:{schema:3,area:state.area,moduleScope:state.moduleScope,revision:++state.revision,tenant:state.tenant,selected:state.selected,view:state.view,tenants:state.tenants}};
     if (new TextEncoder().encode(JSON.stringify(snapshot)).length < 15500) window.openai.setWidgetState(snapshot).catch(() => {});
   }
   function flash(text, error = false) {state.notice = text;state.error = error;}
-  function clearTransient() {state.grid = null;state.gridKey = '';state.history = [];state.edit = null;state.executionRecord = null;state.proposalId = null;}
+  function clearTransient() {state.grid = null;state.gridKey = '';state.history = [];state.edit = null;state.executionRecord = null;state.proposalId = null;state.schemeEdit=null;state.abEdit=null;state.picker=null;state.highlightId=null;state.highlightScheme=null;}
   function go(view) {state.view = view;state.notice = '';state.draft = null;state.returnContext = null;clearTransient();render();persist();}
   function optionList(items, selected) {return items.map(v => '<option value="' + esc(v.id) + '" ' + (v.id === selected ? 'selected' : '') + '>' + esc(v.name) + '</option>').join('');}
-  function pageTabs() {
-    const tabs = [['overview','优化师概览'],['schedule','剧单排期'],['execution','执行记录'],['review','复盘优化'],['pending','待确认 ' + pending(optimizer()).length]];
-    return '<div class="tk-tabs" role="tablist" aria-label="AI 工作台内部页面">' + tabs.map(([key,label]) => '<button type="button" role="tab" aria-selected="' + (state.view === key) + '" class="cursor-interaction ' + (state.view === key ? 'is-active' : '') + '" data-action="nav" data-view="' + key + '">' + label + '</button>').join('') + '</div>';
-  }
   function listPage() {
-    return heading('AI 投放工作台','一个租户可创建多位 AI 优化师，各自设置目标、规则与账户。',button(icon('plus') + ' 创建 AI 优化师','create',true)) +
-      '<div class="tk-grid">' + tenant().optimizers.map(o => '<article class="tk-card"><div class="tk-row"><div class="tk-card-title"><div class="tk-avatar">' + icon('bot') + '</div><div><h2>' + esc(o.name) + '</h2><p class="tk-small">' + esc(o.bc) + ' · ' + o.accounts.length + ' 个账户</p></div></div>' + pill(o.active ? '运行中' : '已暂停',o.active ? 'good' : '') + '</div><div class="tk-goals"><div><span class="tk-small">日消耗目标</span><div class="tk-number">' + money(o.dailySpend) + '</div></div><div><span class="tk-small">ROAS 目标</span><div class="tk-number">' + o.roas.toFixed(2) + '</div></div></div><div class="tk-meta"><div>目标取舍 <strong>' + prefs[o.priority] + '</strong></div><div>搭建策略 <strong>' + esc(strategy(o).name) + '</strong> · v' + strategy(o).version + '</div><div>自动规则 <strong>' + rules(o).length + ' 条</strong> · 按分配账户监控</div><div>AI 优化方式 <strong>' + (o.reviewMode === 'manual' ? '人工确认' : '自动优化') + '</strong></div></div><div class="tk-card-foot"><span class="tk-small">' + (pending(o).length ? pending(o).length + ' 项建议待确认' : '每日复盘 ' + o.reviewAt) + '</span>' + button('进入优化师 ' + icon('arrow-right'),'open',true,'data-id="' + o.id + '"') + '</div></article>').join('') + '</div>';
+    return heading('AI 投放工作台','每位优化师可运行一套或多套搭建方案，分别设置目标、账户与规则。',button(icon('plus')+' 创建 AI 优化师','create',true))+
+      '<div class="tk-grid">'+tenant().optimizers.map(o=>'<article class="tk-card"><div class="tk-row"><div class="tk-card-title"><div class="tk-avatar">'+icon('bot')+'</div><div><h2>'+esc(o.name)+'</h2><p class="tk-small">'+esc(o.bc)+' · '+o.accounts.length+' 个账户</p></div></div>'+pill(o.active?'运行中':'已暂停',o.active?'good':'')+'</div><div class="tk-goals"><div><span class="tk-small">日消耗目标</span><div class="tk-number">'+money(o.dailySpend)+'</div></div><div><span class="tk-small">ROAS 目标</span><div class="tk-number">'+o.roas.toFixed(2)+'</div></div></div><div class="tk-meta"><div>搭建方案 <strong>'+o.schemes.length+' 套</strong> · 引用投放策略 <strong>'+boundStrategyIds(o).length+' 条</strong></div><div>自动规则 <strong>'+rules(o).length+' 条</strong> · 按分配账户监控</div><div>AI 优化方式 <strong>'+(o.reviewMode==='manual'?'人工确认':'自动优化')+'</strong></div></div><div class="tk-card-foot"><span class="tk-small">'+(pending(o).length?pending(o).length+' 项建议待确认':'每日复盘 '+o.reviewAt)+'</span>'+button('进入优化师 '+icon('arrow-right'),'open',true,'data-id="'+o.id+'"')+'</div></article>').join('')+'</div>';
   }
+
   function overviewPage(o) {
-    const s = strategy(o);
-    return heading(o.name,esc(o.bc) + ' · ' + o.accounts.join('、'),button('编辑优化师','edit') + button(o.active ? '暂停优化师' : '恢复优化师','toggle-active')) +
-      '<div class="tk-card" style="margin-bottom:16px"><div class="tk-stats" style="margin-bottom:0"><div class="tk-stat"><span class="tk-small">日消耗目标</span><div class="tk-number">' + money(o.dailySpend) + '</div></div><div class="tk-stat"><span class="tk-small">ROAS 目标</span><div class="tk-number">' + o.roas.toFixed(2) + '</div></div><div class="tk-stat"><span class="tk-small">AI 规则优化</span><div style="margin-top:9px">' + pill(o.reviewMode === 'manual' ? '所有调整先人工确认' : '授权内自动发布',o.reviewMode === 'manual' ? 'wait' : 'good') + '</div></div></div></div>' +
-      '<div class="tk-grid"><section class="tk-card"><div class="tk-section-head"><h2>当前搭建策略</h2>' + pill('TKADA 投放策略') + '</div><h3>' + esc(s.name) + ' · v' + s.version + '</h3><p class="tk-sub">1 系列 / ' + s.groups + ' 组 / 每组 ' + s.ads + ' 条广告</p><p class="tk-sub">系列日预算 ' + money(s.budget) + ' · ROAS 出价 ' + s.bid.toFixed(2) + '</p><div class="tk-actions" style="margin-top:16px">' + button('在投放策略中查看 / 编辑','manage-strategy') + '</div></section><section class="tk-card"><div class="tk-section-head"><h2>当前自动规则</h2>' + pill(rules(o).length + ' 条') + '</div>' + rules(o).map(r => '<h3>' + esc(r.name) + '</h3><p class="tk-sub">' + esc(ruleSummary(r)) + ' → ' + r.action + '</p>').join('') + '<p class="tk-sub">监控范围：' + o.accounts.join('、') + ' 内全部广告</p><div class="tk-actions" style="margin-top:16px">' + button('在自动规则中查看 / 编辑','manage-rules') + '</div></section></div><section class="tk-card" style="margin-top:16px"><h2>自动工作安排</h2><div class="tk-flow"><span>提前填写每日剧单</span><span>→</span><span>到点调用广告搭建</span><span>→</span><span>按剧名匹配素材</span><span>→</span><span>既有自动规则管理账户</span><span>→</span><span>复盘与策略更新</span></div><p class="tk-sub">搭建账户直接使用优化师分配范围；排期时不选择素材。</p></section>';
+    return heading(o.name,esc(o.bc)+' · '+o.accounts.join('、'),button('编辑优化师','edit')+button(o.active?'暂停优化师':'恢复优化师','toggle-active'))+
+      '<section class="tk-card" style="margin-bottom:16px"><div class="tk-stats" style="margin-bottom:0"><div class="tk-stat"><span class="tk-small">日消耗目标</span><div class="tk-number">'+money(o.dailySpend)+'</div></div><div class="tk-stat"><span class="tk-small">ROAS 目标</span><div class="tk-number">'+o.roas.toFixed(2)+'</div></div><div class="tk-stat"><span class="tk-small">AI 优化方式</span><div style="margin-top:9px">'+pill(o.reviewMode==='manual'?'人工确认':'自动优化',o.reviewMode==='manual'?'wait':'good')+'</div></div></div></section>'+
+      '<section class="tk-card"><div class="tk-section-head"><div><h2>搭建方案 '+o.schemes.length+' 套</h2><p class="tk-sub">版权方分批、不同轮次或同剧对照，分别调用现有广告搭建。</p></div>'+button('管理搭建方案','ai-go-schemes')+'</div><div class="tk-table-wrap"><table><thead><tr><th>方案</th><th>版权方</th><th>执行安排</th><th>引用投放策略</th><th>状态</th><th></th></tr></thead><tbody>'+schemeRows(o)+'</tbody></table></div></section>'+
+      '<section class="tk-card" style="margin-top:16px"><div class="tk-section-head"><h2>自动规则 '+rules(o).length+' 条</h2>'+button('查看本优化师规则','manage-rules')+'</div><p class="tk-sub">监控 '+esc(o.accounts.join('、'))+' 内符合规则条件的广告。</p></section>';
   }
+
   function beginConfig(isNew) {
     const o = optimizer();
     state.draft = clone(o);
     if (isNew) Object.assign(state.draft,{id:'new',name:'',active:false,plans:[],builds:[],proposals:[],version:1});
-    state.draft.isNew = isNew;
+    state.draft.isNew = isNew;if(isNew){state.draft.schemes.forEach(s=>{s.id='scheme-'+(++seq);delete s.experimentId;delete s.arm;delete s.accounts;});state.draft.experiments=[];}
     state.tab = 'goals';state.view = 'config';state.notice = '';state.returnContext = null;clearTransient();render();
   }
   function modePicker(d) {
@@ -241,34 +276,73 @@
       [['auto','自动优化','复盘后在授权范围内发布；越界建议转人工确认。'],['manual','人工确认','所有搭建策略、自动规则调整，必须采纳后才生效。']].map(([key,label,desc]) => '<label class="tk-mode ' + (d.reviewMode === key ? 'selected' : '') + '"><input type="radio" name="review-mode" data-review-mode value="' + key + '" ' + (d.reviewMode === key ? 'checked' : '') + '><span><strong>' + label + '</strong><small>' + desc + '</small></span></label>').join('') + '</div>';
   }
   function configPage() {
-    const d = state.draft;
-    return heading(d.isNew ? '创建 AI 优化师' : '配置 ' + d.name,'仅设置目标、范围、工作安排，以及绑定既有策略与规则。',button('返回优化师','cancel-config')) +
-      '<div class="tk-tabs" role="tablist" aria-label="创建优化师步骤">' + [['goals','目标与账户'],['bindings','绑定策略与规则'],['optimization','工作安排与优化方式']].map(([key,label]) => '<button class="cursor-interaction ' + (state.tab === key ? 'is-active' : '') + '" type="button" role="tab" aria-selected="' + (state.tab === key) + '" data-action="config-tab" data-tab="' + key + '">' + label + '</button>').join('') + '</div>' +
-      (state.tab === 'goals' ? '<section class="tk-card tk-stack"><h2>目标与范围</h2><div class="tk-form-grid">' + field('优化师名称','name',d.name) + choose('目标优先关系','priority',prefs[d.priority],Object.values(prefs)) + field('日消耗目标（USD）','dailySpend',d.dailySpend,'number','min="1"') + field('ROAS 目标','roas',d.roas,'number','min=".01" step=".05"') + choose('投放 BC','bc',d.bc,['示例 BC-' + state.tenant.toUpperCase()]) + '<div class="tk-field"><span>分配账户</span><div class="tk-checks" style="margin-top:7px">' + ['账户 01','账户 02','账户 03'].map(a => '<label><input type="checkbox" data-account="' + a + '" ' + (d.accounts.includes(a) ? 'checked' : '') + '>' + a + '</label>').join('') + '</div></div></div><div class="tk-note">后续定时搭建与自动规则，使用这里分配的账户；排期不再逐行分配账户。</div><div class="tk-checks"><label><input type="radio" checked name="selection">人工剧单排期</label><label><input type="radio" name="selection" disabled>自动选剧 ' + pill('暂未开放') + '</label></div></section>' :
-      state.tab === 'bindings' ? '<div class="tk-stack"><section class="tk-card"><div class="tk-section-head"><h2>绑定搭建策略</h2>' + button('管理 / 新建投放策略','manage-strategy') + '</div><label class="tk-field"><span>选择现有投放策略</span><select class="tk-select" data-field="strategyId">' + optionList(tenant().strategies,d.strategyId) + '</select></label><div class="tk-note" style="margin-top:12px">使用 TKADA 同一条投放策略和版本。结构、预算、出价等参数在原投放策略页面维护。</div></section><section class="tk-card"><div class="tk-section-head"><h2>绑定自动规则</h2>' + button('管理 / 新建自动规则','manage-rules') + '</div><div class="tk-stack">' + tenant().rules.map(r => '<label class="tk-binding"><input type="checkbox" data-rule-binding="' + r.id + '" ' + (d.ruleIds.includes(r.id) ? 'checked' : '') + '><span><strong>' + esc(r.name) + '</strong><small>' + esc(ruleSummary(r)) + ' → ' + r.action + ' · ' + r.mode + '</small></span>' + pill('v' + r.version) + '</label>').join('') + '</div><div class="tk-note" style="margin-top:12px">规则监控范围取分配账户与规则适用范围的交集，包含这些账户中的手动搭建广告。</div></section></div>' :
-      '<div class="tk-stack"><section class="tk-card"><h2>AI 规则优化方式</h2><div style="margin-top:14px">' + modePicker(d) + '</div><p class="tk-sub">这里控制 AI 修改配置是否需要确认；已生效规则的动作执行方式，仍由原自动规则设置决定。</p></section><section class="tk-card"><h2>工作安排与自动优化边界</h2><div class="tk-form-grid" style="margin-top:14px">' + field('每天搭建时间','buildAt',d.buildAt,'time') + field('每天复盘时间','reviewAt',d.reviewAt,'time') + field('系列日预算最高可调至（USD）','maxBudget',d.maxBudget,'number','min="1"') + field('单次预算调整上限（%）','maxChange',d.maxChange,'number','min="1" max="100"') + '</div><p class="tk-sub">工作时区 Asia/Shanghai；人工确认模式下，授权内建议也不会自动发布。</p></section></div>') +
-      '<div class="tk-footer"><span class="tk-small">每位优化师分别保存目标、绑定关系与优化方式。</span>' + (state.tab === 'optimization' ? button(d.isNew ? '创建优化师' : '保存优化师','save-config',true) : button('下一步','next-config',true)) + '</div>';
+    const d=state.draft;
+    const basic='<section class="tk-card tk-stack"><h2>目标与范围</h2><div class="tk-form-grid">'+field('优化师名称','name',d.name)+choose('目标优先关系','priority',prefs[d.priority],Object.values(prefs))+field('日消耗目标（USD）','dailySpend',d.dailySpend,'number','min="1"')+field('ROAS 目标','roas',d.roas,'number','min=".01" step=".05"')+'<div class="tk-field"><span>投放 BC</span><p>'+esc(d.bc)+'</p></div><div class="tk-field"><span>分配账户</span><div class="tk-checks">'+['账户 01','账户 02','账户 03'].map(a=>'<label><input type="checkbox" data-account="'+a+'" '+(d.accounts.includes(a)?'checked':'')+'>'+a+'</label>').join('')+'</div></div></div><div class="tk-note">普通搭建继承所有分配账户；实验分组仅在此范围内明确设置。</div><div class="tk-checks"><label><input type="radio" checked>人工剧单排期</label><label><input type="radio" disabled>自动选剧 '+pill('暂未开放')+'</label></div></section>';
+    const bindings='<div class="tk-stack"><section class="tk-card"><div class="tk-section-head"><div><h2>搭建方案 '+d.schemes.length+' 套</h2><p class="tk-sub">每套方案引用一条现有投放策略，可以配置版权方和轮次。</p></div>'+button('从策略库添加方案','config-picker',false,'data-kind="strategy"')+'</div>'+d.schemes.map(s=>'<div class="tk-binding"><span><strong>'+esc(s.name)+'</strong><small>'+esc(schemeStrategy(s).name)+' · '+s.publisher+' · 第 '+s.round+' 轮</small></span>'+pill('ROAS '+schemeStrategy(s).bid.toFixed(2))+'</div>').join('')+'<div class="tk-actions" style="margin-top:14px">'+button('管理当前绑定投放策略','manage-strategy')+'</div></section><section class="tk-card"><div class="tk-section-head"><h2>自动规则 '+d.ruleIds.length+' 条</h2>'+button('从规则库选择','config-picker',false,'data-kind="rule"')+'</div>'+rules(d).map(r=>'<div class="tk-binding"><span><strong>'+esc(r.name)+'</strong><small>'+esc(ruleSummary(r))+'</small></span>'+pill('v'+r.version)+'</div>').join('')+'<div class="tk-actions" style="margin-top:14px">'+button('管理当前绑定规则','manage-rules')+'</div></section></div>';
+    const optimization='<div class="tk-stack"><section class="tk-card"><h2>AI 规则优化方式</h2><div style="margin-top:14px">'+modePicker(d)+'</div><p class="tk-sub">人工确认时，新增方案、对照组及规则调整也必须采纳后生效。</p></section><section class="tk-card"><h2>工作安排与优化边界</h2><div class="tk-form-grid" style="margin-top:14px">'+field('默认搭建时间','buildAt',d.buildAt,'time')+field('每天复盘时间','reviewAt',d.reviewAt,'time')+field('每系列日预算上限（USD）','maxBudget',d.maxBudget,'number','min="1"')+field('单次预算调整上限（%）','maxChange',d.maxChange,'number','min="1" max="100"')+'</div><p class="tk-sub">多方案与实验需同时核验总预算；不因新增 B 组扩大账户授权。</p></section></div>';
+    return heading(d.isNew?'创建 AI 优化师':'配置 '+d.name,'选择目标与范围，绑定一套或多套搭建方案。',button('返回优化师','cancel-config'))+
+      '<div class="tk-config-steps">'+[['goals','1 目标与账户'],['bindings','2 多方案与规则'],['optimization','3 优化方式']].map(([key,label])=>'<button type="button" class="tk-button cursor-interaction '+(state.tab===key?'primary':'')+'" data-action="config-tab" data-tab="'+key+'">'+label+'</button>').join('')+'</div>'+
+      (state.tab==='goals'?basic:state.tab==='bindings'?bindings:optimization)+
+      '<div class="tk-footer"><span class="tk-small">配置独立保存，引用的策略与规则仍在 TKADA 原模块可查。</span>'+(state.tab==='optimization'?button(d.isNew?'创建优化师':'保存优化师','save-config',true):button('下一步','next-config',true))+'</div>';
   }
-  function openModule(view) {
-    state.returnContext = state.view === 'config' ? {view:'config',tab:state.tab} : state.view === 'overview' ? {view:'overview'} : null;
-    state.view = view;state.edit = null;state.notice = '';render();
+
+  function openModule(view, schemeId, recordId) {
+    const fromModule = ['strategies', 'rules'].includes(state.view);
+    if (state.area === 'ai' && !fromModule) {
+      state.returnContext = {view:state.view, ...(state.view === 'config' ? {tab:state.tab} : {}), ...(schemeId ? {schemeId} : {})};
+    }
+    state.moduleScope = state.area === 'ai' ? 'bound' : 'all';
+    state.highlightId = recordId || null;
+    state.picker = null;
+    state.edit = null;
+    if (recordId) {
+      const kind = view === 'strategies' ? 'strategy' : 'rule';
+      const record = (kind === 'strategy' ? tenant().strategies : tenant().rules).find(item => item.id === recordId);
+      if (record) state.edit = {...clone(record), kind, isNew:false};
+    }
+    state.view = view;
+    state.notice = '';
+    render();
   }
-  function returnButton() {return state.returnContext ? button('返回 ' + (state.draft ? '优化师配置' : optimizer().name),'return-module') : '';}
+
+  function returnButton() {
+    const ctx = state.returnContext;
+    if (!ctx || state.area !== 'ai') return '';
+    const o = activeConfig();
+    const labels = {config:'配置', overview:'概览', schemes:'搭建方案', schedule:'剧单排期', execution:'执行记录', review:'复盘优化', pending:'待确认'};
+    const scheme = (o.schemes || []).find(s => s.id === ctx.schemeId);
+    return button('返回 ' + esc(o.name) + ' / ' + (labels[ctx.view] || '工作台') + (scheme ? ' / ' + esc(scheme.name) : ''), 'return-module');
+  }
+
   function moduleBanner(label) {
-    return '<div class="tk-note" style="margin-bottom:16px">' + label + '入口示意 · 正式版本使用现有 TKADA 页面与编辑器。这里演示相同记录修改后，在优化师中同步可见。</div>';
+    return '<div class="tk-note" style="margin-bottom:16px">' + esc(label) + '入口示意 · 正式版本复用现有 TK-ADA 页面与编辑器；此处演示共享配置、绑定关系与返回路径。</div>';
   }
+
   function strategiesPage() {
-    const e = state.edit;
-    return heading('投放策略','租户共享策略库 · 既有 TKADA 功能入口',returnButton() + button('新建策略','new-strategy',true)) + moduleBanner('投放策略') +
-      '<section class="tk-card"><div class="tk-table-wrap"><table><thead><tr><th>策略名称</th><th>结构</th><th>日预算 / ROAS</th><th>版本</th><th>使用优化师</th><th></th></tr></thead><tbody>' + tenant().strategies.map(s => '<tr><td><strong>' + esc(s.name) + '</strong></td><td>1 / ' + s.groups + ' / ' + s.ads + '</td><td>' + money(s.budget) + ' / ' + s.bid.toFixed(2) + '</td><td>v' + s.version + '</td><td>' + esc(tenant().optimizers.filter(o => o.strategyId === s.id).map(o => o.name).join('、') || '未绑定') + '</td><td><button class="tk-link cursor-interaction" data-action="edit-strategy" data-id="' + s.id + '">编辑</button></td></tr>').join('') + '</tbody></table></div></section>' +
-      (e && e.kind === 'strategy' ? '<section class="tk-card tk-stack" style="margin-top:16px"><h2>' + (e.isNew ? '新建策略' : '编辑投放策略') + '</h2><div class="tk-form-grid">' + field('策略名称','entity:name',e.name) + field('每系列广告组数','entity:groups',e.groups,'number','min="1"') + field('每组广告数','entity:ads',e.ads,'number','min="1"') + field('系列日预算（USD）','entity:budget',e.budget,'number','min="1"') + field('ROAS 出价','entity:bid',e.bid,'number','min="1" step=".05"') + '</div><p class="tk-sub">原策略页还包含命名、定向、文案等完整配置；本原型仅示意共享记录与返回路径。</p><div class="tk-actions">' + button('保存策略版本','save-entity',true) + button('取消','cancel-entity') + '</div></section>' : '');
+    const o = activeConfig(), e = state.edit, ids = boundStrategyIds(o);
+    const scoped = state.area === 'ai' && state.moduleScope !== 'all';
+    const items = tenant().strategies.filter(s => !scoped || ids.includes(s.id));
+    return heading('投放策略', state.area === 'ai' ? esc(o.name) + ' · 搭建方案引用的 TK-ADA 投放策略' : '租户共享策略库 · 既有 TK-ADA 功能入口', returnButton() + button('新建策略', 'new-strategy', true)) + moduleBanner('投放策略') + moduleScopeBar('strategy', o) + selectionPanel('strategy', o) +
+      '<section class="tk-card"><div class="tk-table-wrap"><table><thead><tr><th>策略名称</th><th>搭建结构</th><th>日预算 / ROAS</th><th>版本</th><th>本优化师使用方案</th><th>其他使用优化师</th><th></th></tr></thead><tbody>' + items.map(s => {
+        const schemes = (o.schemes || []).filter(scheme => scheme.strategyId === s.id);
+        const others = tenant().optimizers.filter(owner => owner.id !== o.id && boundStrategyIds(owner).includes(s.id));
+        return '<tr class="' + (state.highlightId === s.id ? 'tk-highlight-row' : '') + '"><td><strong>' + esc(s.name) + '</strong></td><td>1 / ' + s.groups + ' / ' + s.ads + '</td><td>' + money(s.budget) + ' / ' + Number(s.bid).toFixed(2) + '</td><td>v' + s.version + '</td><td>' + esc(schemes.map(scheme => scheme.name).join('、') || '未使用') + '</td><td>' + esc(others.map(owner => owner.name).join('、') || '无') + '</td><td><button type="button" class="tk-link cursor-interaction" data-action="edit-strategy" data-id="' + esc(s.id) + '">编辑此策略</button></td></tr>';
+      }).join('') + '</tbody></table>' + (!items.length ? '<div class="tk-empty">尚无绑定策略。可从租户库选择并用于搭建方案。</div>' : '') + '</div></section>' +
+      (e && e.kind === 'strategy' ? '<section class="tk-card tk-stack" style="margin-top:16px"><h2>' + (e.isNew ? '新建投放策略' : '编辑投放策略 · ' + esc(e.name)) + '</h2><div class="tk-form-grid">' + field('策略名称','entity:name',e.name) + field('每系列广告组数','entity:groups',e.groups,'number','min="1"') + field('每组广告数','entity:ads',e.ads,'number','min="1"') + field('系列日预算（USD）','entity:budget',e.budget,'number','min="1"') + field('ROAS 出价','entity:bid',e.bid,'number','min="1" step=".05"') + '</div><p class="tk-sub">保存会更新此共享策略，引用它的搭建方案同步读取新版本；已冻结的任务仍保留执行时版本。</p><p class="tk-small">原策略页还包含命名、定向、文案等完整配置，本原型仅示意。</p><div class="tk-actions">' + button(e.isNew&&state.area==='ai'?(state.returnContext&&state.returnContext.schemeId?'保存并绑定当前方案':'保存并添加搭建方案'):'保存策略版本','save-entity',true) + button('取消','cancel-entity') + '</div></section>' : '');
   }
+
   function rulesPage() {
-    const e = state.edit, o = state.draft || optimizer();
-    return heading('自动规则','既有规则管理 · AI 优化确认与规则动作确认分别设置。',returnButton() + button('新建规则','new-rule',true)) + moduleBanner('自动规则') +
-      '<section class="tk-card"><div class="tk-table-wrap"><table><thead><tr><th>规则与条件</th><th>动作</th><th>执行方式</th><th>监控账户</th><th></th></tr></thead><tbody>' + tenant().rules.map(r => {const owners = tenant().optimizers.filter(x => x.ruleIds.includes(r.id));return '<tr><td><strong>' + esc(r.name) + '</strong><div class="tk-small">' + ruleSummary(r) + ' · v' + r.version + '</div></td><td>' + r.action + '</td><td>' + r.mode + '</td><td>' + esc(owners.flatMap(x => x.accounts).join('、') || '绑定后继承') + '</td><td><button class="tk-link cursor-interaction" data-action="edit-rule" data-id="' + r.id + '">编辑</button></td></tr>';}).join('') + '</tbody></table></div></section>' +
-      (e && e.kind === 'rule' ? '<section class="tk-card tk-stack" style="margin-top:16px"><h2>' + (e.isNew ? '新建自动规则' : '编辑自动规则') + '</h2><div class="tk-form-grid">' + field('规则名称','entity:name',e.name) + choose('动作执行方式','entity:mode',e.mode,['自动执行','确认后执行','仅通知']) + field('消耗大于（USD）','entity:cost',e.cost,'number','min="0"') + field('且 ROAS 小于','entity:roas',e.roas,'number','min="0" step=".05"') + choose('执行动作','entity:action',e.action,['暂停系列','启用系列']) + choose('运行频率','entity:frequency',e.frequency,['每 30 分钟','每小时','每天 12:00']) + '</div><div class="tk-note">优化师分配范围：' + esc(o.accounts.join('、')) + '。按账户内广告监控，非仅限 AI 创建广告；与其他规则重叠时使用现有冲突检查。</div><p class="tk-sub">正式版本复用现有规则编辑抽屉的完整条件、层级、范围和排期功能。</p><div class="tk-actions">' + button('保存自动规则','save-entity',true) + button('取消','cancel-entity') + '</div></section>' : '');
+    const o = activeConfig(), e = state.edit;
+    const scoped = state.area === 'ai' && state.moduleScope !== 'all';
+    const items = tenant().rules.filter(r => !scoped || o.ruleIds.includes(r.id));
+    return heading('自动规则', state.area === 'ai' ? esc(o.name) + ' · 已绑定的账户监控规则' : '租户自动规则库 · 既有 TK-ADA 功能入口', returnButton() + button('新建规则','new-rule',true)) + moduleBanner('自动规则') + moduleScopeBar('rule',o) + selectionPanel('rule',o) +
+      '<section class="tk-card"><div class="tk-table-wrap"><table><thead><tr><th>规则与条件</th><th>动作 / 执行方式</th><th>本优化师绑定</th><th>其他使用优化师</th><th></th></tr></thead><tbody>' + items.map(r => {
+        const others = tenant().optimizers.filter(owner => owner.id !== o.id && owner.ruleIds.includes(r.id));
+        return '<tr class="' + (state.highlightId === r.id ? 'tk-highlight-row' : '') + '"><td><strong>' + esc(r.name) + '</strong><div class="tk-small">' + esc(ruleSummary(r)) + ' · v' + r.version + '</div></td><td>' + esc(r.action) + '<div class="tk-small">' + esc(r.mode) + '</div></td><td>' + (o.ruleIds.includes(r.id) ? pill('已绑定','good') + '<div class="tk-small">' + esc(o.accounts.join('、')) + ' 与规则范围取交集</div>' : pill('未绑定')) + '</td><td>' + esc(others.map(owner => owner.name).join('、') || '无') + '</td><td><button type="button" class="tk-link cursor-interaction" data-action="edit-rule" data-id="' + esc(r.id) + '">编辑此规则</button></td></tr>';
+      }).join('') + '</tbody></table>' + (!items.length ? '<div class="tk-empty">尚未绑定自动规则，可从租户库选择。</div>' : '') + '</div></section>' +
+      (e && e.kind === 'rule' ? '<section class="tk-card tk-stack" style="margin-top:16px"><h2>' + (e.isNew ? '新建自动规则' : '编辑自动规则 · ' + esc(e.name)) + '</h2><div class="tk-form-grid">' + field('规则名称','entity:name',e.name) + choose('动作执行方式','entity:mode',e.mode,['自动执行','确认后执行','仅通知']) + field('消耗大于（USD）','entity:cost',e.cost,'number','min="0"') + field('且 ROAS 小于','entity:roas',e.roas,'number','min="0" step=".05"') + choose('执行动作','entity:action',e.action,['暂停系列','启用系列']) + choose('运行频率','entity:frequency',e.frequency,['每 30 分钟','每小时','每天 12:00']) + '</div><div class="tk-note">' + (state.area === 'ai' ? '当前优化师分配账户：' + esc(o.accounts.join('、')) + '。规则绑定后按交集监控，包含账户中的手动搭建广告。' : '规则按自身适用范围执行；优化师绑定规则时再与分配账户取交集。') + '共享规则更新会影响所有使用方。</div><p class="tk-sub">AI 配置变更确认与规则动作确认分别设置；正式版本复用现有完整条件、范围和冲突检查。</p><div class="tk-actions">' + button(e.isNew&&state.area==='ai'?'保存并绑定当前优化师':'保存自动规则','save-entity',true) + button('取消','cancel-entity') + '</div></section>' : '');
   }
+
   const gridColumns = [
     ['time','执行时间','留空用优化师时间',105],['title','剧目名称','必填',165],['provider','版权方','按已有连接填写',130],['order','下单素材','未勾选则不下单',105],
     ['url','推广链接','选填，留空自动取链',220],['dramaId','剧目 ID','选填，保留前导零',125],['attribution','归因名称','按需填写',140]
@@ -294,7 +368,7 @@
     ensureGrid();
     const saved=o.plans.filter(r=>r.date===state.date);
     return heading('剧单排期','提前填写搭建输入；到点交给现有广告搭建按剧名匹配素材。',button('演示到点执行','execute-schedule')) +
-      '<section class="tk-card"><div class="tk-toolbar"><div class="tk-actions"><label class="tk-field"><span>排期日期</span><input class="tk-input" style="width:auto" type="date" data-plan-date value="' + state.date + '"></label></div><div class="tk-small">账户：' + esc(o.accounts.join('、')) + '<br>继承 ' + esc(o.name) + ' · 策略 ' + esc(strategy(o).name) + '</div></div><div class="tk-grid-toolbar"><span class="tk-small">直接点击空白格填写 · 从任意单元格粘贴 Excel 区域</span><div class="tk-actions">' + button('撤销','grid-undo') + button('清空输入','grid-clear') + '</div></div><div class="tk-table-wrap"><table class="tk-excel"><thead><tr><th style="width:38px">#</th>' + gridColumns.map(([,label,hint,width])=>'<th style="min-width:'+width+'px"><strong>'+label+'</strong><small>'+hint+'</small></th>').join('') + '</tr></thead><tbody>' +
+      '<section class="tk-card"><div class="tk-toolbar"><div class="tk-actions"><label class="tk-field"><span>排期日期</span><input class="tk-input" style="width:auto" type="date" data-plan-date value="' + state.date + '"></label></div><div class="tk-small">账户：' + esc(o.accounts.join('、')) + '<br>继承 ' + esc(o.name) + ' · '+o.schemes.filter(s=>s.enabled).length+' 套启用方案，按版权方匹配' + '</div></div><div class="tk-grid-toolbar"><span class="tk-small">直接点击空白格填写 · 从任意单元格粘贴 Excel 区域</span><div class="tk-actions">' + button('撤销','grid-undo') + button('清空输入','grid-clear') + '</div></div><div class="tk-table-wrap"><table class="tk-excel"><thead><tr><th style="width:38px">#</th>' + gridColumns.map(([,label,hint,width])=>'<th style="min-width:'+width+'px"><strong>'+label+'</strong><small>'+hint+'</small></th>').join('') + '</tr></thead><tbody>' +
       state.grid.map((r,ri)=>'<tr><td>'+String(ri+1)+'</td>'+gridColumns.map(([key,label],ci)=>'<td>'+(key==='order'?'<input type="checkbox" data-cell="'+ri+':'+ci+'" '+(r.built?'disabled':'')+' aria-label="第 '+(ri+1)+' 行 '+label+'" '+(r.order?'checked':'')+'>':'<input type="text" data-cell="'+ri+':'+ci+'" '+(r.built?'disabled':'')+' aria-label="第 '+(ri+1)+' 行 '+label+'" value="'+esc(r[key])+'" '+(key==='time'?'placeholder="'+o.buildAt+'"':'')+'>')+'</td>').join('')+'</tr>').join('')+
       '</tbody></table></div><div class="tk-footer"><span class="tk-small">空白行不计入 · 已执行行只读 · Tab 切换 / Enter 向下 / Ctrl Z 撤销</span>'+button('保存排期','save-grid',true)+'</div></section><section class="tk-card" style="margin-top:16px"><h2>已保存排期</h2>'+
       (saved.length?'<div class="tk-table-wrap" style="margin-top:12px"><table><thead><tr><th>执行时间</th><th>剧目</th><th>素材下单</th><th>排期状态</th></tr></thead><tbody>'+saved.map(r=>'<tr><td>'+esc(r.time||o.buildAt)+'</td><td>'+esc(r.title)+'</td><td>'+(r.order?'需要下单':'不下单')+'</td><td>'+pill(r.status,r.built?'good':r.status==='素材未匹配'?'wait':'')+'</td></tr>').join('')+'</tbody></table></div>':'<p class="tk-sub">当天暂无已保存剧单。</p>')+
@@ -306,57 +380,75 @@
     if(!rows.length){flash('请先保存当天排期。',true);return;}
     let created=0,blocked=0,skipped=0;
     rows.forEach(r=>{
-      if(r.built){skipped++;return;}
-      if(r.order&&!tenant().library[r.title]){r.status='等待订单成片';blocked++;return;}
-      const count=tenant().library[r.title]||0;
-      if(!count){r.status='素材未匹配';blocked++;return;}
-      const s=strategy(o);
-      r.built=true;r.status='搭建已回读';
-      o.builds.push({id:'build-'+(++seq),kind:'build',rowId:r.id,time:state.date.slice(5)+' '+(r.time||o.buildAt),title:r.title,strategyId:s.id,strategyVersion:s.version,optimizerVersion:o.version,accounts:[...o.accounts],matched:count,status:'回读完成'});
-      created++;
+      if(!r.built||!r.assignedSchemes)r.assignedSchemes=clone(relevantSchemes(o,r));
+      if(!r.assignedSchemes.length){r.status='无适用方案';blocked++;return;}
+      r.assignedSchemes.forEach(sc=>{
+        const key=r.id+'|'+sc.id+'|'+sc.version+'|'+sc.round+'|'+(sc.arm||'regular');
+        if(o.builds.some(b=>b.occurrenceKey===key)){skipped++;return;}
+        if(r.order&&!tenant().library[r.title]){blocked++;return;}
+        const count=tenant().library[r.title]||0;
+        if(!count){blocked++;return;}
+        const s=schemeStrategy(sc);if(!s){blocked++;return;}
+        r.materialSnapshots||={};const materialKey=sc.experimentId||sc.id;
+        if(!r.materialSnapshots[materialKey])r.materialSnapshots[materialKey]={id:'match-'+(++seq),count};
+        const material=r.materialSnapshots[materialKey], accounts=sc.accounts||o.accounts;
+        if(!accounts.length||accounts.some(a=>!o.accounts.includes(a))){blocked++;return;}
+        o.builds.push({id:'build-'+(++seq),kind:'build',rowId:r.id,occurrenceKey:key,time:state.date.slice(5)+' '+addMinutes(r.time||o.buildAt,sc.delayMinutes),title:r.title,schemeId:sc.id,schemeName:sc.name,schemeVersion:sc.version,round:sc.round,experimentId:sc.experimentId||null,arm:sc.arm||null,strategyId:s.id,strategyName:s.name,strategyVersion:s.version,bid:s.bid,optimizerVersion:o.version,accounts:[...accounts],matched:material.count,materialSnapshotId:material.id,status:'回读完成'});
+        created++;
+      });
+      const count=o.builds.filter(b=>b.rowId===r.id).length;
+      r.built=count>0;r.status=count===r.assignedSchemes.length?'全部方案已回读':count?'部分方案待处理':r.order?'等待订单成片':'素材未匹配';
     });
     state.grid=null;state.gridKey='';
-    flash('原型演示：'+created+' 条调用广告搭建并完成回读，'+blocked+' 条等待订单或匹配素材，'+skipped+' 条已执行未重复创建。');
+    flash('原型演示：'+created+' 个方案/轮次调用广告搭建并回读，'+blocked+' 项等待素材或方案，'+skipped+' 个已执行批次未重复创建。');
   }
+
   function executionPage(o) {
     const r=state.executionRecord;
-    return heading('执行记录','账户来自优化师；素材匹配和平台动作由既有 TKADA 能力执行。',button('查看搭建任务','build-tasks'))+
-      '<section class="tk-card">'+(o.builds.length?'<div class="tk-table-wrap"><table><thead><tr><th>时间 / 剧目</th><th>搭建策略版本</th><th>执行时匹配</th><th>结果</th><th></th></tr></thead><tbody>'+o.builds.map(b=>'<tr><td>'+esc(b.time)+'<div>'+esc(b.title)+'</div></td><td>v'+b.strategyVersion+'</td><td>'+b.matched+' 条素材 · '+b.accounts.length+' 个账户</td><td>'+pill(b.status,'good')+'</td><td><button class="tk-link cursor-interaction" data-action="execution-detail" data-id="'+b.id+'">过程与证据</button></td></tr>').join('')+'</tbody></table></div>':'<div class="tk-empty">暂无本优化师触发的搭建记录。保存排期后，可演示到点执行。</div>')+'</section>'+
-      (r?'<section class="tk-card" style="margin-top:16px"><div class="tk-section-head"><h2>'+esc(r.title)+' · 执行过程</h2>'+button('收起','close-detail')+'</div><ul class="tk-timeline">'+[
-        ['到点触发','读取已保存剧单；账户继承 '+r.accounts.join('、')+'。'],
-        ['调用广告搭建准备','使用现有剧目解析、取链及素材匹配能力。'],
-        ['按剧名匹配素材','执行阶段匹配到 '+r.matched+' 条；没有在排期里手动选择素材。'],
-        ['冻结预览并提交','采用投放策略 v'+r.strategyVersion+'，在授权范围内自动提交。'],
-        ['对象回读与规则管理','保存实际对象；自动规则继续监控分配账户内的广告。']
-      ].map(([label,text])=>'<li><h3>'+label+'</h3><p class="tk-small">'+esc(text)+'</p></li>').join('')+'</ul></section>':'');
+    return heading('执行记录','按剧单发生记录、方案、轮次与实验组追溯，每个任务独立冻结。',button('查看搭建任务','build-tasks'))+
+      '<section class="tk-card">'+(o.builds.length?'<div class="tk-table-wrap"><table><thead><tr><th>时间 / 剧目</th><th>方案 / 轮次</th><th>策略 / 出价</th><th>账户 / 分组</th><th>结果</th><th></th></tr></thead><tbody>'+o.builds.map(b=>'<tr><td>'+esc(b.time)+'<div>'+esc(b.title)+'</div></td><td>'+esc(b.schemeName)+'<div class="tk-small">第 '+b.round+' 轮</div></td><td>v'+b.strategyVersion+' · ROAS '+b.bid.toFixed(2)+'</td><td>'+b.accounts.length+' 个账户'+(b.arm?'<div class="tk-small">'+b.arm+' 组</div>':'')+'</td><td>'+pill(b.status,'good')+'</td><td><button class="tk-link cursor-interaction" data-action="execution-detail" data-id="'+b.id+'">证据</button></td></tr>').join('')+'</tbody></table></div>':'<div class="tk-empty">暂无执行记录，先保存剧单并演示方案到点执行。</div>')+'</section>'+
+      (r?'<section class="tk-card" style="margin-top:16px"><div class="tk-section-head"><h2>'+esc(r.schemeName)+' · '+esc(r.title)+'</h2>'+button('收起','close-detail')+'</div><div class="tk-meta" style="border:0;padding:0"><div>轮次 / 组别 <strong>第 '+r.round+' 轮'+(r.arm?' · '+r.arm+' 组':'')+'</strong></div><div>冻结策略 <strong>'+esc(r.strategyName)+' v'+r.strategyVersion+' · ROAS '+r.bid.toFixed(2)+'</strong></div><div>执行账户 <strong>'+esc(r.accounts.join('、'))+'</strong></div><div>执行时匹配 <strong>'+r.matched+' 条素材</strong></div><div>素材快照 <strong>'+esc(r.materialSnapshotId)+'</strong>'+(r.experimentId?' · 同一对照共享':'')+'</div></div></section>':'');
   }
+
   function createReview(o) {
-    if(o.proposals.length&&!o.proposals.some(p=>p.status==='stale')){flash('本示例窗口已有复盘结果，不重复生成；可查看待确认或历史处理。');return;}const stale=o.proposals.filter(p=>p.status==='stale');
-    const s=strategy(o),r=rules(o)[0];
-    if(!r){flash('请先绑定自动规则。',true);return;}
+    if(o.proposals.length&&!o.proposals.some(p=>p.status==='stale')){flash('本示例窗口已有复盘结果，请处理待确认或等待下一窗口。');return;}
+    const stale=o.proposals.filter(p=>p.status==='stale'),r=rules(o)[0],source=o.schemes.find(s=>!s.experimentId)||o.schemes[0];
+    if(!r||!source){flash('请先配置搭建方案并绑定自动规则。',true);return;}
+    const s=schemeStrategy(source);
     const proposals=[
-      {id:'proposal-'+(++seq),kind:'rule',entityId:r.id,name:r.name,field:'cost',before:r.cost,after:Math.max(5,Math.round(r.cost*.8)),baseVersion:r.version,status:'pending',reason:'示例：低回收系列在阈值附近继续消耗，建议降低控损触发消耗，下一完整日窗口验证。'},
-      {id:'proposal-'+(++seq),kind:'strategy',entityId:s.id,name:s.name,field:'groups',before:s.groups,after:s.groups===1?2:1,baseVersion:s.version,status:'pending',reason:'示例：对比不同广告组结构，建议调整组数作为待验证假设，保留观察窗口。'}
+      {id:'proposal-'+(++seq),kind:'rule',entityId:r.id,name:r.name,field:'cost',before:r.cost,after:Math.max(5,Math.round(r.cost*.8)),baseVersion:r.version,status:'pending',reason:'示例：低回收系列在阈值附近继续消耗，建议调整控损阈值，后续窗口验证。'},
+      {id:'proposal-'+(++seq),kind:'new_scheme',entityId:source.id,name:'为 '+source.name+' 新增 B 组',field:'bid',before:s.bid,after:Number((s.bid+.2).toFixed(2)),baseVersion:source.version,status:'pending',days:3,distribution:o.accounts.length<2?'同账户双方案观察':'互斥账户分组',budgetBefore:s.budget*o.accounts.length,budgetAfter:s.budget*o.accounts.length*(o.accounts.length<2?2:1),reason:'示例：单一出价不足以判断，建议新增独立 B 策略及方案，使用同剧同素材、明确账户分组观察 3 个完整日。非随机设计，不提前宣称胜出。'}
     ].filter(p=>!stale.length||stale.some(old=>old.entityId===p.entityId));
-    stale.forEach(p=>p.status='superseded');
-    o.proposals.push(...proposals);
-    if(o.reviewMode==='auto'){proposals.forEach(p=>applyProposal(o,p,'auto'));const accepted=proposals.filter(p=>p.status==='accepted').length;const waiting=proposals.filter(p=>p.status==='pending').length;flash('示例复盘完成：实际发布 '+accepted+' 项，'+waiting+' 项因共享配置等原因待人工处理。已发布项同步到原策略或规则记录。',waiting>0);}
-    else flash('示例复盘完成：所有策略和规则调整均待人工确认。可逐条采纳或不采纳，当前配置未变。');
+    stale.forEach(p=>p.status='superseded');o.proposals.push(...proposals);
+    if(o.reviewMode==='auto'){proposals.forEach(p=>applyProposal(o,p,'auto'));const n=proposals.filter(p=>p.status==='accepted').length;flash('示例复盘：实际发布 '+n+' 项，'+(proposals.length-n)+' 项待确认或补充分组/授权。');}
+    else flash('复盘产生规则调整及新增 B 组建议；全部等待人工采纳，当前方案未变。');
   }
+
   function applyProposal(o,p,actor) {
     if(p.status!=='pending')return;
-    const entity=(p.kind==='strategy'?tenant().strategies:tenant().rules).find(x=>x.id===p.entityId);
-    if(!entity||entity.version!==p.baseVersion){p.status='stale';p.decision='版本已变化，需重新复盘';return;}
-    const users=tenant().optimizers.filter(x=>p.kind==='strategy'?x.strategyId===entity.id:x.ruleIds.includes(entity.id));
-    if(users.length>1){flash('该配置被多位优化师共用，需先在原模块另存专用配置再采纳，避免影响其他优化师。',true);return;}
+    if(p.kind==='new_scheme'){
+      const source=o.schemes.find(s=>s.id===p.entityId);
+      if(!source||source.version!==p.baseVersion){p.status='stale';return;}
+      if(source.experimentId){flash('该方案已有实验分组，需重新设计，未重复新增 B 组。',true);return;}
+      const t=schemeStrategy(source);
+      if(t.budget>o.maxBudget){flash('方案预算超出自动优化授权，未发布。',true);return;}
+      if(actor==='auto'&&p.budgetAfter>p.budgetBefore){flash('新增 B 组会提高总日预算，超出当前总量授权，需人工确认。',true);return;}try{const b=establishAb(o,source,p.after,p.days,p.distribution);p.newSchemeId=b.id;p.publishedVersion=1;}
+      catch(error){flash(error.message,true);return;}
+      o.version++;p.status='accepted';p.actor=actor;return;
+    }
+    const entity=tenant().rules.find(x=>x.id===p.entityId);
+    if(!entity||entity.version!==p.baseVersion){p.status='stale';return;}
+    const users=tenant().optimizers.filter(x=>x.ruleIds.includes(entity.id));
+    if(users.length>1){flash('该规则被多位优化师共用，请先明确共享影响或另存专用规则。',true);return;}
     entity[p.field]=p.after;entity.version++;o.version++;p.status='accepted';p.actor=actor;p.publishedVersion=entity.version;
   }
+
   function proposalCard(o,p,decisions) {
-    const labels={pending:'待人工确认',accepted:'已采纳',rejected:'不采纳',stale:'版本变化待重评',superseded:'已重新复盘'};
-    const unit=p.field==='cost'?'控损消耗阈值（USD）':'每系列广告组数';
-    return '<section class="tk-card"><div class="tk-section-head"><div><h2>'+(p.kind==='rule'?'自动规则':'搭建策略')+' · '+esc(p.name)+'</h2><p class="tk-sub">'+unit+' · 基于 v'+p.baseVersion+'</p></div>'+pill(labels[p.status],p.status==='accepted'?'good':p.status==='pending'?'wait':'')+'</div><div class="tk-change"><div>修改前<b>'+esc(p.before)+'</b></div><span>→</span><div class="tk-after">建议修改为<b>'+esc(p.after)+'</b></div></div><p class="tk-small">'+esc(p.reason)+'</p><p class="tk-sub">证据：本租户完整日数据、规则运行记录、适用业务知识；效果待后续验证。</p>'+
-      (decisions&&p.status==='pending'?'<div class="tk-card-foot"><span class="tk-small">不采纳会保留当前配置，并记录原因。</span><div class="tk-actions">'+button('不采纳','reject-proposal',false,'data-id="'+p.id+'"')+button('采纳并发布','accept-proposal',true,'data-id="'+p.id+'"')+'</div></div>':p.status==='rejected'?'<p class="tk-sub">处理结果：不采纳，原配置与版本保持不变。</p>':'')+'</section>';
+    const labels={pending:'待确认',accepted:'已采纳',rejected:'不采纳',stale:'版本变化待重评',superseded:'已重新复盘'},ab=p.kind==='new_scheme';
+    return '<section class="tk-card"><div class="tk-section-head"><div><h2>'+(ab?'新增搭建方案 / B 组':'自动规则调整')+'</h2><p class="tk-sub">'+esc(p.name)+'</p></div>'+pill(labels[p.status],p.status==='accepted'?'good':p.status==='pending'?'wait':'')+'</div><div class="tk-change"><div>'+(ab?'保留 A 组出价':'当前阈值')+'<b>'+esc(p.before)+'</b></div><span>→</span><div class="tk-after">'+(ab?'新增 B 组出价':'建议阈值')+'<b>'+esc(p.after)+'</b></div></div><p class="tk-small">'+esc(p.reason)+'</p>'+(ab?'<p class="tk-sub">采纳后创建 B 策略和方案；A 组保留原策略。'+esc(p.distribution)+'，总日预算 '+money(p.budgetBefore)+' → '+money(p.budgetAfter)+'。仅影响后续未冻结批次。</p>':'')+
+      (decisions&&p.status==='pending'?'<div class="tk-card-foot"><span class="tk-small">拒绝保留当前策略与方案。</span><div class="tk-actions">'+button('不采纳','reject-proposal',false,'data-id="'+p.id+'"')+button('采纳并发布','accept-proposal',true,'data-id="'+p.id+'"')+'</div></div>':'')+'</section>';
   }
+
   function reviewPage(o) {
     return heading('复盘优化',o.reviewMode==='manual'?'人工确认模式：所有 AI 配置调整均需人工采纳。':'自动优化模式：授权内发布，越界或缺能力交人工处理。',button('执行日报','daily')+button('演示一次复盘','run-review',true))+
       '<section class="tk-card" style="margin-bottom:16px"><div class="tk-row"><h2>优化方式</h2>'+pill(o.reviewMode==='manual'?'人工确认':'自动优化',o.reviewMode==='manual'?'wait':'good')+'</div><p class="tk-sub">当前策略和规则照常执行。AI 建议的变更只有发布后才影响后续工作。</p></section>'+
@@ -374,19 +466,134 @@
     return heading(title,'既有 TKADA '+title+'入口示意',button('返回 AI 工作台','back-ai'))+moduleBanner(title)+'<section class="tk-card"><h2>复用现有搭建链路</h2><div class="tk-flow"><span>剧目输入</span><span>→</span><span>解析与取链</span><span>→</span><span>按剧名匹配素材</span><span>→</span><span>冻结预览</span><span>→</span><span>提交与回读</span></div><p class="tk-sub">AI 工作台只提供已保存剧单、绑定策略和分配账户，不另建搭建引擎。</p></section>';
   }
   function render() {
-    const o=optimizer();state.selected=o.id;
-    const module=['strategies','rules','materials','builds','build-tasks'].includes(state.view);
-    const inDetail=!module&&!['optimizers','config'].includes(state.view);
-    const navItem=(label,view,ic)=>'<button type="button" class="cursor-interaction '+((module?state.view===view:view==='optimizers')?'is-active':'')+'" data-action="global-nav" data-view="'+view+'">'+icon(ic)+label+'</button>';
-    const body=state.view==='optimizers'?listPage():state.view==='overview'?overviewPage(o):state.view==='config'?configPage():state.view==='schedule'?schedulePage(o):state.view==='execution'?executionPage(o):state.view==='review'?reviewPage(o):state.view==='pending'?pendingPage(o):state.view==='strategies'?strategiesPage():state.view==='rules'?rulesPage():miscPage(o);
-    root.innerHTML='<div class="tk-proto"><b>交互原型 · 第二版</b><span>示例数据 · 展示嵌入 TKADA 的流程及既有模块复用关系</span></div><div class="tk-app"><aside class="tk-side"><div class="tk-brand">TK-ADA</div><div class="tk-brand-sub">广告投放工具</div><div class="tk-nav-label">投放准备</div><nav class="tk-nav">'+'<span class="tk-nav-static">'+icon('clapperboard')+'素材制作</span>'+navItem('素材库','materials','file-video')+navItem('投放策略','strategies','sliders-horizontal')+'</nav><div class="tk-nav-label">广告投放</div><nav class="tk-nav" aria-label="TKADA 主菜单">'+navItem('AI 投放工作台','optimizers','bot')+navItem('广告搭建','builds','clapperboard')+navItem('搭建任务','build-tasks','list-checks')+'<span class="tk-nav-static">'+icon('chart-no-axes-combined')+'广告报表</span><span class="tk-nav-static">'+icon('chart-no-axes-combined')+'经营看板</span><span class="tk-nav-static">'+icon('history')+'操作记录</span>'+navItem('自动规则','rules','workflow')+'</nav><div class="tk-nav-label">设置</div><div class="tk-small" style="padding:0 11px">账户与授权<br>版权方连接<br>通知设置<br>成员管理</div><div class="tk-side-foot">当前租户<br>'+esc(tenant().name)+'</div></aside><div class="tk-workspace"><header class="tk-topbar"><div class="tk-tenant"><select aria-label="切换租户" data-tenant>'+initial.map(t=>'<option value="'+t.id+'" '+(state.tenant===t.id?'selected':'')+'>'+t.name+'</option>').join('')+'</select><span class="tk-small">/ 投放工作</span></div><span class="tk-small">租户管理员</span></header><main class="tk-content">'+
-      (inDetail?'<div class="tk-breadcrumb"><button type="button" class="tk-link cursor-interaction" data-action="back-ai">AI 优化师</button><span>/</span><select class="tk-select" style="width:auto;padding:4px 8px;font-size:12px" data-optimizer aria-label="切换 AI 优化师">'+optionList(tenant().optimizers,o.id)+'</select></div>'+pageTabs():'')+
-      (state.notice?'<div class="tk-notice '+(state.error?'tk-error':'')+'" role="'+(state.error?'alert':'status')+'"><span>'+esc(state.notice)+'</span><button type="button" class="tk-link cursor-interaction" data-action="dismiss">关闭</button></div>':'')+body+'</main></div></div>';
-    if(globalThis.lucide)lucide.createIcons({attrs:{width:16,height:16}});
+    const o = optimizer();
+    state.selected = o.id;
+    const ai = state.area !== 'tool';
+    const navItem = (label,view,ic) => '<button type="button" class="cursor-interaction ' + ((view === 'optimizers' ? ai : !ai && state.view === view) ? 'is-active' : '') + '" data-action="global-nav" data-view="' + view + '">' + icon(ic) + label + '</button>';
+    const aiItem = (label,view,ic) => '<button type="button" class="cursor-interaction ' + (state.view === view ? 'is-active' : '') + '" data-action="ai-nav" data-view="' + view + '"' + (state.view === view ? ' aria-current="page"' : '') + '>' + icon(ic) + label + '</button>';
+    const secondary = ai ? '<aside class="tk-subside" aria-label="AI 优化师导航"><nav class="tk-nav" aria-label="优化师列表">' + aiItem('全部优化师','optimizers','users') + '</nav><label class="tk-current-optimizer"><span>当前优化师</span><select class="tk-select" data-optimizer aria-label="切换 AI 优化师">' + optionList(tenant().optimizers,o.id) + '</select></label><nav class="tk-nav" aria-label="优化师工作页面">' + [['overview','概览','layout-dashboard'],['schemes','搭建方案','layers'],['schedule','剧单排期','calendar-days'],['execution','执行记录','list-checks'],['review','复盘优化','chart-no-axes-combined'],['pending','待确认 ' + pending(o).length,'circle-check']].map(([view,label,ic]) => aiItem(label,view,ic)).join('') + '</nav><div class="tk-nav-label">绑定配置</div><nav class="tk-nav" aria-label="优化师绑定配置">' + aiItem('已绑定投放策略','strategies','sliders-horizontal') + aiItem('已绑定自动规则','rules','workflow') + '</nav><p class="tk-small tk-context-caption">' + esc(o.bc) + '<br>' + o.accounts.length + ' 个分配账户</p></aside>' : '';
+    const body = state.view === 'optimizers' ? listPage() : state.view === 'overview' ? overviewPage(o) : state.view === 'config' ? configPage() : state.view === 'schemes' ? schemesPage(o) : state.view === 'schedule' ? schedulePage(o) : state.view === 'execution' ? executionPage(o) : state.view === 'review' ? reviewPage(o) : state.view === 'pending' ? pendingPage(o) : state.view === 'strategies' ? strategiesPage() : state.view === 'rules' ? rulesPage() : miscPage(o);
+    root.innerHTML = '<div class="tk-proto"><b>交互原型 · 第三版</b><span>示例数据 · 多搭建方案、既有能力复用与配置上下文</span></div><div class="tk-app"><aside class="tk-side"><div class="tk-brand">TK-ADA</div><div class="tk-brand-sub">广告投放工具</div><div class="tk-nav-label">投放准备</div><nav class="tk-nav" aria-label="投放准备"><span class="tk-nav-static">' + icon('clapperboard') + '素材制作</span>' + navItem('素材库','materials','file-video') + navItem('投放策略','strategies','sliders-horizontal') + '</nav><div class="tk-nav-label">广告投放</div><nav class="tk-nav" aria-label="广告投放">' + navItem('广告搭建','builds','clapperboard') + navItem('搭建任务','build-tasks','list-checks') + '<span class="tk-nav-static">' + icon('chart-no-axes-combined') + '广告报表</span><span class="tk-nav-static">' + icon('chart-no-axes-combined') + '经营看板</span><span class="tk-nav-static">' + icon('history') + '操作记录</span>' + navItem('自动规则','rules','workflow') + '</nav><div class="tk-nav-label">设置</div><div class="tk-small" style="padding:0 11px">账户与授权<br>版权方连接<br>通知设置<br>成员管理</div><div class="tk-side-foot tk-ai-footer"><nav class="tk-nav" aria-label="AI 一级入口">' + navItem('AI 投放工作台','optimizers','bot') + '</nav><div class="tk-experience-entry">' + icon('external-link') + '<span>打开体验版</span><small>示意</small></div><div class="tk-footer-tenant">当前租户 · ' + esc(tenant().name) + '</div></div></aside><div class="tk-workspace"><header class="tk-topbar"><div class="tk-tenant"><select aria-label="切换租户" data-tenant>' + state.tenants.map(t => '<option value="' + esc(t.id) + '" ' + (state.tenant === t.id ? 'selected' : '') + '>' + esc(t.name) + '</option>').join('') + '</select><span class="tk-small">/ ' + (ai ? 'AI 投放工作台' : '投放工具') + '</span></div><span class="tk-small">租户管理员</span></header><div class="tk-workbody ' + (ai ? 'has-ai-nav' : '') + '">' + secondary + '<main class="tk-content">' + (ai && state.view !== 'optimizers' ? '<div class="tk-breadcrumb">AI 投放工作台 / ' + esc(activeConfig().name) + '</div>' : '') + (state.notice ? '<div class="tk-notice ' + (state.error ? 'tk-error' : '') + '" role="' + (state.error ? 'alert' : 'status') + '"><span>' + esc(state.notice) + '</span><button type="button" class="tk-link cursor-interaction" data-action="dismiss">关闭</button></div>' : '') + body + '</main></div></div></div>';
+    if (globalThis.lucide) lucide.createIcons({attrs:{width:16,height:16}});
   }
+
+
+  function activeConfig() {return state.draft || optimizer();}
+
+  function boundStrategyIds(o) {return [...new Set(o.schemes.map(s => s.strategyId))];}
+
+  function schemeStrategy(s) {return tenant().strategies.find(x => x.id === s.strategyId);}
+
+  function relevantSchemes(o,row) {return o.schemes.filter(s => s.enabled && (s.publisher === '全部' || s.publisher === row.provider));}
+
+  function addMinutes(time, minutes) {const [h,m]=time.split(':').map(Number);const total=(h*60+m+Number(minutes||0))%1440;return String(Math.floor(total/60)).padStart(2,'0')+':'+String(total%60).padStart(2,'0');}
+
+  function schemeRows(o, editing=false) {
+    return o.schemes.map(s=>{const t=schemeStrategy(s);return '<tr><td><strong>'+esc(s.name)+'</strong><div class="tk-small">'+(s.experimentId?esc(s.arm)+' 组 · 非随机对照示例':'常规搭建')+'</div></td><td>'+esc(s.publisher)+'</td><td>第 '+s.round+' 轮<div class="tk-small">延后 '+s.delayMinutes+' 分钟</div></td><td>'+esc(t.name)+'<div class="tk-small">v'+t.version+' · ROAS '+t.bid.toFixed(2)+'</div></td><td>'+pill(s.enabled?'已启用':'已暂停',s.enabled?'good':'')+'</td><td><div class="tk-actions">'+button('编辑方案','edit-scheme',false,'data-id="'+s.id+'"')+button('编辑引用策略','scheme-strategy',false,'data-scheme-id="'+s.id+'"')+'</div></td></tr>';}).join('');
+  }
+
+  function schemesPage(o) {
+    const e=state.schemeEdit, ab=state.abEdit;const abSource=ab&&o.schemes.find(s=>s.id===ab.sourceId),abBase=abSource?schemeStrategy(abSource).budget*o.accounts.length:0;
+    const chosen=state.highlightScheme?o.schemes.find(s=>s.id===state.highlightScheme):null;
+    return heading('搭建方案','一套方案引用一条投放策略；可按版权方、多轮次及实验分组组合。',button('配置 A/B 对照','new-ab')+button(icon('plus')+' 添加搭建方案','new-scheme',true))+
+      (chosen?'<div class="tk-note" style="margin-bottom:16px">已定位到方案：'+esc(chosen.name)+'</div>':'')+
+      '<section class="tk-card"><div class="tk-table-wrap"><table><thead><tr><th>方案名称 / 类型</th><th>适用版权方</th><th>轮次</th><th>投放策略</th><th>状态</th><th></th></tr></thead><tbody>'+schemeRows(o)+'</tbody></table></div></section>'+
+      (e?'<section class="tk-card tk-stack" style="margin-top:16px"><h2>'+(e.isNew?'添加搭建方案':'编辑搭建方案')+'</h2><div class="tk-form-grid">'+schemeField('方案名称','name',e.name)+schemeSelect('适用版权方','publisher',e.publisher,['全部','示例版权方 A','示例版权方 B'])+schemeField('执行轮次','round',e.round,'number')+schemeField('相对剧单时间延后（分钟）','delayMinutes',e.delayMinutes,'number')+'<label class="tk-field"><span>引用现有投放策略</span><select class="tk-select" data-scheme-field="strategyId">'+optionList(tenant().strategies,e.strategyId)+'</select></label><label class="tk-checks"><input type="checkbox" data-scheme-field="enabled" '+(e.enabled?'checked':'')+'>启用这套方案</label></div><div class="tk-note">结构、预算和出价在引用的 TKADA 投放策略中编辑。普通方案使用优化师分配的全部账户。</div><div class="tk-actions">'+button('保存搭建方案','save-scheme',true)+button('取消','cancel-scheme')+'</div></section>':'')+
+      (ab?'<section class="tk-card tk-stack" style="margin-top:16px"><h2>配置同剧出价对照</h2><div class="tk-form-grid"><label class="tk-field"><span>以哪套方案为 A 组</span><select class="tk-select" data-ab-field="sourceId">'+o.schemes.filter(s=>!s.experimentId).map(s=>'<option value="'+s.id+'" '+(ab.sourceId===s.id?'selected':'')+'>'+esc(s.name)+'</option>').join('')+'</select></label>'+abField('B 组 ROAS 出价','bidB',ab.bidB,'number')+'<label class="tk-field"><span>比较方式</span><select class="tk-select" data-ab-field="mode">'+['互斥账户分组','同账户双方案观察'].map(v=>'<option '+(v===ab.mode?'selected':'')+'>'+v+'</option>').join('')+'</select></label>'+abField('观察窗口（完整日）','days',ab.days,'number')+'<div class="tk-field"><span>分组与控制条件</span><p class="tk-small">'+(ab.mode==='同账户双方案观察'?'两组使用相同账户；仅为非随机探索性观察。':'已分配账户拆为互斥组（示例），尚未随机化。')+'两组使用同一剧、同一轮次和素材快照。</p></div></div><div class="tk-note">原方案日预算 '+money(abBase)+' → 两组总日预算 '+money(abBase*(ab.mode==='同账户双方案观察'?2:1))+'；保存即确认本次配置。</div><div class="tk-note wait">本示例未实现随机化，不能直接宣称因果增益。预算、素材、时段及样本充分性仍需复盘核验。</div><div class="tk-actions">'+button('保存 A / B 两组方案','save-ab',true)+button('取消','cancel-ab')+'</div></section>':'')+
+      '<div class="tk-note" style="margin-top:16px">同一部剧可按多套匹配方案生成多个任务；每个方案与轮次分别去重。新增测试批次不是自动复制已有系列。</div>';
+  }
+
+  function schemeField(label,key,value,type='text') {return '<label class="tk-field"><span>'+label+'</span><input class="tk-input" data-scheme-field="'+key+'" type="'+type+'" value="'+esc(value)+'" '+(type==='number'?'min="'+(key==='round'?1:0)+'"':'')+'></label>';}
+
+  function schemeSelect(label,key,value,values) {return '<label class="tk-field"><span>'+label+'</span><select class="tk-select" data-scheme-field="'+key+'">'+values.map(v=>'<option '+(v===value?'selected':'')+'>'+esc(v)+'</option>').join('')+'</select></label>';}
+
+  function abField(label,key,value,type='text') {return '<label class="tk-field"><span>'+label+'</span><input class="tk-input" data-ab-field="'+key+'" type="'+type+'" step="'+(key==='bidB'?'.05':'1')+'" min="1" value="'+esc(value)+'"></label>';}
+
+  function establishAb(o,source,bidB,days,mode='互斥账户分组') {
+    const pool=o.accounts;
+    if(!pool.length)throw new Error('请先分配账户。');if(mode==='互斥账户分组'&&pool.length<2)throw new Error('互斥账户分组至少需要两个账户，可改为同账户双方案观察。');
+    const original=schemeStrategy(source), expId='exp-'+(++seq);
+    const bStrategy={...clone(original),id:'strategy-'+(++seq),name:original.name+' · B 出价 '+Number(bidB).toFixed(2),version:1,bid:Number(bidB)};
+    tenant().strategies.push(bStrategy);
+    const middle=Math.ceil(pool.length/2),same=mode==='同账户双方案观察';
+    Object.assign(source,{experimentId:expId,arm:'A',accounts:same?[...pool]:pool.slice(0,middle),version:source.version+1});
+    const bScheme={...clone(source),id:'scheme-'+(++seq),name:source.name+' · B 组',strategyId:bStrategy.id,arm:'B',accounts:same?[...pool]:pool.slice(middle),version:1};
+    source.name=source.name.replace(/ · A 组$/,'')+' · A 组';
+    o.schemes.push(bScheme);
+    o.experiments.push({id:expId,name:'ROAS 出价对照',variable:'ROAS 出价',days:Number(days),schemeIds:[source.id,bScheme.id],design:same?'同账户双方案观察，非随机':'明确账户分组，非随机',hypothesis:'同剧同素材条件下比较不同出价，证据成熟后评价。'});
+    return bScheme;
+  }
+
+  function handleV3Action(a,el) {
+    const o=optimizer();
+    if(a==='back-ai'||a==='cancel-config'){state.area='ai';state.moduleScope='bound';state.returnContext=null;state.picker=null;go('optimizers');return true;}
+    if(a==='config-picker'){
+      const kind=el.dataset.kind;openModule(kind==='strategy'?'strategies':'rules');
+      state.picker={kind,schemeId:null,selectedIds:kind==='rule'?[...activeConfig().ruleIds]:[]};return true;
+    }
+    if(a==='global-nav'){
+      state.area=el.dataset.view==='optimizers'?'ai':'tool';state.moduleScope='all';state.picker=null;go(el.dataset.view);return true;
+    }
+    if(a==='ai-nav'||a==='ai-go-schemes'){
+      state.area='ai';state.moduleScope='bound';state.returnContext=null;state.highlightId=null;state.highlightScheme=null;state.picker=null;state.schemeEdit=null;state.abEdit=null;state.draft=null;clearTransient();state.view=a==='ai-go-schemes'?'schemes':el.dataset.view;state.notice='';return true;
+    }
+    if(a==='manage-strategy'||a==='manage-rules'){openModule(a==='manage-strategy'?'strategies':'rules');return true;}
+    if(a==='scheme-strategy'){const sc=o.schemes.find(s=>s.id===el.dataset.schemeId);openModule('strategies',sc.id,sc.strategyId);return true;}
+    if(a==='module-scope'){state.moduleScope=el.dataset.scope;state.edit=null;state.picker=null;state.notice='';return true;}
+    if(a==='open-picker'){
+      const kind=el.dataset.kind,schemeId=el.dataset.schemeId;
+      state.picker={kind,schemeId:schemeId||null,selectedIds:kind==='rule'?[...activeConfig().ruleIds]:schemeId?[activeConfig().schemes.find(s=>s.id===schemeId).strategyId]:[]};return true;
+    }
+    if(a==='cancel-picker'){state.picker=null;return true;}
+    if(a==='confirm-picker'){
+      const p=state.picker,c=activeConfig();if(!p||!p.selectedIds.length){flash('请选择要绑定的配置。',true);return true;}
+      if(p.kind==='rule')c.ruleIds=[...p.selectedIds];
+      else if(p.schemeId){const sc=c.schemes.find(s=>s.id===p.schemeId);sc.strategyId=p.selectedIds[0];sc.version++;}
+      else p.selectedIds.forEach(id=>{const t=tenant().strategies.find(x=>x.id===id);c.schemes.push({id:'scheme-'+(++seq),name:t.name+' · 新方案',strategyId:id,publisher:'全部',round:1,delayMinutes:0,enabled:true,version:1});});
+      state.edit=null;state.highlightId=p.kind==='strategy'&&p.schemeId?p.selectedIds[0]:null;state.picker=null;flash('已更新当前优化师的绑定；租户库原记录保持不变。');return true;
+    }
+    if(a==='new-scheme'){state.schemeEdit={id:'new',isNew:true,name:'新搭建方案',strategyId:tenant().strategies[0].id,publisher:'全部',round:1,delayMinutes:0,enabled:true,version:1};state.abEdit=null;return true;}
+    if(a==='edit-scheme'){state.view='schemes';state.schemeEdit=clone(o.schemes.find(s=>s.id===el.dataset.id));state.abEdit=null;return true;}
+    if(a==='cancel-scheme'){state.schemeEdit=null;return true;}
+    if(a==='save-scheme'){
+      const s=state.schemeEdit;if(!s.name.trim()||!Number.isInteger(Number(s.round))||s.round<1||s.delayMinutes<0){flash('请填写有效方案名称、轮次与延后时间。',true);return true;}
+      if(s.isNew){s.id='scheme-'+(++seq);delete s.isNew;o.schemes.push(s);}else{s.version++;o.schemes[o.schemes.findIndex(x=>x.id===s.id)]=s;}
+      state.schemeEdit=null;flash('搭建方案已保存；已冻结的旧批次保持原方案。');return true;
+    }
+    if(a==='new-ab'){
+      const source=o.schemes.find(s=>!s.experimentId);if(!source){flash('当前所有方案已在对照中，先添加常规方案。',true);return true;}
+      state.abEdit={sourceId:source.id,bidB:Number((schemeStrategy(source).bid+.2).toFixed(2)),days:3,mode:o.accounts.length<2?'同账户双方案观察':'互斥账户分组'};state.schemeEdit=null;return true;
+    }
+    if(a==='cancel-ab'){state.abEdit=null;return true;}
+    if(a==='save-ab'){
+      const e=state.abEdit;if(!(e.bidB>=1)||!(e.days>=1)){flash('请填写有效出价与观察窗口。',true);return true;}
+      try{establishAb(o,o.schemes.find(s=>s.id===e.sourceId),e.bidB,e.days,e.mode);state.abEdit=null;flash('A / B 方案已保存，分别引用策略；同剧两组共享执行时素材快照。');}catch(error){flash(error.message,true);}
+      return true;
+    }
+    return false;
+  }
+
+  function moduleScopeBar(kind, o) {
+    if (state.area !== 'ai') return '<p class="tk-small" style="margin-bottom:14px">当前范围：' + esc(tenant().name) + ' · 全部配置</p>';
+    const schemeId = state.returnContext && state.returnContext.schemeId;
+    return '<div class="tk-module-toolbar"><div class="tk-scope-switch" aria-label="配置范围">' + ['bound','all'].map(scope => '<button type="button" class="cursor-interaction ' + (state.moduleScope === scope ? 'is-active' : '') + '" data-action="module-scope" data-scope="' + scope + '" aria-pressed="' + (state.moduleScope === scope) + '">' + (scope === 'bound' ? '本优化师已绑定' : '租户全部') + '</button>').join('') + '</div>' + button('从租户库选择' + (kind === 'strategy' ? '投放策略' : '自动规则'), 'open-picker', false, 'data-kind="' + kind + '"' + (schemeId ? ' data-scheme-id="' + esc(schemeId) + '"' : '')) + '</div><p class="tk-small" style="margin-bottom:14px">当前优化师：' + esc(o.name) + ' · ' + esc(o.bc) + '</p>';
+  }
+
+  function selectionPanel(kind, o) {
+    const picker = state.picker;
+    if (!picker || picker.kind !== kind) return '';
+    const isStrategy = kind === 'strategy';
+    const items = isStrategy ? tenant().strategies : tenant().rules;
+    const scheme = (o.schemes || []).find(s => s.id === picker.schemeId);
+    const single = isStrategy && !!picker.schemeId;
+    return '<section class="tk-card tk-selection-panel" aria-label="从租户库选择"><div class="tk-section-head"><div><h2>从租户库选择' + (isStrategy ? '投放策略' : '自动规则') + '</h2><p class="tk-sub">' + esc(tenant().name) + ' → ' + esc(o.name) + (scheme ? ' → ' + esc(scheme.name) : '') + '</p></div>' + pill(single ? '单选' : '多选') + '</div><p class="tk-sub">' + (single ? '此方案引用一条投放策略。确认后更换引用，原策略内容不变。' : isStrategy ? '所选投放策略用于本优化师的搭建方案；搭建方案分别引用策略。' : '确认后更新本优化师的规则绑定；规则监控范围仍与分配账户取交集。') + '</p><div class="tk-stack" style="margin-top:12px">' + items.map(item => '<label class="tk-binding"><input type="' + (single ? 'radio' : 'checkbox') + '" name="tk-library-picker" data-pick="' + esc(item.id) + '" ' + (picker.selectedIds.includes(item.id) ? 'checked' : '') + '><span><strong>' + esc(item.name) + '</strong><small>' + (isStrategy ? '1 系列 / ' + item.groups + ' 组 / 每组 ' + item.ads + ' 条 · ' + money(item.budget) + ' · ROAS ' + Number(item.bid).toFixed(2) : esc(ruleSummary(item)) + ' → ' + esc(item.action)) + '</small></span>' + pill('v' + item.version) + '</label>').join('') + '</div><div class="tk-actions" style="margin-top:16px">' + button('确认选择', 'confirm-picker', true) + button('取消', 'cancel-picker') + '</div></section>';
+  }
+
   const numbers=new Set(['dailySpend','roas','maxBudget','maxChange','groups','ads','budget','bid','cost']);
   root.addEventListener('input',e=>{
     const el=e.target;
+    if(el.dataset.schemeField&&state.schemeEdit){const key=el.dataset.schemeField;state.schemeEdit[key]=el.type==='checkbox'?el.checked:el.type==='number'?Number(el.value):el.value;return;}
+    if(el.dataset.abField&&state.abEdit){const key=el.dataset.abField;state.abEdit[key]=el.type==='number'?Number(el.value):el.value;if(el.tagName==='SELECT')render();return;}
     if(el.dataset.cell){const [r,c]=el.dataset.cell.split(':').map(Number);if(state.grid[r].built)return;rememberGrid();state.grid[r][gridColumns[c][0]]=el.type==='checkbox'?el.checked:el.value;return;}
     const key=el.dataset.field;if(!key)return;
     if(key.startsWith('entity:')){if(state.edit){const name=key.slice(7);state.edit[name]=numbers.has(name)?Number(el.value):el.value;}}
@@ -394,8 +601,11 @@
   });
   root.addEventListener('change',e=>{
     const el=e.target;
+    if(el.dataset.schemeField&&state.schemeEdit){const key=el.dataset.schemeField;state.schemeEdit[key]=el.type==='checkbox'?el.checked:el.type==='number'?Number(el.value):el.value;return;}
+    if(el.dataset.abField&&state.abEdit){const key=el.dataset.abField;state.abEdit[key]=el.type==='number'?Number(el.value):el.value;if(el.tagName==='SELECT')render();return;}
+    if(el.matches('[data-pick]')&&state.picker){const id=el.dataset.pick;state.picker.selectedIds=el.type==='radio'?[id]:el.checked?[...new Set([...state.picker.selectedIds,id])]:state.picker.selectedIds.filter(x=>x!==id);return;}
     if(el.matches('[data-tenant]')){state.tenant=el.value;state.selected=tenant().optimizers[0].id;go('optimizers');return;}
-    if(el.matches('[data-optimizer]')){state.selected=el.value;clearTransient();state.notice='';render();persist();return;}
+    if(el.matches('[data-optimizer]')){state.selected=el.value;state.draft=null;state.returnContext=null;state.moduleScope='bound';if(state.view==='config')state.view='overview';clearTransient();state.notice='';render();persist();return;}
     if(el.matches('[data-plan-date]')){state.date=el.value;state.grid=null;state.gridKey='';state.history=[];state.notice='';render();return;}
     if(el.matches('[data-account]')&&state.draft){const a=el.dataset.account;state.draft.accounts=el.checked?[...new Set([...state.draft.accounts,a])]:state.draft.accounts.filter(x=>x!==a);return;}
     if(el.matches('[data-rule-binding]')&&state.draft){const id=el.dataset.ruleBinding;state.draft.ruleIds=el.checked?[...new Set([...state.draft.ruleIds,id])]:state.draft.ruleIds.filter(x=>x!==id);return;}
@@ -423,6 +633,7 @@
   root.addEventListener('click',e=>{
     const el=e.target.closest('[data-action]');if(!el||el.disabled)return;
     const a=el.dataset.action,o=optimizer();
+    if(handleV3Action(a,el)){render();persist();return;}
     if(a==='nav'){go(el.dataset.view);return;}
     if(a==='global-nav'){go(el.dataset.view);return;}
     if(a==='open'){state.selected=el.dataset.id;go('overview');return;}
@@ -436,10 +647,10 @@
     if(a==='toggle-active'){o.active=!o.active;flash(o.active?'该优化师已恢复（原型演示）。':'该优化师已暂停，其他优化师不受影响。');}
     if(a==='manage-strategy'){openModule('strategies');return;}
     if(a==='manage-rules'){openModule('rules');return;}
-    if(a==='return-module'){const ctx=state.returnContext;state.returnContext=null;state.edit=null;state.view=ctx?ctx.view:'optimizers';if(ctx&&ctx.tab)state.tab=ctx.tab;state.notice='';}
+    if(a==='return-module'){const ctx=state.returnContext;state.returnContext=null;state.edit=null;state.view=ctx?ctx.view:'optimizers';if(ctx&&ctx.tab)state.tab=ctx.tab;state.highlightScheme=ctx&&ctx.schemeId||null;state.notice='';}
     if(a==='save-config'){
       const d=state.draft;
-      if(!d.name.trim()||!(d.dailySpend>0)||!(d.roas>0)||!d.accounts.length||!tenant().strategies.some(s=>s.id===d.strategyId)){flash('请填写名称、有效目标，分配账户并选择搭建策略。',true);render();return;}
+      if(!d.name.trim()||!(d.dailySpend>0)||!(d.roas>0)||!d.accounts.length||!d.schemes.length||d.schemes.some(sc=>!tenant().strategies.some(s=>s.id===sc.strategyId))){flash('请填写名称、有效目标，分配账户并选择搭建策略。',true);render();return;}
       if(d.isNew){d.id='opt-'+(++seq);delete d.isNew;tenant().optimizers.push(d);}else{d.version++;tenant().optimizers[tenant().optimizers.findIndex(x=>x.id===d.id)]=d;}
       state.selected=d.id;state.draft=null;state.view='overview';flash('已保存优化师及绑定关系；AI 规则优化方式为“'+(d.reviewMode==='manual'?'人工确认':'自动优化')+'”。');
     }
@@ -454,14 +665,13 @@
       const collection=entity.kind==='strategy'?tenant().strategies:tenant().rules,copy=clone(entity);
       delete copy.kind;delete copy.isNew;
       if(entity.isNew){copy.id='entity-'+(++seq);collection.push(copy);}else{copy.version++;collection[collection.findIndex(x=>x.id===copy.id)]=copy;}
-      state.edit=null;flash('已保存到原'+(entity.kind==='strategy'?'投放策略':'自动规则')+'记录；绑定该记录的优化师同步读取。');
+      if(entity.isNew&&entity.kind==='strategy'&&state.returnContext&&state.returnContext.schemeId){const sc=activeConfig().schemes.find(s=>s.id===state.returnContext.schemeId);if(sc){sc.strategyId=copy.id;sc.version++;}}else if(entity.isNew&&entity.kind==='strategy'&&state.area==='ai'){activeConfig().schemes.push({id:'scheme-'+(++seq),name:copy.name+' · 新方案',strategyId:copy.id,publisher:'全部',round:1,delayMinutes:0,enabled:true,version:1});}if(entity.isNew&&entity.kind==='rule'&&state.area==='ai')activeConfig().ruleIds.push(copy.id);state.highlightId=copy.id;state.edit=null;flash('已保存到原'+(entity.kind==='strategy'?'投放策略':'自动规则')+'记录；绑定该记录的优化师同步读取。');
     }
     if(a==='grid-undo'&&state.history.length)state.grid=state.history.pop();
     if(a==='grid-clear'){rememberGrid();state.grid=state.grid.filter(r=>r.built).map(clone);while(state.grid.length<10)state.grid.push(emptyRow());}
     if(a==='save-grid'){
       const filled=state.grid.filter(r=>r.title.trim()||r.provider.trim()||r.url.trim()||r.dramaId.trim()||r.time.trim()||r.order);
-      const seen=new Set();
-      for(const r of filled){if(!r.title.trim()){flash('存在已填内容但缺少剧名的行。',true);render();return;}if(seen.has(r.title.trim())){flash('当天剧名重复，请核对排期。',true);render();return;}seen.add(r.title.trim());if(r.time&&!/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(r.time)){flash('执行时间请填写 HH:mm。',true);render();return;}}
+      for(const r of filled){if(!r.title.trim()){flash('存在已填内容但缺少剧名的行。',true);render();return;}if(r.time&&!/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(r.time)){flash('执行时间请填写 HH:mm。',true);render();return;}}
       o.plans=[...o.plans.filter(r=>r.date!==state.date),...filled.map(r=>({...clone(r),date:state.date,confirmed:true,status:r.built?r.status:r.order?'待素材订单':'已排期'}))];
       state.grid=null;state.gridKey='';flash('排期已保存。到点后才调用广告搭建匹配素材，账户继承优化师分配范围。');
     }
@@ -479,5 +689,6 @@
   window.addEventListener('openai:set_globals',e=>{if(e.detail&&e.detail.globals&&e.detail.globals.widgetState){restore(e.detail.globals.widgetState);render();}});
   render();
 })();
+
 
 </script>
