@@ -55,6 +55,27 @@ class OptimizerUpdate(BaseModel):
     active: bool | None = None
     request_id: UUID | None = None
 
+    @model_validator(mode="after")
+    def require_change(self) -> OptimizerUpdate:
+        if all(
+            value is None
+            for value in (
+                self.name,
+                self.daily_spend,
+                self.target_roas,
+                self.priority,
+                self.bc_id,
+                self.advertiser_ids,
+                self.optimization_mode,
+                self.authorization_limits,
+                self.strategy_version_id,
+                self.rule_ids,
+                self.active,
+            )
+        ):
+            raise ValueError("At least one optimizer field is required")
+        return self
+
 
 class OptimizerPublic(OptimizerFields):
     id: UUID
