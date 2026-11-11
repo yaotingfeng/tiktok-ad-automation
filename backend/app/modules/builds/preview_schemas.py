@@ -17,7 +17,7 @@ def preview_daily_budget_sum(
     preview: Any, *, campaign_count: int, group_count: int
 ) -> Decimal:
     """普通预览按统一预算汇总；单系列复制按冻结的逐组金额精确求和。"""
-    if preview.config.get("campaign_copy_version") == 1:
+    if preview.config.get("campaign_copy_version") in {1, 2}:
         return (
             Decimal(preview.config["copy_daily_budget_sum"])
             if campaign_count
@@ -210,8 +210,8 @@ class FrozenUnit(BaseModel):
     preview_id: UUID
     tenant_id: UUID
     drama_id: UUID
-    link_id: UUID
-    strategy_version_id: UUID
+    link_id: UUID | None
+    strategy_version_id: UUID | None
     bc_id: str
     advertiser_id: str
     connection_id: UUID
@@ -245,8 +245,9 @@ class FrozenAd(BaseModel):
     base_ad_no: int
     creative_no: int
     name: str
-    copy_id: UUID
+    copy_id: UUID | None
     text: str
+    text_variants: tuple[str, ...] = ()
     cta_option_ids: tuple[str, ...]
     material_ids: tuple[UUID, ...]
 

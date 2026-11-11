@@ -9,6 +9,7 @@ from app.core.errors import DomainError
 from app.core.pagination import Page, count_rows
 from app.modules.accounts.resolver import decode_cursor, encode_cursor
 
+from .copy_compile import copy_ad_texts
 from .creative_units import frozen_ad_creative_units
 from .preview_material_views import GroupMaterialView
 from .preview_materials import material_not_skipped
@@ -201,6 +202,7 @@ def ad_page(session, *, context, preview, unit, group_id: UUID, cursor, limit):
                 name=ad.name,
                 copy_id=ad.copy_id,
                 text=ad.text,
+                text_variants=copy_ad_texts(unit.scene_snapshot, ad.id),
                 cta_option_ids=tuple(ad.cta_option_ids),
                 material_ids=tuple(material_ids),
                 creative_units=creatives,

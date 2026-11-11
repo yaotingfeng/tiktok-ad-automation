@@ -3,13 +3,14 @@
 from collections.abc import Callable
 from uuid import UUID
 
-from app.integrations.tiktok.adapters.build_results import created_result
+from app.integrations.tiktok.adapters.build_results import created_result, observed_cta
 from app.integrations.tiktok.contracts.builds import (
     AdGroupStatus,
     BuildPage,
     BuildReadQuery,
     CreatedObject,
     CreateIntent,
+    CtaCreate,
 )
 from app.integrations.tiktok.contracts.common import McpBusinessResponse
 from app.integrations.tiktok.group_isolation import (
@@ -27,6 +28,19 @@ from app.modules.builds.request_compiler import (
 
 
 class McpBuildOperations:
+    def read_cta_portfolio(self, *, advertiser_id: str, portfolio_id: str) -> CtaCreate:
+        response = self._client.call(
+            operation="build.get_cta_portfolio",
+            advertiser_id=advertiser_id,
+            arguments={
+                "advertiser_id": advertiser_id,
+                "creative_portfolio_id": portfolio_id,
+            },
+        )
+        return observed_cta(
+            response=response, advertiser_id=advertiser_id, portfolio_id=portfolio_id
+        )
+
     def __init__(
         self,
         client: BoundMCPClient,

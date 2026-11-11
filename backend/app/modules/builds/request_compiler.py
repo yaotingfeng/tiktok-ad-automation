@@ -101,6 +101,8 @@ class _Url(FrozenModel):
 
 class _AdConfiguration(FrozenModel):
     call_to_action_id: Id
+    dark_post_status: Literal["ON", "OFF"] | None = None
+    product_info_enabled: Literal["NON_CATALOG"] | None = None
 
 
 class _AdBody(FrozenModel):
@@ -109,7 +111,7 @@ class _AdBody(FrozenModel):
     ad_name: Id
     operation_status: Literal["ENABLE", "DISABLE"]
     creative_list: tuple[_Creative, ...] = Field(min_length=1, max_length=50)
-    ad_text_list: tuple[_Text, ...] = Field(min_length=1, max_length=1)
+    ad_text_list: tuple[_Text, ...] = Field(min_length=1, max_length=5)
     landing_page_url_list: tuple[_Url, ...] = Field(min_length=1, max_length=1)
     ad_configuration: _AdConfiguration
 
@@ -203,6 +205,11 @@ def decode_observed_intent(kind: str, body: dict[str, object]) -> CreateIntent:
             identity_id=info.identity_id,
             identity_authorized_bc_id=info.identity_authorized_bc_id,
             text=ad.ad_text_list[0].ad_text,
+            text_variants=tuple(item.ad_text for item in ad.ad_text_list)
+            if len(ad.ad_text_list) > 1
+            else None,
+            dark_post_status=ad.ad_configuration.dark_post_status,
+            product_info_enabled=ad.ad_configuration.product_info_enabled,
             landing_page_url=ad.landing_page_url_list[0].landing_page_url,
             portfolio_id=ad.ad_configuration.call_to_action_id,
             assets=tuple(
@@ -291,9 +298,18 @@ def encode_intent(intent: CreateIntent) -> dict[str, object]:
                 }
                 for asset in intent.assets
             ],
-            "ad_text_list": [{"ad_text": intent.text}],
+            "ad_text_list": [
+                {"ad_text": text} for text in intent.text_variants or (intent.text,)
+            ],
             "landing_page_url_list": [{"landing_page_url": intent.landing_page_url}],
-            "ad_configuration": {"call_to_action_id": intent.portfolio_id},
+            "ad_configuration": {
+                "call_to_action_id": intent.portfolio_id,
+                **{
+                    key: getattr(intent, key)
+                    for key in ("dark_post_status", "product_info_enabled")
+                    if getattr(intent, key) is not None
+                },
+            },
         }
     elif isinstance(intent, CtaCreate):
         return {

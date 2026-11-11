@@ -72,6 +72,10 @@ class BuildDraft(SQLModel, table=True):
         ),
         CheckConstraint("revision > 0", name="ck_build_draft_revision"),
         CheckConstraint(
+            "COALESCE((strategy_version_id IS NOT NULL AND provider_connection_id IS NOT NULL AND application_id IS NOT NULL) OR (link_config->>'source_mode'='CAMPAIGN_COPY' AND strategy_version_id IS NULL AND provider_connection_id IS NULL AND application_id IS NULL),false)",
+            name="ck_draft_source_references",
+        ),
+        CheckConstraint(
             "targeting_override IS NULL OR jsonb_typeof(targeting_override) = 'object'",
             name="ck_build_draft_targeting_object",
         ),
@@ -105,11 +109,11 @@ class BuildDraft(SQLModel, table=True):
     )
     revision: int = 1
     status: str = "DRAFT"
-    strategy_version_id: UUID
-    provider_connection_id: UUID
+    strategy_version_id: UUID | None = None
+    provider_connection_id: UUID | None = None
     # 可编辑偏好与后代冻结路由分开；NULL 仅在新准备时解析 BC 默认。
     execution_connection_id: UUID | None = None
-    application_id: str = Field(max_length=255)
+    application_id: str | None = Field(default=None, max_length=255)
     link_config: dict[str, Any] = Field(
         default_factory=dict, sa_column=Column(JSONB, nullable=False)
     )

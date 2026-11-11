@@ -81,26 +81,31 @@ def ensure_scene_preparation(
     context: TenantContext,
     bc_id: str,
     advertiser_id: str,
-    link_id: UUID,
+    link_id: UUID | None,
     route: FrozenTikTokRoute,
     selected_identity: dict[str, Any] | None = None,
     media_kind: MediaKind = "VIDEO",
+    minis_id: str | None = None,
 ) -> ScenePreparation:
     """Local enqueue/reuse only; caller commits. No SDK or credential decryption."""
     require_tenant(
         session, actor_id=context.actor_id, tenant_id=context.tenant_id, action="build"
     )
     try:
-        scope = _scope(
-            session,
-            context=context,
-            bc_id=bc_id,
-            advertiser_id=advertiser_id,
-            link_id=link_id,
-            route=route,
-            lock=True,
-            media_kind=media_kind,
-        )
+        scope_args: dict[str, Any] = {
+            "context": context,
+            "bc_id": bc_id,
+            "advertiser_id": advertiser_id,
+            "route": route,
+            "lock": True,
+            "media_kind": media_kind,
+        }
+        if link_id is not None:
+            scope = _scope(session, link_id=link_id, **scope_args)
+        else:
+            if not minis_id:
+                raise DomainError("copy_minis_missing", "来源缺少实际小程序ID")
+            scope = _account_scope(session, minis_id=minis_id, **scope_args)
     except DomainError as error:
         return ScenePreparation(None, "blocked", error.code)
     now = datetime.now(UTC)
@@ -136,7 +141,9 @@ def ensure_scene_preparation(
         if not scope["minis_id"]:
             from .mini_selection import match_catalog_link
 
-            if match_catalog_link(session, context=context, link_id=link_id, job=job):
+            if link_id is not None and match_catalog_link(
+                session, context=context, link_id=link_id, job=job
+            ):
                 return ensure_scene_preparation(
                     session,
                     context=context,
@@ -146,6 +153,7 @@ def ensure_scene_preparation(
                     route=route,
                     selected_identity=selected_identity,
                     media_kind=media_kind,
+                    minis_id=minis_id,
                 )
             return ScenePreparation(job.id, "blocked", "minis_selection_required")
         result = read_scene_context(
@@ -157,6 +165,7 @@ def ensure_scene_preparation(
             route=route,
             selected_identity=selected_identity,
             media_kind=media_kind,
+            minis_id=minis_id,
         )
         if result.supported:
             return ScenePreparation(job.id, "ready")

@@ -14,7 +14,11 @@ from app.modules.builds.execution_models import ExecutionStep
 from app.modules.builds.preview_models import BuildPreview
 from app.modules.campaign_copies import service, tasks
 from app.modules.campaign_copies.models import CampaignCopyDraft
-from app.modules.campaign_copies.schemas import CopyPatchRequest, CopyRevisionRequest
+from app.modules.campaign_copies.schemas import (
+    CopyPatchRequest,
+    CopyRevisionRequest,
+    CopySubmitRequest,
+)
 from tests.modules.builds.test_campaign_copy_flow import (
     complete_offline_catalog as complete_offline_catalog,
 )
@@ -172,7 +176,7 @@ def test_direct_submitted_child_blocks_parent_edit_but_replay_stays_valid(ready_
         assert replay.submission_id == submission_id
 
 
-def test_source_rejects_known_mismatched_cta(copy_source):
+def test_history_mismatch_does_not_override_current_cta(copy_source):
     engine, context, _, _ = copy_source
     with Session(engine) as session, session.begin():
         cta = session.exec(
@@ -191,8 +195,8 @@ def test_source_rejects_known_mismatched_cta(copy_source):
             advertiser_id="account-A",
             campaign_id="source-CAMPAIGN-0",
         )
-        assert source["blockers"]
-        assert not source["snapshot"]
+        assert source["blockers"] == []
+        assert source["snapshot"]["cta_portfolio_id"] == "source-CTA-0"
 
 
 @pytest.mark.parametrize("winner", ["edit", "submit"])
@@ -351,3 +355,91 @@ def test_failed_retry_keeps_prepared_children_for_later_invalidation(
                 session, context=context, preview_id=old_child, request_id=uuid4()
             )
         assert error.value.code == "preview_not_frozen"
+
+
+def test_region_display_enrichment_does_not_invalidate_copy_source(
+    copy_source, monkeypatch
+):
+    from app.modules.builds.scene_job_models import SceneJob
+
+    engine, context, _, _ = copy_source
+    with Session(engine) as session, session.begin():
+        for job in session.exec(select(SceneJob)).all():
+            job.facts = {**job.facts, "regions": {}}
+            session.add(job)
+    engine, context, identity, payload = start_batch(copy_source, monkeypatch)
+    with Session(engine) as session, session.begin():
+        row = session.get(CampaignCopyDraft, identity)
+        assert row.rows[0]["source"]["targeting"] is None
+        for job in session.exec(select(SceneJob)).all():
+            job.facts = {
+                **job.facts,
+                "regions": {
+                    "locations": [
+                        {"region_code": "US", "location_id": "fixture-location"}
+                    ]
+                },
+            }
+            session.add(job)
+    tasks.process(
+        database_engine=engine,
+        tenant_id=context.tenant_id,
+        actor_id=context.actor_id,
+        payload=payload,
+    )
+    with Session(engine) as session, session.begin():
+        row = session.get(CampaignCopyDraft, identity)
+        assert row.status == "READY", row.error_code
+        service.submit(
+            session,
+            context=context,
+            draft_id=identity,
+            body=CopySubmitRequest(
+                request_id=uuid4(),
+                expected_revision=row.revision,
+                preview_digest=row.preview_digest,
+            ),
+        )
+
+
+def test_refresh_sources_upgrades_legacy_draft_and_preserves_saved_settings(
+    copy_source, monkeypatch
+):
+    from copy import deepcopy
+
+    engine, context, identity, _ = start_batch(copy_source, monkeypatch)
+    with Session(engine) as session, session.begin():
+        row = session.get(CampaignCopyDraft, identity)
+        items = deepcopy(row.rows)
+        items[0]["source"]["snapshot"]["version"] = 1
+        items[0]["configuration"]["budget"] = "250"
+        row.rows = items
+        row.status = "FAILED"
+        session.add(row)
+    request = CopyRevisionRequest(request_id=uuid4(), expected_revision=1)
+    with Session(engine) as session, session.begin():
+        row = service.refresh_sources(
+            session, context=context, draft_id=identity, body=request
+        )
+        assert row.status == "DRAFT" and row.revision == 2
+        assert row.rows[0]["source"]["snapshot"]["version"] == 2
+        assert row.rows[0]["configuration"]["budget"] == "250"
+        assert row.children == [] and row.preview_digest is None
+        assert (
+            service.refresh_sources(
+                session, context=context, draft_id=identity, body=request
+            ).revision
+            == 2
+        )
+
+
+def test_legacy_frozen_copy_requires_explicit_refresh_without_rewriting_it():
+    from app.modules.builds.copying import validate_copy_submission
+
+    with pytest.raises(DomainError) as error:
+        validate_copy_submission(
+            None,
+            context=None,
+            preview=SimpleNamespace(config={"campaign_copy_version": 1}),
+        )
+    assert error.value.code == "copy_source_contract_obsolete"

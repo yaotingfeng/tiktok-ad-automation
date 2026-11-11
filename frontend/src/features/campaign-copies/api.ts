@@ -72,7 +72,10 @@ export type CopyMutation =
         rows: CopyRowsPatch
       }
     }
-  | { kind: "preview"; body: { request_id: string; expected_revision: number } }
+  | {
+      kind: "preview" | "refresh-source"
+      body: { request_id: string; expected_revision: number }
+    }
   | {
       kind: "submit"
       body: {
@@ -147,7 +150,7 @@ export function readPending(key: string): CopyMutation | null {
       sessionStorage.getItem(key) || "null",
     )
     return value &&
-      ["save", "preview", "submit"].includes(value.kind) &&
+      ["save", "preview", "submit", "refresh-source"].includes(value.kind) &&
       typeof value.body?.request_id === "string"
       ? value
       : null
@@ -161,7 +164,7 @@ export function configurationError(rows: CopyRow[]) {
   for (const row of rows) {
     const config = row.configuration
     if (row.source.blockers.length)
-      return "来源存在无法继承的配置，请查看行内原因。"
+      return `${row.source.name}：${row.source.blockers.join("；")}`
     if (
       !config.target_advertiser_ids.length ||
       config.target_advertiser_ids.length > 100

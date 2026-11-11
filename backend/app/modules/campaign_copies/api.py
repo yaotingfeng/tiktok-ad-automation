@@ -80,6 +80,28 @@ def patch(
 
 
 @router.post(
+    "/{draft_id}/refresh-source",
+    response_model=CopyDraftPublic,
+    operation_id="campaign_copies-refresh-source",
+)
+def refresh_sources(
+    tenant_id: UUID,
+    draft_id: UUID,
+    body: CopyRevisionRequest,
+    session: SessionDep,
+    user: CurrentUser,
+) -> CopyDraftPublic:
+    context = require_tenant(
+        session, actor_id=user.id, tenant_id=tenant_id, action="build"
+    )
+    result = service.public(
+        service.refresh_sources(session, context=context, draft_id=draft_id, body=body)
+    )
+    session.commit()
+    return result
+
+
+@router.post(
     "/{draft_id}/preview",
     response_model=CopyDraftPublic,
     status_code=202,

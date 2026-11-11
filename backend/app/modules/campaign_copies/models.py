@@ -74,3 +74,40 @@ class CampaignCopyRequest(SQLModel, table=True):
     draft_id: UUID
     digest: str = Field(max_length=64)
     action: str = Field(max_length=16)
+
+
+class CopySourceFacts(SQLModel, table=True):
+    """当前来源配置的只读补充事实；不依赖任何历史搭建记录。"""
+
+    __tablename__ = "campaign_copy_source_facts"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["tenant_id", "bc_id"], ["tenant_bc.tenant_id", "tenant_bc.bc_id"]
+        ),
+        UniqueConstraint("tenant_id", "source_digest", name="uq_copy_source_facts"),
+        CheckConstraint(
+            "status IN ('PENDING','READY','FAILED')", name="ck_copy_source_facts_status"
+        ),
+        Index("ix_copy_source_facts_repair", "status", "repair_after", "id"),
+    )
+    id: UUID = Field(primary_key=True)
+    tenant_id: UUID
+    bc_id: str = Field(max_length=128)
+    actor_id: UUID = Field(foreign_key="user.id")
+    source_digest: str = Field(max_length=64)
+    source: dict[str, Any] = Field(sa_column=Column(JSONB, nullable=False))
+    facts: dict[str, Any] = Field(
+        default_factory=dict, sa_column=Column(JSONB, nullable=False)
+    )
+    status: str = "PENDING"
+    error_code: str | None = None
+    generation: int = 0
+    failures: int = 0
+    claim_token: UUID | None = None
+    claimed_until: datetime | None = Field(
+        default=None, sa_column=Column(DateTime(timezone=True))
+    )
+    dispatch_id: UUID | None = Field(default=None, foreign_key="pending_dispatch.id")
+    repair_after: datetime = Field(
+        default_factory=now, sa_column=Column(DateTime(timezone=True), nullable=False)
+    )

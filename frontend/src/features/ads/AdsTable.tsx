@@ -26,6 +26,7 @@ import {
   nameKeyFor,
   type ParentLink,
   rowOptimizationGoal,
+  rowBidStrategy,
   rowTargetRoas,
   unavailableReason,
 } from "./search"
@@ -70,8 +71,13 @@ const TARGET_ROAS: ConfigColumn = {
 }
 const OPTIMIZATION_GOAL: ConfigColumn = {
   key: "optimization_goal",
-  label: "优化目标",
+  label: "价值类型",
   render: (row) => ({ text: rowOptimizationGoal(row) ?? "—" }),
+}
+const BID_STRATEGY: ConfigColumn = {
+  key: "bid_strategy",
+  label: "竞价策略",
+  render: (row) => ({ text: rowBidStrategy(row) ?? "—" }),
 }
 
 /** 配置列不属于报表事实：系列看预算，广告组看预算与出价，广告看所属广告组的出价。 */
@@ -96,9 +102,10 @@ function configColumns(dimension: AdsDimension): ConfigColumn[] {
         },
         TARGET_ROAS,
         OPTIMIZATION_GOAL,
+        BID_STRATEGY,
       ]
     case "ad":
-      return [TARGET_ROAS, OPTIMIZATION_GOAL]
+      return [TARGET_ROAS, OPTIMIZATION_GOAL, BID_STRATEGY]
     default:
       return []
   }

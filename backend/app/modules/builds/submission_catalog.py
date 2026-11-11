@@ -47,7 +47,7 @@ def _scalar_count(session: Session, query: str, params: dict[str, Any]) -> int:
 
 METADATA = """
 SELECT s.id submission_id,coalesce(nullif(actor.full_name,''),actor.username) actor_name,
- st.name || ' v' || sv.number::text strategy_label,
+ CASE WHEN p.config->>'campaign_copy_version'='2' THEN '沿用来源配置' ELSE st.name || ' v' || sv.number::text END strategy_label,
  (SELECT string_agg(names.display_name,'、' ORDER BY names.display_name) FROM (
  SELECT DISTINCT pc.display_name FROM preview_drama d
  JOIN promotion_link l ON l.tenant_id=d.tenant_id AND l.id=d.link_id
@@ -55,8 +55,8 @@ SELECT s.id submission_id,coalesce(nullif(actor.full_name,''),actor.username) ac
  WHERE d.tenant_id=s.tenant_id AND d.preview_id=s.preview_id) names) provider_name
 FROM build_submission s JOIN "user" actor ON actor.id=s.actor_id
 JOIN build_preview p ON p.tenant_id=s.tenant_id AND p.id=s.preview_id
-JOIN strategy_version sv ON sv.tenant_id=p.tenant_id AND sv.id=p.strategy_version_id
-JOIN strategy st ON st.tenant_id=sv.tenant_id AND st.id=sv.strategy_id
+LEFT JOIN strategy_version sv ON sv.tenant_id=p.tenant_id AND sv.id=p.strategy_version_id
+LEFT JOIN strategy st ON st.tenant_id=sv.tenant_id AND st.id=sv.strategy_id
 """
 
 

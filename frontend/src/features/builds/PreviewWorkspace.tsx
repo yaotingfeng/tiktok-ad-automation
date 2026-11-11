@@ -1058,7 +1058,9 @@ function AdDetail({ ad }: { ad: FrozenAd }) {
         </div>
       )}
       <CopyField label="Ad 名称" value={ad.name} expanded />
-      <p className="whitespace-pre-wrap text-sm">{ad.text}</p>
+      <p className="whitespace-pre-wrap text-sm">
+        {ad.text_variants?.length ? ad.text_variants.join("\n") : ad.text}
+      </p>
       <p className="break-all text-xs">
         CTA：{ad.cta_option_ids.join("、") || "无 CTA"}
       </p>

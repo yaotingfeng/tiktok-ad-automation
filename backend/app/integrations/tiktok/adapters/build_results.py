@@ -2,7 +2,10 @@
 
 import re
 
-from app.integrations.tiktok.contracts.builds import BuildKind, CreatedObject
+from pydantic import ValidationError
+
+from app.core.errors import DomainError
+from app.integrations.tiktok.contracts.builds import BuildKind, CreatedObject, CtaCreate
 from app.integrations.tiktok.contracts.common import (
     CallEvidence,
     McpBusinessResponse,
@@ -16,6 +19,27 @@ ID_KEYS = {
     "AD": "smart_plus_ad_id",
     "CTA": "creative_portfolio_id",
 }
+
+
+def observed_cta(
+    *, response: McpBusinessResponse, advertiser_id: str, portfolio_id: str
+) -> CtaCreate:
+    """来源CTA从当前账户的实际portfolio读取，不能从历史文案或推荐值猜取。"""
+    data = response.data
+    if (
+        data.get("creative_portfolio_id") != portfolio_id
+        or data.get("creative_portfolio_type") != "CTA"
+        or data.get("advertiser_id", advertiser_id) != advertiser_id
+    ):
+        raise DomainError("copy_cta_unverified", "来源CTA详情身份不一致")
+    try:
+        return CtaCreate.model_validate(
+            {"advertiser_id": advertiser_id, "assets": data.get("portfolio_content")}
+        )
+    except ValidationError:
+        raise DomainError(
+            "copy_cta_unverified", "来源CTA详情缺少可核实的文案与资产"
+        ) from None
 
 
 def created_result(*, kind: BuildKind, response: McpBusinessResponse) -> CreatedObject:

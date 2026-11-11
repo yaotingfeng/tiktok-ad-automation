@@ -6,6 +6,7 @@ from uuid import uuid4
 import pytest
 from pydantic import ValidationError
 
+from app.modules.accounts.routing import freeze_route
 from app.modules.campaign_copies.schemas import CopyConfiguration, CopyPatchRequest
 
 
@@ -73,11 +74,27 @@ def queue_fixture(session, context, intent, monkeypatch):
         "budget_strategy": "SERIES",
         "bid_strategy": "TARGET_ROAS",
         "materials": [
-            {"material_id": material, "file_name": "source.mp4", "media_type": "VIDEO"}
+            {
+                "material_id": material,
+                "file_name": "source.mp4",
+                "media_type": "VIDEO",
+                "video_id": "source-video",
+                "image_id": "source-cover",
+            }
         ],
         "targeting": None,
         "blockers": [],
-        "snapshot": {"private_provenance": "not-public"},
+        "snapshot": {
+            "version": 2,
+            "tenant_id": str(context.tenant_id),
+            "bc_id": intent["bc_id"],
+            "source_route": freeze_route(
+                session, context=context, bc_id=intent["bc_id"]
+            ).model_dump(mode="json"),
+            "source_digest": "a" * 64,
+            "cta_portfolio_id": "source-cta",
+            "private_current_source": "not-public",
+        },
     }
     monkeypatch.setattr(
         service,
@@ -352,7 +369,13 @@ def _committed_queue(engine, context, monkeypatch):
         "budget_strategy": "SERIES",
         "bid_strategy": "TARGET_ROAS",
         "materials": [
-            {"material_id": material, "file_name": "source.mp4", "media_type": "VIDEO"}
+            {
+                "material_id": material,
+                "file_name": "source.mp4",
+                "media_type": "VIDEO",
+                "video_id": "source-video",
+                "image_id": "source-cover",
+            }
         ],
         "targeting": None,
         "blockers": [],
@@ -377,6 +400,16 @@ def _committed_queue(engine, context, monkeypatch):
     with Session(engine) as session, session.begin():
         intent = create_intent(session, context)
         account(session, context)
+        source["snapshot"] = {
+            "version": 2,
+            "tenant_id": str(context.tenant_id),
+            "bc_id": intent["bc_id"],
+            "source_route": freeze_route(
+                session, context=context, bc_id=intent["bc_id"]
+            ).model_dump(mode="json"),
+            "source_digest": "a" * 64,
+            "cta_portfolio_id": "source-cta",
+        }
         row = service.create(
             session,
             context=context,

@@ -4,9 +4,10 @@ from copy import deepcopy
 from datetime import UTC, datetime
 from decimal import Decimal
 from types import SimpleNamespace
+from typing import Any, NoReturn
 from uuid import UUID, uuid5
 
-from sqlalchemy import text
+from sqlalchemy import func
 from sqlmodel import Session, select
 
 from app.core.errors import DomainError
@@ -18,7 +19,7 @@ from app.modules.materials.readiness import get_material_readiness
 from app.modules.tenants.permissions import require_tenant
 
 from .copy_compile import COPY_KEY, group_setting, observed_body
-from .copy_source import digest, load_copy_source
+from .copy_source import digest, fingerprint, load_copy_source
 from .creative_units import creative_content_digest
 from .models import BuildDraft
 from .preview_models import (
@@ -43,7 +44,7 @@ from .targeting import apply_targeting
 from .targeting_schemas import AudienceTargeting
 
 
-def _fail(code, message):
+def _fail(code: str, message: str) -> NoReturn:
     raise DomainError(code, message)
 
 
@@ -119,7 +120,7 @@ def create_copy_preview(
         session, actor_id=context.actor_id, tenant_id=context.tenant_id, action="build"
     )
     snapshot = source.get("snapshot", {})
-    if source.get("blockers") or snapshot.get("version") != 1:
+    if source.get("blockers") or snapshot.get("version") != 2:
         _fail("copy_source_blocked", "来源存在未解决的问题，不能生成复制预览")
     if (snapshot.get("tenant_id"), snapshot.get("bc_id")) != (
         str(context.tenant_id),
@@ -131,9 +132,12 @@ def create_copy_preview(
         or not 1 <= ordinal <= configuration["copies"]
     ):
         _fail("copy_scope_mismatch", "副本不在已选择账户和份数范围内")
-    session.execute(
-        text("SELECT pg_advisory_xact_lock(hashtextextended(:key,0))"),
-        {"key": f"copy-child:{context.tenant_id}:{request_id}"},
+    session.exec(
+        select(
+            func.pg_advisory_xact_lock(
+                func.hashtextextended(f"copy-child:{context.tenant_id}:{request_id}", 0)
+            )
+        )
     )
     intent_digest = digest([source, configuration, advertiser_id, ordinal])
     draft_id, preview_id = uuid5(request_id, "draft"), uuid5(request_id, "preview")
@@ -198,9 +202,10 @@ def create_copy_preview(
             id=draft_id,
             tenant_id=context.tenant_id,
             bc_id=bc_id,
-            strategy_version_id=UUID(snapshot["strategy_version_id"]),
-            provider_connection_id=UUID(snapshot["provider_connection_id"]),
-            application_id=snapshot["application_id"],
+            strategy_version_id=None,
+            provider_connection_id=None,
+            application_id=None,
+            link_config={"source_mode": "CAMPAIGN_COPY"},
             execution_connection_id=route.connection_id,
             created_by=context.actor_id,
             request_id=request_id,
@@ -222,7 +227,8 @@ def create_copy_preview(
         context=context,
         bc_id=bc_id,
         advertiser_id=advertiser_id,
-        link_id=UUID(snapshot["link_id"]),
+        link_id=None,
+        minis_id=snapshot["minis_id"],
         route=route,
         selected_identity=snapshot["identity"],
         media_kind="VIDEO",
@@ -240,14 +246,18 @@ def create_copy_preview(
         context=context,
         bc_id=bc_id,
         advertiser_id=advertiser_id,
-        link_id=UUID(snapshot["link_id"]),
+        link_id=None,
+        minis_id=snapshot["minis_id"],
         route=route,
         selected_identity=snapshot["identity"],
         media_kind="VIDEO",
     )
     if not scene.supported:
         _fail("copy_scene_unavailable", "目标账户投放条件未通过核验")
-    expected_contents = {entry["asset_content"] for entry in snapshot["cta_contents"]}
+    from app.modules.campaign_copies.source_facts import ensure_source_facts
+
+    facts = ensure_source_facts(session, context=context, source=source)
+    expected_contents = {entry["asset_content"] for entry in facts["cta_contents"]}
     recommendations = scene.cta_fields.get("recommend_assets", [])
     matched = [
         entry
@@ -295,7 +305,11 @@ def create_copy_preview(
     # 名称超限须显示阻断，不能截断来源名称使多个副本发生碰撞。
     if name_reasons(campaign_name, "campaign", scene.to_snapshot()):
         _fail("copy_name_invalid", "复制系列名称超过目标账户限制")
-    scope = {"tenant_id": context.tenant_id, "preview_id": preview_id, "bc_id": bc_id}
+    scope: dict[str, Any] = {
+        "tenant_id": context.tenant_id,
+        "preview_id": preview_id,
+        "bc_id": bc_id,
+    }
     drama_id = UUID(snapshot["drama_id"])
     unit_id = uuid5(request_id, "unit")
     group_plans, contract_groups = [], {}
@@ -352,7 +366,7 @@ def create_copy_preview(
     bid_strategy = "TARGET_ROAS" if bids else "HIGHEST_VALUE"
     config = {
         "currency": access.currency,
-        "campaign_copy_version": 1,
+        "campaign_copy_version": 2,
         "copy_group_settings": [
             group_setting(
                 {**contract_groups[str(group_id)], "adgroup_name": group_name},
@@ -399,7 +413,7 @@ def create_copy_preview(
         PreviewDrama(
             **scope,
             drama_id=drama_id,
-            link_id=UUID(snapshot["link_id"]),
+            link_id=None,
             **{
                 key: snapshot[key]
                 for key in (
@@ -417,15 +431,24 @@ def create_copy_preview(
     scene_snapshot = scene.to_snapshot()
     scene_snapshot.update(budget_strategy=budget_strategy, bid_strategy=bid_strategy)
     scene_snapshot[COPY_KEY] = {
-        "version": 1,
+        "version": 2,
+        "minis_id": snapshot["minis_id"],
         "campaign": campaign,
         "groups": contract_groups,
+        "ads": {
+            str(uuid5(request_id, f"ad:{ad['remote_id']}")): {
+                "ad_text_list": ad["body"]["ad_text_list"],
+                "ad_configuration": ad["body"]["ad_configuration"],
+            }
+            for _, _, _, ads in group_plans
+            for ad, _ in ads
+        },
         "delivery_config": delivery,
         "source_digest": snapshot["source_digest"],
         "source_campaign_id": source["campaign_id"],
         "source_advertiser_id": source["advertiser_id"],
         "source_route": snapshot["source_route"],
-        "source_fingerprint": digest(source),
+        "source_fingerprint": fingerprint(source),
     }
     unit = BuildUnit(
         **scope,
@@ -512,7 +535,7 @@ def create_copy_preview(
                     base_ad_no=ad_no,
                     creative_no=1,
                     name=ad["body"]["ad_name"] + suffix,
-                    copy_id=UUID(ad["copy_id"]),
+                    copy_id=None,
                     text=ad["body"]["ad_text_list"][0]["ad_text"],
                     cta_option_ids=cta_ids,
                 )
@@ -546,8 +569,13 @@ def validate_copy_submission(
     session: Session, *, context, preview: BuildPreview
 ) -> None:
     """原提交入口也复核复制来源，防止绕过父批次直接提交过期子预览。"""
-    if preview.config.get("campaign_copy_version") != 1:
+    if preview.config.get("campaign_copy_version") not in {1, 2}:
         return
+    if preview.config.get("campaign_copy_version") == 1:
+        _fail(
+            "copy_source_contract_obsolete",
+            "复制来源读取方式已更新，请回到批量复制重新读取来源",
+        )
     units = session.exec(
         select(BuildUnit)
         .where(
@@ -558,7 +586,7 @@ def validate_copy_submission(
     if len(units) != 1:
         _fail("copy_contract_invalid", "复制子预览层级不完整")
     contract = units[0].scene_snapshot.get(COPY_KEY, {})
-    if contract.get("version") != 1 or not all(
+    if contract.get("version") not in {1, 2} or not all(
         contract.get(key)
         for key in (
             "source_route",
@@ -583,5 +611,5 @@ def validate_copy_submission(
         advertiser_id=contract["source_advertiser_id"],
         campaign_id=contract["source_campaign_id"],
     )
-    if current["blockers"] or digest(current) != contract["source_fingerprint"]:
+    if current["blockers"] or fingerprint(current) != contract["source_fingerprint"]:
         _fail("copy_source_changed", "来源系列或关联已改变，请重新生成复制预览")

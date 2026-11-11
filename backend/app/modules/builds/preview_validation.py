@@ -2,6 +2,7 @@
 
 import unicodedata
 from decimal import Decimal, InvalidOperation
+from types import SimpleNamespace
 from typing import Any
 
 from app.modules.builds.scene_schemas import CREATIVE_COMPILER_REVISION, SceneContext
@@ -53,7 +54,7 @@ def final_ad_count_exceeded(
 
 
 def scene_reasons(
-    config: StrategyConfig,
+    config: StrategyConfig | SimpleNamespace,
     scene: SceneContext,
     currency: str,
     *,

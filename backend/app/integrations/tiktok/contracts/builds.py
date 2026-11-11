@@ -194,6 +194,15 @@ class AdGroupObservedFacts(FrozenModel):
     schedule_type: Literal["SCHEDULE_FROM_NOW", "SCHEDULE_START_END"] = (
         "SCHEDULE_FROM_NOW"
     )
+    # 复制保留来源真实归因、投放时段与互动设置，不借新建模板覆盖。
+    dayparting: str | None = None
+    attribution_event_count: str | None = None
+    click_attribution_window: str | None = None
+    view_attribution_window: str | None = None
+    engaged_view_attribution_window: str | None = None
+    comment_disabled: bool | None = None
+    share_disabled: bool | None = None
+    video_download_disabled: bool | None = None
 
     @model_validator(mode="before")
     @classmethod
@@ -294,6 +303,11 @@ class AdCreate(IdentityFields):
     adgroup_id: Id
     name: Id
     text: Id = Field(max_length=100)
+    text_variants: tuple[Annotated[Id, Field(max_length=100)], ...] | None = Field(
+        default=None, min_length=1, max_length=5
+    )
+    dark_post_status: Literal["ON", "OFF"] | None = None
+    product_info_enabled: Literal["NON_CATALOG"] | None = None
     landing_page_url: Id
     portfolio_id: Id
     assets: tuple[CreativeAsset, ...] = Field(min_length=1, max_length=50)
@@ -301,6 +315,8 @@ class AdCreate(IdentityFields):
 
     @model_validator(mode="after")
     def homogeneous_format(self) -> Self:
+        if self.text_variants is not None and self.text_variants[0] != self.text:
+            raise ValueError("primary text must match the first actual text variant")
         if len({asset.kind for asset in self.assets}) != 1:
             raise ValueError("one ad must use one explicit creative format")
         return self
@@ -371,6 +387,9 @@ class AdGroupStatus(FrozenModel):
 
 
 class BuildOperations(Protocol):
+    def read_cta_portfolio(
+        self, *, advertiser_id: str, portfolio_id: str
+    ) -> CtaCreate: ...
     def disable_adgroup(
         self, *, advertiser_id: str, adgroup_id: str
     ) -> McpBusinessResponse: ...

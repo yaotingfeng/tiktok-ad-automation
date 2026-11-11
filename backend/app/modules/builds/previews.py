@@ -94,6 +94,7 @@ from app.modules.strategies.service import get_copies, get_version
 from app.modules.strategies.structure import estimate_batch_structure, plan_structure
 from app.modules.tenants.permissions import require_tenant
 
+from .copy_compile import copy_ad_texts
 from .creative_units import (
     preview_contract,
     require_freeze_ready,
@@ -573,6 +574,7 @@ def _snapshot_drama(
         frozen = PreviewDrama(
             **_scope(preview),
             drama_id=drama.drama_id,
+            provider_drama_id=drama.drama_id,
             link_id=drama.link_id,
             title=drama.title,
             provider_pinyin=connection.display_name
@@ -1727,7 +1729,7 @@ def get_preview_units(
                 advertiser_id=u.advertiser_id,
                 currency=u.currency,
                 budget=Decimal(preview.config["copy_daily_budget_sum"])
-                if preview.config.get("campaign_copy_version") == 1
+                if preview.config.get("campaign_copy_version") in {1, 2}
                 else preview.budget,
                 campaign_name=u.campaign_name,
                 readiness=cast(Readiness, u.readiness),
@@ -1755,7 +1757,7 @@ def get_preview_units(
                 )
                 + (
                     "；本副本日预算合计，各组保留独立设置"
-                    if preview.config.get("campaign_copy_version") == 1
+                    if preview.config.get("campaign_copy_version") in {1, 2}
                     else f"；{budget_unit_label(budget_strategy)}"
                 )
                 + f"；竞价策略 {bid_strategy_label(bid_strategy)}",
@@ -2128,6 +2130,7 @@ def get_frozen_groups(
                         name=a.name,
                         copy_id=a.copy_id,
                         text=a.text,
+                        text_variants=copy_ad_texts(unit.scene_snapshot, a.id),
                         cta_option_ids=tuple(a.cta_option_ids),
                         material_ids=tuple(
                             ad_material_map.get(

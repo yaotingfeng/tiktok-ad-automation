@@ -157,6 +157,11 @@ def _current_scene(
         bc_id=frozen.bc_id,
         advertiser_id=frozen.advertiser_id,
         link_id=frozen.link_id,
+        **(
+            {"minis_id": frozen.scene_snapshot["campaign_copy"]["minis_id"]}
+            if frozen.scene_snapshot.get("campaign_copy", {}).get("version") == 2
+            else {}
+        ),
         route=load_preview_route(
             session, context=context, preview_id=frozen.preview_id
         ),
@@ -384,6 +389,13 @@ def prepare_request(
                 for item in mappings
             ]
         resolved = ad_assets(assets, text=ad.text, url=frozen.url, identity=identity)
+        copy_contract = frozen.scene_snapshot.get("campaign_copy", {})
+        if copy_contract.get("version") == 2:
+            source_ad = copy_contract.get("ads", {}).get(str(ad.id))
+            if source_ad is None:
+                raise DomainError("copy_contract_invalid", "复制缺少来源广告文案及设置")
+            resolved["ad_text_list"] = source_ad["ad_text_list"]
+            resolved["ad_configuration"] = dict(source_ad["ad_configuration"])
         cta = session.exec(
             select(ExecutionStep).where(
                 ExecutionStep.tenant_id == step.tenant_id,
@@ -394,7 +406,7 @@ def prepare_request(
         ).one()
         if cta.status != "SUCCEEDED" or not cta.remote_id:
             raise DomainError("cta_not_ready", "CTA 尚未准备完成", retryable=True)
-        resolved["ad_configuration"] = {"call_to_action_id": cta.remote_id}
+        resolved.setdefault("ad_configuration", {})["call_to_action_id"] = cta.remote_id
         fixed.update(
             adgroup_id=_parent(session, step),
             ad_name=ad.name,
@@ -725,6 +737,12 @@ def _prepare_scene_dependency(
                 bc_id=frozen.bc_id,
                 advertiser_id=frozen.advertiser_id,
                 link_id=frozen.link_id,
+                **(
+                    {"minis_id": frozen.scene_snapshot["campaign_copy"]["minis_id"]}
+                    if frozen.scene_snapshot.get("campaign_copy", {}).get("version")
+                    == 2
+                    else {}
+                ),
                 route=claim.route,
                 media_kind=frozen.media_kind,
                 selected_identity={
