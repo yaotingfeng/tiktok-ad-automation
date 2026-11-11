@@ -1,0 +1,81 @@
+erDiagram
+  DIR_AD ||--|| ad_object : "remote_id = smart_plus_ad_id"
+  DIR_CREATIVE }|--|| ad_material_reference : "creative_ids 包含 smart_plus_creative_id"
+  RPT_AD_V2 ||--|| ad_report_day : "ad_id = ad_id_v2"
+  RPT_BREAKDOWN ||--|| material_report_day : "main_material_id"
+  RPT_OVERVIEW ||--o{ material_post_link : "补链: smart_plus_ad_id + ad_material_id"
+  RPT_BREAKDOWN ||..o{ material_post_link : "旧帖: 按广告筛选定位(推断)"
+  ad_object ||--o{ ad_report_day : "remote_id = ad_id"
+  ad_object ||--o{ ad_material_reference : "remote_id = ad_remote_id"
+  material_report_day }o--o{ material_post_link : "main_material_id + type"
+  material_post_link }o..|| ad_object : "ad_remote_id (推断)"
+  material_post_link }o--o| ad_material_reference : "ad_remote_id + ad_material_id"
+  ad_material_reference }o--o| material_file : "local_material_id"
+
+  DIR_AD["目录-广告 DIR_AD"] {
+    string smart_plus_ad_id PK "广告ID"
+    string adgroup_id FK "广告组ID"
+  }
+  DIR_CREATIVE["目录-创意 DIR_CREATIVE"] {
+    string smart_plus_creative_id PK "创意ID"
+    string ad_material_id "广告内素材ID"
+    string video_id "视频ID(VID)"
+    string web_uri "图片ID"
+  }
+  RPT_AD_V2["基础报表-广告级 RPT_AD_V2"] {
+    string ad_id_v2 FK "广告ID"
+    date stat_time_day "日期"
+  }
+  RPT_BREAKDOWN["素材拆分报表 RPT_BREAKDOWN"] {
+    string main_material_id FK "主素材ID"
+    date stat_time_day "日期"
+  }
+  RPT_OVERVIEW["素材概览报表 RPT_OVERVIEW"] {
+    string smart_plus_ad_id FK "广告ID"
+    string main_material_id FK "主素材ID"
+    string ad_material_id FK "广告内素材ID"
+  }
+  ad_object["本地-广告对象 ad_object"] {
+    uuid tenant_id PK "租户ID"
+    string advertiser_id PK "账户ID"
+    string kind PK "层级 campaign/adgroup/ad"
+    string remote_id PK "平台ID"
+    string parent_remote_id FK "上级ID"
+  }
+  ad_report_day["本地-广告日报 ad_report_day"] {
+    uuid tenant_id PK "租户ID"
+    string advertiser_id PK "账户ID"
+    date stat_date PK "日期"
+    string ad_id PK "广告ID(存的是ad_id_v2)"
+    string adgroup_id FK "广告组ID"
+    string campaign_id FK "系列ID"
+  }
+  ad_material_reference["本地-广告素材引用 ad_material_reference"] {
+    uuid id PK "本地主键"
+    string advertiser_id "账户ID"
+    string ad_remote_id FK "广告ID"
+    string ad_material_id "广告内素材ID"
+    string platform_material_id "VID 或 图片ID"
+    string material_type "VIDEO/IMAGE"
+    jsonb creative_ids "创意ID列表"
+    uuid local_material_id FK "本地素材文件"
+  }
+  material_report_day["本地-素材日报 material_report_day"] {
+    uuid tenant_id PK "租户ID"
+    string advertiser_id PK "账户ID"
+    date stat_date PK "日期"
+    string main_material_id PK "主素材ID(帖子或MID)"
+    string main_material_type "主素材类型"
+  }
+  material_post_link["本地-帖子关联 material_post_link"] {
+    uuid tenant_id PK "租户ID"
+    string advertiser_id PK "账户ID"
+    string main_material_id PK "主素材ID"
+    string ad_remote_id PK "所属广告ID"
+    string main_material_type "主素材类型"
+    string ad_material_id "广告内素材ID"
+    string platform_material_id "VID(补链写入)"
+  }
+  material_file["本地-素材文件 material_file"] {
+    uuid id PK "本地素材文件ID"
+  }
