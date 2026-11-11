@@ -107,6 +107,17 @@ class SyncSchedule(SQLModel, table=True):
             "tenant_id",
             postgresql_where=text("active IS TRUE"),
         ),
+        # 每租户/接口/工作类按服务年龄找首个就绪头，避免到期索引扫完后再排序。
+        Index(
+            "ix_sync_schedule_service_age",
+            "tenant_id",
+            "physical_endpoint",
+            "work_class",
+            text("last_dispatched_at ASC NULLS FIRST"),
+            text("oldest_pending_at ASC NULLS FIRST"),
+            postgresql_include=["scope_id", "next_eligible_at", "leased_until"],
+            postgresql_where=text("active IS TRUE"),
+        ),
     )
     scope_id: UUID = Field(primary_key=True)
     work_class: str = Field(primary_key=True, max_length=32)
