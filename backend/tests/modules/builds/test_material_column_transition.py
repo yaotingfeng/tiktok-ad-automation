@@ -31,17 +31,19 @@ from tests.modules.builds.test_created_directory import (
 
 
 def _column_shape(session, retained):
-    # 当前 head 已删列；中间版本仅给旧列添加空数组默认值，不改历史内容。
-    assert "creative_ids" not in {
+    # 原生建表与已迁移到0117的库分别从无列/保留列开始；显式构造两种物理形态。
+    exists = "creative_ids" in {
         column["name"]
         for column in inspect(session.connection()).get_columns("ad_material_reference")
     }
-    if retained:
+    if retained and not exists:
         session.execute(
             text("""ALTER TABLE ad_material_reference
             ADD COLUMN creative_ids jsonb NOT NULL DEFAULT '[]'::jsonb
             CHECK (jsonb_typeof(creative_ids)='array')""")
         )
+    elif not retained and exists:
+        session.execute(text("ALTER TABLE ad_material_reference DROP COLUMN creative_ids"))
 
 
 @pytest.mark.parametrize("retained", [True, False], ids=["retained", "dropped"])
