@@ -5002,3 +5002,10 @@ c34b生产快速切换约3分28秒完成、锁释放/CI恢复；五分钟仍4.88
 ### 创意回填身份修正
 
 修正同父广告/资产的缺失MID被误当冲突，可审计补全与恢复纯弱冲突；真实冲突、版本/观察及live状态保护保留。可限定报表实际引用的创意优先回填，不截断轮播。测试先红后绿：全新PG/Redis88项通过、Ruff/mypy/ty通过、独立审查通过；更广ads回归68项完成后主动中止于未改动的素材引用批量SQL，不声称全量通过。生产A仍运行，B切换仍待真实回补对账。
+
+## 2026-11-11 广告报表合并改名入口
+
+- 按用户要求将“批量改名”和“按表格改名”合并为一个“批量改名”按钮。有勾选时冻结选择并默认查找替换；未勾选时直接打开表格粘贴，不请求空选择冻结。移除旧的双入口动作参数。
+- 查找替换、前后缀只修改冻结的勾选；无勾选时显示提示并禁用提交。表格粘贴明确按输入 ID 解析，不受勾选范围限制；保留租户/BC及只读权限边界、异常行记录和原后台任务链路。
+- 本地验证：在 `frontend/` 执行 `npx --yes --package bun -c 'PLAYWRIGHT_PORT=5197 node ../node_modules/@playwright/test/cli.js test tests/ad-management.spec.ts --project=workspace --grep "改名|viewer 隐藏|数值只提交|启停点击直接" --workers=2 --reporter=line'`，7项通过；`npx --yes bun run build` 的类型检查、正式版与体验版构建通过；改动4个前端文件的定向 Biome 格式化和 `git diff --check` 通过。
+- 本节与 `ads-reporting: unify bulk campaign rename entry` 为同一聚焦本地提交。未推送、发布或进行真实广告写入；保留本轮前已有的未跟踪编译缓存。

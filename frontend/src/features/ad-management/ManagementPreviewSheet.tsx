@@ -35,7 +35,7 @@ import {
 export type ManagementAction =
   | { field: "status"; value: "ENABLE" | "DISABLE" }
   | { field: "roas" | "budget" }
-  | { field: "name"; entry: "selection" | "paste" }
+  | { field: "name" }
 
 type Props = {
   tenantId: string
@@ -63,7 +63,6 @@ const MODE_OPTIONS: Array<{ value: MutationMode; label: string }> = [
 export function managementActionKey(action: ManagementAction | null) {
   if (!action) return ""
   if (action.field === "status") return `status:${action.value}`
-  if (action.field === "name") return `name:${action.entry}`
   return action.field
 }
 
@@ -153,12 +152,11 @@ export function ManagementPreviewSheet({
   const [mode, setMode] = useState<MutationMode>("set")
   const [value, setValue] = useState("")
   const [draft, setDraft] = useState(() =>
-    emptyRenameDraft(
-      action?.field === "name" && action.entry === "paste"
-        ? "explicit"
-        : "replace",
-    ),
+    emptyRenameDraft(selection ? "replace" : "explicit"),
   )
+  // 规则改名仅操作冻结的勾选；表格粘贴始终按粘贴的 ID 重新解析目标。
+  const needsSelection =
+    action?.field === "name" && draft.kind !== "explicit" && !selection
   const rule = useMemo(() => renameRuleFrom(draft), [draft])
   // 同一提交遇到网络超时复用幂等键；参数改变才分配新键。
   const attempt = useRef<{
@@ -185,6 +183,7 @@ export function ManagementPreviewSheet({
   const submit = useMutation({
     mutationFn: async () => {
       if (!mutation) throw new Error("请填写完整操作参数")
+      if (needsSelection) throw new Error("请先在列表勾选要改名的推广系列")
       const signature = JSON.stringify({
         bcId,
         selection: selection?.selection_id,
@@ -318,7 +317,16 @@ export function ManagementPreviewSheet({
             </div>
           )}
           {action?.field === "name" && (
-            <RenameFields value={draft} onChange={setDraft} />
+            <>
+              <p className="text-sm text-muted-foreground">
+                {draft.kind === "explicit"
+                  ? "按表格中的推广系列 ID 改名，不受列表勾选范围限制。"
+                  : selection
+                    ? "仅修改本次勾选的推广系列。"
+                    : "请先在列表勾选要改名的推广系列，或切换到“表格粘贴”按 ID 改名。"}
+              </p>
+              <RenameFields value={draft} onChange={setDraft} />
+            </>
           )}
           {submissionError && (
             <Alert variant="destructive">
@@ -332,7 +340,7 @@ export function ManagementPreviewSheet({
         </div>
         <SheetFooter>
           <Button
-            disabled={!mutation || submit.isPending}
+            disabled={!mutation || needsSelection || submit.isPending}
             onClick={startSubmit}
           >
             {submit.isPending

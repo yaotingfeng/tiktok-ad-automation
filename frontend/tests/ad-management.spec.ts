@@ -353,6 +353,9 @@ test.describe("广告管理工作台", () => {
     await managementBoundary(page, { viewer: true })
     await page.goto(`/tenants/${TENANT}/ads?bc_id=${BC_A}`)
     await page.getByRole("tab", { name: "系列", exact: true }).click()
+    await expect(
+      page.getByRole("button", { name: "批量改名", exact: true }),
+    ).toHaveCount(0)
     await page
       .getByRole("checkbox", { name: "选择 嘉书-总裁归来-测试" })
       .check()
@@ -722,15 +725,119 @@ test("提交失败重试保留幂等键", async ({ page }) => {
   expect(bodies[0]?.idempotency_key).toBe(bodies[1]?.idempotency_key)
 })
 
-test("改名参数直接提交且表格异常行随任务保存", async ({ page }) => {
+test("未勾选也只有一个改名入口，规则改名需勾选、表格粘贴可直接提交", async ({
+  page,
+}) => {
+  const boundary = await managementBoundary(page)
+  const selections: string[] = []
+  page.on("request", (request) => {
+    if (new URL(request.url()).pathname.endsWith("/ad-selections"))
+      selections.push(request.url())
+  })
+  await page.goto(`/tenants/${TENANT}/ads?bc_id=${BC_A}`)
+  await expect(
+    page.getByRole("button", { name: "批量改名", exact: true }),
+  ).toHaveCount(0)
+  await page.getByRole("tab", { name: "系列", exact: true }).click()
+  await expect(
+    page.getByRole("button", { name: "批量改名", exact: true }),
+  ).toHaveCount(1)
+  await expect(
+    page.getByRole("button", { name: "按表格改名", exact: true }),
+  ).toHaveCount(0)
+  await page.getByRole("button", { name: "批量改名", exact: true }).click()
+  await expect(
+    page.getByRole("tab", { name: "表格粘贴", exact: true }),
+  ).toHaveAttribute("data-state", "active")
+  await page.getByRole("tab", { name: "查找替换", exact: true }).click()
+  await page.getByRole("textbox", { name: "查找", exact: true }).fill("测试")
+  await expect(
+    page.getByText(
+      "请先在列表勾选要改名的推广系列，或切换到“表格粘贴”按 ID 改名。",
+    ),
+  ).toBeVisible()
+  await expect(
+    page.getByRole("button", { name: "提交管理任务" }),
+  ).toBeDisabled()
+  await page.getByRole("tab", { name: "前缀后缀", exact: true }).click()
+  await page.getByRole("textbox", { name: "前缀", exact: true }).fill("【停】")
+  await expect(
+    page.getByRole("button", { name: "提交管理任务" }),
+  ).toBeDisabled()
+  await page.getByRole("tab", { name: "表格粘贴", exact: true }).click()
+  await page
+    .getByRole("textbox", { name: "粘贴推广系列 ID 和新名称" })
+    .fill("1700000000000000001\t新名称")
+  await page.getByRole("button", { name: "提交管理任务" }).click()
+  await expect.poll(() => boundary.directBodies.length).toBe(1)
+  expect(selections).toEqual([])
+  expect(boundary.renameSelectionBodies).toHaveLength(1)
+  expect(boundary.renameSelectionBodies[0]).toMatchObject({
+    bc_id: BC_A,
+    rows: [{ campaign_id: "1700000000000000001", new_name: "新名称" }],
+  })
+})
+
+for (const kind of ["replace", "affix"] as const) {
+  test(`勾选后统一改名入口默认查找替换，${kind}使用勾选范围`, async ({
+    page,
+  }) => {
+    const boundary = await managementBoundary(page)
+    await selectCampaign(page)
+    await expect(
+      page.getByRole("button", { name: "批量改名", exact: true }),
+    ).toHaveCount(1)
+    await expect(
+      page.getByRole("button", { name: "按表格改名", exact: true }),
+    ).toHaveCount(0)
+    await page.getByRole("button", { name: "批量改名", exact: true }).click()
+    await expect(
+      page.getByRole("tab", { name: "查找替换", exact: true }),
+    ).toHaveAttribute("data-state", "active")
+    if (kind === "replace") {
+      await page
+        .getByRole("textbox", { name: "查找", exact: true })
+        .fill("测试")
+      await page
+        .getByRole("textbox", { name: "替换为", exact: true })
+        .fill("放量")
+    } else {
+      await page.getByRole("tab", { name: "前缀后缀", exact: true }).click()
+      await page
+        .getByRole("textbox", { name: "前缀", exact: true })
+        .fill("【停】")
+    }
+    await page.getByRole("button", { name: "提交管理任务" }).click()
+    await expect.poll(() => boundary.directBodies.length).toBe(1)
+    expect(boundary.renameSelectionBodies).toEqual([])
+    expect(boundary.directBodies[0]).toMatchObject({
+      bc_id: BC_A,
+      selection_id: selectionId,
+      mutation: {
+        field: "name",
+        mode: "set",
+        rename:
+          kind === "replace"
+            ? { kind, find: "测试", replace_with: "放量" }
+            : { kind, prefix: "【停】", suffix: "" },
+      },
+    })
+  })
+}
+
+test("勾选后可切换表格改名，按粘贴ID解析且异常行随任务保存", async ({
+  page,
+}) => {
   const boundary = await managementBoundary(page)
   await selectCampaign(page)
-  await page.getByRole("button", { name: "按表格改名", exact: true }).click()
+  await page.getByRole("button", { name: "批量改名", exact: true }).click()
+  await page.getByRole("tab", { name: "表格粘贴", exact: true }).click()
   await page
     .getByRole("textbox", { name: "粘贴推广系列 ID 和新名称" })
     .fill("1700000000000000001\t新名称\n1799999999999999999\tx")
   await page.getByRole("button", { name: "提交管理任务" }).click()
   await expect.poll(() => boundary.directBodies.length).toBe(1)
+  expect(boundary.renameSelectionBodies).toHaveLength(1)
   expect(boundary.previewBodies).toEqual([])
   expect(boundary.directBodies[0]?.row_problems).toEqual([
     { campaign_id: "1799999999999999999", new_name: "x", reason: "not_found" },

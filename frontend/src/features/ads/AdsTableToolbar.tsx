@@ -45,25 +45,27 @@ const ACTIONS: Record<
   budget: { label: "修改预算", action: { field: "budget" } },
   rename: {
     label: "批量改名",
-    action: { field: "name", entry: "selection" },
+    action: { field: "name" },
   },
 }
 
-/** 按表格改名不依赖勾选，推广系列维度的工具栏常驻该入口（只读成员不显示）。 */
-function PasteRenameButton({
+/** 未勾选时也能打开统一改名面板，直接粘贴表格指定系列。 */
+function RenameButton({
   dimension,
   readonly,
+  busy,
   onAction,
-}: Pick<ToolbarSelection, "dimension" | "readonly" | "onAction">) {
+}: Pick<ToolbarSelection, "dimension" | "readonly" | "busy" | "onAction">) {
   if (readonly || dimension !== "campaign") return null
   return (
     <Button
       type="button"
       variant="outline"
       size="sm"
-      onClick={() => onAction({ field: "name", entry: "paste" })}
+      disabled={busy}
+      onClick={() => onAction(toolbarAction("rename"))}
     >
-      按表格改名
+      {toolbarActionLabel("rename")}
     </Button>
   )
 }
@@ -146,11 +148,6 @@ function SelectionToolbar({
               {toolbarActionLabel(key)}
             </Button>
           ))}
-        <PasteRenameButton
-          dimension={dimension}
-          readonly={readonly}
-          onAction={onAction}
-        />
         {!readonly && (
           <Button
             type="button"
@@ -234,9 +231,10 @@ export function AdsTableToolbar({
 
   return (
     <div className="flex flex-wrap items-center gap-2">
-      <PasteRenameButton
+      <RenameButton
         dimension={selection.dimension}
         readonly={selection.readonly}
+        busy={selection.busy}
         onAction={selection.onAction}
       />
       <DropdownMenu>

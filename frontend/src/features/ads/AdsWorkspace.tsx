@@ -572,8 +572,13 @@ export function AdsWorkspace() {
       // 详情里的操作按该对象自身的维度说明修改层级（可能不同于表格当前维度）。
       setManagementDimension(single?.scope.dimension ?? applied.dimension)
       setPreviewSession((current) => current + 1)
-      // 按表格改名的目标来自粘贴的推广系列 ID，不冻结列表勾选，直接打开面板。
-      if (next.field === "name" && next.entry === "paste") {
+      // 统一改名入口：有勾选就冻结范围，无勾选则直接打开表格粘贴。
+      if (
+        next.field === "name" &&
+        !single &&
+        !ads.selection.selected.size &&
+        !ads.selection.allMatching
+      ) {
         selectionRequestScopeRef.current = null
         setFrozenSelection(null)
         setPreviewOpen(true)
