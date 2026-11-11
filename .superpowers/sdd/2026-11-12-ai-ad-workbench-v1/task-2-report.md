@@ -21,5 +21,19 @@ Implemented daily drama plans for the AI workbench.
 
 ## Commit
 
-Commit: `218e4b06 feat: add AI optimizer daily drama plans`
+Baseline implementation commit: `6aa3f074 feat: add AI optimizer daily drama plans`
+
+## Fix round 1
+
+- Daily plan reads and writes now require an active optimizer with exactly one active strategy binding; inactive or orphaned optimizer contexts are rejected before row writes.
+- Provider connection/application pairs are checked against the tenant's provider application registry and are also protected by a composite foreign key.
+- The AI workbench is tenant-only, selects an enabled optimizer from the tenant API, loads the selected day's plan, and carries the selected optimizer into save requests. Switching tenant, optimizer, or date resets the rows and revision before loading fresh data.
+- Normal cell edits now use the same history path as TSV paste, and focused backend/API plus frontend worksheet checks cover scope, order intent, leading-zero IDs, and row expansion.
+
+Verification for this fix round:
+
+- `uv run ruff check app/modules/ai_workbench/plans.py app/modules/ai_workbench/plans_service.py app/core/errors.py tests/modules/ai_workbench/test_daily_plans.py` (passed).
+- `npm run build` in `frontend/` (passed for production and demo bundles).
+- `PLAYWRIGHT_BASE_URL=http://127.0.0.1:9 npx playwright test tests/ai-workbench.spec.ts --project=chromium --no-deps` (2 passed).
+- Full database-backed API tests remain environment-dependent because this worktree has no configured dedicated PostgreSQL test database; contract tests pass under the isolated test invocation.
 

@@ -65,6 +65,15 @@ class AIDailyPlanRow(SQLModel, table=True):
             ["ai_optimizer.tenant_id", "ai_optimizer.id"],
             name="fk_ai_daily_plan_row_optimizer",
         ),
+        ForeignKeyConstraint(
+            ["tenant_id", "provider_connection_id", "application_id"],
+            [
+                "provider_application.tenant_id",
+                "provider_application.connection_id",
+                "provider_application.external_id",
+            ],
+            name="fk_ai_daily_plan_row_provider_application",
+        ),
         Index("ix_ai_daily_plan_row_day", "tenant_id", "optimizer_id", "business_date", "position"),
     )
 

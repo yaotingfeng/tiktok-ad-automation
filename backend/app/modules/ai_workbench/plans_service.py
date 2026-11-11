@@ -7,7 +7,7 @@ from sqlmodel import Session, col, delete, select
 
 from app.core.context import TenantContext
 from app.core.errors import DomainError
-from app.modules.ai_workbench.models import AIOptimizer
+from app.modules.ai_workbench.models import AIOptimizer, AIOptimizerStrategyBinding
 from app.modules.ai_workbench.plan_schemas import (
     DailyPlanPage,
     DailyPlanPublic,
@@ -18,6 +18,7 @@ from app.modules.ai_workbench.plan_schemas import (
     validate_plan_rows,
 )
 from app.modules.ai_workbench.plans import AIDailyPlan, AIDailyPlanRow
+from app.modules.providers.models import ProviderApplication
 from app.modules.tenants.permissions import require_tenant
 
 
@@ -40,6 +41,24 @@ def _optimizer(session: Session, context: TenantContext, optimizer_id: UUID) -> 
     if row is None:
         raise DomainError("ai_optimizer_not_found", "ai_optimizer_not_found")
     return row
+
+
+def _optimizer_context(
+    session: Session, context: TenantContext, optimizer_id: UUID
+) -> AIOptimizer:
+    optimizer = _optimizer(session, context, optimizer_id)
+    if not optimizer.active:
+        raise DomainError("ai_optimizer_inactive", "ai_optimizer_inactive")
+    bindings = session.exec(
+        select(AIOptimizerStrategyBinding).where(
+            AIOptimizerStrategyBinding.tenant_id == context.tenant_id,
+            AIOptimizerStrategyBinding.optimizer_id == optimizer_id,
+            AIOptimizerStrategyBinding.active.is_(True),
+        )
+    ).all()
+    if len(bindings) != 1:
+        raise DomainError("ai_strategy_binding_required", "ai_strategy_binding_required")
+    return optimizer
 
 
 def _request_rows(body: DailyPlanRequest) -> list[DailyPlanRowInput]:
@@ -82,6 +101,24 @@ def _validate_rows(rows: list[DailyPlanRowInput], *, optimizer_id: UUID) -> date
     return next(iter(dates))
 
 
+def _validate_provider_scope(
+    session: Session, *, context: TenantContext, rows: list[DailyPlanRowInput]
+) -> None:
+    for row in rows:
+        application = session.exec(
+            select(ProviderApplication).where(
+                ProviderApplication.tenant_id == context.tenant_id,
+                ProviderApplication.connection_id == row.provider_connection_id,
+                ProviderApplication.external_id == row.application_id,
+            )
+        ).one_or_none()
+        if application is None:
+            raise DomainError(
+                "ai_provider_application_not_found",
+                "ai_provider_application_not_found",
+            )
+
+
 def create_daily_plan(
     session: Session,
     *,
@@ -90,8 +127,9 @@ def create_daily_plan(
     body: DailyPlanRequest,
 ) -> DailyPlanPublic:
     _authorize(session, context, write=True)
-    _optimizer(session, context, optimizer_id)
+    _optimizer_context(session, context, optimizer_id)
     rows = _request_rows(body)
+    _validate_provider_scope(session, context=context, rows=rows)
     business_date = body.business_date or _validate_rows(
         rows, optimizer_id=optimizer_id
     )
@@ -129,8 +167,9 @@ def update_daily_plan(
     body: DailyPlanRequest,
 ) -> DailyPlanPublic:
     _authorize(session, context, write=True)
-    _optimizer(session, context, optimizer_id)
+    _optimizer_context(session, context, optimizer_id)
     rows = _request_rows(body)
+    _validate_provider_scope(session, context=context, rows=rows)
     requested_date = business_date or body.business_date
     if requested_date is None and rows:
         requested_date = _validate_rows(rows, optimizer_id=optimizer_id)
@@ -168,7 +207,7 @@ def get_daily_plan(
     business_date: date,
 ) -> DailyPlanPublic:
     _authorize(session, context)
-    _optimizer(session, context, optimizer_id)
+    _optimizer_context(session, context, optimizer_id)
     plan = session.exec(
         select(AIDailyPlan).where(
             AIDailyPlan.tenant_id == context.tenant_id,
@@ -185,7 +224,7 @@ def list_daily_plans(
     session: Session, *, context: TenantContext, optimizer_id: UUID
 ) -> DailyPlanPage:
     _authorize(session, context)
-    _optimizer(session, context, optimizer_id)
+    _optimizer_context(session, context, optimizer_id)
     plans = session.exec(
         select(AIDailyPlan)
         .where(

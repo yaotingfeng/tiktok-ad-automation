@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react"
+import { useMemo, useRef, useState } from "react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
@@ -84,7 +84,9 @@ export function applyPlanPaste(
     line.forEach((part, columnIndex) => {
       const key = planColumns[startColumn + columnIndex].key
       if (key === "order_materials")
-        result[startRow + rowIndex][key] = /^(1|true|yes|是)$/i.test(part.trim())
+        result[startRow + rowIndex][key] = /^(1|true|yes|是)$/i.test(
+          part.trim(),
+        )
       else result[startRow + rowIndex][key] = part
     })
   })
@@ -110,31 +112,30 @@ export function DramaPlanGrid({
 }: Props) {
   const initial = useMemo(
     () =>
-      initialRows?.length
-        ? initialRows
-        : Array.from({ length: 10 }, () => emptyPlanRow(businessDate, optimizerId)),
+      Array.from(
+        { length: Math.max(10, initialRows?.length ?? 0) },
+        (_, index) =>
+          initialRows?.[index] ?? emptyPlanRow(businessDate, optimizerId),
+      ),
     [businessDate, initialRows, optimizerId],
   )
-  const [rows, setRows] = useState(initial)
-  const [history, setHistory] = useState<DramaPlanRow[][]>([])
+  const [historyState, setHistoryState] = useState<{
+    key: string
+    items: DramaPlanRow[][]
+  }>({ key: "", items: [] })
   const [saving, setSaving] = useState(false)
   const refs = useRef<Record<string, HTMLInputElement | null>>({})
-  useEffect(() => {
-    // Changing the business day loads a fresh ten-row worksheet and clears
-    // undo history so rows from another day cannot be submitted accidentally.
-    setRows(initial)
-    setHistory([])
-  }, [initial])
+  const resetKey = `${businessDate}:${optimizerId}`
+  const history = historyState.key === resetKey ? historyState.items : []
+  const rows = initial
   const update = (next: DramaPlanRow[]) => {
-    setHistory((past) => [...past.slice(-19), rows])
-    setRows(next)
+    setHistoryState({ key: resetKey, items: [...history.slice(-19), rows] })
     onChange?.(next)
   }
   const undo = () => {
     const previous = history[history.length - 1]
     if (!previous) return
-    setHistory((past) => past.slice(0, -1))
-    setRows(previous)
+    setHistoryState({ key: resetKey, items: history.slice(0, -1) })
     onChange?.(previous)
   }
   return (
@@ -142,7 +143,9 @@ export function DramaPlanGrid({
       <CardHeader className="flex-row items-center justify-between">
         <CardTitle>每日剧单</CardTitle>
         <div className="flex items-center gap-2">
-          <label className="text-sm text-muted-foreground" htmlFor="plan-date">日期</label>
+          <label className="text-sm text-muted-foreground" htmlFor="plan-date">
+            日期
+          </label>
           <Input
             id="plan-date"
             data-testid="plan-date"
@@ -150,16 +153,44 @@ export function DramaPlanGrid({
             value={businessDate}
             onChange={(event) => onDateChange?.(event.target.value)}
           />
-          <Button type="button" variant="outline" onClick={undo} disabled={!history.length}>撤销</Button>
-          {onSave && <Button type="button" onClick={async () => {
-            setSaving(true)
-            try { await onSave(rows) } finally { setSaving(false) }
-          }} disabled={saving}>{saving ? "保存中…" : "保存剧单"}</Button>}
+          <Button
+            type="button"
+            variant="outline"
+            onClick={undo}
+            disabled={!history.length}
+          >
+            撤销
+          </Button>
+          {onSave && (
+            <Button
+              type="button"
+              onClick={async () => {
+                setSaving(true)
+                try {
+                  await onSave(rows)
+                } finally {
+                  setSaving(false)
+                }
+              }}
+              disabled={saving}
+            >
+              {saving ? "保存中…" : "保存剧单"}
+            </Button>
+          )}
         </div>
       </CardHeader>
       <CardContent className="overflow-x-auto">
         <table className="w-full text-sm" data-testid="drama-plan-table">
-          <thead><tr><th className="p-2 text-left">#</th>{planColumns.map((column) => <th className="p-2 text-left" key={column.key}>{column.label}</th>)}</tr></thead>
+          <thead>
+            <tr>
+              <th className="p-2 text-left">#</th>
+              {planColumns.map((column) => (
+                <th className="p-2 text-left" key={column.key}>
+                  {column.label}
+                </th>
+              ))}
+            </tr>
+          </thead>
           <tbody>
             {rows.map((row, rowIndex) => (
               <tr key={`${rowIndex}-${row.title}`}>
@@ -167,45 +198,71 @@ export function DramaPlanGrid({
                 {planColumns.map((column, columnIndex) => {
                   const key = column.key
                   const refKey = `${rowIndex}:${columnIndex}`
-                  return <td className="p-1" key={key}>
-                    <Input
-                      ref={(element) => { refs.current[refKey] = element }}
-                      data-testid={`plan-cell-${rowIndex}-${columnIndex}`}
-                      value={key === "order_materials" ? (row[key] ? "是" : "否") : row[key]}
-                      onChange={(event) => {
-                        const next = rows.map((item) => ({ ...item }))
-                        next[rowIndex] = {
-                          ...next[rowIndex],
-                          [key]: key === "order_materials"
-                            ? /^(是|1|true)$/i.test(event.target.value)
-                            : event.target.value,
+                  return (
+                    <td className="p-1" key={key}>
+                      <Input
+                        ref={(element) => {
+                          refs.current[refKey] = element
+                        }}
+                        data-testid={`plan-cell-${rowIndex}-${columnIndex}`}
+                        value={
+                          key === "order_materials"
+                            ? row[key]
+                              ? "是"
+                              : "否"
+                            : row[key]
                         }
-                        setRows(next)
-                        onChange?.(next)
-                      }}
-                      onPaste={(event) => {
-                        const text = event.clipboardData.getData("text/plain")
-                        if (!text.includes("\t") && !text.includes("\n")) return
-                        event.preventDefault()
-                        update(applyPlanPaste(rows, rowIndex, columnIndex, text, businessDate, optimizerId))
-                      }}
-                      onKeyDown={(event) => {
-                        if (event.key !== "Tab" && event.key !== "Enter") return
-                        event.preventDefault()
-                        const nextColumn = event.key === "Enter" ? columnIndex : columnIndex + 1
-                        const nextRow = event.key === "Enter" ? rowIndex + 1 : rowIndex
-                        refs.current[`${nextRow}:${nextColumn}`]?.focus()
-                      }}
-                    />
-                  </td>
+                        onChange={(event) => {
+                          const next = rows.map((item) => ({ ...item }))
+                          next[rowIndex] = {
+                            ...next[rowIndex],
+                            [key]:
+                              key === "order_materials"
+                                ? /^(是|1|true)$/i.test(event.target.value)
+                                : event.target.value,
+                          }
+                          update(next)
+                        }}
+                        onPaste={(event) => {
+                          const text = event.clipboardData.getData("text/plain")
+                          if (!text.includes("\t") && !text.includes("\n"))
+                            return
+                          event.preventDefault()
+                          update(
+                            applyPlanPaste(
+                              rows,
+                              rowIndex,
+                              columnIndex,
+                              text,
+                              businessDate,
+                              optimizerId,
+                            ),
+                          )
+                        }}
+                        onKeyDown={(event) => {
+                          if (event.key !== "Tab" && event.key !== "Enter")
+                            return
+                          event.preventDefault()
+                          const nextColumn =
+                            event.key === "Enter"
+                              ? columnIndex
+                              : columnIndex + 1
+                          const nextRow =
+                            event.key === "Enter" ? rowIndex + 1 : rowIndex
+                          refs.current[`${nextRow}:${nextColumn}`]?.focus()
+                        }}
+                      />
+                    </td>
+                  )
                 })}
               </tr>
             ))}
           </tbody>
         </table>
-        <p className="mt-3 text-xs text-muted-foreground">素材只在执行时按剧目和版权方连接匹配；此处不选择素材。</p>
+        <p className="mt-3 text-xs text-muted-foreground">
+          素材只在执行时按剧目和版权方连接匹配；此处不选择素材。
+        </p>
       </CardContent>
     </Card>
   )
 }
-

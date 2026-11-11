@@ -67,6 +67,15 @@ def upgrade() -> None:
             ["ai_optimizer.tenant_id", "ai_optimizer.id"],
             name="fk_ai_daily_plan_row_optimizer",
         ),
+        sa.ForeignKeyConstraint(
+            ["tenant_id", "provider_connection_id", "application_id"],
+            [
+                "provider_application.tenant_id",
+                "provider_application.connection_id",
+                "provider_application.external_id",
+            ],
+            name="fk_ai_daily_plan_row_provider_application",
+        ),
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint("tenant_id", "id", name="uq_ai_daily_plan_row_tenant_id"),
         sa.UniqueConstraint(
