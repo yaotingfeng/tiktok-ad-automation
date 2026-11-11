@@ -1,12 +1,21 @@
 """Tenant/optimizer-scoped DSH proposals and publication decisions."""
 from __future__ import annotations
 
+from collections.abc import Mapping
 from datetime import UTC, datetime
+from decimal import Decimal, InvalidOperation
 from typing import Any, Literal
 from uuid import UUID, uuid4
 
 from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy import JSON, Column, DateTime, UniqueConstraint
+from sqlalchemy import (
+    JSON,
+    CheckConstraint,
+    Column,
+    DateTime,
+    ForeignKeyConstraint,
+    UniqueConstraint,
+)
 from sqlmodel import Field as SQLField
 from sqlmodel import Session, SQLModel, col, select
 
@@ -18,7 +27,12 @@ from app.modules.ai_workbench.models import (
     AIOptimizerStrategyBinding,
     AIOptimizerVersion,
 )
-from app.modules.ai_workbench.reviews import DSHReviewTask, authorize, load_optimizer
+from app.modules.ai_workbench.reviews import (
+    DSHReviewTask,
+    authorize,
+    frozen_evidence_ids,
+    load_optimizer,
+)
 from app.modules.automation_rules.models import AutomationRule
 from app.modules.automation_rules.schemas import RuleDefinition, RuleUpdate
 from app.modules.strategies.models import Strategy, StrategyVersion
@@ -52,10 +66,22 @@ class DecisionRequest(BaseModel):
 
 class AIProposal(SQLModel, table=True):
     __tablename__ = "ai_optimizer_proposal"
-    __table_args__ = (UniqueConstraint("tenant_id", "request_id", name="uq_ai_proposal_request"),)
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "request_id", name="uq_ai_proposal_request"),
+        ForeignKeyConstraint(
+            ["tenant_id", "optimizer_id"],
+            ["ai_optimizer.tenant_id", "ai_optimizer.id"],
+            name="fk_ai_proposal_optimizer",
+        ),
+        CheckConstraint("kind IN ('strategy','rule')", name="ck_ai_proposal_kind"),
+        CheckConstraint(
+            "status IN ('PENDING','ACCEPTED','REJECTED','STALE')",
+            name="ck_ai_proposal_status",
+        ),
+    )
     id: UUID = SQLField(default_factory=uuid4, primary_key=True)
     tenant_id: UUID = SQLField(foreign_key="tenant.id")
-    optimizer_id: UUID = SQLField(foreign_key="ai_optimizer.id")
+    optimizer_id: UUID
     review_task_id: UUID = SQLField(foreign_key="ai_dsh_review_task.id")
     kind: str = SQLField(max_length=16)
     target_id: UUID | None = None
@@ -70,7 +96,7 @@ class AIProposal(SQLModel, table=True):
     base_rule_id: UUID | None = None
     published_version_id: UUID | None = None
     decision_by: UUID | None = None
-    decision_reason: str | None = None
+    decision_reason: str | None = SQLField(default=None, max_length=1000)
     decision_request_id: UUID | None = None
     decision_request_digest: str | None = SQLField(default=None, max_length=64)
     decision_at: datetime | None = SQLField(default=None, sa_type=DateTime(timezone=True))
@@ -92,14 +118,14 @@ def list_proposals(session: Session, *, context: TenantContext, optimizer_id: UU
     return [_public(row) for row in session.exec(query).all()]
 
 
-def _limit_value(limits: dict[str, Any], *keys: str) -> Any:
+def _limit_value(limits: Mapping[str, Any], *keys: str) -> Any:
     for key in keys:
         if key in limits:
             return limits[key]
     return None
 
 
-def _authorized(limits: dict[str, Any], kind: str, mode: str) -> bool:
+def _authorized(limits: Mapping[str, Any], kind: str, mode: str) -> bool:
     """Read both the compact and nested authorization-limit contracts."""
     raw = _limit_value(limits, kind, f"allow_{kind}", f"{kind}_publication")
     if isinstance(raw, dict):
@@ -114,30 +140,64 @@ def _authorized(limits: dict[str, Any], kind: str, mode: str) -> bool:
 
 def _within_authorization(*, version: AIOptimizerVersion, kind: str, before: dict[str, Any], after: dict[str, Any]) -> tuple[bool, str | None]:
     limits = version.authorization_limits or {}
+    if not isinstance(limits, Mapping):
+        raise DomainError("ai_proposal_invalid", "authorization limits must be an object")
     if kind == "strategy":
         if not _authorized(limits, "strategy", version.optimization_mode):
             return False, "strategy_publication_not_authorized"
-        before_cfg = before.get("config", before) if isinstance(before, dict) else {}
-        after_cfg = after.get("config", after) if isinstance(after, dict) else {}
+        before_cfg = before.get("config", before) if isinstance(before, Mapping) else {}
+        after_cfg = after.get("config", after) if isinstance(after, Mapping) else {}
+        if not isinstance(before_cfg, Mapping) or not isinstance(after_cfg, Mapping):
+            raise DomainError("ai_proposal_invalid", "strategy scope must be an object")
         nested = limits.get("strategy") if isinstance(limits.get("strategy"), dict) else {}
         for field in ("budget", "daily_spend", "spend"):
             if field in after_cfg and field in before_cfg:
                 maximum = _limit_value(limits, f"max_{field}_delta", f"{field}_delta")
                 maximum = maximum if maximum is not None else _limit_value(nested, f"max_{field}_delta", f"{field}_delta")
-                if maximum is None or abs(float(after_cfg[field]) - float(before_cfg[field])) > float(maximum):
+                if maximum is None:
+                    return False, f"{field}_delta_out_of_scope"
+                try:
+                    delta = abs(Decimal(str(after_cfg[field])) - Decimal(str(before_cfg[field])))
+                    maximum_decimal = Decimal(str(maximum))
+                except (InvalidOperation, TypeError, ValueError) as exc:
+                    raise DomainError("ai_proposal_invalid", f"{field} delta must be numeric") from exc
+                if delta > maximum_decimal:
                     return False, f"{field}_delta_out_of_scope"
     else:
         if not _authorized(limits, "rule", version.optimization_mode):
             return False, "rule_publication_not_authorized"
-        definition = after.get("definition", after) if isinstance(after, dict) else {}
-        accounts = definition.get("accounts", {}) if isinstance(definition, dict) else {}
-        accounts = accounts if isinstance(accounts, dict) else {}
-        advertiser_ids = accounts.get("advertiser_ids", definition.get("advertiser_ids")) if isinstance(definition, dict) else None
-        bc_ids = accounts.get("bc_ids", definition.get("bc_ids")) if isinstance(definition, dict) else None
+        if not isinstance(version.bc_id, str) or not isinstance(version.advertiser_ids, (list, tuple, set)):
+            raise DomainError("ai_invalid_rule_scope", "optimizer scope is malformed")
+        if not all(isinstance(item, str) for item in version.advertiser_ids):
+            raise DomainError("ai_invalid_rule_scope", "optimizer advertiser scope is malformed")
+        if not isinstance(after, Mapping):
+            raise DomainError("ai_invalid_rule_scope", "rule scope must be an object")
+        definition = after.get("definition", after)
+        if not isinstance(definition, Mapping):
+            raise DomainError("ai_invalid_rule_scope", "rule definition scope must be an object")
+        accounts = definition.get("accounts", {})
+        if accounts is None:
+            accounts = {}
+        if not isinstance(accounts, Mapping):
+            raise DomainError("ai_invalid_rule_scope", "nested rule accounts scope must be an object")
+        advertiser_ids = accounts.get("advertiser_ids", definition.get("advertiser_ids"))
+        bc_ids = accounts.get("bc_ids", definition.get("bc_ids"))
+        if advertiser_ids is not None and (
+            not isinstance(advertiser_ids, (list, tuple, set))
+            or not all(isinstance(item, str) for item in advertiser_ids)
+        ):
+            raise DomainError("ai_invalid_rule_scope", "advertiser scope must be a list")
+        if bc_ids is not None and (
+            not isinstance(bc_ids, (list, tuple, set))
+            or not all(isinstance(item, str) for item in bc_ids)
+        ):
+            raise DomainError("ai_invalid_rule_scope", "business center scope must be a list")
         if advertiser_ids is not None and not set(advertiser_ids).issubset(set(version.advertiser_ids)):
             return False, "advertiser_scope_out_of_scope"
         if bc_ids is not None and version.bc_id not in set(bc_ids):
             return False, "bc_scope_out_of_scope"
+        if definition.get("bc_id") is not None and not isinstance(definition["bc_id"], str):
+            raise DomainError("ai_invalid_rule_scope", "business center scope must be a string")
         if definition.get("bc_id") is not None and definition["bc_id"] != version.bc_id:
             return False, "bc_scope_out_of_scope"
     return True, None
@@ -158,7 +218,9 @@ def create_proposal(session: Session, *, context: TenantContext, optimizer_id: U
     if review_task.tenant_id != context.tenant_id or review_task.optimizer_id != optimizer_id:
         raise DomainError("ai_review_scope_mismatch", "review task is outside optimizer scope")
     optimizer, version = load_optimizer(session, context, optimizer_id)
-    frozen_ids = {item.get("id") for item in review_task.evidence.get("rule_evidence", []) if item.get("id")}
+    if review_task.optimizer_version != version.number:
+        raise DomainError("ai_proposal_stale", "review task optimizer version is stale")
+    frozen_ids = frozen_evidence_ids(review_task.evidence)
     if any(str(item) not in frozen_ids for item in change.evidence_ids):
         raise DomainError("ai_evidence_not_found", "proposal evidence is outside the frozen review task")
     request_id = request_id or uuid4()

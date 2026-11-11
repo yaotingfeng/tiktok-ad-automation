@@ -21,3 +21,22 @@ Validation:
 - Required proposal evidence references to be present in the frozen review task.
 - Added review request digests and decision request IDs/digests for conflicting retry detection.
 - Broadened secret and reasoning trace sanitization.
+
+## Reviewer fix round 2
+
+- Reporting review inputs now freeze immutable `QuerySnapshot` IDs plus row,
+  name-scope and inline `ReportEvidenceVersion` references with digests; no
+  mutable report-day rows are read as review evidence.
+- Proposal creation rejects a review task whose optimizer version is stale and
+  accepts evidence IDs from every frozen category (plans, builds, rules,
+  reporting, business and operation logs).
+- Added composite tenant/optimizer model foreign keys and migration-matching
+  proposal checks/decision reason length, defensive `DomainError` handling for
+  malformed nested rule scopes, and JSON-safe secret-sanitized evidence values.
+
+Validation:
+
+- `.venv/bin/ruff check backend/app/modules/ai_workbench backend/tests/modules/ai_workbench` — passed.
+- `.venv/bin/python -m compileall -q backend/app/modules/ai_workbench backend/tests/modules/ai_workbench` — passed.
+- Pure sanitizer, evidence-ID, malformed-scope and metadata contract checks — passed.
+- Full pytest still requires the repository PostgreSQL test database and Redis service.

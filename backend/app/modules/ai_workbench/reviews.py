@@ -3,11 +3,12 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Mapping
 from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import UUID, uuid4
 
-from sqlalchemy import JSON, Column, DateTime, UniqueConstraint
+from sqlalchemy import JSON, Column, DateTime, ForeignKeyConstraint, UniqueConstraint
 from sqlmodel import Field, Session, SQLModel, col, select
 
 from app.core.context import TenantContext
@@ -35,11 +36,16 @@ class DSHReviewTask(SQLModel, table=True):
     __tablename__ = "ai_dsh_review_task"
     __table_args__ = (
         UniqueConstraint("tenant_id", "request_id", name="uq_ai_dsh_review_request"),
+        ForeignKeyConstraint(
+            ["tenant_id", "optimizer_id"],
+            ["ai_optimizer.tenant_id", "ai_optimizer.id"],
+            name="fk_ai_dsh_review_optimizer",
+        ),
     )
 
     id: UUID = Field(default_factory=uuid4, primary_key=True)
     tenant_id: UUID = Field(foreign_key="tenant.id")
-    optimizer_id: UUID = Field(foreign_key="ai_optimizer.id")
+    optimizer_id: UUID
     request_id: UUID
     request_digest: str = Field(default="", max_length=64)
     dsh_task_id: str = Field(max_length=160)
@@ -87,6 +93,184 @@ def load_optimizer(session: Session, context: TenantContext, optimizer_id: UUID)
     return optimizer, version
 
 
+def _digest(value: Any) -> str:
+    payload = json.dumps(
+        sanitize_public(value), sort_keys=True, separators=(",", ":")
+    ).encode()
+    return hashlib.sha256(payload).hexdigest()
+
+
+def _reporting_frozen_refs(
+    session: Session,
+    *,
+    context: TenantContext,
+    version: AIOptimizerVersion,
+) -> list[dict[str, Any]]:
+    """Return immutable query/evidence references, never live report rows."""
+    from app.modules.reporting.query_models import (
+        QuerySnapshot,
+        QuerySnapshotEvidence,
+        QuerySnapshotNameVersion,
+        QuerySnapshotRow,
+    )
+    from app.modules.reporting.read_models.evidence import ReportEvidenceVersion
+
+    snapshots = session.exec(
+        select(QuerySnapshot).where(
+            QuerySnapshot.tenant_id == context.tenant_id,
+            QuerySnapshot.bc_id == version.bc_id,
+            QuerySnapshot.actor_id == context.actor_id,
+        ).order_by(col(QuerySnapshot.created_at).desc())
+    ).all()
+    account_ids = set(version.advertiser_ids)
+    snapshots = [
+        row for row in snapshots
+        if account_ids.intersection(set(row.advertiser_ids or ()))
+    ]
+    if not snapshots:
+        return []
+
+    snapshot_ids = [row.id for row in snapshots]
+    evidence_rows = session.exec(
+        select(QuerySnapshotEvidence).where(
+            col(QuerySnapshotEvidence.snapshot_id).in_(snapshot_ids)
+        )
+    ).all()
+    name_rows = session.exec(
+        select(QuerySnapshotNameVersion).where(
+            col(QuerySnapshotNameVersion.snapshot_id).in_(snapshot_ids)
+        )
+    ).all()
+    snapshot_rows = session.exec(
+        select(QuerySnapshotRow).where(
+            col(QuerySnapshotRow.snapshot_id).in_(snapshot_ids)
+        )
+    ).all()
+    version_ids = {row.version_id for row in evidence_rows}
+    version_ids.update(row.version_id for row in name_rows)
+    # Newer reporting migrations also keep the frozen IDs inline on each row.
+    # Read those IDs as a fallback so the review contract remains immutable
+    # across both storage layouts during a rolling deployment.
+    for row in snapshot_rows:
+        version_ids.update(row.evidence_versions or ())
+    evidence_versions = session.exec(
+        select(ReportEvidenceVersion).where(
+            col(ReportEvidenceVersion.id).in_(version_ids)
+        )
+    ).all() if version_ids else []
+    evidence_by_id = {row.id: row for row in evidence_versions}
+    refs_by_snapshot: dict[UUID, list[dict[str, Any]]] = {}
+    seen_refs: set[tuple[UUID, str | None, UUID]] = set()
+
+    def add_ref(snapshot_id: UUID, version_id: UUID, *, category: str, row_key: str | None = None) -> None:
+        dedupe_key = (snapshot_id, row_key, version_id)
+        if dedupe_key in seen_refs:
+            return
+        seen_refs.add(dedupe_key)
+        evidence = evidence_by_id.get(version_id)
+        ref: dict[str, Any] = {"version_id": str(version_id), "category": category}
+        if row_key is not None:
+            ref["row_key"] = row_key
+        if evidence is not None:
+            ref.update({
+                "advertiser_id": evidence.advertiser_id,
+                "kind": evidence.kind,
+                "refs": evidence.refs,
+                "material_uses": evidence.material_uses,
+                "naming_versions": evidence.naming_versions,
+                "created_at": evidence.created_at,
+                "retired_at": evidence.retired_at,
+            })
+        ref["digest"] = _digest(ref)
+        refs_by_snapshot.setdefault(snapshot_id, []).append(ref)
+
+    for row in evidence_rows:
+        add_ref(row.snapshot_id, row.version_id, category="row", row_key=row.row_key)
+    for row in name_rows:
+        add_ref(row.snapshot_id, row.version_id, category="name")
+    for row in snapshot_rows:
+        for version_id in row.evidence_versions or ():
+            add_ref(row.snapshot_id, version_id, category="inline", row_key=row.row_key)
+
+    result: list[dict[str, Any]] = []
+    for row in snapshots:
+        snapshot = {
+            "id": str(row.id),
+            "created_at": row.created_at,
+            "expires_at": row.expires_at,
+            "bc_id": row.bc_id,
+            "advertiser_ids": row.advertiser_ids,
+            "filter_digest": row.filter_digest,
+            "dependency_digest": row.dependency_digest,
+            "filters": row.filters,
+            "naming_versions": row.naming_versions,
+            "dependency_stamp": row.dependency_stamp,
+            "total": row.total,
+            "summary": row.summary,
+            "coverage": row.coverage,
+            "publication_versions": row.publication_versions,
+            "evidence": refs_by_snapshot.get(row.id, []),
+        }
+        snapshot["digest"] = _digest(snapshot)
+        result.append(snapshot)
+    return result
+
+
+def frozen_evidence_ids(evidence: Mapping[str, Any] | None) -> set[str]:
+    """Collect identifiers for every frozen evidence category.
+
+    Review proposals may cite report snapshots, business runs, operation
+    exports, build occurrences, plans, or rule evidence.  Keeping this list
+    explicit prevents a proposal from citing a live row that was never frozen.
+    """
+    if not isinstance(evidence, Mapping):
+        return set()
+
+    fields_by_category: dict[str, tuple[str, ...]] = {
+        "plans": ("id",),
+        "build_occurrences": ("id", "strategy_version_id"),
+        "rule_evidence": ("id",),
+        "reporting": ("id", "version_id"),
+        "business": ("id", "run_id"),
+        "operation_logs": ("id", "export_id"),
+    }
+    result: set[str] = set()
+    for category, fields in fields_by_category.items():
+        value = evidence.get(category)
+        if category == "reporting" and isinstance(value, Mapping):
+            rows = value.get("snapshots", ())
+            nested = []
+            for snapshot in rows if isinstance(rows, list) else ():
+                if isinstance(snapshot, Mapping):
+                    nested.append(snapshot)
+                    refs = snapshot.get("evidence", ())
+                    if isinstance(refs, list):
+                        nested.extend(refs)
+            rows = nested
+        elif category == "business" and isinstance(value, Mapping):
+            rows = []
+            for key in ("runs", "publications"):
+                candidate = value.get(key, ())
+                if isinstance(candidate, list):
+                    rows.extend(candidate)
+        elif category == "operation_logs" and isinstance(value, Mapping):
+            rows = []
+            for key in ("coverage", "exports"):
+                candidate = value.get(key, ())
+                if isinstance(candidate, list):
+                    rows.extend(candidate)
+        else:
+            rows = value if isinstance(value, list) else ()
+        for row in rows:
+            if not isinstance(row, Mapping):
+                continue
+            for field in fields:
+                item = row.get(field)
+                if item is not None:
+                    result.add(str(item))
+    return result
+
+
 def frozen_evidence(
     session: Session,
     *,
@@ -105,28 +289,31 @@ def frozen_evidence(
         BuildOccurrence.tenant_id == context.tenant_id,
         BuildOccurrence.optimizer_id == optimizer.id,
     ).order_by(col(BuildOccurrence.scheduled_at))).all()
-    statement = select(AutomationRuleEvidence).where(
-        AutomationRuleEvidence.tenant_id == context.tenant_id,
-        AutomationRuleEvidence.optimizer_id == optimizer.id,
+    all_rule_evidence = session.exec(
+        select(AutomationRuleEvidence).where(
+            AutomationRuleEvidence.tenant_id == context.tenant_id,
+            AutomationRuleEvidence.optimizer_id == optimizer.id,
+        ).order_by(col(AutomationRuleEvidence.created_at))
+    ).all()
+    rule_evidence = (
+        [row for row in all_rule_evidence if row.id in set(evidence_ids)]
+        if evidence_ids
+        else all_rule_evidence
     )
-    if evidence_ids:
-        statement = statement.where(col(AutomationRuleEvidence.id).in_(evidence_ids))
-    rule_evidence = session.exec(statement.order_by(col(AutomationRuleEvidence.created_at))).all()
     # Freeze IDs, revisions and digests from append-only reporting, business and
     # operation stores so later source updates never change this review input.
     from app.modules.business.models import BusinessPublication, BusinessRun
     from app.modules.operation_logs.models import OperationCoverage, OperationExport
-    from app.modules.reporting.read_models.models import AccountReportDayState
-    report_states = session.exec(select(AccountReportDayState).where(AccountReportDayState.tenant_id == context.tenant_id, col(AccountReportDayState.advertiser_id).in_(version.advertiser_ids))).all()
+    reporting_snapshots = _reporting_frozen_refs(
+        session, context=context, version=version
+    )
     business_scopes = session.exec(select(BusinessRun).where(BusinessRun.tenant_id == context.tenant_id, BusinessRun.bc_id == version.bc_id).order_by(col(BusinessRun.created_at).desc()).limit(50)).all()
     business_pubs = session.exec(select(BusinessPublication).where(BusinessPublication.tenant_id == context.tenant_id, BusinessPublication.bc_id == version.bc_id)).all()
     operation_coverage = session.exec(select(OperationCoverage).where(OperationCoverage.tenant_id == context.tenant_id, col(OperationCoverage.advertiser_id).in_(version.advertiser_ids))).all()
     operation_exports = session.exec(select(OperationExport).where(OperationExport.tenant_id == context.tenant_id, col(OperationExport.advertiser_id).in_(version.advertiser_ids)).order_by(col(OperationExport.observed_at).desc()).limit(50)).all()
-    if evidence_ids and {row.id for row in rule_evidence} != set(evidence_ids):
-        raise DomainError("ai_evidence_not_found", "requested evidence is outside optimizer scope")
     # These snapshots intentionally retain IDs/status/version only.  Full report
     # and business rows remain in their own append-only stores and are referenced.
-    return sanitize_public({
+    frozen = sanitize_public({
         "optimizer": {
             "id": str(optimizer.id),
             "version": version.number,
@@ -159,7 +346,7 @@ def frozen_evidence(
             "source": "reporting_store",
             "account_ids": list(version.advertiser_ids),
             "optimizer_version": version.number,
-            "snapshots": [{"advertiser_id": row.advertiser_id, "stat_date": row.stat_date, "revision": row.revision, "observed_at": row.observed_at, "status": row.status} for row in report_states],
+            "snapshots": reporting_snapshots,
         },
         "business": {
             "source": "business_store",
@@ -178,6 +365,10 @@ def frozen_evidence(
         "knowledge_refs": snapshot_knowledge_refs(knowledge_refs),
         "captured_at": _now(),
     })
+    requested = {str(item) for item in evidence_ids}
+    if requested and not requested.issubset(frozen_evidence_ids(frozen)):
+        raise DomainError("ai_evidence_not_found", "requested evidence is outside optimizer scope")
+    return frozen
 
 
 def create_review_task(
