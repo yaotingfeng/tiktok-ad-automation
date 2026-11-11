@@ -30,6 +30,7 @@ class RuleBindingScope:
     bc_id: str
     advertiser_ids: tuple[str, ...]
     authorization_revision: int
+    authorization_revisions: tuple[tuple[str, int], ...] = ()
     optimizer_version: int = 0
     rule_version: int = 0
     binding_id: UUID | None = None
@@ -46,7 +47,7 @@ def _rule_accounts(definition: RuleDefinition, *, bc_id: str) -> set[str] | None
 
 def _current_revision(
     session: Session, *, tenant_id: UUID, bc_id: str, advertiser_ids: set[str]
-) -> tuple[set[str], int]:
+) -> tuple[set[str], int, tuple[tuple[str, int], ...]]:
     # Keep account access imports lazy: account routing imports tenant models,
     # which in turn register the full model graph during application startup.
     from app.modules.accounts.access import usable_grants
@@ -54,7 +55,7 @@ def _current_revision(
     from app.modules.accounts.models import BCAccountAccess
 
     if not advertiser_ids:
-        return set(), 0
+        return set(), 0, ()
     grants = session.exec(
         usable_grants(tenant_id=tenant_id, bc_id=bc_id, action="read").where(
             col(BCAccountAccess.advertiser_id).in_(advertiser_ids)
@@ -63,14 +64,24 @@ def _current_revision(
     found = {grant.advertiser_id for grant in grants}
     if found != advertiser_ids:
         raise DomainError("ai_invalid_rule_scope", "optimizer account authorization is stale")
-    revisions = session.exec(
-        select(TikTokConnection.authorization_revision)
+    revision_rows = session.exec(
+        select(TikTokConnection.id, TikTokConnection.authorization_revision)
         .where(
             TikTokConnection.tenant_id == tenant_id,
             col(TikTokConnection.id).in_([grant.connection_id for grant in grants]),
         )
     ).all()
-    return found, max((int(value) for value in revisions), default=0)
+    by_connection = {connection_id: int(revision) for connection_id, revision in revision_rows}
+    if any(grant.connection_id not in by_connection for grant in grants):
+        raise DomainError("ai_invalid_rule_scope", "authorization revision is unavailable")
+    revisions = tuple(
+        sorted(
+            (f"{advertiser_id}:{grant.connection_id}", by_connection[grant.connection_id])
+            for grant in grants
+            for advertiser_id in [grant.advertiser_id]
+        )
+    )
+    return found, max((revision for _, revision in revisions), default=0), revisions
 
 
 def resolve_rule_binding(
@@ -88,6 +99,8 @@ def resolve_rule_binding(
     ).one_or_none()
     if optimizer is None:
         raise DomainError("ai_optimizer_not_found", "ai_optimizer_not_found")
+    if require_active and not optimizer.active:
+        raise DomainError("ai_optimizer_inactive", "optimizer is disabled")
     version = session.exec(
         select(AIOptimizerVersion).where(
             AIOptimizerVersion.tenant_id == tenant_id,
@@ -123,7 +136,7 @@ def resolve_rule_binding(
         allowed &= requested
     if not allowed:
         raise DomainError("ai_invalid_rule_scope", "rule and optimizer account scopes do not overlap")
-    authorized, revision = _current_revision(
+    authorized, revision, revisions = _current_revision(
         session, tenant_id=tenant_id, bc_id=version.bc_id, advertiser_ids=allowed
     )
     return RuleBindingScope(
@@ -133,6 +146,7 @@ def resolve_rule_binding(
         bc_id=version.bc_id,
         advertiser_ids=tuple(sorted(authorized)),
         authorization_revision=revision,
+        authorization_revisions=revisions,
         optimizer_version=version.number,
         rule_version=rule.version,
         binding_id=binding.id,
@@ -157,8 +171,12 @@ def validate_rule_binding(
         or (scope.bc_id and current.bc_id != scope.bc_id)
         or (scope.advertiser_ids and current.advertiser_ids != scope.advertiser_ids)
         or (
-            scope.authorization_revision
+            scope.authorization_revision is not None
             and current.authorization_revision != scope.authorization_revision
+        )
+        or (
+            scope.authorization_revisions
+            and current.authorization_revisions != scope.authorization_revisions
         )
     ):
         raise DomainError("ai_rule_binding_changed", "optimizer rule binding changed")

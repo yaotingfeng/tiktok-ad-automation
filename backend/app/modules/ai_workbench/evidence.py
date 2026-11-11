@@ -32,6 +32,7 @@ class RuleEvidenceSnapshot:
     bc_id: str | None = None
     advertiser_ids: tuple[str, ...] = ()
     authorization_revision: int | None = None
+    authorization_revisions: tuple[tuple[str, int], ...] = ()
     checked_metrics: dict[str, Any] = field(default_factory=dict)
     data_freshness: dict[str, Any] = field(default_factory=dict)
     publication_versions: dict[str, Any] = field(default_factory=dict)
@@ -56,6 +57,7 @@ class RuleEvidenceSnapshot:
             "bc_id": self.bc_id,
             "advertiser_ids": list(self.advertiser_ids),
             "authorization_revision": self.authorization_revision,
+            "authorization_revisions": dict(self.authorization_revisions),
         }
 
     @classmethod
@@ -67,6 +69,9 @@ class RuleEvidenceSnapshot:
         result: Evaluation,
         skipped_accounts: list[dict[str, str]],
         scope: RuleBindingScope | None = None,
+        freshness: list[dict[str, Any]] | None = None,
+        publication_versions: dict[str, int] | None = None,
+        checked_objects: tuple[dict[str, Any], ...] | None = None,
     ) -> RuleEvidenceSnapshot:
         definition = RuleDefinition.model_validate(rule.definition)
         checked_metrics = {
@@ -85,7 +90,7 @@ class RuleEvidenceSnapshot:
             }
             for hit in result.hits
         )
-        checked_objects = tuple(
+        derived_checked_objects = tuple(
             {
                 "key": target.key,
                 "kind": target.kind,
@@ -107,15 +112,25 @@ class RuleEvidenceSnapshot:
             bc_id=scope.bc_id if scope else None,
             advertiser_ids=scope.advertiser_ids if scope else (),
             authorization_revision=scope.authorization_revision if scope else run.authorization_revision,
+            authorization_revisions=(scope.authorization_revisions if scope else tuple(run.authorization_revisions.items())),
             checked_metrics=checked_metrics,
             data_freshness={
                 "evaluated_at": run.finished_at.isoformat()
                 if run.finished_at
                 else datetime.now(UTC).isoformat(),
                 "checked_count": result.checked,
+                "rows": list(freshness or []),
+                "sources": sorted({item.get("source", "") for item in freshness or []}),
+                "stat_dates": sorted(
+                    {item.get("stat_date") for item in freshness or [] if item.get("stat_date")}
+                ),
+                "timezones": sorted(
+                    {item.get("timezone") for item in freshness or [] if item.get("timezone")}
+                ),
             },
+            publication_versions=publication_versions or {},
             skipped_accounts=tuple(skipped_accounts),
-            checked_objects=checked_objects,
+            checked_objects=checked_objects or derived_checked_objects,
             hits=hits,
             retention_until=datetime.now(UTC) + timedelta(days=365),
         )
@@ -139,6 +154,7 @@ class RuleEvidenceSnapshot:
             bc_id=self.bc_id,
             advertiser_ids=list(self.advertiser_ids),
             authorization_revision=self.authorization_revision,
+            authorization_revisions=dict(self.authorization_revisions),
             checked_metrics=self.checked_metrics,
             data_freshness=self.data_freshness,
             publication_versions=self.publication_versions,
@@ -163,9 +179,19 @@ def persist_evidence(
     result: Evaluation,
     skipped_accounts: list[dict[str, str]],
     scope: RuleBindingScope | None = None,
+    freshness: list[dict[str, Any]] | None = None,
+    publication_versions: dict[str, int] | None = None,
+    checked_objects: tuple[dict[str, Any], ...] | None = None,
 ) -> AutomationRuleEvidence:
     snapshot = RuleEvidenceSnapshot.from_evaluation(
-        rule=rule, run=run, result=result, skipped_accounts=skipped_accounts, scope=scope
+        rule=rule,
+        run=run,
+        result=result,
+        skipped_accounts=skipped_accounts,
+        scope=scope,
+        freshness=freshness,
+        publication_versions=publication_versions,
+        checked_objects=checked_objects,
     )
     row = snapshot.persist(session, run_id=run.id)
     run.evidence_id = row.id

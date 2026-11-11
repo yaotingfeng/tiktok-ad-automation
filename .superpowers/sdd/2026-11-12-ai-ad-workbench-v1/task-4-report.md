@@ -18,3 +18,10 @@ input/evaluator/executor path.
 Validation: `uv run ruff check` passed for all changed Python files and
 `uv run python -m compileall` passed. Database-backed pytest was not runnable in
 this environment because the required test settings/database URL were absent.
+
+Round 1 fixes: unscoped/scoped run uniqueness now uses separate partial unique
+indexes; authorization fences retain every account/connection revision;
+inactive optimizers are excluded and rejected; evidence includes report sync
+rows, dates, timezones, sources and publication versions plus all checked
+objects; asynchronous management readback updates the evidence snapshot; and
+the executor revalidates the scope immediately before each management submit.

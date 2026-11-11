@@ -16,7 +16,7 @@ from app.core.errors import DomainError
 from app.jobs.celery_app import celery_app
 from app.jobs.outbox import enqueue_after_commit, validate_dispatch_payload
 from app.jobs.tasks import register_dispatch_task
-from app.modules.ai_workbench.models import AIOptimizerRuleBinding
+from app.modules.ai_workbench.models import AIOptimizer, AIOptimizerRuleBinding
 from app.modules.automation_rules.executor import execute_hits, lock_tenant
 from app.modules.automation_rules.inputs import plan_next_run
 from app.modules.automation_rules.models import (
@@ -83,17 +83,32 @@ def scan_due_rules(session: Session, *, now: datetime) -> int:
         setting = load_tenant_setting(session, rule.tenant_id)
         slot = rule.next_run_at
         assert slot is not None
-        bindings = session.exec(
+        all_bindings = session.exec(
             select(AIOptimizerRuleBinding).where(
                 AIOptimizerRuleBinding.tenant_id == rule.tenant_id,
                 AIOptimizerRuleBinding.rule_id == rule.id,
+            )
+        ).all()
+        bindings = session.exec(
+            select(AIOptimizerRuleBinding)
+            .join(
+                AIOptimizer,
+                (AIOptimizer.tenant_id == AIOptimizerRuleBinding.tenant_id)
+                & (AIOptimizer.id == AIOptimizerRuleBinding.optimizer_id),
+            )
+            .where(
+                AIOptimizerRuleBinding.tenant_id == rule.tenant_id,
+                AIOptimizerRuleBinding.rule_id == rule.id,
                 AIOptimizerRuleBinding.active.is_(True),
+                AIOptimizer.active.is_(True),
             )
         ).all()
         payloads = [
             {"rule_id": str(rule.id), "slot_at": slot.isoformat(), "optimizer_id": str(binding.optimizer_id)}
             for binding in bindings
-        ] or [{"rule_id": str(rule.id), "slot_at": slot.isoformat()}]
+        ]
+        if not all_bindings:
+            payloads = [{"rule_id": str(rule.id), "slot_at": slot.isoformat()}]
         for payload in payloads:
             suffix = payload.get("optimizer_id", "default")
             enqueue_after_commit(

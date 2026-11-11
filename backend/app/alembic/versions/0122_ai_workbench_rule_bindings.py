@@ -16,9 +16,16 @@ def upgrade() -> None:
     op.add_column("automation_rule_run", sa.Column("binding_version", sa.Integer(), nullable=True))
     op.add_column("automation_rule_run", sa.Column("binding_id", sa.Uuid(), nullable=True))
     op.add_column("automation_rule_run", sa.Column("authorization_revision", sa.Integer(), nullable=True))
+    op.add_column("automation_rule_run", sa.Column("authorization_revisions", JSONB(), nullable=False, server_default=sa.text("'{}'::jsonb")))
+    op.alter_column("automation_rule_run", "authorization_revisions", server_default=None)
     op.drop_constraint("uq_automation_run_slot", "automation_rule_run", type_="unique")
-    op.create_unique_constraint(
-        "uq_automation_run_slot", "automation_rule_run", ["rule_id", "slot_at", "optimizer_id"]
+    op.create_index(
+        "uq_automation_run_unscoped_slot", "automation_rule_run", ["rule_id", "slot_at"],
+        unique=True, postgresql_where=sa.text("optimizer_id IS NULL"),
+    )
+    op.create_index(
+        "uq_automation_run_optimizer_slot", "automation_rule_run", ["rule_id", "slot_at", "optimizer_id"],
+        unique=True, postgresql_where=sa.text("optimizer_id IS NOT NULL"),
     )
     op.create_foreign_key(
         "fk_automation_run_optimizer", "automation_rule_run", "ai_optimizer",
@@ -40,6 +47,7 @@ def upgrade() -> None:
         sa.Column("bc_id", sa.String(length=128), nullable=True),
         sa.Column("advertiser_ids", JSONB(), nullable=False),
         sa.Column("authorization_revision", sa.Integer(), nullable=True),
+        sa.Column("authorization_revisions", JSONB(), nullable=False),
         sa.Column("checked_metrics", JSONB(), nullable=False),
         sa.Column("data_freshness", JSONB(), nullable=False),
         sa.Column("publication_versions", JSONB(), nullable=False),
@@ -93,8 +101,10 @@ def downgrade() -> None:
     op.drop_index("ix_automation_rule_evidence_tenant_created", table_name="automation_rule_evidence")
     op.drop_table("automation_rule_evidence")
     op.drop_constraint("fk_automation_run_optimizer", "automation_rule_run", type_="foreignkey")
-    op.drop_constraint("uq_automation_run_slot", "automation_rule_run", type_="unique")
+    op.drop_index("uq_automation_run_optimizer_slot", table_name="automation_rule_run")
+    op.drop_index("uq_automation_run_unscoped_slot", table_name="automation_rule_run")
     op.create_unique_constraint("uq_automation_run_slot", "automation_rule_run", ["rule_id", "slot_at"])
+    op.drop_column("automation_rule_run", "authorization_revisions")
     op.drop_column("automation_rule_run", "authorization_revision")
     op.drop_column("automation_rule_run", "binding_id")
     op.drop_column("automation_rule_run", "binding_version")

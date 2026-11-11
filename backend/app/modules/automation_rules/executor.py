@@ -194,6 +194,7 @@ def execute_hits(
         run.execution_status, run.execution_summary = "FAILED", summary
         session.flush()
         return summary
+    scope: RuleBindingScope | None = None
     if run.optimizer_id is not None:
         # Optimizer executions are fenced to the exact rule/optimizer snapshot
         # used during evaluation; edits or revoked authorization fail closed.
@@ -212,6 +213,7 @@ def execute_hits(
                     bc_id="",
                     advertiser_ids=(),
                     authorization_revision=run.authorization_revision or 0,
+                    authorization_revisions=tuple(sorted(run.authorization_revisions.items())),
                     optimizer_version=run.optimizer_version or 0,
                     rule_version=run.rule_version,
                     binding_id=run.binding_id,
@@ -352,6 +354,10 @@ def execute_hits(
         before = dict(outcome)
         try:
             with session.begin_nested():
+                if scope is not None:
+                    # A rule/optimizer edit can happen while previews are being
+                    # prepared; fence again at the exact submission boundary.
+                    validate_rule_binding(session, scope)
                 submitted = _execute_bc(
                     session,
                     context=context,

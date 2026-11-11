@@ -2,9 +2,16 @@ from datetime import UTC, datetime
 from uuid import uuid4
 
 from app.modules.ai_workbench.evidence import RuleEvidenceSnapshot
-from app.modules.ai_workbench.rule_binding import RuleBindingScope, _rule_accounts
+from app.modules.ai_workbench.rule_binding import (
+    RuleBindingScope,
+    _rule_accounts,
+    validate_rule_binding,
+)
 from app.modules.automation_rules.evaluate import Evaluation, Hit, Target
-from app.modules.automation_rules.models import AutomationRule, AutomationRuleRun
+from app.modules.automation_rules.models import (
+    AutomationRule,
+    AutomationRuleRun,
+)
 from app.modules.automation_rules.schemas import RuleDefinition
 from tests.modules.automation_rules.test_definition import base
 
@@ -88,10 +95,63 @@ def test_evidence_freezes_rule_version_scope_hits_and_retention():
             optimizer_version=7,
             rule_version=3,
         ),
+        freshness=[
+            {
+                "source": "report_sync_state",
+                "stat_date": "2026-11-12",
+                "timezone": "UTC",
+                "observed_at": "2026-11-12T04:00:00+00:00",
+                "publication_version": 9,
+            }
+        ],
+        publication_versions={"a-1:ad_day:2026-11-12": 9},
     )
     assert snapshot.rule_version == 3
     assert snapshot.advertiser_ids == ("a-1",)
     assert snapshot.hits[0]["targets"][0]["key"] == target.key
     assert snapshot.skipped_accounts[0]["reason"] == "STALE_REPORT"
     assert snapshot.data_freshness["checked_count"] == 1
+    assert snapshot.data_freshness["rows"][0]["observed_at"]
+    assert snapshot.publication_versions["a-1:ad_day:2026-11-12"] == 9
     assert snapshot.retention_until is not None
+
+
+def test_scope_validation_fences_each_connection_revision(monkeypatch):
+    from app.modules.ai_workbench import rule_binding
+
+    tenant_id, optimizer_id, rule_id = uuid4(), uuid4(), uuid4()
+    scope = RuleBindingScope(
+        tenant_id=tenant_id,
+        optimizer_id=optimizer_id,
+        rule_id=rule_id,
+        bc_id="bc-x",
+        advertiser_ids=("a-1",),
+        authorization_revision=0,
+        authorization_revisions=(("a-1:connection-a", 0), ("a-2:connection-b", 4)),
+        optimizer_version=2,
+        rule_version=3,
+        binding_id=uuid4(),
+    )
+    monkeypatch.setattr(rule_binding, "resolve_rule_binding", lambda *_args, **_kwargs: scope)
+    assert validate_rule_binding(object(), scope).authorization_revisions[-1][1] == 4
+    changed = RuleBindingScope(
+        **{
+            **scope.__dict__,
+            "authorization_revisions": (("a-1:connection-a", 0), ("a-2:connection-b", 5)),
+        }
+    )
+    monkeypatch.setattr(rule_binding, "resolve_rule_binding", lambda *_args, **_kwargs: changed)
+    try:
+        validate_rule_binding(object(), scope)
+    except Exception as error:
+        assert getattr(error, "code", None) == "ai_rule_binding_changed"
+    else:
+        raise AssertionError("authorization revision change must fail closed")
+
+
+def test_ordinary_and_optimizer_runs_have_distinct_partial_uniqueness_indexes():
+    indexes = {index.name for index in AutomationRuleRun.__table__.indexes}
+    assert {
+        "uq_automation_run_unscoped_slot",
+        "uq_automation_run_optimizer_slot",
+    } <= indexes

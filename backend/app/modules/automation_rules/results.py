@@ -12,6 +12,7 @@ from app.modules.ad_management.models import (
 from app.modules.automation_rules.models import (
     AutomationActionLedger,
     AutomationRule,
+    AutomationRuleEvidence,
     AutomationRuleRun,
 )
 from app.modules.automation_rules.runner import notify_execution
@@ -85,6 +86,19 @@ def refresh_execution_results(session: Session, task_id: UUID, tenant_id: UUID) 
         if run.execution_summary == summary and previous_status == status:
             continue
         run.execution_summary, run.execution_status = summary, status
+        if run.evidence_id is not None:
+            evidence = session.get(AutomationRuleEvidence, run.evidence_id)
+            if evidence is not None:
+                evidence.readback_status = {
+                    "task_id": str(task_id),
+                    "status": status,
+                    "results": dict(results),
+                    "completed": not bool(results["pending"]),
+                }
+                evidence.management_tasks = [
+                    *evidence.management_tasks,
+                    {"task_id": str(task_id), "status": status},
+                ]
         # 所有管理项结算后再发结果卡片；重投只更新一次，等待重试不反复通知。
         if not results["pending"]:
             rule = session.get(AutomationRule, run.rule_id)

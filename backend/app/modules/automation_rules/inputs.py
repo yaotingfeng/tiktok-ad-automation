@@ -72,6 +72,10 @@ class Inputs:
     entities: dict[str, Entity]
     facts: dict[str, dict[str, dict[str, Decimal | None]]]
     skipped_accounts: list[dict[str, str]] = field(default_factory=list)
+    # Decision evidence keeps the sync publication watermarks instead of only
+    # retaining a coarse STALE_REPORT reason.
+    freshness: list[dict[str, Any]] = field(default_factory=list)
+    publication_versions: dict[str, int] = field(default_factory=dict)
 
 
 def in_rule_scope(
@@ -231,6 +235,59 @@ def _fresh_accounts(
         else:
             skipped.append({"advertiser_id": adv, "reason": "STALE_REPORT"})
     return fresh, skipped
+
+
+def _freshness_metadata(
+    session: Session,
+    *,
+    tenant_id: UUID,
+    accounts: dict[str, AccountInfo],
+    report_kinds: tuple[str, ...],
+    now: datetime,
+) -> tuple[list[dict[str, Any]], dict[str, int]]:
+    """Capture per-account stat date, timezone, source and publication watermark."""
+    if not accounts:
+        return [], {}
+    rows = session.connection().execute(
+        text(
+            "SELECT advertiser_id, report_kind, stat_date, status, last_success_at, "
+            "observed_at, publication_version FROM report_sync_state "
+            "WHERE tenant_id=:t AND advertiser_id = ANY(:advs) "
+            "AND report_kind = ANY(:kinds) AND stat_date >= :since "
+            "ORDER BY advertiser_id, report_kind, stat_date"
+        ),
+        {
+            "t": tenant_id,
+            "advs": list(accounts),
+            "kinds": list(report_kinds),
+            "since": now.date() - timedelta(days=31),
+        },
+    ).all()
+    freshness: list[dict[str, Any]] = []
+    versions: dict[str, int] = {}
+    for row in rows:
+        info = accounts.get(row.advertiser_id)
+        if info is None:
+            continue
+        key = f"{row.advertiser_id}:{row.report_kind}:{row.stat_date.isoformat()}"
+        versions[key] = int(row.publication_version or 0)
+        freshness.append(
+            {
+                "advertiser_id": row.advertiser_id,
+                "bc_id": info.bc_id,
+                "report_kind": row.report_kind,
+                "source": "report_sync_state",
+                "stat_date": row.stat_date.isoformat(),
+                "timezone": info.timezone,
+                "status": row.status,
+                "last_success_at": row.last_success_at.isoformat()
+                if row.last_success_at
+                else None,
+                "observed_at": row.observed_at.isoformat() if row.observed_at else None,
+                "publication_version": int(row.publication_version or 0),
+            }
+        )
+    return freshness, versions
 
 
 def _decimal(value: Any) -> Decimal | None:
@@ -489,6 +546,13 @@ def load_inputs(
         }
     level = definition.apply_to.level
     kind = "creative_day" if level == "material" else "ad_day"
+    freshness, publication_versions = _freshness_metadata(
+        session,
+        tenant_id=tenant_id,
+        accounts=accounts,
+        report_kinds=(kind, "ad_day") if kind != "ad_day" else (kind,),
+        now=now,
+    )
     accounts, skipped = _fresh_accounts(
         session, tenant_id=tenant_id, accounts=accounts, kind=kind, now=now
     )
@@ -498,7 +562,10 @@ def load_inputs(
         )
         skipped.extend(ledger_skipped)
     if not accounts:
-        return Inputs(accounts={}, entities={}, facts={}, skipped_accounts=skipped)
+        return Inputs(
+            accounts={}, entities={}, facts={}, skipped_accounts=skipped,
+            freshness=freshness, publication_versions=publication_versions,
+        )
     ranges: list[str] = sorted(
         {
             str(c.range)
@@ -571,5 +638,10 @@ def load_inputs(
             for adv in sorted(changed - audited)
         )
     return Inputs(
-        accounts=accounts, entities=entities, facts=facts, skipped_accounts=skipped
+        accounts=accounts,
+        entities=entities,
+        facts=facts,
+        skipped_accounts=skipped,
+        freshness=freshness,
+        publication_versions=publication_versions,
     )

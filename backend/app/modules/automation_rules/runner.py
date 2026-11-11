@@ -26,7 +26,7 @@ from app.modules.automation_rules.confirmations import (
 )
 from app.modules.automation_rules.data_issues import actionable_input_issues
 from app.modules.automation_rules.evaluate import Evaluation, evaluate
-from app.modules.automation_rules.inputs import load_inputs
+from app.modules.automation_rules.inputs import in_rule_scope, load_inputs
 from app.modules.automation_rules.models import (
     AutomationConfirmation,
     AutomationRule,
@@ -78,6 +78,7 @@ def _start(
         binding_version=scope.optimizer_version if scope else None,
         binding_id=scope.binding_id if scope else None,
         authorization_revision=scope.authorization_revision if scope else None,
+        authorization_revisions=dict(scope.authorization_revisions) if scope else {},
         rule_version=rule.version,
         definition=rule.definition,
         slot_at=slot_at,
@@ -189,6 +190,24 @@ def execute_run(
                 result=result,
                 skipped_accounts=inputs.skipped_accounts,
                 scope=optimizer_scope,
+                freshness=inputs.freshness,
+                publication_versions=inputs.publication_versions,
+                checked_objects=tuple(
+                    {
+                        "key": entity.key,
+                        "kind": entity.kind,
+                        "advertiser_id": entity.advertiser_id,
+                        "bc_id": entity.bc_id,
+                        "remote_id": entity.remote_id,
+                        "status": entity.status,
+                        "before": {
+                            key: None if value is None else str(value)
+                            for key, value in entity.attributes.items()
+                        },
+                    }
+                    for entity in inputs.entities.values()
+                    if in_rule_scope(entity, definition, ignore_status=True)
+                ),
             )
     except SoftTimeLimitExceeded:
         logger.warning("automation rule timed out", extra={"rule_id": str(rule.id)})

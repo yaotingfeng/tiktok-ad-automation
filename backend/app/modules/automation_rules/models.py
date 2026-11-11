@@ -10,6 +10,7 @@ from sqlalchemy import (
     ForeignKeyConstraint,
     Index,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlmodel import Field, SQLModel
@@ -46,8 +47,20 @@ class AutomationRule(SQLModel, table=True):
 class AutomationRuleRun(SQLModel, table=True):
     __tablename__ = "automation_rule_run"
     __table_args__ = (
-        UniqueConstraint(
-            "rule_id", "slot_at", "optimizer_id", name="uq_automation_run_slot"
+        Index(
+            "uq_automation_run_unscoped_slot",
+            "rule_id",
+            "slot_at",
+            unique=True,
+            postgresql_where=text("optimizer_id IS NULL"),
+        ),
+        Index(
+            "uq_automation_run_optimizer_slot",
+            "rule_id",
+            "slot_at",
+            "optimizer_id",
+            unique=True,
+            postgresql_where=text("optimizer_id IS NOT NULL"),
         ),
         Index("ix_automation_run_tenant_time", "tenant_id", "started_at"),
         CheckConstraint(
@@ -73,6 +86,9 @@ class AutomationRuleRun(SQLModel, table=True):
     binding_version: int | None = None
     binding_id: UUID | None = None
     authorization_revision: int | None = None
+    authorization_revisions: dict[str, int] = Field(
+        default_factory=dict, sa_column=Column(JSONB, nullable=False)
+    )
     rule_version: int
     # 运行所用的规则定义快照;规则后续修改不影响历史记录解释。
     definition: dict[str, Any] = Field(sa_column=Column(JSONB, nullable=False))
@@ -130,6 +146,9 @@ class AutomationRuleEvidence(SQLModel, table=True):
     bc_id: str | None = Field(default=None, max_length=128)
     advertiser_ids: list[str] = Field(default_factory=list, sa_column=Column(JSONB, nullable=False))
     authorization_revision: int | None = None
+    authorization_revisions: dict[str, int] = Field(
+        default_factory=dict, sa_column=Column(JSONB, nullable=False)
+    )
     checked_metrics: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSONB, nullable=False))
     data_freshness: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSONB, nullable=False))
     publication_versions: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSONB, nullable=False))
