@@ -69,3 +69,14 @@ Round 2 verification:
 
 - `uv run ruff check --fix backend/tests/modules/ai_workbench/test_build_handoff.py` — passed.
 - Focused handoff tests — `11 passed`.
+
+## Review fix round 3
+
+- Aggregate `Submission.NEEDS_REVIEW` now maps to occurrence `UNKNOWN`,
+  preserving the explicit unresolved-readback state and its evidence instead of
+  incorrectly reporting a partial build.
+- Added a regression test for the NEEDS_REVIEW-to-UNKNOWN transition.
+
+Round 3 verification:
+
+- Focused handoff tests — `12 passed`.

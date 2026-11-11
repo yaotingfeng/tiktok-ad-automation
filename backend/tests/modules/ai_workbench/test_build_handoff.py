@@ -240,3 +240,37 @@ def test_nonterminal_submission_does_not_terminalize_multi_step_occurrence(
     assert result is None
     assert occurrence.status == "DISPATCHED"
 
+
+def test_needs_review_aggregate_maps_to_unknown(monkeypatch: pytest.MonkeyPatch) -> None:
+    submission_id = uuid4()
+    occurrence = BuildOccurrence(
+        tenant_id=uuid4(), optimizer_id=uuid4(), plan_row_id=uuid4(), request_id=uuid4(),
+        request_digest="g" * 64, strategy_version_id=uuid4(), bc_id="bc-1",
+        advertiser_ids=["adv-1"], provider_connection_id=uuid4(), application_id="app-1",
+        title="剧目", scheduled_at=datetime.now(UTC), status="DISPATCHED", submission_id=submission_id,
+    )
+
+    class Result:
+        def one_or_none(self) -> BuildOccurrence:
+            return occurrence
+
+    class Session:
+        def exec(self, _query: object) -> Result:
+            return Result()
+
+        def get(self, _model: object, _identity: object) -> object:
+            return type("Submission", (), {"status": "NEEDS_REVIEW"})()
+
+        def add(self, _row: object) -> None:
+            return None
+
+        def flush(self) -> None:
+            return None
+
+    monkeypatch.setattr(BuildHandoff, "_authorize", lambda self: None)
+    result = BuildHandoff(
+        Session(), context=type("Context", (), {"tenant_id": occurrence.tenant_id, "actor_id": uuid4()})()
+    ).record_submission_result(submission_id, state="UNKNOWN")
+    assert result is occurrence
+    assert occurrence.status == "UNKNOWN"
+

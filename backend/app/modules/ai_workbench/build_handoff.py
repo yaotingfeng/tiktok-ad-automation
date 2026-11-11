@@ -427,7 +427,10 @@ class BuildHandoff:
             "COMPLETED": "COMPLETE",
             "PARTIAL": "PARTIAL",
             "FAILED": "FAILED",
-            "NEEDS_REVIEW": "PARTIAL",
+            # Existing aggregate status uses NEEDS_REVIEW for UNKNOWN or
+            # mismatch evidence; preserve the occurrence's explicit UNKNOWN
+            # reconciliation state until a later readback resolves it.
+            "NEEDS_REVIEW": "UNKNOWN",
         }[submission.status]
         occurrence = self.session.exec(
             select(BuildOccurrence)
