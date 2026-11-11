@@ -164,3 +164,15 @@ def test_submit_boundary_revalidation_runs_after_preview_preparation():
     source = inspect.getsource(_execute_bc)
     assert source.index("prepare_preview(") < source.index("validate_rule_binding(")
     assert source.index("validate_rule_binding(") < source.index("submit_management_task(")
+
+
+def test_failed_submit_fence_restores_preview_unsupported_details():
+    from app.modules.automation_rules.executor import _restore_bc_summary
+
+    summary = {"submitted": 0, "unsupported_details": [{"target_key": "rolled-back"}]}
+    _restore_bc_summary(
+        summary,
+        {"submitted": 0},
+        [{"target_key": "before-bc"}],
+    )
+    assert summary["unsupported_details"] == [{"target_key": "before-bc"}]

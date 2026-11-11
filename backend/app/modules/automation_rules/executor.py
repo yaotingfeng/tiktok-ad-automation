@@ -85,6 +85,16 @@ def _summary() -> dict[str, Any]:
     }
 
 
+def _restore_bc_summary(
+    summary: dict[str, Any],
+    counts: dict[str, int],
+    unsupported_details: list[dict[str, Any]],
+) -> None:
+    """Restore all mutable BC-local summary state after a savepoint rollback."""
+    summary.update(counts)
+    summary["unsupported_details"] = list(unsupported_details)
+
+
 def lock_tenant(session: Session, tenant_id: UUID) -> None:
     # 同一租户的执行串行化：后到的执行一定能看到先到者写下的台账，冲突判断才可靠。
     session.connection().execute(
@@ -352,6 +362,7 @@ def execute_hits(
             key: value for key, value in summary.items() if isinstance(value, int)
         }
         before = dict(outcome)
+        before_unsupported_details = list(summary["unsupported_details"])
         try:
             with session.begin_nested():
                 submitted = _execute_bc(
@@ -384,7 +395,11 @@ def execute_hits(
                 "automation execution failed for bc",
                 extra={"rule_id": str(rule.id), "bc_id": bc_id, "reason": reason},
             )
-            summary.update(counts)
+            # Preview classification may have appended unsupported details
+            # before the final scope fence failed.  Restore the whole BC save
+            # point, not only integer counters, so the failed evidence cannot
+            # describe work that was rolled back.
+            _restore_bc_summary(summary, counts, before_unsupported_details)
             outcome.clear()
             outcome.update(before)
             summary["failed_bcs"].append({"bc_id": bc_id, "reason": reason})

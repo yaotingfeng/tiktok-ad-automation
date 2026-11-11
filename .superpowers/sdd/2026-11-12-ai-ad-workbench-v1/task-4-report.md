@@ -30,3 +30,7 @@ Round 2 fix: the final scope revalidation now runs inside `_execute_bc` after
 preview preparation and directly before `submit_management_task`, closing the
 preview-to-submit race window. A focused ordering regression test covers this
 boundary.
+
+Round 3 fix: BC savepoint rollback now restores `unsupported_details` alongside
+integer counters and outcomes, preventing a failed final fence from retaining
+preview classifications that were rolled back.
