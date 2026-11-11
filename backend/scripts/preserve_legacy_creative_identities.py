@@ -3,6 +3,7 @@
 import argparse
 import json
 import sys
+from collections import deque
 from typing import Any
 from uuid import UUID
 
@@ -37,6 +38,34 @@ def _covered(original, row):
         and _same_assets(identity.get("assets", []), row["assets"])
         for identity in identities
     )
+
+
+def _append_proofs(connection, scope, proofs):
+    written = 0
+    for start in range(0, len(proofs), 500):
+        # 同批 CID 唯一，UPDATE ... FROM 不会为一行随机挑选多份冲突证据。
+        result = connection.execute(
+            text("""
+            UPDATE ad_creative AS current SET evidence=jsonb_set(current.evidence,'{legacy_identities}',
+                COALESCE(current.evidence->'legacy_identities','[]'::jsonb) || CASE WHEN
+                COALESCE(current.evidence->'legacy_identities','[]'::jsonb) @> jsonb_build_array(incoming.proof)
+                THEN '[]'::jsonb ELSE jsonb_build_array(incoming.proof) END)
+                || CASE WHEN incoming.conflict THEN jsonb_build_object('conflicts',
+                   COALESCE(current.evidence->'conflicts','[]'::jsonb) || CASE WHEN
+                   COALESCE(current.evidence->'conflicts','[]'::jsonb) @> jsonb_build_array(incoming.proof)
+                   THEN '[]'::jsonb ELSE jsonb_build_array(incoming.proof) END)
+                   ELSE '{}'::jsonb END,
+                identity_status=CASE WHEN incoming.conflict THEN 'CONFLICT' ELSE current.identity_status END
+            FROM jsonb_to_recordset(CAST(:proofs AS jsonb)) AS incoming(cid text,proof jsonb,conflict boolean)
+            WHERE current.tenant_id=:tenant AND current.advertiser_id=:account AND current.creative_id=incoming.cid
+              AND (NOT COALESCE(current.evidence->'legacy_identities','[]'::jsonb) @> jsonb_build_array(incoming.proof)
+                OR (incoming.conflict AND (current.identity_status<>'CONFLICT' OR NOT
+                  COALESCE(current.evidence->'conflicts','[]'::jsonb) @> jsonb_build_array(incoming.proof))))
+        """),
+            scope | {"proofs": json.dumps(proofs[start : start + 500])},
+        )
+        written += result.rowcount
+    return written
 
 
 def preserve_creative_identities(
@@ -98,7 +127,7 @@ def preserve_creative_identities(
     rows = _group_references([dict(ref) for ref in refs])
     wanted = frozenset(row["creative_id"] for row in rows)
 
-    def identities():
+    def identities(ids=wanted):
         return {
             row["creative_id"]: dict(row)
             for row in connection.execute(
@@ -106,7 +135,7 @@ def preserve_creative_identities(
             SELECT * FROM ad_creative WHERE tenant_id=:tenant AND advertiser_id=:account
             AND creative_id=ANY(CAST(:ids AS text[]))
         """),
-                scope | {"ids": sorted(wanted)},
+                scope | {"ids": sorted(ids)},
             ).mappings()
         }
 
@@ -136,96 +165,82 @@ def preserve_creative_identities(
             .all()
         )
         by_id = {row["remote_id"]: row for row in statuses}
+        # 同 CID 的多组观察必须顺序判定；不同 CID 则成批写入，避免逐条全页回读。
+        # 每轮每 CID 只取一条，下一轮读取上一轮最终状态，保持旧版冲突/弱身份语义。
+        pending = {}
         for row in rows:
-            original = known.get(row["creative_id"])
-            if _covered(original, row):
-                continue
-            row["asset_order_source"] = "CANONICAL_REFERENCE_SORT"
-            child = by_id.get(row["creative_id"])
-            if child:
-                row["deleted"] |= child["operation_status"] in {"DELETE", "DELETED"}
-                row["operation_status"] = child["operation_status"]
-            identity = {
-                key: row[key] for key in ("ad_remote_id", "ad_material_id", "assets")
-            }
-            proof = {
-                "identity": identity,
-                "published_version": row["published_version"],
-                "observed_at": row["observed_at"].isoformat(),
-                "asset_order_source": "CANONICAL_REFERENCE_SORT",
-            }
-            conflict = False
-            if original is None:
-                written += _write_groups(
-                    session,
-                    tenant_id=tenant_id,
-                    advertiser_id=advertiser_id,
-                    rows=[row],
-                )
-            elif (
-                original["ad_remote_id"] == row["ad_remote_id"]
-                and original["ad_material_id"] in (None, row["ad_material_id"])
-                and (
-                    (
-                        original["identity_status"] == "UNRESOLVED"
-                        and not original["assets"]
+            pending.setdefault(row["creative_id"], deque()).append(row)
+        while pending:
+            publications, proofs = [], []
+            for observations in pending.values():
+                row = observations.popleft()
+                original = known.get(row["creative_id"])
+                if _covered(original, row):
+                    continue
+                row["asset_order_source"] = "CANONICAL_REFERENCE_SORT"
+                child = by_id.get(row["creative_id"])
+                if child:
+                    row["deleted"] |= child["operation_status"] in {"DELETE", "DELETED"}
+                    row["operation_status"] = child["operation_status"]
+                identity = {
+                    key: row[key]
+                    for key in ("ad_remote_id", "ad_material_id", "assets")
+                }
+                proof = {
+                    "identity": identity,
+                    "published_version": row["published_version"],
+                    "observed_at": row["observed_at"].isoformat(),
+                    "asset_order_source": "CANONICAL_REFERENCE_SORT",
+                }
+                conflict = False
+                if original is None:
+                    publications.append(row)
+                elif (
+                    original["ad_remote_id"] == row["ad_remote_id"]
+                    and original["ad_material_id"] in (None, row["ad_material_id"])
+                    and (
+                        (
+                            original["identity_status"] == "UNRESOLVED"
+                            and not original["assets"]
+                        )
+                        or _same_assets(original["assets"], row["assets"])
                     )
-                    or _same_assets(original["assets"], row["assets"])
+                ):
+                    # 较新的空观察不能抹掉旧正向资产；补齐时保留其版本、时间和状态围栏。
+                    enriched = dict(
+                        row,
+                        published_version=max(
+                            original["published_version"], row["published_version"]
+                        ),
+                        observed_at=max(original["observed_at"], row["observed_at"]),
+                        name=original["name"],
+                        operation_status=original["operation_status"],
+                        deleted=original["deleted"],
+                    )
+                    if original["assets"]:
+                        enriched["assets"] = original["assets"]
+                    publications.append(enriched)
+                else:
+                    conflict = True
+                proofs.append(
+                    {"cid": row["creative_id"], "proof": proof, "conflict": conflict}
                 )
-            ):
-                # 较新的空观察不能抹掉旧正向资产；补齐时保留其版本、时间和状态围栏。
-                enriched = dict(
-                    row,
-                    published_version=max(
-                        original["published_version"], row["published_version"]
-                    ),
-                    observed_at=max(original["observed_at"], row["observed_at"]),
-                    name=original["name"],
-                    operation_status=original["operation_status"],
-                    deleted=original["deleted"],
-                )
-                if original["assets"]:
-                    enriched["assets"] = original["assets"]
+            if publications:
                 written += _write_groups(
                     session,
                     tenant_id=tenant_id,
                     advertiser_id=advertiser_id,
-                    rows=[enriched],
+                    rows=publications,
                 )
-            else:
-                conflict = True
-            # 真实不相容观察进入标准冲突合同；后续弱 MID 恢复也必须看见它。
-            # 所有未承接旧观察均追加精确证据，包括冲突、旧版本和原 UNRESOLVED。
-            # 不用旧观察覆盖已有完整身份，且相同页重试不会重复追加证据。
-            result = connection.execute(
-                text("""
-                UPDATE ad_creative SET evidence=jsonb_set(evidence,'{legacy_identities}',
-                    COALESCE(evidence->'legacy_identities','[]'::jsonb) || CASE WHEN
-                    COALESCE(evidence->'legacy_identities','[]'::jsonb) @> jsonb_build_array(CAST(:proof AS jsonb))
-                    THEN '[]'::jsonb ELSE jsonb_build_array(CAST(:proof AS jsonb)) END)
-                    || CASE WHEN :conflict THEN jsonb_build_object('conflicts',
-                       COALESCE(evidence->'conflicts','[]'::jsonb) || CASE WHEN
-                       COALESCE(evidence->'conflicts','[]'::jsonb) @> jsonb_build_array(CAST(:proof AS jsonb))
-                       THEN '[]'::jsonb ELSE jsonb_build_array(CAST(:proof AS jsonb)) END)
-                       ELSE '{}'::jsonb END,
-                    identity_status=CASE WHEN :conflict THEN 'CONFLICT' ELSE identity_status END
-                WHERE tenant_id=:tenant AND advertiser_id=:account AND creative_id=:cid
-                  AND (NOT COALESCE(evidence->'legacy_identities','[]'::jsonb) @> jsonb_build_array(CAST(:proof AS jsonb))
-                    OR (:conflict AND (identity_status<>'CONFLICT' OR NOT
-                      COALESCE(evidence->'conflicts','[]'::jsonb) @> jsonb_build_array(CAST(:proof AS jsonb)))))
-            """),
-                scope
-                | {
-                    "cid": row["creative_id"],
-                    "parent": row["ad_remote_id"],
-                    "mid": row["ad_material_id"],
-                    "conflict": conflict,
-                    "proof": json.dumps(proof),
-                },
-            )
-            written += result.rowcount
-            # 同 CID 可能在同一父广告页内有多组不相容观察，下一组必须读到新证据。
-            known = identities()
+            if proofs:
+                written += _append_proofs(connection, scope, proofs)
+                # 只回读本轮变动 CID 一次；不随每条观察反复传输整页身份。
+                known.update(identities({item["cid"] for item in proofs}))
+            pending = {
+                cid: observations
+                for cid, observations in pending.items()
+                if observations
+            }
 
     return {
         "written": written,
