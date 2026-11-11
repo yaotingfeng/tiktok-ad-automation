@@ -54,17 +54,12 @@ def dispatch_due_plans(*, database_engine: Any = engine, limit: int = 100) -> in
     with Session(database_engine) as session, session.begin():
         rows = session.exec(
             select(AIDailyPlanRow)
-            .where(
-                AIDailyPlanRow.business_date <= now.date(),
-            )
             .order_by(col(AIDailyPlanRow.business_date), col(AIDailyPlanRow.scheduled_time), col(AIDailyPlanRow.id))
             .limit(limit)
             .with_for_update(skip_locked=True)
         ).all()
         for row in rows:
             scheduled_at = _scheduled_at(row)
-            if scheduled_at > now:
-                continue
             optimizer = session.exec(
                 select(AIOptimizer).where(
                     AIOptimizer.tenant_id == row.tenant_id,
@@ -72,6 +67,16 @@ def dispatch_due_plans(*, database_engine: Any = engine, limit: int = 100) -> in
                 )
             ).one_or_none()
             if optimizer is None or not optimizer.active:
+                if optimizer is not None:
+                    context = TenantContext(tenant_id=row.tenant_id, actor_id=optimizer.created_by, role="operator")
+                    BuildHandoff(session, context=context).create_occurrence(
+                        row.id,
+                        uuid5(OCCURRENCE_NAMESPACE, f"skip:{row.id}:inactive"),
+                        enqueue=False,
+                        skip_reason="ai_optimizer_inactive",
+                        allow_inactive=True,
+                        allow_missing_provider=True,
+                    )
                 continue
             actor_id = optimizer.created_by
             request_id = uuid5(
@@ -80,11 +85,35 @@ def dispatch_due_plans(*, database_engine: Any = engine, limit: int = 100) -> in
             )
             context = TenantContext(tenant_id=row.tenant_id, actor_id=actor_id, role="operator")
             handoff = BuildHandoff(session, context=context)
-            occurrence = handoff.create_occurrence(row.id, request_id)
+            if scheduled_at > now:
+                occurrence = handoff.create_occurrence(
+                    row.id,
+                    request_id,
+                    enqueue=False,
+                    skip_reason="future",
+                )
+                occurrence.evidence = {**occurrence.evidence, "skip_reason": "future"}
+                session.add(occurrence)
+                continue
+            try:
+                occurrence = handoff.create_occurrence(row.id, request_id)
+            except DomainError as error:
+                # Keep a durable blocked occurrence when provider/application
+                # readiness changes after the plan was saved.
+                occurrence = handoff.create_occurrence(
+                    row.id,
+                    request_id,
+                    enqueue=False,
+                    skip_reason=error.code,
+                    allow_inactive=True,
+                    allow_missing_provider=True,
+                )
             # The occurrence ledger is the claim.  Existing UNKNOWN rows are
             # returned by create_occurrence and never submitted again.
             if occurrence.status == "PENDING":
                 handoff.dispatch_occurrence(occurrence.id)
+            elif occurrence.status == "WAITING_MATERIAL":
+                handoff.schedule_retry(occurrence.id)
             created += 1
     return created
 

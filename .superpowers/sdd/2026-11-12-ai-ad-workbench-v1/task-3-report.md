@@ -32,3 +32,23 @@ draft, preparation, preview, submission and reconciliation services.
 The repository's full database-backed suite still requires its dedicated
 PostgreSQL/Redis test environment; these focused tests do not call external ad
 or provider services.
+
+## Review fix round 1
+
+- WAITING_MATERIAL occurrences now have a durable retry generation and outbox
+  re-arm path. Beat revisits waiting rows and never leaves material waits
+  orphaned.
+- Existing build result/readback workers call a `record_submission_result`
+  hook, mapping reconciliation evidence into COMPLETE/PARTIAL/FAILED/UNKNOWN.
+  UNKNOWN cannot transition to DISPATCHED without an explicit retry guard.
+- Schedule claims use a stable tenant/optimizer/row/strategy/time advisory lock
+  in addition to request idempotency, protecting duplicate requests.
+- Beat persists future, inactive-optimizer, and provider-readiness skip reasons
+  in occurrence evidence rather than silently dropping rows.
+- Added regression tests for retry rearming, UNKNOWN transition protection,
+  readback evidence import, and material readiness classification.
+
+Fix round verification:
+
+- `uv run ruff check --fix backend/app/modules/ai_workbench/build_handoff.py backend/app/modules/ai_workbench/build_tasks.py backend/app/modules/builds/tasks.py backend/app/core/errors.py backend/tests/modules/ai_workbench/test_build_handoff.py` — passed.
+- Focused handoff tests — `10 passed`.

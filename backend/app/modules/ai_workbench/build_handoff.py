@@ -82,6 +82,8 @@ class BuildHandoff:
         plan_row_id: UUID,
         *,
         caller_strategy_version_id: UUID | None,
+        allow_inactive: bool = False,
+        allow_missing_provider: bool = False,
     ) -> tuple[AIDailyPlanRow, AIOptimizer, AIOptimizerVersion, UUID]:
         row = self.session.exec(
             select(AIDailyPlanRow)
@@ -103,7 +105,7 @@ class BuildHandoff:
         ).one_or_none()
         if optimizer is None:
             raise DomainError("ai_optimizer_not_found", "ai_optimizer_not_found")
-        if not optimizer.active:
+        if not optimizer.active and not allow_inactive:
             raise DomainError("ai_optimizer_inactive", "ai_optimizer_inactive")
         binding = self.session.exec(
             select(AIOptimizerStrategyBinding).where(
@@ -136,7 +138,7 @@ class BuildHandoff:
                 ProviderApplication.external_id == row.application_id,
             )
         ).one_or_none()
-        if application is None:
+        if application is None and not allow_missing_provider:
             raise DomainError("ai_provider_application_not_found", "ai_provider_application_not_found")
         return row, optimizer, version, binding.strategy_version_id
 
@@ -146,6 +148,10 @@ class BuildHandoff:
         request_id: UUID,
         *,
         strategy_version_id: UUID | None = None,
+        enqueue: bool = True,
+        skip_reason: str | None = None,
+        allow_inactive: bool = False,
+        allow_missing_provider: bool = False,
     ) -> BuildOccurrence:
         """Create or return a frozen occurrence and its local outbox message.
 
@@ -154,7 +160,10 @@ class BuildHandoff:
         """
         self._authorize()
         row, optimizer, version, resolved_strategy = self._resolve_snapshot(
-            plan_row_id, caller_strategy_version_id=strategy_version_id
+            plan_row_id,
+            caller_strategy_version_id=strategy_version_id,
+            allow_inactive=allow_inactive,
+            allow_missing_provider=allow_missing_provider,
         )
         scheduled_at = _scheduled_at(row)
         payload = {
@@ -176,6 +185,13 @@ class BuildHandoff:
         # Celery task IDs for deduplication.
         key = int.from_bytes(hashlib.sha256(f"ai-occurrence:{self.context.tenant_id}:{request_id}".encode()).digest()[:8], signed=True)
         SQLAlchemySession.execute(self.session, text("SELECT pg_advisory_xact_lock(:key)"), {"key": key})
+        schedule_key = int.from_bytes(
+            hashlib.sha256(
+                f"ai-schedule:{self.context.tenant_id}:{optimizer.id}:{row.id}:{resolved_strategy}:{scheduled_at.isoformat()}".encode()
+            ).digest()[:8],
+            signed=True,
+        )
+        SQLAlchemySession.execute(self.session, text("SELECT pg_advisory_xact_lock(:key)"), {"key": schedule_key})
         prior = self.session.exec(
             select(BuildOccurrence).where(
                 BuildOccurrence.tenant_id == self.context.tenant_id,
@@ -213,17 +229,21 @@ class BuildHandoff:
             external_drama_id=row.external_drama_id,
             order_materials=row.order_materials,
             scheduled_at=scheduled_at,
-            evidence={"snapshot": payload},
+            evidence={"snapshot": payload, **({"skip_reason": skip_reason} if skip_reason else {})},
         )
+        if skip_reason and skip_reason != "future":
+            occurrence.status = "FAILED"
+            occurrence.error_code = skip_reason
         self.session.add(occurrence)
         self.session.flush()
-        occurrence.dispatch_id = enqueue_after_commit(
-            self.session,
-            context=self.context,
-            task_name=TASK_NAME,
-            task_key=f"ai-build-occurrence:{occurrence.id}",
-            payload={"occurrence_id": str(occurrence.id)},
-        )
+        if enqueue and not skip_reason:
+            occurrence.dispatch_id = enqueue_after_commit(
+                self.session,
+                context=self.context,
+                task_name=TASK_NAME,
+                task_key=f"ai-build-occurrence:{occurrence.id}",
+                payload={"occurrence_id": str(occurrence.id)},
+            )
         self.session.add(occurrence)
         self.session.flush()
         return occurrence
@@ -313,6 +333,33 @@ class BuildHandoff:
         self.session.flush()
         return occurrence
 
+    def schedule_retry(self, occurrence_id: UUID) -> BuildOccurrence:
+        """Re-arm a material wait through a new durable outbox generation."""
+        self._authorize()
+        occurrence = self.session.exec(
+            select(BuildOccurrence)
+            .where(BuildOccurrence.tenant_id == self.context.tenant_id, BuildOccurrence.id == occurrence_id)
+            .with_for_update()
+        ).one_or_none()
+        if occurrence is None:
+            raise DomainError("ai_build_occurrence_not_found", "ai_build_occurrence_not_found")
+        if occurrence.status != "WAITING_MATERIAL":
+            return occurrence
+        generation = int(occurrence.evidence.get("retry_generation", 0)) + 1
+        occurrence.evidence = {**occurrence.evidence, "retry_generation": generation}
+        occurrence.status = "PENDING"
+        occurrence.dispatch_id = enqueue_after_commit(
+            self.session,
+            context=self.context,
+            task_name=TASK_NAME,
+            task_key=f"ai-build-occurrence:{occurrence.id}:retry:{generation}",
+            payload={"occurrence_id": str(occurrence.id)},
+        )
+        occurrence.updated_at = datetime.now(UTC)
+        self.session.add(occurrence)
+        self.session.flush()
+        return occurrence
+
     def reconcile_occurrence(
         self,
         occurrence_id: UUID,
@@ -331,6 +378,9 @@ class BuildHandoff:
         ).one_or_none()
         if occurrence is None:
             raise DomainError("ai_build_occurrence_not_found", "ai_build_occurrence_not_found")
+        if occurrence.status == "UNKNOWN" and state == "DISPATCHED":
+            if not (evidence or {}).get("explicit_retry"):
+                raise DomainError("ai_build_occurrence_retry_required", "ai_build_occurrence_retry_required")
         occurrence.status = state
         if evidence:
             occurrence.evidence = {**occurrence.evidence, "readback": evidence}
@@ -341,4 +391,43 @@ class BuildHandoff:
 
     # A concise alias used by result workers and tests.
     reconcile = reconcile_occurrence
+
+    def record_submission_result(
+        self,
+        submission_id: UUID,
+        *,
+        state: str,
+        evidence: dict[str, Any] | None = None,
+    ) -> BuildOccurrence | None:
+        """Result-worker hook translating existing build readback into ledger state."""
+        mapped = {
+            "SUCCEEDED": "COMPLETE",
+            "VERIFIED_REPLACEMENT": "COMPLETE",
+            "NOT_REQUIRED": "COMPLETE",
+            "MISMATCH": "PARTIAL",
+            "FAILED": "FAILED",
+            "UNKNOWN": "UNKNOWN",
+        }.get(state)
+        if mapped is None:
+            return None
+        occurrence = self.session.exec(
+            select(BuildOccurrence)
+            .where(
+                BuildOccurrence.tenant_id == self.context.tenant_id,
+                BuildOccurrence.submission_id == submission_id,
+            )
+            .with_for_update()
+        ).one_or_none()
+        if occurrence is None:
+            return None
+        if occurrence.status == "UNKNOWN" and mapped == "COMPLETE":
+            # A later readback may close UNKNOWN; it is never treated as a new
+            # submission and therefore cannot create a second platform effect.
+            pass
+        occurrence.status = mapped
+        occurrence.evidence = {**occurrence.evidence, "readback": {"state": state, **(evidence or {})}}
+        occurrence.updated_at = datetime.now(UTC)
+        self.session.add(occurrence)
+        self.session.flush()
+        return occurrence
 

@@ -340,6 +340,7 @@ ERROR_HTTP_STATUS: dict[str, int] = {
     "ai_strategy_binding_mismatch": 409,
     "ai_build_occurrence_not_found": 404,
     "ai_build_occurrence_state_invalid": 422,
+    "ai_build_occurrence_retry_required": 409,
     "copy_pool_not_found": 404,
     "copy_pool_exhausted": 422,
     "invalid_group_config": 422,
