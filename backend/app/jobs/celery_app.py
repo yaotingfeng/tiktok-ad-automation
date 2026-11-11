@@ -34,6 +34,7 @@ celery_app.conf.update(
         "app.modules.builds.carousel_music_tasks",
         "app.modules.builds.preview_tasks",
         "app.modules.campaign_copies.tasks",
+        "app.modules.campaign_copies.source_facts",
         "app.modules.builds.submission_tasks",
         "app.modules.builds.tasks",
         "app.modules.builds.scene_tasks",

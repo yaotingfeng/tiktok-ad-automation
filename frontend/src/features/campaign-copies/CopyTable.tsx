@@ -156,6 +156,7 @@ function CopyTableRow({
   open: (kind: EditorKind) => void
 }) {
   const { source, configuration: config } = row
+  const sourceUnavailable = source.blockers.length > 0
   return (
     <TableRow data-testid={`copy-row-${row.row_id}`}>
       <TableCell>
@@ -212,7 +213,9 @@ function CopyTableRow({
         />
       </TableCell>
       <TableCell>
-        {source.bid_strategy === "TARGET_ROAS" ? (
+        {sourceUnavailable ? (
+          <span className="text-muted-foreground">未读取</span>
+        ) : source.bid_strategy === "TARGET_ROAS" ? (
           <Input
             className="w-24"
             aria-label={`${source.name} 目标 ROAS`}
@@ -243,13 +246,19 @@ function CopyTableRow({
           onChange={(event) => change({ budget: event.target.value || null })}
         />
         <p className="mt-1 text-xs text-muted-foreground">
-          {source.currency} ·{" "}
-          {source.budget_strategy === "ADGROUP" ? "组预算" : "系列预算"}
-          {config.budget === null
-            ? source.budget === null
-              ? " · 按来源各组保留"
-              : " · 沿用"
-            : ""}
+          {sourceUnavailable ? (
+            "来源预算未读取"
+          ) : (
+            <>
+              {source.currency} ·{" "}
+              {source.budget_strategy === "ADGROUP" ? "组预算" : "系列预算"}
+              {config.budget === null
+                ? source.budget === null
+                  ? " · 按来源各组保留"
+                  : " · 沿用"
+                : ""}
+            </>
+          )}
         </p>
       </TableCell>
       <TableCell className="min-w-52 max-w-64 whitespace-normal">
@@ -274,7 +283,9 @@ function CopyTableRow({
           disabled={!editable}
           onClick={() => open("materials")}
         >
-          {config.material_ids.length} 条素材
+          {sourceUnavailable
+            ? "素材未读取"
+            : `${config.material_ids.length} 条素材`}
         </Button>
       </TableCell>
       <TableCell>

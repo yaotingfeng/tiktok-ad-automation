@@ -11,6 +11,18 @@ from app.core.errors import DomainError
 from .request_compiler import decode_observed_intent, encode_intent
 
 COPY_KEY = "campaign_copy"
+
+
+def copy_ad_texts(snapshot: dict[str, Any], ad_id: object) -> tuple[str, ...]:
+    return tuple(
+        item["ad_text"]
+        for item in snapshot.get(COPY_KEY, {})
+        .get("ads", {})
+        .get(str(ad_id), {})
+        .get("ad_text_list", ())
+    )
+
+
 # 只允许剥离明确无创建语义的目录/传输元数据，未知业务字段必须阻断。
 READ_METADATA = {
     "campaign_id",
@@ -29,6 +41,8 @@ READ_METADATA = {
     "campaign_name",
     "adgroup_name",
     "ad_name",
+    "skip_learning_phase",
+    "optimization_event_type",
 }
 REQUIRED = {
     "CAMPAIGN": {
@@ -74,6 +88,60 @@ REQUIRED = {
 }
 
 
+def _drop_default(body, key, expected):
+    """只剥离已知的读取默认形态；不同值保留给严格编译报出具体字段。"""
+    if key in body and type(body[key]) is type(expected) and body[key] == expected:
+        body.pop(key)
+
+
+def _normalize_observation(kind, body):
+    if kind == "CAMPAIGN":
+        _drop_default(body, "is_search_campaign", False)
+    if kind == "ADGROUP":
+        # 平台把系列预算的子组回读为0/INFINITE，创建时应省略组预算。
+        if body.get("budget_mode") == "BUDGET_MODE_INFINITE" and body.get("budget") in (
+            0,
+            "0",
+            "0.0",
+        ):
+            body.pop("budget", None)
+            body.pop("budget_mode", None)
+        for key in ("min_budget", "conversion_bid_price"):
+            if body.get(key) in (0, "0", "0.0"):
+                body.pop(key, None)
+        if body.get("schedule_type") == "SCHEDULE_FROM_NOW":
+            body.pop("schedule_end_time", None)
+        target = body.get("targeting_spec")
+        if isinstance(target, dict):
+            ages = ["AGE_18_24", "AGE_25_34", "AGE_35_44", "AGE_45_54", "AGE_55_100"]
+            if target.get("spc_audience_age") == "OVER_TWENTY_FIVE":
+                ages = ages[1:]
+            if body.get("targeting_optimization_mode") == "AUTOMATIC":
+                if set(target.get("age_groups") or []) == set(ages):
+                    target.pop("age_groups", None)
+                _drop_default(target, "gender", "GENDER_UNLIMITED")
+            _drop_default(target, "languages", [])
+            _drop_default(target, "age_groups", [])
+            _drop_default(target, "spending_power", "ALL")
+            _drop_default(target, "brand_safety_type", "NO_BRAND_SAFETY")
+        for key in (
+            "is_hfss",
+            "is_lhf_compliance",
+            "search_result_enabled",
+            "organic_comment_disabled",
+        ):
+            _drop_default(body, key, False)
+        _drop_default(body, "pacing", "PACING_MODE_SMOOTH")
+    if kind == "AD":
+        for key in ("deeplink_list", "tracking_pixel_id_list", "utm_params"):
+            _drop_default(body, key, [])
+        config = body.get("ad_configuration")
+        if isinstance(config, dict):
+            _drop_default(config, "catalog_creative_toggle", False)
+            _drop_default(config, "fallback_type", "UNSET")
+    return body
+
+
 def observed_body(kind: str, configuration: dict[str, Any]) -> dict[str, Any]:
     """严格反编译当前目录；DTO 默认值不能替代显式的来源事实。"""
     if not isinstance(configuration, dict) or REQUIRED[kind] - configuration.keys():
@@ -84,6 +152,7 @@ def observed_body(kind: str, configuration: dict[str, Any]) -> dict[str, Any]:
     keep = REQUIRED[kind]
     for key in READ_METADATA - keep:
         body.pop(key, None)
+    body = _normalize_observation(kind, body)
     if kind == "AD":
         entries = body.get("creative_list")
         if not isinstance(entries, list) or any(
@@ -135,15 +204,28 @@ def observed_body(kind: str, configuration: dict[str, Any]) -> dict[str, Any]:
     try:
         return encode_intent(decode_observed_intent(kind, body))
     except (ValidationError, ValueError, TypeError) as error:
+        layer = {"CAMPAIGN": "系列", "ADGROUP": "广告组", "AD": "广告"}[kind]
+        fields = (
+            ", ".join(
+                sorted(
+                    {
+                        ".".join(map(str, item["loc"]))
+                        for item in error.errors(include_input=False, include_url=False)
+                    }
+                )
+            )
+            if isinstance(error, ValidationError)
+            else "配置值"
+        )
         raise DomainError(
             "copy_source_unsupported",
-            "来源当前设置不完整或包含现有创建通道不支持的字段",
+            f"来源{layer}配置无法继承，请核对字段：{fields}",
         ) from error
 
 
 def copy_parent_request(frozen, *, kind: str, name: str, parent_id=None, group_id=None):
     contract = frozen.scene_snapshot[COPY_KEY]
-    if contract.get("version") != 1:
+    if contract.get("version") not in {1, 2}:
         raise DomainError("copy_contract_invalid", "复制合同版本不可用")
     body = deepcopy(
         contract["campaign"]

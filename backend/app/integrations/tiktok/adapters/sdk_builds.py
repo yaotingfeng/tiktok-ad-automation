@@ -13,6 +13,7 @@ import business_api_client as sdk  # type: ignore[import-untyped]
 from app.core.errors import DomainError
 from app.integrations.tiktok.adapters.build_results import (
     created_result,
+    observed_cta,
     sdk_creation_envelope,
 )
 from app.integrations.tiktok.contracts.builds import (
@@ -21,6 +22,7 @@ from app.integrations.tiktok.contracts.builds import (
     BuildReadQuery,
     CreatedObject,
     CreateIntent,
+    CtaCreate,
 )
 from app.integrations.tiktok.contracts.common import (
     CallEvidence,
@@ -130,6 +132,16 @@ def _log_rejection(raw: object, *, kind: str) -> None:
 
 
 class ApiBuildOperations:
+    def read_cta_portfolio(self, *, advertiser_id: str, portfolio_id: str) -> CtaCreate:
+        response = self._read(
+            "build.get_cta_portfolio",
+            advertiser_id,
+            {"advertiser_id": advertiser_id, "creative_portfolio_id": portfolio_id},
+        )
+        return observed_cta(
+            response=response, advertiser_id=advertiser_id, portfolio_id=portfolio_id
+        )
+
     def __init__(
         self,
         client: Any,

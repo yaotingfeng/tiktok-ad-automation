@@ -109,3 +109,49 @@ def test_conditional_fields_cannot_be_invented_from_dto_defaults(changes):
 def test_campaign_null_budget_facts_are_not_creation_defaults(field):
     with pytest.raises(DomainError):
         observed_body("CAMPAIGN", {**campaign(), field: None})
+
+
+def test_non_search_flag_from_platform_is_not_a_copy_blocker():
+    assert (
+        observed_body("CAMPAIGN", {**campaign(), "is_search_campaign": False})["budget"]
+        == "120"
+    )
+
+
+def test_platform_group_defaults_preserve_target_roas_without_group_budget():
+    value = {
+        **group(),
+        "budget": 0,
+        "budget_mode": "BUDGET_MODE_INFINITE",
+        "min_budget": 0,
+        "roas_bid": "1.06",
+        "deep_bid_type": "VO_MIN_ROAS",
+        "conversion_bid_price": 0,
+        "schedule_end_time": "2036-10-10 05:00:00",
+        "targeting_spec": {
+            **group()["targeting_spec"],
+            "age_groups": [
+                "AGE_18_24",
+                "AGE_25_34",
+                "AGE_35_44",
+                "AGE_45_54",
+                "AGE_55_100",
+            ],
+            "gender": "GENDER_UNLIMITED",
+            "spending_power": "ALL",
+            "brand_safety_type": "NO_BRAND_SAFETY",
+        },
+    }
+    result = observed_body("ADGROUP", value)
+    assert result["roas_bid"] == "1.06"
+    assert "budget" not in result
+    assert "schedule_end_time" not in result
+    assert "age_groups" not in result["targeting_spec"]
+
+
+def test_unknown_setting_reports_layer_and_field_without_exposing_value():
+    with pytest.raises(DomainError) as error:
+        observed_body("CAMPAIGN", {**campaign(), "new_delivery_rule": "private-value"})
+    assert "系列" in error.value.message
+    assert "new_delivery_rule" in error.value.message
+    assert "private-value" not in error.value.message

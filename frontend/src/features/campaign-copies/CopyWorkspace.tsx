@@ -202,7 +202,9 @@ function CopyPanel({
       throw caught
     }
   }
-  async function run(action: "save" | "preview" | "submit" | "retry") {
+  async function run(
+    action: "save" | "preview" | "submit" | "retry" | "refresh-source",
+  ) {
     if (!write || busy || (action !== "retry" && (pending || conflict))) return
     setBusy(true)
     setError(undefined)
@@ -214,6 +216,19 @@ function CopyPanel({
         return
       }
       let current = data
+      if (action === "refresh-source") {
+        await send({
+          kind: "refresh-source",
+          body: {
+            request_id: crypto.randomUUID(),
+            expected_revision: revision,
+          },
+        })
+        setNotice(
+          "已重新读取来源，保留已保存的覆盖设置，请核对素材选择后生成预览。",
+        )
+        return
+      }
       if (action === "save" || (action === "preview" && dirty)) {
         current = await send({
           kind: "save",
@@ -274,6 +289,16 @@ function CopyPanel({
         >
           保存草稿
         </Button>
+        {write && data.status !== "SUBMITTED" && (
+          <Button
+            variant="outline"
+            disabled={busy || !!pending || conflict}
+            title="重新读取当前广告配置，保留已保存设置；本页未保存修改会被替换"
+            onClick={() => run("refresh-source")}
+          >
+            重新读取来源
+          </Button>
+        )}
       </div>
       <div className="flex flex-wrap items-center gap-3 text-sm">
         <span>1 配置复制方案</span>

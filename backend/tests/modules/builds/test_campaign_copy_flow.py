@@ -2,7 +2,7 @@
 
 from copy import deepcopy
 from types import SimpleNamespace
-from uuid import uuid4
+from uuid import uuid4, uuid5
 
 import pytest
 from sqlmodel import Session, select
@@ -17,6 +17,28 @@ from app.modules.builds.preview_models import BuildPreview, BuildUnit, PlannedAd
 from app.modules.builds.routes import load_preview_route
 from app.modules.builds.scene_schemas import ScenePreparation
 from tests.modules.builds.test_execution import executable as executable
+
+
+def seed_copy_facts(session, context, source):
+    from app.modules.campaign_copies.models import CopySourceFacts
+    from app.modules.campaign_copies.source_facts import source_key
+
+    key = source_key(source)
+    row = CopySourceFacts(
+        id=uuid5(context.tenant_id, "copy-facts:" + key),
+        tenant_id=context.tenant_id,
+        bc_id="bc-draft",
+        actor_id=context.actor_id,
+        source_digest=key,
+        source=source,
+        status="READY",
+        facts={
+            "cta_contents": [{"asset_ids": ["cta-1"], "asset_content": "Watch now"}],
+            "materials": [m["material_id"] for m in source["materials"]],
+        },
+    )
+    session.add(row)
+    session.flush()
 
 
 @pytest.fixture(autouse=True)
@@ -38,6 +60,11 @@ def complete_offline_catalog(monkeypatch):
             ):
                 job.facts = {
                     **job.facts,
+                    "regions": {
+                        "locations": [
+                            {"region_code": "US", "location_id": "fixture-location"}
+                        ]
+                    },
                     "identity": {
                         **job.facts["identity"],
                         "seen": 1,
@@ -162,6 +189,7 @@ def copy_source(executable, monkeypatch):
             campaign_id="source-CAMPAIGN-0",
         )
         assert source["blockers"] == []
+        seed_copy_facts(session, context, source)
     configuration = {
         "target_advertiser_ids": ["account-A"],
         "copies": 2,
@@ -819,7 +847,7 @@ def test_direct_child_submit_rejects_revoked_source_authorization(copy_source):
             )
 
 
-def test_custom_source_cover_is_blocked_instead_of_replaced(copy_source):
+def test_custom_source_cover_is_prepared_without_replacing_it(copy_source):
     engine, context, _, _ = copy_source
     with Session(engine) as session, session.begin():
         ad = session.exec(
@@ -843,8 +871,9 @@ def test_custom_source_cover_is_blocked_instead_of_replaced(copy_source):
             advertiser_id="account-A",
             campaign_id="source-CAMPAIGN-0",
         )
-        assert any("封面" in message for message in current["blockers"])
-        assert not current["snapshot"]
+        assert current["blockers"] == []
+        assert "custom-cover" in {m["image_id"] for m in current["materials"]}
+        assert current["snapshot"]["version"] == 2
 
 
 def test_actual_source_targeting_and_child_group_settings_are_visible(copy_source):
@@ -893,3 +922,206 @@ def test_actual_source_targeting_and_child_group_settings_are_visible(copy_sourc
         assert (
             saved.config["copy_group_settings"][0]["targeting"] == current["targeting"]
         )
+
+
+def external_source(session, context, *, remote_video=False):
+    """目录中的外部系列不带任何本地成功步骤或版权方关联。"""
+    mapping = {
+        "source-CAMPAIGN-0": "external-campaign",
+        "source-ADGROUP-0": "external-group",
+    }
+    rows = session.exec(
+        select(AdObject).where(
+            AdObject.tenant_id == context.tenant_id,
+            AdObject.advertiser_id == "account-A",
+        )
+    ).all()
+    for old in rows:
+        if old.kind not in {"campaign", "adgroup", "ad"}:
+            continue
+        new_id = mapping.get(old.remote_id, "external-" + old.remote_id)
+        body = deepcopy(old.configuration)
+        for key in ("campaign_id", "adgroup_id"):
+            if body.get(key) in mapping:
+                body[key] = mapping[body[key]]
+        body[
+            {
+                "campaign": "campaign_id",
+                "adgroup": "adgroup_id",
+                "ad": "smart_plus_ad_id",
+            }[old.kind]
+        ] = new_id
+        if old.kind == "ad" and remote_video:
+            info = body["creative_list"][0]["creative_info"]
+            info["video_info"]["video_id"] = "external-video"
+            info["image_info"] = [{"web_uri": "external-cover"}]
+        value = old.model_dump()
+        value.update(
+            remote_id=new_id,
+            parent_remote_id=mapping.get(old.parent_remote_id, old.parent_remote_id),
+            configuration=body,
+        )
+        session.add(AdObject.model_validate(value))
+    session.flush()
+    return load_copy_source(
+        session,
+        context=context,
+        bc_id="bc-draft",
+        advertiser_id="account-A",
+        campaign_id="external-campaign",
+    )
+
+
+def test_external_source_without_build_history_can_freeze_and_submit(copy_source):
+    engine, context, _, configuration = copy_source
+    from app.modules.builds.models import BuildDraft
+    from app.modules.builds.preview_models import PreviewDrama
+
+    with Session(engine) as session, session.begin():
+        source = external_source(session, context)
+        assert source["blockers"] == []
+        assert (
+            session.exec(
+                select(ExecutionStep).where(
+                    ExecutionStep.remote_id == "external-campaign"
+                )
+            ).first()
+            is None
+        )
+        seed_copy_facts(session, context, source)
+        preview_id = copying.create_copy_preview(
+            session,
+            context=context,
+            bc_id="bc-draft",
+            source=source,
+            configuration=configuration,
+            advertiser_id="account-A",
+            ordinal=1,
+            request_id=uuid4(),
+        )
+        preview = session.get(BuildPreview, preview_id)
+        draft = session.get(BuildDraft, preview.draft_id)
+        assert draft.strategy_version_id is None
+        assert draft.provider_connection_id is None
+        assert draft.application_id is None
+        drama = session.exec(
+            select(PreviewDrama).where(PreviewDrama.preview_id == preview_id)
+        ).one()
+        assert drama.provider_drama_id is None and drama.link_id is None
+        assert all(
+            ad.copy_id is None
+            for ad in session.exec(
+                select(PlannedAd).where(PlannedAd.preview_id == preview_id)
+            ).all()
+        )
+        receipt = submissions.submit_preview(
+            session, context=context, preview_id=preview_id, request_id=uuid4()
+        )
+        assert receipt.submission_id
+
+
+def test_external_video_without_local_mapping_is_a_preparable_source(copy_source):
+    engine, context, _, _ = copy_source
+    with Session(engine) as session, session.begin():
+        source = external_source(session, context, remote_video=True)
+        assert source["blockers"] == []
+        assert len(source["materials"]) == 1
+        assert source["materials"][0]["video_id"] == "external-video"
+        assert source["materials"][0]["image_id"] == "external-cover"
+
+
+def test_copy_preserves_all_source_text_variants_and_ad_settings(copy_source):
+    engine, context, _, configuration = copy_source
+    texts = [{"ad_text": f"当前平台文案 {n}"} for n in range(5)]
+    from app.modules.builds.copy_source import fingerprint
+
+    with Session(engine) as session, session.begin():
+        ads = session.exec(
+            select(AdObject).where(
+                AdObject.tenant_id == context.tenant_id,
+                AdObject.advertiser_id == "account-A",
+                AdObject.kind == "ad",
+            )
+        ).all()
+        for ad in ads:
+            body = deepcopy(ad.configuration)
+            body["ad_text_list"] = texts
+            body["ad_configuration"] = {
+                **body["ad_configuration"],
+                "dark_post_status": "ON",
+                "product_info_enabled": "NON_CATALOG",
+            }
+            ad.configuration = body
+            session.add(ad)
+        session.flush()
+        source = load_copy_source(
+            session,
+            context=context,
+            bc_id="bc-draft",
+            advertiser_id="account-A",
+            campaign_id="source-CAMPAIGN-0",
+        )
+        assert source["blockers"] == []
+        preview_id = copying.create_copy_preview(
+            session,
+            context=context,
+            bc_id="bc-draft",
+            source=source,
+            configuration=configuration,
+            advertiser_id="account-A",
+            ordinal=1,
+            request_id=uuid4(),
+        )
+        unit = session.exec(
+            select(BuildUnit).where(BuildUnit.preview_id == preview_id)
+        ).one()
+        frozen = previews.load_frozen_unit(session, context=context, unit_id=unit.id)
+        receipt = submissions.submit_preview(
+            session, context=context, preview_id=preview_id, request_id=uuid4()
+        )
+        while not submissions.expand_submission(
+            session, context=context, submission_id=receipt.submission_id
+        ):
+            pass
+        steps = session.exec(
+            select(ExecutionStep).where(
+                ExecutionStep.submission_id == receipt.submission_id
+            )
+        ).all()
+        for step in steps:
+            if step.kind in {"CTA", "CAMPAIGN", "ADGROUP"}:
+                step.status, step.phase, step.remote_id = (
+                    "SUCCEEDED",
+                    "DONE",
+                    "copy-" + step.kind,
+                )
+                session.add(step)
+        session.flush()
+        adstep = next(step for step in steps if step.kind == "AD")
+        route = load_preview_route(session, context=context, preview_id=preview_id)
+        request = execution.prepare_request(
+            session,
+            context=context,
+            claim=SimpleNamespace(
+                step_id=adstep.id,
+                advertiser_id="account-A",
+                bc_id="bc-draft",
+                route=route,
+            ),
+            frozen=frozen,
+        )
+        assert request["ad_text_list"] == texts
+        assert request["ad_configuration"] == {
+            "call_to_action_id": "copy-CTA",
+            "dark_post_status": "ON",
+            "product_info_enabled": "NON_CATALOG",
+        }
+        groups = previews.get_frozen_groups(session, context=context, unit_id=unit.id)
+        page = previews.get_frozen_ads(
+            session, context=context, unit_id=unit.id, group_id=groups.items[0].group_id
+        )
+        assert page.items[0].text_variants == tuple(x["ad_text"] for x in texts)
+        altered = deepcopy(source)
+        altered["targeting"] = {"anything": "new country display"}
+        altered["group_settings"] = []
+        assert fingerprint(altered) == fingerprint(source)

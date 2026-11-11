@@ -368,6 +368,12 @@ def compare_record(
         return "INCOMPLETE"
     expected = query.intent.model_dump()
     actual = record.intent.model_dump()
+    if query.intent.kind == "AD" and (
+        expected.get("text_variants") or actual.get("text_variants")
+    ):
+        # text只是用于页面摘要的首条文案；多文案实际内容按完整多重集合核验。
+        expected.pop("text", None)
+        actual.pop("text", None)
     if query.intent.kind == "ADGROUP":
         # 创建 wire、标准 adgroup 回读和 Smart+ 回读的事件枚举不同；
         # deep_bid_type/roas_bid 已把它们映射到统一策略，事件本身仍保留为证据。

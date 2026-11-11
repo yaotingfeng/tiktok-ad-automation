@@ -14,6 +14,7 @@ from uuid import UUID
 from sqlalchemy import RowMapping, Text, any_, bindparam, func, text, true
 from sqlalchemy import select as sql_select
 from sqlalchemy.dialects.postgresql import ARRAY, aggregate_order_by
+from sqlalchemy.orm import Session as SASession
 from sqlalchemy.orm import aliased
 from sqlalchemy.sql import ColumnElement
 from sqlmodel import Session, SQLModel, col, select
@@ -401,6 +402,7 @@ def _config_display(entity: AdObject | None) -> dict[str, str | None]:
         "budget": _text_number(entity.budget_value),
         "budget_mode": entity.budget_mode or None,
         "optimization_goal": entity.optimization_goal or None,
+        **getattr(entity, "_report_config", {}),
     }
 
 
@@ -477,6 +479,21 @@ def _hierarchy_display(
         display["target_roas"] = config["target_roas"]
     if config.get("optimization_goal"):
         display["optimization_goal"] = config["optimization_goal"]
+    for key in ("optimization_event", "deep_bid_type"):
+        if config.get(key):
+            display[key] = config[key]
+    if kind == "ad" and adgroup_id:
+        parent_config = _config_display(
+            objects.get((advertiser_id, "adgroup", adgroup_id))
+        )
+        for key in (
+            "target_roas",
+            "optimization_goal",
+            "optimization_event",
+            "deep_bid_type",
+        ):
+            if parent_config.get(key):
+                display[key] = parent_config[key]
     if kind == "campaign" and config.get("budget"):
         display["campaign_budget"] = config["budget"]
     if kind == "adgroup" and config.get("budget"):
@@ -875,6 +892,39 @@ def _page_objects(
                 wanted.setdefault(parent, set()).add(
                     (obj.advertiser_id, obj.parent_remote_id)
                 )
+    # 新增展示项只在当前页广告组按完整主键补读，避免为全候选扩宽报表投影。
+    group_pairs = sorted((adv, rid) for adv, k, rid in objects if k == "adgroup")
+    if group_pairs:
+        metadata = (
+            cast(SASession, session)
+            .execute(
+                text("""
+            SELECT obj.advertiser_id,obj.remote_id,obj.published_version,
+                obj.configuration->>'optimization_event' AS optimization_event,
+                obj.configuration->>'deep_bid_type' AS deep_bid_type
+            FROM unnest(CAST(:advertisers AS text[]),CAST(:ids AS text[])) wanted(adv,rid)
+            CROSS JOIN LATERAL (SELECT obj.* FROM ad_object obj
+                WHERE obj.tenant_id=:tenant AND obj.advertiser_id=wanted.adv
+                AND obj.kind='adgroup' AND obj.remote_id=wanted.rid OFFSET 0) obj
+        """),
+                {
+                    "tenant": tenant_id,
+                    "advertisers": [a for a, _ in group_pairs],
+                    "ids": [r for _, r in group_pairs],
+                },
+            )
+            .mappings()
+            .all()
+        )
+        for item in metadata:
+            obj = objects[(item["advertiser_id"], "adgroup", item["remote_id"])]
+            if obj.published_version != item["published_version"]:
+                continue
+            object.__setattr__(
+                obj,
+                "_report_config",
+                {key: item[key] for key in ("optimization_event", "deep_bid_type")},
+            )
     return objects
 
 

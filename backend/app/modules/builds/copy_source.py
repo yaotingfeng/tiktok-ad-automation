@@ -1,7 +1,8 @@
-"""复制来源：当前目录决定设置，历史搭建仅证明推广链路与素材的归属。"""
+"""当前授权目录是复制来源事实；不要求本系统的历史搭建或版权方关联。"""
 
 import json
 from hashlib import sha256
+from uuid import uuid5
 
 from sqlmodel import Session, col, select
 
@@ -10,18 +11,9 @@ from app.modules.accounts.access import resolve_account_access
 from app.modules.accounts.routing import freeze_route, verify_route
 from app.modules.ads.models import AdObject
 from app.modules.materials.models import AccountMaterial, MaterialFile
-from app.modules.providers.models import (
-    PromotionLink,
-    ProviderApplication,
-    ProviderConnection,
-)
 from app.modules.tenants.permissions import require_tenant
 
 from .copy_compile import group_setting, observed_body
-from .execution_models import ExecutionStep
-from .mini_targets import link_url
-from .models import BuildDraft
-from .preview_models import BuildPreview, BuildUnit, PlannedAd, PreviewDrama
 
 
 def digest(value):
@@ -30,32 +22,43 @@ def digest(value):
     ).hexdigest()
 
 
-def _provenance(session, context, bc_id, advertiser_id, remote_id, kind):
+def fingerprint(source):
+    """来源有效性只看远端设置及冻结权限，不纳入地区展示和本地素材别名。"""
+    snapshot = source.get("snapshot") or {}
+    if not snapshot:
+        return digest(
+            {
+                key: source.get(key)
+                for key in ("advertiser_id", "campaign_id", "blockers")
+            }
+        )
+    return digest(
+        {
+            key: snapshot[key]
+            for key in ("tenant_id", "bc_id", "source_route", "source_digest")
+        }
+    )
+
+
+def _regions(session, context, bc_id, advertiser_id):
+    from .scene_job_models import SceneJob
+
     rows = session.exec(
-        select(ExecutionStep)
-        .join(BuildUnit, col(BuildUnit.id) == ExecutionStep.unit_id)
+        select(SceneJob)
         .where(
-            ExecutionStep.tenant_id == context.tenant_id,
-            ExecutionStep.bc_id == bc_id,
-            BuildUnit.tenant_id == context.tenant_id,
-            BuildUnit.advertiser_id == advertiser_id,
-            ExecutionStep.kind == kind,
-            ExecutionStep.remote_id == remote_id,
-            ExecutionStep.status == "SUCCEEDED",
-            col(ExecutionStep.mismatch).is_(False),
+            SceneJob.tenant_id == context.tenant_id,
+            SceneJob.bc_id == bc_id,
+            SceneJob.advertiser_id == advertiser_id,
+            SceneJob.status == "COMPLETE",
         )
-        .order_by(col(ExecutionStep.updated_at).desc())
-        .limit(2)
+        .order_by(col(SceneJob.created_at).desc())
+        .limit(20)
     ).all()
-    # 续建可能保留同一远端对象，只有完全相同的冻结来源才可消除重复。
-    if (
-        not rows
-        or len({(row.preview_id, row.unit_id, row.planned_ad_id) for row in rows}) != 1
-    ):
-        raise DomainError(
-            "copy_provenance_missing", "来源缺少唯一可核实的搭建关联，暂不能复制"
-        )
-    return rows[0]
+    for row in rows:
+        locations = row.facts.get("regions", {}).get("locations", [])
+        if locations:
+            return locations
+    return []
 
 
 def load_copy_source(
@@ -120,40 +123,6 @@ def load_copy_source(
             or root.parent_kind is not None
         ):
             raise DomainError("copy_parent_mismatch", "来源系列身份不一致")
-        source_step = _provenance(
-            session, context, bc_id, advertiser_id, campaign_id, "CAMPAIGN"
-        )
-        unit = session.get(BuildUnit, source_step.unit_id)
-        preview = session.get(BuildPreview, source_step.preview_id)
-        draft = session.get(BuildDraft, preview.draft_id)
-        drama = session.get(
-            PreviewDrama, (context.tenant_id, preview.id, unit.drama_id)
-        )
-        if not drama or not draft or draft.tenant_id != context.tenant_id:
-            raise DomainError("copy_provenance_missing", "来源推广剧目关联不完整")
-        # 只查公开名称列，不读取或序列化版权方凭据和应用私有配置。
-        provider_name = session.exec(
-            select(ProviderConnection.display_name).where(
-                ProviderConnection.tenant_id == context.tenant_id,
-                ProviderConnection.id == draft.provider_connection_id,
-            )
-        ).one_or_none()
-        application_name = session.exec(
-            select(ProviderApplication.name).where(
-                ProviderApplication.tenant_id == context.tenant_id,
-                ProviderApplication.connection_id == draft.provider_connection_id,
-                ProviderApplication.external_id == draft.application_id,
-            )
-        ).one_or_none()
-        result["provider_name"] = provider_name or str(draft.provider_connection_id)
-        result["application_name"] = application_name or draft.application_id
-        link = session.get(PromotionLink, drama.link_id)
-        if (
-            not link
-            or link.tenant_id != context.tenant_id
-            or link_url(link) != drama.url
-        ):
-            raise DomainError("copy_link_changed", "来源推广链接与当前版权方关联不一致")
         groups = session.exec(
             select(AdObject)
             .where(
@@ -218,15 +187,6 @@ def load_copy_source(
                     or ad_body["advertiser_id"] != advertiser_id
                 ):
                     raise DomainError("copy_parent_mismatch", "来源广告父身份不一致")
-                original = _provenance(
-                    session, context, bc_id, advertiser_id, ad.remote_id, "AD"
-                )
-                planned = session.get(
-                    PlannedAd,
-                    (context.tenant_id, original.preview_id, original.planned_ad_id),
-                )
-                if planned is None or planned.tenant_id != context.tenant_id:
-                    raise DomainError("copy_provenance_missing", "来源广告缺少文案关联")
                 mids = []
                 for entry in ad_body["creative_list"]:
                     info = entry["creative_info"]
@@ -249,6 +209,12 @@ def load_copy_source(
                         )
                     )
                     video_id = info["video_info"]["video_id"]
+                    images = info.get("image_info", [])
+                    if len(images) != 1:
+                        raise DomainError(
+                            "copy_cover_unavailable",
+                            "来源视频缺少当前封面，请刷新广告目录",
+                        )
                     matches = session.exec(
                         select(MaterialFile, AccountMaterial)
                         .join(
@@ -263,28 +229,34 @@ def load_copy_source(
                             AccountMaterial.bc_id == bc_id,
                             AccountMaterial.advertiser_id == advertiser_id,
                             AccountMaterial.video_id == video_id,
+                            AccountMaterial.image_id == images[0]["web_uri"],
                             AccountMaterial.status == "available",
                             col(AccountMaterial.verified_at).is_not(None),
                         )
-                        .limit(2)
+                        .order_by(col(MaterialFile.id))
+                        .limit(1)
                     ).all()
-                    if len(matches) != 1 or matches[0][0].media_type != "VIDEO":
+                    material = matches[0][0] if matches else None
+                    if material is not None and material.media_type != "VIDEO":
                         raise DomainError(
-                            "copy_material_unmapped",
-                            "来源视频缺少唯一已核实的本地素材映射，请先导入素材",
+                            "copy_material_invalid", "来源视频的素材类型不一致"
                         )
-                    material, asset = matches[0]
+                    mid = (
+                        str(material.id)
+                        if material
+                        else str(
+                            uuid5(
+                                context.tenant_id,
+                                f"copy-video:{bc_id}:{advertiser_id}:{video_id}:{images[0]['web_uri']}",
+                            )
+                        )
+                    )
                     images = info.get("image_info", [])
-                    if (
-                        len(images) != 1
-                        or not asset.image_id
-                        or images[0]["web_uri"] != asset.image_id
-                    ):
+                    if len(images) != 1:
                         raise DomainError(
-                            "copy_cover_unverified",
-                            "来源当前封面与可信素材封面映射不一致，不能静默替换定制封面",
+                            "copy_cover_unavailable",
+                            "来源视频缺少当前封面，请刷新广告目录",
                         )
-                    mid = str(material.id)
                     if mid in mids:
                         raise DomainError(
                             "copy_material_duplicate",
@@ -293,8 +265,12 @@ def load_copy_source(
                     mids.append(mid)
                     materials[mid] = {
                         "material_id": mid,
-                        "file_name": material.file_name,
-                        "media_type": material.media_type,
+                        "file_name": material.file_name
+                        if material
+                        else info["video_info"].get("file_name", video_id),
+                        "media_type": "VIDEO",
+                        "video_id": video_id,
+                        "image_id": images[0]["web_uri"],
                     }
                 urls.add(ad_body["landing_page_url_list"][0]["landing_page_url"])
                 portfolios.add(ad_body["ad_configuration"]["call_to_action_id"])
@@ -302,7 +278,7 @@ def load_copy_source(
                     {
                         "remote_id": ad.remote_id,
                         "body": ad_body,
-                        "copy_id": str(planned.copy_id),
+                        "copy_id": None,
                         "material_ids": mids,
                     }
                 )
@@ -313,32 +289,6 @@ def load_copy_source(
             raise DomainError(
                 "copy_ad_variants_unsupported",
                 "来源包含不同投放身份、推广链接或CTA组合，暂不能无损复制",
-            )
-        if next(iter(urls)) != drama.url:
-            raise DomainError(
-                "copy_link_changed",
-                "来源当前推广链接与已核实剧目关联不一致，请先重新核验链接",
-            )
-        cta = session.exec(
-            select(ExecutionStep)
-            .where(
-                ExecutionStep.tenant_id == context.tenant_id,
-                ExecutionStep.bc_id == bc_id,
-                ExecutionStep.unit_id == unit.id,
-                ExecutionStep.kind == "CTA",
-                ExecutionStep.status == "SUCCEEDED",
-                col(ExecutionStep.mismatch).is_(False),
-                ExecutionStep.remote_id == next(iter(portfolios)),
-            )
-            .limit(2)
-        ).all()
-        if (
-            len(cta) != 1
-            or not cta[0].request_body
-            or not cta[0].request_body.get("portfolio_content")
-        ):
-            raise DomainError(
-                "copy_cta_unverified", "来源当前CTA组合缺少可核实的资产关联"
             )
         budgets = {group["body"].get("budget") for group in frozen_groups}
         bids = {group["body"].get("roas_bid") for group in frozen_groups}
@@ -372,12 +322,11 @@ def load_copy_source(
             else "HIGHEST_VALUE",
             materials=list(materials.values()),
         )
+        regions = _regions(session, context, bc_id, advertiser_id)
         settings = [
             group_setting(
                 group["body"],
-                unit.scene_snapshot.get("field_constraints", {}).get(
-                    "target_regions", []
-                ),
+                regions,
             )
             for group in frozen_groups
         ]
@@ -391,31 +340,28 @@ def load_copy_source(
         result["targeting"] = (
             settings[0]["targeting"] if not result["targeting_mixed"] else None
         )
-        if any(setting["targeting"] is None for setting in settings):
-            raise DomainError(
-                "copy_targeting_unavailable",
-                "来源实际地区ID缺少已核实的国家码映射，暂不能完整展示复制定向",
-            )
         result["snapshot"] = {
-            "version": 1,
+            "version": 2,
             "tenant_id": str(context.tenant_id),
             "bc_id": bc_id,
             "source_route": route.model_dump(mode="json"),
             "campaign": campaign,
             "groups": frozen_groups,
             "identity": json.loads(next(iter(identities))),
-            "cta_contents": cta[0].request_body["portfolio_content"],
-            "strategy_version_id": str(preview.strategy_version_id),
-            "provider_connection_id": str(draft.provider_connection_id),
-            "application_id": draft.application_id,
-            "drama_id": str(drama.drama_id),
-            "link_id": str(drama.link_id),
-            "title": drama.title,
-            "url": drama.url,
-            "protected_base": drama.protected_base,
-            "provider_pinyin": drama.provider_pinyin,
-            "external_drama_id": drama.external_drama_id,
-            "display_drama_id": drama.display_drama_id,
+            "cta_portfolio_id": next(iter(portfolios)),
+            "minis_id": result["minis_id"],
+            "drama_id": str(
+                uuid5(
+                    context.tenant_id,
+                    f"copy-source:{bc_id}:{advertiser_id}:{campaign_id}",
+                )
+            ),
+            "title": root.name,
+            "url": next(iter(urls)),
+            "protected_base": root.name,
+            "provider_pinyin": "",
+            "external_drama_id": "",
+            "display_drama_id": "",
             # 正常目录刷新会推进观察时间/发布版本；只有规范化业务设置、
             # 层级和已核实的素材/文案绑定改变，才使复制来源失效。
             "source_digest": digest(
@@ -423,7 +369,17 @@ def load_copy_source(
                     "advertiser_id": advertiser_id,
                     "campaign_id": campaign_id,
                     "campaign": campaign,
-                    "groups": frozen_groups,
+                    "groups": [
+                        {
+                            "remote_id": g["remote_id"],
+                            "body": g["body"],
+                            "ads": [
+                                {"remote_id": ad["remote_id"], "body": ad["body"]}
+                                for ad in g["ads"]
+                            ],
+                        }
+                        for g in frozen_groups
+                    ],
                 }
             ),
         }

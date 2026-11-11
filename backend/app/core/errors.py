@@ -4,6 +4,12 @@ from fastapi.responses import JSONResponse
 # Register exact business codes here; never infer status from provider text.
 ERROR_HTTP_STATUS: dict[str, int] = {
     "copy_not_found": 404,
+    "copy_source_contract_obsolete": 409,
+    "copy_source_read_failed": 502,
+    "copy_material_unverified": 409,
+    "copy_material_changed": 409,
+    "copy_cover_unavailable": 409,
+    "copy_cover_preparing": 409,
     "copy_selection_invalid": 422,
     "copy_material_invalid": 422,
     "copy_bid_strategy_invalid": 422,

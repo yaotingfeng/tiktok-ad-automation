@@ -47,6 +47,10 @@ class BuildPreview(SQLModel, table=True):
             name="ck_preview_status",
         ),
         CheckConstraint(
+            "strategy_version_id IS NOT NULL OR COALESCE(config->>'campaign_copy_version'='2',false)",
+            name="ck_preview_source_strategy",
+        ),
+        CheckConstraint(
             "draft_revision > 0 AND generation >= 0", name="ck_preview_revision"
         ),
         Index("ix_preview_repair", "status", "repair_after", "id"),
@@ -56,7 +60,7 @@ class BuildPreview(SQLModel, table=True):
     bc_id: str = Field(max_length=128)
     draft_id: UUID
     draft_revision: int
-    strategy_version_id: UUID
+    strategy_version_id: UUID | None = None
     actor_id: UUID = Field(foreign_key="user.id")
     batch_short_id: str = Field(max_length=32)
     local_date: str = Field(max_length=8)
@@ -112,14 +116,17 @@ class PreviewDrama(PreviewRow, table=True):
     __table_args__ = (
         preview_fk(),
         ForeignKeyConstraint(
-            ["tenant_id", "drama_id"], ["provider_drama.tenant_id", "provider_drama.id"]
+            ["tenant_id", "provider_drama_id"],
+            ["provider_drama.tenant_id", "provider_drama.id"],
         ),
         ForeignKeyConstraint(
             ["tenant_id", "link_id"], ["promotion_link.tenant_id", "promotion_link.id"]
         ),
     )
     drama_id: UUID = Field(primary_key=True)
-    link_id: UUID
+    # 复制使用独立来源分组身份；只有真实版权方关联才写入此列。
+    provider_drama_id: UUID | None = None
+    link_id: UUID | None = None
     title: str = Field(max_length=1000)
     # 冻结命名输入，后续跨账户展开不再读取可变的版权方资料。
     provider_pinyin: str = Field(default="", max_length=100)
@@ -390,7 +397,7 @@ class PlannedAd(PreviewRow, table=True):
     base_ad_no: int = 1
     creative_no: int
     name: str
-    copy_id: UUID = Field(foreign_key="copy_entry.id")
+    copy_id: UUID | None = Field(default=None, foreign_key="copy_entry.id")
     text: str
     cta_option_ids: list[str] = Field(
         default_factory=list, sa_column=Column(JSONB, nullable=False)
@@ -417,9 +424,6 @@ class PreviewCreativeUnit(PreviewRow, table=True):
     __tablename__ = "preview_creative_unit"
     __table_args__ = (
         preview_fk(),
-        ForeignKeyConstraint(
-            ["tenant_id", "drama_id"], ["provider_drama.tenant_id", "provider_drama.id"]
-        ),
         UniqueConstraint(
             "tenant_id",
             "preview_id",

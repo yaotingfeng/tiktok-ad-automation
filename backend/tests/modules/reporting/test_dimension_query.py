@@ -484,3 +484,71 @@ def test_search_ids_metric_bounds_and_name_sort(session, sync_seed):
     ]
     assert keys(max_spend=Decimal("4"), min_d0_roas=Decimal("0")) == []
     assert keys(sort_by="campaign_name", sort_direction="desc") == ["b1", "a1", "a2"]
+
+
+def test_report_keeps_revenue_value_bid_strategy_and_roas_separate(session, sync_seed):
+    from datetime import UTC, datetime
+
+    from sqlmodel import select
+
+    from app.modules.accounts.models import AdvertiserAccount
+    from app.modules.ads.models import AdObject
+    from app.modules.reporting.dimension_query import _hierarchy_display, _page_objects
+
+    for kind, rid, parent in [
+        ("campaign", "c", None),
+        ("adgroup", "g", "c"),
+        ("ad", "a", "g"),
+    ]:
+        session.add(
+            AdObject(
+                tenant_id=sync_seed.tenant_id,
+                advertiser_id="acc-1",
+                kind=kind,
+                remote_id=rid,
+                parent_kind=None
+                if kind == "campaign"
+                else "campaign"
+                if kind == "adgroup"
+                else "adgroup",
+                parent_remote_id=parent,
+                name=rid,
+                ad_type="SMART_PLUS",
+                configuration={
+                    "optimization_goal": "VALUE",
+                    "optimization_event": "IMPRESSION_LEVEL_AD_REVENUE",
+                    "deep_bid_type": "VO_MIN_ROAS",
+                    "roas_bid": "1.06",
+                }
+                if kind == "adgroup"
+                else {},
+                published_version=1,
+                observed_at=datetime.now(UTC),
+            )
+        )
+    session.flush()
+    objects = _page_objects(
+        session,
+        tenant_id=sync_seed.tenant_id,
+        kind="ad",
+        parents={},
+        identities=(("acc-1", "a"),),
+    )
+    account = session.exec(
+        select(AdvertiserAccount).where(
+            AdvertiserAccount.tenant_id == sync_seed.tenant_id,
+            AdvertiserAccount.advertiser_id == "acc-1",
+        )
+    ).one()
+    display = _hierarchy_display(
+        accounts={"acc-1": account},
+        objects=objects,
+        advertiser_id="acc-1",
+        kind="ad",
+        remote_id="a",
+        entity=objects[("acc-1", "ad", "a")],
+    )
+    assert display["optimization_goal"] == "VALUE"
+    assert display["optimization_event"] == "IMPRESSION_LEVEL_AD_REVENUE"
+    assert display["deep_bid_type"] == "VO_MIN_ROAS"
+    assert display["target_roas"] == "1.06"

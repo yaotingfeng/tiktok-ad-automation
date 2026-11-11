@@ -119,7 +119,9 @@ def test_official_method_accepts_unmodeled_dictionary(monkeypatch):
     ],
 )
 @pytest.mark.parametrize("status", ["ENABLE", "DISABLE"])
-def test_actual_official_transport_serializes_each_layer(monkeypatch, kind, id_key, status):
+def test_actual_official_transport_serializes_each_layer(
+    monkeypatch, kind, id_key, status
+):
     from app.modules.builds.request_compiler import compile_request
 
     calls = []
@@ -156,7 +158,8 @@ def test_actual_official_transport_serializes_each_layer(monkeypatch, kind, id_k
     assert method == "POST" and url.endswith(f"/smart_plus/{kind}/create/")
     assert json.loads(kwargs["body"]) == (
         {**body, "request_id": remote_request_id(attempt_id)}
-        if kind in {"campaign", "adgroup"} else body
+        if kind in {"campaign", "adgroup"}
+        else body
     )
     assert kwargs["headers"]["Access-Token"] == "fixture-token"
 
@@ -279,3 +282,91 @@ def test_future_wait_does_not_return_or_cleanup_while_transport_runs(monkeypatch
             release.set()
         assert future.result(timeout=5).remote_id == "remote"
     assert cleaned.is_set()
+
+
+@pytest.mark.parametrize("wrong_scope", [False, True])
+def test_source_cta_uses_exact_portfolio_and_actual_contents(monkeypatch, wrong_scope):
+    calls = []
+
+    def request(_pool, method, url, **kwargs):
+        calls.append((method, url, kwargs))
+        return HTTPResponse(
+            body=json.dumps(
+                {
+                    "code": 0,
+                    "request_id": "read-cta",
+                    "data": {
+                        "creative_portfolio_id": "other"
+                        if wrong_scope
+                        else "portfolio-source",
+                        "creative_portfolio_type": "CTA",
+                        "portfolio_content": [
+                            {
+                                "asset_content": "Watch now",
+                                "asset_ids": ["asset-source"],
+                            }
+                        ],
+                    },
+                }
+            ).encode(),
+            status=200,
+        )
+
+    monkeypatch.setattr("urllib3.PoolManager.request", request)
+    with official_client(access_token="fixture-token") as client:
+        api = sdk_build_operations(client)
+        if wrong_scope:
+            with pytest.raises(DomainError) as error:
+                api.read_cta_portfolio(
+                    advertiser_id="source-account", portfolio_id="portfolio-source"
+                )
+            assert error.value.code == "copy_cta_unverified"
+        else:
+            cta = api.read_cta_portfolio(
+                advertiser_id="source-account", portfolio_id="portfolio-source"
+            )
+            assert cta.advertiser_id == "source-account"
+            assert cta.assets[0].asset_content == "Watch now"
+    assert len(calls) == 1 and calls[0][0] == "GET"
+    assert calls[0][1].endswith("/creative/portfolio/get/")
+    assert dict(calls[0][2]["fields"])["creative_portfolio_id"] == "portfolio-source"
+
+
+def test_mcp_source_cta_uses_the_same_verified_result_parser():
+    from types import SimpleNamespace
+
+    from app.integrations.tiktok.adapters.mcp_builds import McpBuildOperations
+    from app.integrations.tiktok.contracts.common import (
+        CallEvidence,
+        McpBusinessResponse,
+    )
+
+    calls = []
+
+    def read(**kwargs):
+        calls.append(kwargs)
+        return McpBusinessResponse(
+            data={
+                "creative_portfolio_id": "portfolio-source",
+                "creative_portfolio_type": "CTA",
+                "portfolio_content": [
+                    {"asset_content": "Watch now", "asset_ids": ["asset-source"]}
+                ],
+            },
+            evidence=CallEvidence(),
+        )
+
+    result = McpBuildOperations(SimpleNamespace(call=read)).read_cta_portfolio(
+        advertiser_id="source-account", portfolio_id="portfolio-source"
+    )
+    assert result.assets[0].asset_ids == ("asset-source",)
+    assert calls == [
+        {
+            "operation": "build.get_cta_portfolio",
+            "advertiser_id": "source-account",
+            "arguments": {
+                "advertiser_id": "source-account",
+                "creative_portfolio_id": "portfolio-source",
+            },
+        }
+    ]

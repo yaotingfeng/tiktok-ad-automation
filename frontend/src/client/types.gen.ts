@@ -3077,11 +3077,15 @@ export type FrozenAd = {
     /**
      * Copy Id
      */
-    copy_id: string;
+    copy_id: string | null;
     /**
      * Text
      */
     text: string;
+    /**
+     * Text Variants
+     */
+    text_variants?: Array<string>;
     /**
      * Cta Option Ids
      */
@@ -3319,11 +3323,11 @@ export type FrozenUnit = {
     /**
      * Link Id
      */
-    link_id: string;
+    link_id: string | null;
     /**
      * Strategy Version Id
      */
-    strategy_version_id: string;
+    strategy_version_id: string | null;
     /**
      * Bc Id
      */
@@ -19812,6 +19816,40 @@ export type campaignCopiesPatchResponses = {
 };
 
 export type campaignCopiesPatchResponse = campaignCopiesPatchResponses[keyof campaignCopiesPatchResponses];
+
+export type campaignCopiesRefreshSourceData = {
+    body: CopyRevisionRequest;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+        /**
+         * Draft Id
+         */
+        draft_id: string;
+    };
+    query?: never;
+    url: '/api/tenants/{tenant_id}/campaign-copies/{draft_id}/refresh-source';
+};
+
+export type campaignCopiesRefreshSourceErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type campaignCopiesRefreshSourceError = campaignCopiesRefreshSourceErrors[keyof campaignCopiesRefreshSourceErrors];
+
+export type campaignCopiesRefreshSourceResponses = {
+    /**
+     * Successful Response
+     */
+    200: CopyDraftPublic;
+};
+
+export type campaignCopiesRefreshSourceResponse = campaignCopiesRefreshSourceResponses[keyof campaignCopiesRefreshSourceResponses];
 
 export type campaignCopiesPreviewData = {
     body: CopyRevisionRequest;

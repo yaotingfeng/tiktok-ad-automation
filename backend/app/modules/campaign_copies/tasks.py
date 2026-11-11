@@ -73,11 +73,15 @@ def process(
             children = deepcopy(row.children)
             child = next((c for c in children if c["status"] == "PENDING"), None)
             if child is not None:
-                from app.modules.builds.copy_source import load_copy_source
+                from app.modules.builds.copy_source import fingerprint, load_copy_source
                 from app.modules.builds.copying import create_copy_preview
 
                 source_row = next(r for r in row.rows if r["row_id"] == child["row_id"])
                 source = source_row["source"]
+                if source.get("snapshot", {}).get("version") != 2:
+                    raise DomainError(
+                        "copy_source_contract_obsolete", "请重新读取来源后生成复制预览"
+                    )
                 current = load_copy_source(
                     session,
                     context=context,
@@ -85,7 +89,7 @@ def process(
                     advertiser_id=source["advertiser_id"],
                     campaign_id=source["campaign_id"],
                 )
-                if digest(current) != source_row["source_digest"]:
+                if fingerprint(current) != source_row["source_digest"]:
                     raise DomainError(
                         "copy_source_changed",
                         "来源配置已变化，请重新选择来源生成复制草稿",
@@ -182,6 +186,9 @@ def repair(*, database_engine: Any, limit: int = 100) -> int:
         raise ValueError("repair limit must be between 1 and 100")
     now = datetime.now(UTC)
     with Session(database_engine) as session, session.begin():
+        from .source_facts import repair_sources
+
+        source_count = repair_sources(session, limit)
         rows = session.exec(
             select(CampaignCopyDraft)
             .where(
@@ -213,7 +220,7 @@ def repair(*, database_engine: Any, limit: int = 100) -> int:
                 session.add(dispatch)
             row.repair_after = now + timedelta(seconds=120)
             session.add(row)
-        return len(rows)
+        return len(rows) + source_count
 
 
 @celery_app.task(

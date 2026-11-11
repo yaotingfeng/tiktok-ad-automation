@@ -7,7 +7,7 @@ from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID, uuid4, uuid5
 
-from sqlalchemy import text
+from sqlalchemy import func
 from sqlmodel import Session, col, select
 
 from app.core.context import TenantContext
@@ -131,9 +131,14 @@ def _request(
     draft_id: UUID | None = None,
 ) -> CampaignCopyDraft | None:
     # 请求锁在父草稿锁之前，跨草稿复用同一键也不能并发改写幂等记录。
-    session.execute(
-        text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))"),
-        {"key": f"campaign-copy:{context.tenant_id}:{request_id}"},
+    session.exec(
+        select(
+            func.pg_advisory_xact_lock(
+                func.hashtextextended(
+                    f"campaign-copy:{context.tenant_id}:{request_id}", 0
+                )
+            )
+        )
     )
     prior = session.get(CampaignCopyRequest, (context.tenant_id, request_id))
     if prior is None:
@@ -189,7 +194,7 @@ def create(
     ):
         raise DomainError("copy_selection_invalid", "请从系列维度选择 1–100 条来源")
     route = freeze_route(session, context=context, bc_id=bc_id)
-    from app.modules.builds.copy_source import load_copy_source
+    from app.modules.builds.copy_source import fingerprint, load_copy_source
 
     members = []
     for ref in refs:
@@ -206,7 +211,7 @@ def create(
             {
                 "row_id": str(uuid4()),
                 "source": source,
-                "source_digest": digest(source),
+                "source_digest": fingerprint(source),
                 "configuration": {
                     "target_advertiser_ids": [ref.advertiser_id],
                     "copies": 1,
@@ -391,6 +396,56 @@ def patch(
     return row
 
 
+def refresh_sources(
+    session: Session,
+    *,
+    context: TenantContext,
+    draft_id: UUID,
+    body: CopyRevisionRequest,
+) -> CampaignCopyDraft:
+    """显式重读当前来源，保留已保存覆盖；旧子预览只失效，不改冻结正文。"""
+    from app.modules.builds.copy_source import fingerprint, load_copy_source
+
+    from .source_facts import retry_failed_source
+
+    value = body.model_dump(mode="json", exclude={"request_id"})
+    prior = _request(
+        session, context, body.request_id, "refresh_sources", value, draft_id
+    )
+    if prior:
+        return prior
+    row = get_draft(session, context=context, draft_id=draft_id, write=True)
+    _revision(row, body.expected_revision)
+    _invalidate_child_previews(session, row)
+    members = deepcopy(row.rows)
+    for item in members:
+        old = item["source"]
+        source = load_copy_source(
+            session,
+            context=context,
+            bc_id=row.bc_id,
+            advertiser_id=old["advertiser_id"],
+            campaign_id=old["campaign_id"],
+        )
+        selected = item["configuration"]["material_ids"]
+        available = {m["material_id"] for m in source["materials"]}
+        item["configuration"]["material_ids"] = (
+            [mid for mid in selected if mid in available]
+            if selected
+            else [m["material_id"] for m in source["materials"]]
+        )
+        item.update(source=source, source_digest=fingerprint(source))
+        if not source["blockers"]:
+            retry_failed_source(session, context=context, source=source)
+    row.rows, row.children, row.preview_digest, row.error_code = members, [], None, None
+    row.revision += 1
+    row.generation += 1
+    row.status = "DRAFT"
+    session.add(row)
+    _record(session, row, body.request_id, "refresh_sources", value)
+    return row
+
+
 def preview(
     session: Session,
     *,
@@ -408,6 +463,15 @@ def preview(
         _record(session, row, body.request_id, "preview", value)
         return row
     _validate_rows(session, context, row, row.rows, strict=True)
+    from .source_facts import retry_failed_source
+
+    for item in row.rows:
+        if item["source"].get("snapshot", {}).get("version") != 2:
+            raise DomainError(
+                "copy_source_contract_obsolete",
+                "复制来源读取方式已更新，请先点击重新读取来源",
+            )
+        retry_failed_source(session, context=context, source=item["source"])
     started_at = datetime.now(UTC).isoformat()
     if row.status == "FAILED" and row.children:
         # 已准备好的副本仍属于同一修订，必须保留关联，不能因重试抹掉。
@@ -468,7 +532,7 @@ def submit(
     ):
         raise DomainError("copy_preview_invalid", "复制预览内容与已冻结摘要不一致")
     _validate_rows(session, context, row, row.rows, strict=True)
-    from app.modules.builds.copy_source import load_copy_source
+    from app.modules.builds.copy_source import fingerprint, load_copy_source
     from app.modules.builds.submissions import submit_preview
 
     # READY 不是永久授权；提交边界重新核验来源当前事实及读取连接，
@@ -482,7 +546,7 @@ def submit(
             advertiser_id=source["advertiser_id"],
             campaign_id=source["campaign_id"],
         )
-        if digest(current) != item["source_digest"]:
+        if fingerprint(current) != item["source_digest"]:
             raise DomainError(
                 "copy_source_changed", "来源系列已变化，请重新选择来源生成复制草稿"
             )

@@ -95,12 +95,27 @@ export function rowTargetRoas(row: ReportRow): string | null {
   return display.target_roas ?? null
 }
 export function rowOptimizationGoal(row: ReportRow): string | null {
+  if (
+    ["IMPRESSION_LEVEL_AD_REVENUE", "AD_REVENUE_VALUE"].includes(
+      row.display?.optimization_event ?? "",
+    )
+  )
+    return "广告收入价值"
   const value = row.display?.optimization_goal
   if (!value) return null
-  const normalized = value.toUpperCase().replace(/_/g, " ")
-  if (normalized.includes("VALUE")) return "最大价值"
-  if (normalized.includes("ROAS")) return "目标 ROAS"
-  return value
+  return value === "VALUE" ? "价值" : value
+}
+export function rowBidStrategy(row: ReportRow): string | null {
+  const value = row.display?.deep_bid_type
+  if (!value) return null
+  return (
+    (
+      { VO_MIN_ROAS: "目标 ROAS", VO_HIGHEST_VALUE: "最高价值" } as Record<
+        string,
+        string
+      >
+    )[value] ?? value
+  )
 }
 // 指标单元格只显示数值；没有值时统一显示“—”，原因放在悬停说明里，
 // 避免同步未完成时整表、整排汇总卡片都是“数据缺失”之类的提示文字。

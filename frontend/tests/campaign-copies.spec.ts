@@ -205,6 +205,20 @@ async function boundary(
         ),
       )
     }
+    if (path.endsWith("/refresh-source")) {
+      draft = {
+        ...draft,
+        revision: draft.revision + 1,
+        status: "DRAFT",
+        rows: draft.rows.map((row) => ({
+          ...row,
+          source: { ...row.source, blockers: [] },
+        })),
+        children: [],
+        preview_digest: null,
+        error_code: null,
+      }
+    }
     if (path.endsWith("/submit")) {
       draft.status = "SUBMITTED"
       draft.submission_ids = ["eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee"]
@@ -222,6 +236,27 @@ async function boundary(
   })
   return { mutations, reads: () => reads }
 }
+
+test("来源读取失败不显示默认最高价值，重新读取后可继续预览", async ({
+  page,
+}) => {
+  const state = await boundary(page, { blocker: true })
+  await page.goto(url)
+  const row = page.getByTestId("copy-row-row-1")
+  await expect(row.getByText("未读取", { exact: true })).toBeVisible()
+  await expect(row.getByRole("button", { name: "素材未读取" })).toBeVisible()
+  await expect(
+    page.getByRole("button", { name: "生成复制预览" }),
+  ).toBeDisabled()
+  await page.getByRole("button", { name: "重新读取来源", exact: true }).click()
+  await expect(
+    page.getByText(
+      "已重新读取来源，保留已保存的覆盖设置，请核对素材选择后生成预览。",
+    ),
+  ).toBeVisible()
+  expect(state.mutations.at(-1)?.action).toBe("refresh-source")
+  await expect(page.getByRole("button", { name: "生成复制预览" })).toBeEnabled()
+})
 
 test("复制份数与展开上限按全部来源计算", () => {
   const draft = fixture()

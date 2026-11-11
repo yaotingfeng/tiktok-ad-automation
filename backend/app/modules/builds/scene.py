@@ -581,15 +581,19 @@ def read_scene_context(
     context: TenantContext,
     bc_id: str,
     advertiser_id: str,
-    link_id: UUID,
+    link_id: UUID | None,
     route: FrozenTikTokRoute,
     selected_identity: dict[str, Any] | None = None,
     media_kind: MediaKind = "VIDEO",
+    minis_id: str | None = None,
 ) -> SceneContext:
     # 每个链接独立核验版权方与 Mini，不借别的剧目链接取得权限。
     # 只有同账户、同 Mini、同冻结路由的场景事实可在本地短批次复用。
     with session.no_autoflush:
-        minis_id = _link_target(session, context=context, link_id=link_id)
+        if link_id is not None:
+            minis_id = _link_target(session, context=context, link_id=link_id)
+        elif not minis_id:
+            raise DomainError("copy_minis_missing", "复制来源缺少实际小程序ID")
         result = _read_account_scene(
             session,
             context=context,
@@ -614,5 +618,10 @@ def read_scene_context(
                 media_kind=media_kind,
                 selected_identity=selected_identity,
             )
-        assert result is not None
+        if result is None:
+            return SceneContext(
+                supported=False,
+                reason_codes=("scene_evidence_missing",),
+                capability_revision="missing",
+            )
         return result

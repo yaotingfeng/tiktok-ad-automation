@@ -1,5 +1,43 @@
 import { expect, test } from "@playwright/test"
 import { configSections } from "../src/features/ads/details/configFields"
+import {
+  rowOptimizationGoal,
+  rowBidStrategy,
+  rowTargetRoas,
+} from "../src/features/ads/search"
+import type { ReportRow } from "../src/client"
+
+test("广告收入价值、竞价策略和出价值分别显示", () => {
+  const row = {
+    display: {
+      optimization_goal: "VALUE",
+      optimization_event: "IMPRESSION_LEVEL_AD_REVENUE",
+      deep_bid_type: "VO_MIN_ROAS",
+      target_roas: "1.06",
+    },
+  } as ReportRow
+  expect(rowOptimizationGoal(row)).toBe("广告收入价值")
+  expect(rowBidStrategy(row)).toBe("目标 ROAS")
+  expect(rowTargetRoas(row)).toBe("1.06")
+  expect(
+    rowOptimizationGoal({
+      display: { optimization_goal: "VALUE" },
+    } as ReportRow),
+  ).toBe("价值")
+  expect(
+    rowBidStrategy({ display: { optimization_goal: "VALUE" } } as ReportRow),
+  ).toBeNull()
+  const flat = flatten(
+    configSections("adgroup", {
+      optimization_goal: "VALUE",
+      optimization_event: "IMPRESSION_LEVEL_AD_REVENUE",
+      deep_bid_type: "VO_MIN_ROAS",
+      roas_bid: "1.06",
+    }),
+  )
+  expect(flat["价值类型"]).toBe("广告收入价值")
+  expect(flat["竞价策略"]).toBe("目标 ROAS")
+})
 
 const flatten = (sections: ReturnType<typeof configSections>) =>
   Object.fromEntries(
