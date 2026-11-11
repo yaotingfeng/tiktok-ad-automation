@@ -59,8 +59,16 @@ class OptimizerUpdate(BaseModel):
     def require_change(self) -> OptimizerUpdate:
         # ``target_roas: null`` is an intentional clear operation; use field-set
         # semantics instead of treating every nullable value as omission.
-        if not (self.model_fields_set - {"request_id"}):
+        mutation_fields = self.model_fields_set - {"request_id"}
+        if not mutation_fields:
             raise ValueError("At least one optimizer field is required")
+        invalid_nulls = {
+            field
+            for field in mutation_fields
+            if field != "target_roas" and getattr(self, field) is None
+        }
+        if invalid_nulls:
+            raise ValueError("Optimizer fields cannot be null")
         return self
 
 

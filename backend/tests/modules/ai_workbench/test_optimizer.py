@@ -46,6 +46,34 @@ def test_optimizer_contract_rejects_invalid_mode_and_roas_priority():
         OptimizerCreate.model_validate(payload(target_roas=None))
 
 
+def test_update_contract_only_allows_explicit_target_roas_clear():
+    from app.modules.ai_workbench.schemas import OptimizerUpdate
+
+    request_id = str(uuid4())
+    cleared = OptimizerUpdate.model_validate(
+        {"target_roas": None, "request_id": request_id}
+    )
+    assert "target_roas" in cleared.model_fields_set
+    for field in (
+        "name",
+        "daily_spend",
+        "priority",
+        "bc_id",
+        "advertiser_ids",
+        "optimization_mode",
+        "authorization_limits",
+        "strategy_version_id",
+        "rule_ids",
+        "active",
+    ):
+        with pytest.raises(ValidationError):
+            OptimizerUpdate.model_validate({field: None, "request_id": request_id})
+    with pytest.raises(ValidationError):
+        OptimizerUpdate.model_validate(
+            {"target_roas": None, "name": None, "request_id": request_id}
+        )
+
+
 def test_strategy_binding_has_active_scope_index():
     indexes = {index.name for index in AIOptimizerStrategyBinding.__table__.indexes}
     assert "uq_ai_binding_one_active" in indexes
