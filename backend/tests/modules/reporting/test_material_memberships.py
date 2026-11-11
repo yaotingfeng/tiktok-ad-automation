@@ -251,9 +251,9 @@ def test_empty_then_large_statement_and_noop_rebuild_preserve_versions(
     connection.execute(
         text("""INSERT INTO ad_material_reference
         (id,tenant_id,advertiser_id,ad_remote_id,platform_material_id,ad_material_id,material_type,
-         name,creative_ids,complete,published_version)
+         name,complete,published_version)
         SELECT gen_random_uuid(),:tenant,'acc-1','batch-'||i,'shared-'||(i%10),'m-'||i,'VIDEO',
-            'name-'||i,'[]'::jsonb,true,1 FROM generate_series(1,1000) i"""),
+            'name-'||i,true,1 FROM generate_series(1,1000) i"""),
         parameters,
     )
     old_heads = heads(material_members)
@@ -292,19 +292,13 @@ def test_empty_then_large_statement_and_noop_rebuild_preserve_versions(
     assert "Index" in str(plan)
 
 
-def test_exact_post_identity_never_matches_ambiguous_head(material_members):
+def test_exact_material_identity_never_matches_ambiguous_head(material_members):
     session, seed = material_members
     add(material_members, precise="a")
     ambiguous = add(material_members, precise="b")
-    session.connection().execute(
-        text("""INSERT INTO material_post_link
-        (tenant_id,advertiser_id,main_material_id,ad_remote_id,main_material_type,ad_material_id,observed_at)
-        VALUES(:tenant,'acc-1','post-a','ad-1','VIDEO_SPARK_ADS','a',clock_timestamp())"""),
-        {"tenant": seed.tenant_id},
-    )
-    statement = text("""SELECT h.version_id FROM material_ad_member_current h JOIN material_post_link p
-        ON p.tenant_id=h.tenant_id AND p.advertiser_id=h.advertiser_id AND p.ad_remote_id=h.ad_remote_id
-        AND p.ad_material_id=h.ad_material_id WHERE h.tenant_id=:tenant""")
+    statement = text("""SELECT h.version_id FROM material_ad_member_current h
+        WHERE h.tenant_id=:tenant AND h.advertiser_id='acc-1'
+          AND h.ad_remote_id='ad-1' AND h.ad_material_id='a'""")
     assert (
         session.connection().execute(statement, {"tenant": seed.tenant_id}).all() == []
     )
@@ -348,9 +342,9 @@ def test_batch_same_video_refreshes_once_per_statement(material_members):
     connection.execute(
         text("""INSERT INTO ad_material_reference
         (id,tenant_id,advertiser_id,ad_remote_id,platform_material_id,ad_material_id,material_type,
-         name,creative_ids,complete,published_version)
+         name,complete,published_version)
         SELECT gen_random_uuid(),:tenant,'acc-1','batch-'||i,'one-vid','m-'||i,'VIDEO',
-            'name-'||i,'[]'::jsonb,true,1 FROM generate_series(1,200) i"""),
+            'name-'||i,true,1 FROM generate_series(1,200) i"""),
         {"tenant": seed.tenant_id},
     )
     assert refresh_count() - before == 1

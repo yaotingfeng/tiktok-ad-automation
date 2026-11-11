@@ -176,9 +176,6 @@ class AdMaterialReference(SQLModel, table=True):
             postgresql_nulls_not_distinct=True,
         ),
         CheckConstraint("published_version > 0", name="ck_ad_material_version"),
-        CheckConstraint(
-            "jsonb_typeof(creative_ids) = 'array'", name="ck_ad_material_creatives"
-        ),
         Index("ix_ad_material_ad", "tenant_id", "advertiser_id", "ad_remote_id"),
         # 同时支持视频反查及完整使用身份。保留两列短索引时，估计每视频一行的
         # 缓存计划会选短索引，在热门视频上逐广告过滤4万引用；不能只再加长索引。
@@ -207,11 +204,8 @@ class AdMaterialReference(SQLModel, table=True):
     platform_material_id: str = Field(max_length=128)
     ad_material_id: str | None = Field(default=None, max_length=128)
     material_type: str = Field(max_length=64)
-    # 外部素材可没有本地文件；目录保存素材使用身份和名称，报表主素材身份由帖子关联维护。
+    # 外部素材可没有本地文件；目录保存素材使用身份和名称，创意与资产对应由 ad_creative 维护。
     name: str = ""
-    creative_ids: list[str] = Field(
-        default_factory=list, sa_column=Column(JSONB, nullable=False)
-    )
     local_material_id: UUID | None = None
     operation_status: str | None = None
     complete: bool = False

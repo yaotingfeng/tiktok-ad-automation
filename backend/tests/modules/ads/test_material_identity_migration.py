@@ -10,7 +10,6 @@ from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session
 
 from app.modules.ads.models import AdMaterialReference
-from app.modules.reporting.store_models import MaterialPostLink, MaterialReportDay
 from tests.migration_database import historical_database
 from tests.modules.reporting.sync_conftest import sync_seed
 
@@ -40,10 +39,20 @@ def test_drop_directory_main_identity_preserves_report_chain_and_reverses_schema
             session.execute(
                 insert(table),
                 usage.model_dump()
-                | {"main_material_id": None, "main_material_type": None},
+                | {
+                    "creative_ids": ["creative"],
+                    "main_material_id": None,
+                    "main_material_type": None,
+                },
             )
-            session.add(
-                MaterialReportDay(
+            session.execute(
+                Table(
+                    "material_report_day",
+                    MetaData(),
+                    autoload_with=session.connection(),
+                )
+                .insert()
+                .values(
                     tenant_id=seed.tenant_id,
                     advertiser_id="acc-2",
                     stat_date=now.date(),
@@ -56,8 +65,12 @@ def test_drop_directory_main_identity_preserves_report_chain_and_reverses_schema
                     spend=10,
                 )
             )
-            session.add(
-                MaterialPostLink(
+            session.execute(
+                Table(
+                    "material_post_link", MetaData(), autoload_with=session.connection()
+                )
+                .insert()
+                .values(
                     tenant_id=seed.tenant_id,
                     advertiser_id="acc-2",
                     ad_remote_id="ad",
@@ -113,5 +126,14 @@ def test_drop_directory_main_identity_preserves_report_chain_and_reverses_schema
                 connection.execute(
                     text("UPDATE ad_material_reference SET main_material_id='untyped'")
                 )
+        from scripts.preserve_legacy_creative_identities import (
+            preserve_creative_identities,
+        )
+
+        command.upgrade(config, "0114_retire_material")
+        with Session(engine) as session, session.begin():
+            preserve_creative_identities(
+                session, tenant_id=seed.tenant_id, advertiser_id="acc-2"
+            )
         command.upgrade(config, "head")
         command.check(config)

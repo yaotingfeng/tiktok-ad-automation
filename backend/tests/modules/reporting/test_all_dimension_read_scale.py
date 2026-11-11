@@ -111,9 +111,9 @@ def _seed_directory(session, seed):
         "10k material uses / 100 videos",
         """INSERT INTO ad_material_reference
         (id,tenant_id,advertiser_id,ad_remote_id,platform_material_id,ad_material_id,material_type,
-         name,creative_ids,complete,published_version)
+         name,complete,published_version)
         SELECT gen_random_uuid(),:t,'scale-'||((i-1)/20+1),'a'||i,'scale-video-'||((i-1)%100+1),
-            'asset-'||i,'VIDEO','合成视频'||((i-1)%100+1),'[]',true,1 FROM generate_series(1,10000)i""",
+            'asset-'||i,'VIDEO','合成视频'||((i-1)%100+1),true,1 FROM generate_series(1,10000)i""",
     )
 
 

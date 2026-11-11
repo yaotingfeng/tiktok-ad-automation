@@ -472,7 +472,7 @@ def _material_values(
     }
 
 
-_MATERIAL_COLUMNS = "id,tenant_id,advertiser_id,ad_remote_id,platform_material_id,ad_material_id,material_type,name,creative_ids,local_material_id,operation_status,complete,published_version"
+_MATERIAL_COLUMNS = "id,tenant_id,advertiser_id,ad_remote_id,platform_material_id,ad_material_id,material_type,name,local_material_id,operation_status,complete,published_version"
 _MATERIAL_IDENTITY = (
     "tenant_id",
     "advertiser_id",
@@ -487,7 +487,7 @@ def _material_upsert_sql(target, source):
     return f"""
         INSERT INTO {target} ({_MATERIAL_COLUMNS}) {source}
         ON CONFLICT ({",".join(_MATERIAL_IDENTITY)}) DO UPDATE SET
-            name=EXCLUDED.name,creative_ids=EXCLUDED.creative_ids,
+            name=EXCLUDED.name,
             local_material_id=EXCLUDED.local_material_id,
             operation_status=EXCLUDED.operation_status,
             complete=EXCLUDED.complete,published_version=EXCLUDED.published_version
@@ -515,7 +515,7 @@ def _creative_material_stage(session):
     session.connection().execute(
         text(f"""
         CREATE TEMP TABLE {name} (LIKE ad_material_reference INCLUDING DEFAULTS
-            INCLUDING CONSTRAINTS,
+            INCLUDING CONSTRAINTS, creative_ids jsonb NOT NULL,
             creative_asset_ordinal bigint GENERATED ALWAYS AS IDENTITY) ON COMMIT DROP
     """)
     )
@@ -531,9 +531,9 @@ def _stage_creative_material_batch(session, staged, materials, *, run, version):
     if values:
         session.connection().execute(
             text(f"""
-            INSERT INTO {staged} ({_MATERIAL_COLUMNS})
-            SELECT {_MATERIAL_COLUMNS} FROM
-                jsonb_populate_recordset(NULL::ad_material_reference,CAST(:rows AS jsonb)) incoming
+            INSERT INTO {staged} ({_MATERIAL_COLUMNS},creative_ids)
+            SELECT {_MATERIAL_COLUMNS},creative_ids FROM
+                jsonb_populate_recordset(NULL::{staged},CAST(:rows AS jsonb)) incoming
         """),
             {"rows": json.dumps(values, default=str, ensure_ascii=False)},
         )

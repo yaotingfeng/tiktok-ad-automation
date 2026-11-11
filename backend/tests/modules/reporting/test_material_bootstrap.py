@@ -198,8 +198,8 @@ def test_bootstrap_batches_are_bounded_without_splitting_video_groups(
     _read(
         session,
         """INSERT INTO ad_material_reference
-        (id,tenant_id,advertiser_id,ad_remote_id,platform_material_id,ad_material_id,material_type,name,creative_ids,complete,published_version)
-        SELECT gen_random_uuid(),:tenant,'acc-1','batch-'||i,'video-'||((i-1)/3),'m-'||i,'VIDEO','name','[]'::jsonb,true,1
+        (id,tenant_id,advertiser_id,ad_remote_id,platform_material_id,ad_material_id,material_type,name,complete,published_version)
+        SELECT gen_random_uuid(),:tenant,'acc-1','batch-'||i,'video-'||((i-1)/3),'m-'||i,'VIDEO','name',true,1
         FROM generate_series(1,10) i""",
         tenant=sync_seed.tenant_id,
     )

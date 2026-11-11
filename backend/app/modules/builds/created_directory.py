@@ -3,12 +3,14 @@
 from copy import deepcopy
 from typing import cast
 
+from sqlalchemy import text
 from sqlalchemy.dialects.postgresql import insert
 from sqlmodel import Session, col, select
 
 from app.integrations.tiktok.adapters.ads_read import material_usages
 from app.integrations.tiktok.contracts.ads import EntityKind, EntityRef
 from app.integrations.tiktok.contracts.context import FrozenTikTokRoute
+from app.modules.ads.creatives import _cached_rows, upsert_creatives
 from app.modules.ads.directory import append_campaign_name_projection
 from app.modules.ads.models import AdMaterialReference, AdObject
 from app.modules.ads.sync import _next_directory_version
@@ -52,6 +54,12 @@ def publish_created_object(
     parent_id = body.get(f"{parent_kind}_id") if parent_kind else None
     if parent_kind and not parent_id:
         return
+    # 与正式目录发布保持同一锁序：先账户锁，再写对象、素材和创意。
+    # 否则创建回执持有对象行锁后等待账户锁，会与同步发布互等。
+    session.connection().execute(
+        text("SELECT pg_advisory_xact_lock(hashtextextended(:scope, 0))"),
+        {"scope": f"directory-publish:{step.tenant_id}:{unit.advertiser_id}"},
+    )
     version = _next_directory_version(session)
     inserted = (
         session.connection()
@@ -139,7 +147,6 @@ def publish_created_object(
                     "material_type": use.use_ref.material_type,
                     "name": name,
                     "local_material_id": local_id,
-                    "creative_ids": list(use.creative_ids),
                     "operation_status": use.operation_status,
                     "complete": use.complete,
                     "published_version": version,
@@ -150,3 +157,29 @@ def publish_created_object(
             session.connection().execute(
                 insert(AdMaterialReference).values(values).on_conflict_do_nothing()
             )
+        # 仅解析这次已确认创建的快照，避免为一次回执扫描整个账户。
+        # 若回执没有 CID，解析器返回空列表，不能用广告/MID 伪造创意身份。
+        observed = step.checked_at or step.updated_at
+        rows = _cached_rows(
+            {
+                "configuration": body,
+                "kind": "ad",
+                "ad_type": "SMART_PLUS",
+                "remote_id": step.remote_id,
+                "name": body.get("ad_name", ""),
+                "operation_status": step.operation_status,
+                "observed_at": observed,
+                "published_version": version,
+            },
+            step.tenant_id,
+            unit.advertiser_id,
+            None,
+        )
+        upsert_creatives(
+            session,
+            tenant_id=step.tenant_id,
+            advertiser_id=unit.advertiser_id,
+            rows=rows,
+            observed_at=observed,
+            published_version=version,
+        )

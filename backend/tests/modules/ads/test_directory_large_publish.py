@@ -262,10 +262,10 @@ def _seed_material_background(session, seed, rows):
         text("""
         INSERT INTO ad_material_reference (
             id,tenant_id,advertiser_id,ad_remote_id,platform_material_id,ad_material_id,
-            material_type,name,creative_ids,local_material_id,operation_status,complete,published_version)
+            material_type,name,local_material_id,operation_status,complete,published_version)
         SELECT md5(CAST(:tenant AS text)||':background:'||i)::uuid,:tenant,'account-a',
             'background-ad-'||i,'background-video-'||i,'background-material-'||i,
-            'VIDEO','unrelated background '||i,'[]'::jsonb,NULL,'ENABLE',true,:version
+            'VIDEO','unrelated background '||i,NULL,'ENABLE',true,:version
         FROM generate_series(1,:rows) i
     """),
         {"tenant": seed.context.tenant_id, "rows": rows, "version": version},
@@ -431,7 +431,7 @@ def test_material_publish_refreshes_loaded_and_partly_expired_identity(
     assert row.name == "after"
     assert row.published_version == 2
     assert row.ad_material_id == "non-null-id"
-    assert row.creative_ids == ["creative-new"]
+    assert "creative_ids" not in AdMaterialReference.model_fields
 
 
 def test_multi_page_publish_passes_only_bounded_entity_batches(

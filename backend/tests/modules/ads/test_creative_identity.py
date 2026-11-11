@@ -207,53 +207,26 @@ def test_ids_isolated_by_tenant_and_account(session, directory_seed, other_conte
     assert _get(session, directory_seed).ad_remote_id == "ad"
 
 
-def test_backfill_combines_historical_refs_and_preserves_newer_identity(
+def test_backfill_preserves_existing_complete_identity_without_legacy_references(
     session, directory_seed
 ):
-    parent = directory_seed.row
-    parent.operation_status = "DELETE"
-    for image in ["b", "a"]:
-        session.add(
-            AdMaterialReference(
-                tenant_id=parent.tenant_id,
-                advertiser_id=parent.advertiser_id,
-                ad_remote_id=parent.remote_id,
-                platform_material_id=image,
-                material_type="IMAGE",
-                ad_material_id="images",
-                creative_ids=["carousel"],
-                complete=False,
-                published_version=1,
-            )
-        )
-    session.add(
-        AdMaterialReference(
-            tenant_id=parent.tenant_id,
-            advertiser_id=parent.advertiser_id,
-            ad_remote_id=parent.remote_id,
-            platform_material_id="video",
-            material_type="VIDEO",
-            creative_ids=["native"],
-            complete=True,
-            published_version=1,
-        )
-    )
-    session.flush()
+    owner = directory_seed.row
+    assets = [
+        {"platform_material_id": image, "material_type": "IMAGE"}
+        for image in ["b", "a"]
+    ]
     _write(
         session,
         directory_seed,
-        [_row("native", parent="original")],
+        [_row("carousel", parent=owner.remote_id, assets=assets)],
         version=999,
-        observed=datetime.now(UTC) + timedelta(days=1),
     )
     backfill_creatives(
-        session, tenant_id=parent.tenant_id, advertiser_id=parent.advertiser_id
+        session, tenant_id=owner.tenant_id, advertiser_id=owner.advertiser_id
     )
     carousel = _get(session, directory_seed, "carousel")
-    assert carousel.material_type == "CAROUSEL" and len(carousel.assets) == 2
-    assert carousel.deleted and carousel.platform_material_id is None
-    assert carousel.evidence["asset_order_source"] == "CANONICAL_REFERENCE_SORT"
-    assert _get(session, directory_seed, "native").ad_remote_id == "original"
+    assert carousel.identity_status == "COMPOSITE" and carousel.assets == assets
+    assert carousel.published_version == 999
 
 
 @pytest.mark.parametrize("smart", [False, True])
@@ -416,33 +389,19 @@ def test_deleted_smart_parent_retains_and_deletes_historical_creatives(
     assert row.deleted and row.platform_material_id == "video"
 
 
-def test_backfill_normal_ad_without_native_id_and_orphan_native_ref(
+def test_backfill_normal_ad_uses_official_snapshot_without_native_id(
     session, directory_seed
 ):
     owner = directory_seed.row
     owner.ad_type = "REGULAR"
-    for parent, ids in [(owner.remote_id, []), ("missing-parent", ["orphan-native"])]:
-        session.add(
-            AdMaterialReference(
-                tenant_id=owner.tenant_id,
-                advertiser_id=owner.advertiser_id,
-                ad_remote_id=parent,
-                platform_material_id="video",
-                material_type="VIDEO",
-                creative_ids=ids,
-                complete=True,
-                published_version=1,
-            )
-        )
+    owner.configuration = {"video_id": "video"}
+    session.add(owner)
     session.flush()
     backfill_creatives(
         session, tenant_id=owner.tenant_id, advertiser_id=owner.advertiser_id
     )
     assert (
         _get(session, directory_seed, owner.remote_id).platform_material_id == "video"
-    )
-    assert (
-        _get(session, directory_seed, "orphan-native").ad_remote_id == "missing-parent"
     )
 
 
@@ -524,7 +483,6 @@ def test_backfill_reuses_known_order_instead_of_conflicting_with_unordered_histo
                 advertiser_id=owner.advertiser_id,
                 ad_remote_id=owner.remote_id,
                 ad_material_id="material",
-                creative_ids=["creative"],
                 complete=True,
                 published_version=1,
                 **asset,
@@ -701,7 +659,6 @@ def test_same_or_older_backfill_does_not_overwrite_live_status(
             platform_material_id="video",
             material_type="VIDEO",
             ad_material_id=reference_mid,
-            creative_ids=["creative"],
             complete=True,
             name="historical",
             operation_status="ENABLE",
@@ -744,7 +701,6 @@ def test_partial_backfill_preserves_complete_live_carousel(session, directory_se
             platform_material_id="a",
             material_type="IMAGE",
             ad_material_id="material",
-            creative_ids=["creative"],
             complete=True,
             published_version=2,
         )
@@ -769,26 +725,21 @@ def test_backfill_still_records_genuinely_conflicting_identity(
         [_row(parent=owner.remote_id)],
         observed=owner.observed_at,
     )
-    owner.observed_at += timedelta(seconds=1)
-    parent = owner.remote_id
-    if changed == "parent":
-        parent = "different-parent"
-        session.add(AdObject(**{**owner.model_dump(), "remote_id": parent}))
-    session.add(
-        AdMaterialReference(
-            tenant_id=owner.tenant_id,
-            advertiser_id=owner.advertiser_id,
-            ad_remote_id=parent,
-            platform_material_id="different-video" if changed == "asset" else "video",
-            material_type="VIDEO",
-            ad_material_id="different-material"
+    child = _cached_child(
+        session,
+        directory_seed,
+        creative="creative",
+        configuration={
+            "video_id": "different-video" if changed == "asset" else "video",
+            "ad_material_id": "different-material"
             if changed == "ad_material"
             else "material",
-            creative_ids=["creative"],
-            complete=True,
-            published_version=2,
-        )
+        },
     )
+    child.observed_at += timedelta(seconds=1)
+    if changed == "parent":
+        child.parent_remote_id = "different-parent"
+    session.add(child)
     session.flush()
     backfill_creatives(
         session, tenant_id=owner.tenant_id, advertiser_id=owner.advertiser_id
@@ -797,7 +748,6 @@ def test_backfill_still_records_genuinely_conflicting_identity(
     assert creative.identity_status == "CONFLICT"
     assert (
         creative.ad_remote_id == owner.remote_id
-        and creative.ad_material_id == "material"
         and creative.platform_material_id == "video"
     )
 
@@ -859,21 +809,13 @@ def test_prioritized_backfill_only_writes_requested_creatives_with_all_assets(
     session, directory_seed, targets
 ):
     owner = directory_seed.row
-    for image in ["a", "b"]:
-        session.add(
-            AdMaterialReference(
-                tenant_id=owner.tenant_id,
-                advertiser_id=owner.advertiser_id,
-                ad_remote_id=owner.remote_id,
-                platform_material_id=image,
-                material_type="IMAGE",
-                ad_material_id="carousel",
-                creative_ids=["wanted", "other"],
-                complete=True,
-                published_version=1,
-            )
+    for cid in ["wanted", "other"]:
+        _cached_child(
+            session,
+            directory_seed,
+            creative=cid,
+            configuration={"image_ids": ["a", "b"], "ad_material_id": "carousel"},
         )
-    session.flush()
     backfill_creatives(
         session,
         tenant_id=owner.tenant_id,
@@ -885,8 +827,7 @@ def test_prioritized_backfill_only_writes_requested_creatives_with_all_assets(
     if targets:
         assert wanted.identity_status == "COMPOSITE"
         assert wanted.assets == [
-            {"platform_material_id": "a", "material_type": "IMAGE"},
-            {"platform_material_id": "b", "material_type": "IMAGE"},
+            {"platform_material_id": p, "material_type": "IMAGE"} for p in ["a", "b"]
         ]
     else:
         assert wanted is None
@@ -971,17 +912,20 @@ def test_cached_empty_child_retains_older_positive_reference_and_parent_delete(
     child = _cached_child(session, directory_seed)
     owner.operation_status = "DELETE"
     session.add(owner)
-    session.add(
-        AdMaterialReference(
-            tenant_id=owner.tenant_id,
-            advertiser_id=owner.advertiser_id,
-            ad_remote_id=owner.remote_id,
-            platform_material_id="known-video",
-            material_type="VIDEO",
-            creative_ids=["cached"],
-            complete=True,
-            published_version=1,
-        )
+    _write(
+        session,
+        directory_seed,
+        [
+            _row(
+                "cached",
+                parent=owner.remote_id,
+                assets=[
+                    {"platform_material_id": "known-video", "material_type": "VIDEO"}
+                ],
+            )
+        ],
+        observed=owner.observed_at,
+        version=1,
     )
     session.flush()
     backfill_creatives(

@@ -12,9 +12,9 @@ def test_usage_rebuild_resumes_and_preserves_precise_latest_candidates(
     session.execute(
         text("""INSERT INTO ad_material_reference
         (id,tenant_id,advertiser_id,ad_remote_id,platform_material_id,
-         ad_material_id,material_type,name,creative_ids,complete,published_version)
+         ad_material_id,material_type,name,complete,published_version)
         SELECT gen_random_uuid(),:tenant,'acc-1',v.ad,'video',v.material,'VIDEO',
-            v.name,'[]'::jsonb,v.complete,v.version
+            v.name,v.complete,v.version
         FROM (VALUES
             ('a',NULL,'imprecise',true,99),
             ('a','old','older',true,1),

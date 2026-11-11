@@ -20,8 +20,38 @@ from app.modules.reporting.store_models import ReportSyncState
 from tests.modules.builds.test_execution import executable as executable
 
 
+@pytest.fixture(autouse=True)
+def complete_offline_identity_catalog(monkeypatch):
+    """回执专项沿用执行夹具，补齐当前目录要求的完整页计数，不访问外部接口。"""
+    from app.modules.builds.scene_job_models import SceneJob
+    from tests.modules.builds import test_execution
+
+    seed = test_execution.seed_targeting_directory
+
+    def complete(session, context, advertisers, **kwargs):
+        seed(session, context, advertisers, **kwargs)
+        for job in session.exec(
+            select(SceneJob).where(SceneJob.tenant_id == context.tenant_id)
+        ).all():
+            identity = job.facts.get("identity")
+            if identity and identity.get("options"):
+                job.facts = {
+                    **job.facts,
+                    "identity": {
+                        **identity,
+                        "seen": len(identity["options"]),
+                        "total_number": len(identity["options"]),
+                        "total_page": 1,
+                    },
+                }
+                session.add(job)
+        session.flush()
+
+    monkeypatch.setattr(test_execution, "seed_targeting_directory", complete)
+
+
 @pytest.fixture
-def created_step(executable):
+def created_step(executable, request):
     engine, context, ids = executable
     with Session(engine) as session, session.begin():
         step = session.get(ExecutionStep, ids["AD"][0])
@@ -43,6 +73,17 @@ def created_step(executable):
                 }
             ],
         }
+        if getattr(request, "param", None) == "native":
+            step.request_body = {
+                **step.request_body,
+                "creative_list": [
+                    {
+                        **step.request_body["creative_list"][0],
+                        "smart_plus_creative_id": "created-native",
+                        "ad_material_id": "created-mid",
+                    }
+                ],
+            }
         identity = step.id
     return engine, context, identity, route
 
@@ -146,7 +187,7 @@ def test_existing_sync_updates_created_directory_and_repeat_receipt_preserves_it
         assert obj.published_version == version
         uses = current_ad_materials(session, obj.ref)
         assert len(uses) == 1 and uses[0].ad_material_id == "actual-material-id"
-        assert uses[0].creative_ids == ["actual-creative-id"]
+        assert "creative_ids" not in AdMaterialReference.model_fields
 
 
 @pytest.mark.parametrize(
@@ -231,3 +272,43 @@ def test_carousel_records_images_and_music_without_invented_creative_id(created_
         carousel = directory_carousels(obj)
         assert carousel.identities[0].ordered_image_ids == ("image-1", "image-2")
         assert carousel.identities[0].music_id == "music-1"
+
+
+@pytest.mark.parametrize("created_step", ["native"], indirect=True)
+def test_created_native_creative_uses_current_identity_table_and_account_lock(
+    created_step,
+):
+    from sqlalchemy import event
+
+    from app.modules.ads.creative_models import AdCreative
+
+    engine, _, identity, route = created_step
+    statements = []
+
+    def observe(_connection, _cursor, statement, _parameters, _context, _executemany):
+        statements.append(statement)
+
+    event.listen(engine, "before_cursor_execute", observe)
+    try:
+        with Session(engine) as session, session.begin():
+            step = session.get(ExecutionStep, identity)
+            publish_created_object(session, step=step, route=route)
+            creative = session.get(
+                AdCreative, (step.tenant_id, "account-A", "created-native")
+            )
+            assert creative.platform_material_id == "target-0"
+            assert creative.ad_material_id == "created-mid"
+            lock = next(
+                i
+                for i, sql in enumerate(statements)
+                if "pg_advisory_xact_lock(hashtextextended" in sql
+            )
+            write = next(
+                i
+                for i, sql in enumerate(statements)
+                if sql.startswith("INSERT INTO ad_object")
+            )
+            assert lock < write
+            assert "creative_ids" not in AdMaterialReference.__table__.columns
+    finally:
+        event.remove(engine, "before_cursor_execute", observe)

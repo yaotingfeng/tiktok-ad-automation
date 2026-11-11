@@ -141,9 +141,6 @@ def trigger_statements() -> list[str]:
         LANGUAGE plpgsql STABLE AS $$ BEGIN RETURN {parsed_date};
         EXCEPTION WHEN invalid_parameter_value OR invalid_datetime_format OR datetime_field_overflow OR numeric_value_out_of_range
         THEN RETURN NULL; END $$""",
-        """CREATE INDEX ix_material_post_link_video_page ON material_post_link
-        (tenant_id,platform_material_id,advertiser_id,main_material_id,main_material_type)
-        WHERE platform_material_id IS NOT NULL""",
     ]
     sources = {
         "ad_object": (
@@ -162,16 +159,6 @@ def trigger_statements() -> list[str]:
             material_refresh,
         ),
         "ad_report_day": ("tenant_id,advertiser_id,stat_date", "ad_day", None),
-        "material_report_day": (
-            "tenant_id,advertiser_id,stat_date",
-            "material_day",
-            None,
-        ),
-        "material_post_link": (
-            "tenant_id,advertiser_id,main_material_id",
-            "link",
-            None,
-        ),
         "report_sync_state": (
             "tenant_id,advertiser_id,report_kind,stat_date",
             "state",
@@ -208,23 +195,13 @@ def trigger_statements() -> list[str]:
                     )
                 else:
                     body += refresh(keys)
-            elif kind in {"ad_day", "material_day"}:
+            elif kind == "ad_day":
                 body += _bump(
                     f"SELECT tenant_id,advertiser_id,'{kind}'::varchar AS kind,stat_date AS bucket FROM ({keys}) k"
                 )
             elif kind == "state":
                 body += _bump(
                     f"SELECT tenant_id,advertiser_id,report_kind AS kind,stat_date AS bucket FROM ({keys}) k"
-                )
-            else:
-                body += _bump(
-                    f"SELECT DISTINCT tenant_id,advertiser_id,'link'::varchar AS kind,{DIRECTORY_BUCKET} AS bucket FROM ({keys}) k",
-                    complete=True,
-                )
-                body += _replan(
-                    _bump(f"""SELECT DISTINCT f.tenant_id,f.advertiser_id,'material_day'::varchar AS kind,f.stat_date AS bucket
-                    FROM ({keys}) k JOIN material_report_day f ON f.tenant_id=k.tenant_id
-                        AND f.advertiser_id=k.advertiser_id AND f.main_material_id=k.main_material_id""")
                 )
             suffix = f"{table}_{operation.lower()}"
             result.append(

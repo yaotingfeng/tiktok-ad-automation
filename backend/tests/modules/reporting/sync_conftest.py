@@ -186,7 +186,6 @@ def committed_sync_seed():
                 "campaign_report_day",
                 "campaign_report_hour",
                 "ad_report_day",
-                "material_report_day",
             )
             for name in names:
                 table = SQLModel.metadata.tables[name]

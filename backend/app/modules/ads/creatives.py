@@ -405,7 +405,12 @@ def _cached_rows(
 
 
 def _cached_directory_rows(
-    session: Session, tenant: UUID, account: str, requested: frozenset[str] | None
+    session: Session,
+    tenant: UUID,
+    account: str,
+    requested: frozenset[str] | None,
+    *,
+    parent_ids: list[str] | None = None,
 ) -> Iterator[dict[str, Any]]:
     params: dict[str, Any] = {"tenant": tenant, "account": account, "limit": 50}
     direct = (
@@ -486,6 +491,10 @@ def _cached_directory_rows(
         if needed is not None
         else ""
     )
+    if parent_ids is not None:
+        # 一次性物理退休按父广告分页，不能为每页缺失 CID 重扫整个账户 JSON。
+        params["parent_ids"] = parent_ids
+        match += " AND o.remote_id=ANY(CAST(:parent_ids AS text[]))"
     after_id = ""
     while True:
         page = (
@@ -515,6 +524,7 @@ def _backfill_cached(
     requested: frozenset[str] | None,
     *,
     primary: bool,
+    parent_ids: list[str] | None = None,
 ) -> int:
     count = 0
     batch = []
@@ -613,7 +623,9 @@ def _backfill_cached(
             rows = remaining
         return written
 
-    for row in _cached_directory_rows(session, tenant, account, requested):
+    for row in _cached_directory_rows(
+        session, tenant, account, requested, parent_ids=parent_ids
+    ):
         assets = row["assets"]
         is_primary = bool(assets) and all(
             a["material_type"] in {"VIDEO", "IMAGE"} for a in assets
@@ -635,181 +647,43 @@ def backfill_creatives(
     advertiser_id: str | None = None,
     creative_ids: list[str] | None = None,
 ) -> int:
-    """从本地目录快照和历史引用回填；先处理新事实需要的身份，再推进历史。
+    """仅从官方目录快照补身份；当前创意事实保留历史完整资产、版本和冲突证据。
 
-    筛选只减少父广告/创意范围，同一创意的全部资产仍一起读取，不截断轮播。
-    不扫描平台、不推断缺失删除。
+    筛选仅缩小创意范围，轮播始终按整个创意读取，不能按素材引用重新推断身份。
     """
     requested = frozenset(creative_ids) if creative_ids is not None else None
     if requested is not None and not requested:
         return 0
-    filters: list[str] = []
-    params: dict[str, Any] = {}
-    target_clause = ""
-    if requested is not None:
-        target = "(creative_ids ?| CAST(:creative_ids AS text[]) OR ad_remote_id=ANY(CAST(:creative_ids AS text[])))"
-        filters.append(target)
-        params["creative_ids"] = sorted(requested)
-        target_clause = " AND " + target
+    filters, params = [], {}
     if tenant_id is not None:
         filters.append("tenant_id=:tenant")
         params["tenant"] = tenant_id
     if advertiser_id is not None:
         filters.append("advertiser_id=:advertiser")
         params["advertiser"] = advertiser_id
-    where = " WHERE " + " AND ".join(filters) if filters else ""
-    object_where = " AND ".join(
-        clause for clause in filters if "creative_ids" not in clause
-    )
-    object_where = (" AND " + object_where) if object_where else ""
+    where = " AND " + " AND ".join(filters) if filters else ""
     accounts = (
         [(tenant_id, advertiser_id)]
         if tenant_id is not None and advertiser_id is not None
-        else (
-            session.connection()
-            .execute(
-                text(
-                    "SELECT DISTINCT tenant_id,advertiser_id FROM ad_material_reference"
-                    + where
-                    + " UNION SELECT tenant_id,advertiser_id FROM ad_object WHERE kind IN ('ad','creative')"
-                    + object_where
-                    + " ORDER BY tenant_id,advertiser_id"
-                ),
-                params,
-            )
-            .all()
+        else session.connection()
+        .execute(
+            text(
+                "SELECT DISTINCT tenant_id,advertiser_id FROM ad_object "
+                "WHERE kind IN ('ad','creative')"
+                + where
+                + " ORDER BY tenant_id,advertiser_id"
+            ),
+            params,
         )
+        .all()
     )
     count = 0
     for tenant, account in accounts:
-        # 读取已有顺序前先与目录发布互斥，避免等待UPSERT时使用过时的映射快照。
         session.connection().execute(
             text("SELECT pg_advisory_xact_lock(hashtextextended(:scope, 0))"),
             {"scope": f"directory-publish:{tenant}:{account}"},
         )
-        # 先读取缓存中明确的VID/图片，再用引用补历史；空内容和帖子仅作最后的兜底。
-        # 所有关系均来自目录原字段，不按报表筛广告或猜测帖子对应的VID。
         count += _backfill_cached(session, tenant, account, requested, primary=True)
-        after = ""
-        while True:
-            scope = {
-                "tenant": tenant,
-                "account": account,
-                "after": after,
-                "limit": _BATCH_SIZE,
-                **(
-                    {"creative_ids": sorted(requested)} if requested is not None else {}
-                ),
-            }
-            parents = (
-                session.connection()
-                .execute(
-                    text(f"""
-                SELECT DISTINCT ad_remote_id FROM ad_material_reference
-                WHERE tenant_id=:tenant AND advertiser_id=:account AND ad_remote_id>:after {target_clause}
-                ORDER BY ad_remote_id LIMIT :limit
-            """),
-                    scope,
-                )
-                .scalars()
-                .all()
-            )
-            if not parents:
-                break
-            refs = (
-                session.connection()
-                .execute(
-                    text("""
-                SELECT m.*,p.ad_type,p.operation_status AS parent_status,
-                    COALESCE(p.observed_at,'1970-01-01 UTC'::timestamptz) AS observed_at
-                FROM ad_material_reference m LEFT JOIN ad_object p
-                  ON p.tenant_id=m.tenant_id AND p.advertiser_id=m.advertiser_id
-                    AND p.kind='ad' AND p.remote_id=m.ad_remote_id
-                WHERE m.tenant_id=:tenant AND m.advertiser_id=:account AND m.ad_remote_id=ANY(:parents)
-                ORDER BY m.ad_remote_id,m.platform_material_id,m.material_type,m.ad_material_id
-            """),
-                    {**scope, "parents": parents},
-                )
-                .mappings()
-                .all()
-            )
-            rows = _group_references([dict(ref) for ref in refs])
-            if requested is not None:
-                rows = [row for row in rows if row["creative_id"] in requested]
-            if rows:
-                existing = (
-                    session.connection()
-                    .execute(
-                        text("""
-                    SELECT creative_id,ad_remote_id,ad_material_id,assets,published_version FROM ad_creative
-                    WHERE tenant_id=:tenant AND advertiser_id=:account AND creative_id=ANY(:ids)
-                """),
-                        {**scope, "ids": sorted({row["creative_id"] for row in rows})},
-                    )
-                    .mappings()
-                    .all()
-                )
-                by_creative = {row["creative_id"]: row for row in existing}
-                accepted = []
-                for row in rows:
-                    original = by_creative.get(row["creative_id"])
-                    # 历史引用可能丢失共享素材成员且没有位置列：同身份的资产子集
-                    # 沿用完整已知资产/顺序，不能以缺失推断删除或制造冲突。
-                    if (
-                        original
-                        and original["ad_remote_id"] == row["ad_remote_id"]
-                        and (
-                            original["ad_material_id"] is None
-                            or row["ad_material_id"] is None
-                            or original["ad_material_id"] == row["ad_material_id"]
-                        )
-                        and {
-                            (asset["material_type"], asset["platform_material_id"])
-                            for asset in original["assets"]
-                        }
-                        >= {
-                            (asset["material_type"], asset["platform_material_id"])
-                            for asset in row["assets"]
-                        }
-                    ):
-                        row["assets"] = original["assets"]
-                        # 父目录可能更晚同步，但它的时间不能提升旧素材引用的权威性。
-                        # 相同或较旧版本的弱回填仅补不存在的身份，不覆盖live状态。
-                        # MID 缺失仍是同身份弱观察，不能借父时间提升旧引用；
-                        # 同版本的 MID 补全也留给新的强目录观察。
-                        if row["published_version"] <= original["published_version"]:
-                            continue
-                    accepted.append(row)
-                rows = accepted
-                if not rows:
-                    after = parents[-1]
-                    continue
-                # 创意实体明确删除优先；父广告未删不能反推已删除创意仍有效。
-                statuses = (
-                    session.connection()
-                    .execute(
-                        text("""
-                    SELECT remote_id,operation_status,observed_at FROM ad_object
-                    WHERE tenant_id=:tenant AND advertiser_id=:account AND kind='creative' AND remote_id=ANY(:ids)
-                """),
-                        {**scope, "ids": sorted({row["creative_id"] for row in rows})},
-                    )
-                    .mappings()
-                    .all()
-                )
-                by_id = {row["remote_id"]: row for row in statuses}
-                for row in rows:
-                    row["asset_order_source"] = "CANONICAL_REFERENCE_SORT"
-                    child = by_id.get(row["creative_id"])
-                    if child:
-                        row["deleted"] = row["deleted"] or child[
-                            "operation_status"
-                        ] in {"DELETE", "DELETED"}
-                        row["operation_status"] = child["operation_status"]
-                count += _write_groups(
-                    session, tenant_id=tenant, advertiser_id=account, rows=rows
-                )
-            after = parents[-1]
         count += _backfill_cached(session, tenant, account, requested, primary=False)
     return count
 

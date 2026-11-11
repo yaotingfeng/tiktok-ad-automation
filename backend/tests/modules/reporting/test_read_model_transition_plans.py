@@ -7,8 +7,6 @@ from uuid import uuid4
 import pytest
 from sqlalchemy import text
 
-from tests.modules.reporting.test_material_query import D
-
 
 def _nodes(plan):
     yield plan
@@ -25,12 +23,7 @@ def _plans(session):
     def notice(message):
         value = message.message_primary
         if "plan:\n" not in value or not any(
-            marker in value
-            for marker in (
-                "current_ad_material",
-                "FROM material_report_day f",
-                "JOIN material_report_day f",
-            )
+            marker in value for marker in ("current_ad_material",)
         ):
             return
         parsed = json.loads(value.split("plan:\n", 1)[1])
@@ -59,16 +52,10 @@ def _plans(session):
         connection.execute(text("SET LOCAL auto_explain.log_min_duration=-1"))
 
 
-def _seed(session, seed, family, tag, n):
-    if family == "link":
-        statement = """INSERT INTO material_post_link
-        (tenant_id,advertiser_id,main_material_id,ad_remote_id,main_material_type,platform_material_id,observed_at)
-        SELECT :tenant,'acc-1','post-'||i,:tag||i,'VIDEO_SPARK_ADS','video-'||i,now()
-        FROM generate_series(1,:n)i"""
-    else:
-        statement = """INSERT INTO ad_material_reference
-        (id,tenant_id,advertiser_id,ad_remote_id,platform_material_id,ad_material_id,material_type,name,creative_ids,complete,published_version)
-        SELECT gen_random_uuid(),:tenant,'acc-1',:tag||i,'video-'||i,i::text,'VIDEO','material-'||i,'[]'::jsonb,true,1
+def _seed(session, seed, _family, tag, n):
+    statement = """INSERT INTO ad_material_reference
+        (id,tenant_id,advertiser_id,ad_remote_id,platform_material_id,ad_material_id,material_type,name,complete,published_version)
+        SELECT gen_random_uuid(),:tenant,'acc-1',:tag||i,'video-'||i,i::text,'VIDEO','material-'||i,true,1
         FROM generate_series(1,:n)i"""
     session.execute(text(statement), {"tenant": seed.tenant_id, "tag": tag, "n": n})
 
@@ -78,16 +65,7 @@ def _seed(session, seed, family, tag, n):
 def test_transition_estimate_tracks_small_large_small_on_one_backend(
     session, sync_seed, family, operation, record_property
 ):
-    if family == "link":
-        # 两个日期分区确保确实执行事实关联，不能因事实为空跳过transition。
-        session.execute(
-            text("""INSERT INTO material_report_day
-          (tenant_id,advertiser_id,stat_date,main_material_id,main_material_type,currency,timezone,fetched_at,sync_job_id,spend,revenue_total)
-          SELECT :tenant,'acc-1',CAST(:day AS date)-d,'post-'||i,'VIDEO_SPARK_ADS','USD','UTC',now(),gen_random_uuid(),1,0
-          FROM generate_series(1,1000)i CROSS JOIN (VALUES(0),(60))days(d)"""),
-            {"tenant": sync_seed.tenant_id, "day": D},
-        )
-    table = "material_post_link" if family == "link" else "ad_material_reference"
+    table = "ad_material_reference"
     counts = []
     for phase, n in enumerate([1] * 6 + [1000, 1]):
         tag = f"phase-{phase}-"
@@ -97,11 +75,7 @@ def test_transition_estimate_tracks_small_large_small_on_one_backend(
             if operation == "INSERT":
                 _seed(session, sync_seed, family, tag, n)
             else:
-                assignment = (
-                    "observed_at=clock_timestamp()"
-                    if family == "link"
-                    else "name='updated'"
-                )
+                assignment = "name='updated'"
                 prefix = (
                     f"UPDATE {table} SET {assignment}"
                     if operation == "UPDATE"
@@ -153,8 +127,8 @@ def test_reference_identity_move_keeps_precise_latest_ties_and_atomic_rollback(
         ("neighbor", "neighbor", 1, True, "acc-2"),
     ]:
         session.execute(
-            text("""INSERT INTO ad_material_reference(id,tenant_id,advertiser_id,ad_remote_id,platform_material_id,ad_material_id,material_type,name,creative_ids,complete,published_version)
-            VALUES(:id,:tenant,:account,'ad','video',:material,'VIDEO','name','[]'::jsonb,:complete,:version)"""),
+            text("""INSERT INTO ad_material_reference(id,tenant_id,advertiser_id,ad_remote_id,platform_material_id,ad_material_id,material_type,name,complete,published_version)
+            VALUES(:id,:tenant,:account,'ad','video',:material,'VIDEO','name',:complete,:version)"""),
             {
                 "id": ids[key],
                 "tenant": sync_seed.tenant_id,
@@ -219,6 +193,11 @@ def test_fixed_migration_roundtrip_matches_generated_functions(session):
             )
         )
     ]
+    # 历史0099同时包含现已删除的补链函数，当前只比较仍存续的素材引用函数。
+    migration = {
+        key: tuple(sql for sql in migration[key] if "qrm_ad_material_reference_" in sql)
+        for key in ("UPGRADE", "DOWNGRADE")
+    }
     assert migration["UPGRADE"] == tuple(expected)
     names = [s.split("()", 1)[0].split()[-1] for s in migration["UPGRADE"]]
 

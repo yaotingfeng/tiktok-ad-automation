@@ -1,9 +1,8 @@
-"""冻结旧补链不能给未知创意恢复身份；动作只取当前精确目录。"""
+"""未知创意不能由同广告素材引用推断身份；动作只取当前精确目录。"""
 
 from decimal import Decimal
 
 import pytest
-from sqlalchemy import text
 
 from app.modules.reporting.schemas import ReportingFilter
 from tests.modules.reporting.query_helpers import query_ads
@@ -27,13 +26,6 @@ def test_retained_links_do_not_map_unknown_creative_or_grant_actions(
     )
     if ambiguous:
         use(session, sync_seed, adv="acc-1", ad="a1", video="v1", ad_material="m2")
-    session.execute(
-        text("""INSERT INTO material_post_link
-        (tenant_id,advertiser_id,main_material_id,ad_remote_id,main_material_type,
-         ad_material_id,material_name,platform_material_id,observed_at)
-        VALUES (:tenant,'acc-1','p2','a1','VIDEO','m1','legacy','v1',now())"""),
-        {"tenant": sync_seed.tenant_id},
-    )
     page = query_ads(
         session,
         context=sync_seed.context,
