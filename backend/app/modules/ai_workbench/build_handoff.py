@@ -428,6 +428,7 @@ class BuildHandoff:
                 ExecutionStep,
                 SubmissionUnit,
             )
+            from app.modules.builds.receipt_completion import obsolete_readback_sql
 
             active_unit = self.session.exec(
                 select(SubmissionUnit.unit_id).where(
@@ -445,6 +446,7 @@ class BuildHandoff:
                     ExecutionStep.tenant_id == self.context.tenant_id,
                     ExecutionStep.submission_id == submission_id,
                     ExecutionStep.status.in_(["QUEUED", "RUNNING"]),
+                    text("NOT " + obsolete_readback_sql("execution_step")),
                 ).limit(1)
             ).first()
             if active_unit is not None or active_step is not None:

@@ -92,3 +92,17 @@ Round 4 verification:
 
 - Ruff passed.
 - Focused handoff tests — `13 passed`.
+
+## Review fix round 5
+
+- Active execution-step gating now applies the same
+  `NOT obsolete_readback_sql(...)` predicate as `finalize_submission`, so an
+  obsolete queued/running readback cannot hold an occurrence in DISPATCHED
+  after the aggregate submission settles.
+- Added a regression that verifies the obsolete-readback SQL predicate and
+  allows the occurrence to transition to UNKNOWN.
+
+Round 5 verification:
+
+- Ruff passed.
+- Focused handoff tests — `14 passed`.
