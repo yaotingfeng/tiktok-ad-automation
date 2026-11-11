@@ -16,6 +16,12 @@ from app.modules.reporting.store_models import AdReportDay, AdSyncBc, ReportSync
 from tests.modules.reporting.test_job_tasks import _ctx
 
 
+def test_screening_plan_without_report_kind_uses_integrated_endpoint():
+    """筛查回放的轻量计划没有 kind，也必须能选择统一报表物理接口。"""
+    plan = type("ScreeningPlan", (), {})()
+    assert job_tasks._report_plan_kind(plan) == "ad_day"
+
+
 def _seed(factory, seed, accounts, now, *, after, covered, done, advanced):
     with factory() as session, session.begin():
         session.add_all(

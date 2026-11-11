@@ -90,6 +90,11 @@ def _context(row):
     )
 
 
+def _report_plan_kind(plan) -> str:
+    """返回报表任务类型；筛查回放的轻量计划默认使用广告日报入口。"""
+    return getattr(plan, "kind", "ad_day")
+
+
 @contextmanager
 def _reader_for(
     *,
@@ -106,8 +111,11 @@ def _reader_for(
     from app.modules.sync_control.schedule import report_endpoint
 
     reservation = getattr(plan, "claim_token", None)
+    # 筛查阶段传入的冻结轻量计划只包含 BC/路由字段，没有报表任务的 kind；
+    # 该读取仍走统一 integrated report 物理接口，不能因缺少任务字段阻断热报规划。
+    kind = _report_plan_kind(plan)
     endpoint = reservation_endpoint or report_endpoint(
-        plan.kind, getattr(plan, "progress", None)
+        kind, getattr(plan, "progress", None)
     )
     budget = (
         dispatch_context(
