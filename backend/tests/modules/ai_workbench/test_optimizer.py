@@ -66,6 +66,55 @@ def test_version_binding_fk_includes_optimizer_scope():
     ]
 
 
+def test_same_tenant_optimizer_binding_mismatch_is_rejected(session, context):
+    from sqlalchemy.exc import IntegrityError
+
+    from app.modules.ai_workbench.models import (
+        AIOptimizer,
+        AIOptimizerStrategyBinding,
+        AIOptimizerVersion,
+    )
+
+    strategy = seed_optimizer_dependencies(session, context)
+    optimizer_a = AIOptimizer(
+        tenant_id=context.tenant_id, name="A", created_by=context.actor_id
+    )
+    optimizer_b = AIOptimizer(
+        tenant_id=context.tenant_id, name="B", created_by=context.actor_id
+    )
+    session.add(optimizer_a)
+    session.add(optimizer_b)
+    session.flush()
+    binding = AIOptimizerStrategyBinding(
+        tenant_id=context.tenant_id,
+        optimizer_id=optimizer_a.id,
+        strategy_version_id=strategy.id,
+        created_by=context.actor_id,
+    )
+    session.add(binding)
+    session.flush()
+    session.add(
+        AIOptimizerVersion(
+            tenant_id=context.tenant_id,
+            optimizer_id=optimizer_b.id,
+            number=1,
+            daily_spend="10",
+            target_roas=None,
+            priority="BALANCED",
+            bc_id="bc-a",
+            advertiser_ids=["acc-1"],
+            optimization_mode="MANUAL",
+            authorization_limits={},
+            strategy_binding_id=binding.id,
+            request_id=uuid4(),
+            request_digest="b" * 64,
+            created_by=context.actor_id,
+        )
+    )
+    with pytest.raises(IntegrityError):
+        session.flush()
+
+
 def seed_optimizer_dependencies(session: Session, context, *, account="acc-1"):
     """Seed only local tenant facts; no provider/API calls are made."""
     connection = TikTokConnection(tenant_id=context.tenant_id, status="ACTIVE")
