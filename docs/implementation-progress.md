@@ -5121,3 +5121,9 @@ c34b生产快速切换约3分28秒完成、锁释放/CI恢复；五分钟仍4.88
 - 集成f8d053b3（实现8a969b91）：operation_log CREATE/CHECK/DOWNLOAD端点统一；混阶段重选、有界旧头纠正、领取前冻结票据端点及跨代旧消息只清自身占位。无DDL，保留原头级冷却、官方SDK准入/配额和全部owner/lease代数保护。
 - 72项真实PG/Redis相关回归与Ruff/格式检查通过，独立审查Ready；集成工作树另外2项关键行为回归通过。
 - 计划按现行无DDL快速镜像切换发布，保留11角色全部配置/资源/退出宽限、50QPS和四开关；不新建备份、恢复演练或全量停服排空。真实时效尚待验，具体边界见物理退休验证记录。
+
+## 2026-11-12 筛查规划阻断修复已发布
+
+- 线上7f版本中发现筛查回放的轻量计划缺少报表`kind`，`screen_hot`进入`AttributeError`并按5分钟退避；修复由`_report_plan_kind`为缺失字段明确选择integrated报表入口。新增回归与阶段端点专项通过，旧4,859账户压力用例因本地PG `max_locks_per_transaction` 不足失败，未归因于本次代码。
+- f10dff97从7f快速发布，11角色全就绪、schema0118、配置/额度/并发/资源/四开关/HTTPS保持，发布锁删除、Jenkins恢复。补数16Gi与报表反亲和造成节点碎片，临时正常退出迁移报表Worker后恢复，最终Deployment规格/副本数回到原值；无扩容、DDL、强删任务或新备份。
+- 发布后lagging计划在18:35:58完成screen_hot、hot、material、live，hot/material各覆盖535账户；cohort四任务COMPLETE且revision gap为0。全局stale计数仍受切换窗口和身份缺口影响，必须继续以发布边界后的自然需求核对20分钟SLO。
