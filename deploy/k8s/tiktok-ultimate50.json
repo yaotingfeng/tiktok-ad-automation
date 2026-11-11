@@ -274,7 +274,11 @@
           "cpu": "4",
           "memory": "8Gi"
         }
-      }
+      },
+      "avoid_colocation_with": [
+        "worker-ads-backfill",
+        "worker-ads-reporting"
+      ]
     }
   },
   "polling": {

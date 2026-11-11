@@ -97,6 +97,19 @@ spec:
         - name: tiktok-ad-automation-registry
       automountServiceAccountToken: false
       terminationGracePeriodSeconds: 960
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+          - labelSelector:
+              matchLabels:
+                app: tiktok-ad-automation
+              matchExpressions:
+              - key: role
+                operator: In
+                values:
+                - worker-ads-backfill
+                - worker-ads-reporting
+            topologyKey: kubernetes.io/hostname
       containers:
         - name: worker-resource
           image: __APP_IMAGE__
