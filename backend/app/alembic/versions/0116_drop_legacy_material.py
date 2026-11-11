@@ -1,7 +1,8 @@
-"""物理退休旧素材事实；先保全官方创意身份，再在同一事务移除旧结构。
+"""第一阶段物理退休三张旧素材表；保留旧 CID 列供在线保全。
 
 必须停写、排空并备份；旧表数据不可由 downgrade 重建，回退须恢复经核验的本轮专项恢复包。
-先运行 scripts/preserve_legacy_creative_identities.py；upgrade 只验证覆盖，不全量解析。
+本阶段不运行身份覆盖守卫、不删除 creative_ids；新行默认空数组，既有列值不变。
+旧关系完整保全与守卫通过后，另行发布删列迁移。
 """
 
 from alembic import op
@@ -13,57 +14,11 @@ branch_labels = None
 depends_on = None
 
 
-# 逐条核验旧关系；寻找任意缺口不需要去重，避免冻结窗口全量排序。
-# 可直接 EXPLAIN 此冻结 SQL 评估生产预算；不把在线预回填回执当作完整性证据。
-IDENTITY_COVERAGE_SQL = """
-    SELECT legacy.tenant_id,legacy.advertiser_id,legacy.creative_id
-    FROM (
-      SELECT m.tenant_id,m.advertiser_id,m.ad_remote_id,m.ad_material_id,
-        m.platform_material_id,m.material_type,
-        CASE WHEN jsonb_typeof(c.value)='string' THEN c.value #>> '{}' END AS creative_id
-      FROM ad_material_reference m
-      CROSS JOIN LATERAL jsonb_array_elements(m.creative_ids) c(value)
-    ) legacy
-    LEFT JOIN ad_creative a ON a.tenant_id=legacy.tenant_id
-      AND a.advertiser_id=legacy.advertiser_id AND a.creative_id=legacy.creative_id
-    WHERE legacy.creative_id IS NULL OR legacy.creative_id='' OR a.creative_id IS NULL
-      OR NOT (
-        (a.ad_remote_id=legacy.ad_remote_id
-         AND (legacy.ad_material_id IS NULL OR a.ad_material_id IS NOT DISTINCT FROM legacy.ad_material_id)
-         AND a.assets @> jsonb_build_array(jsonb_build_object(
-           'material_type',legacy.material_type,'platform_material_id',legacy.platform_material_id)))
-        OR (a.identity_status='CONFLICT' AND EXISTS (
-          SELECT 1 FROM jsonb_array_elements(COALESCE(a.evidence->'conflicts','[]'::jsonb)) e
-          WHERE e->'identity'->>'ad_remote_id'=legacy.ad_remote_id
-            AND (legacy.ad_material_id IS NULL OR e->'identity'->>'ad_material_id'=legacy.ad_material_id)
-            AND e->'identity'->'assets' @> jsonb_build_array(jsonb_build_object(
-              'material_type',legacy.material_type,'platform_material_id',legacy.platform_material_id))
-        ))
-      )
-    LIMIT 1
-"""
-
-
-def assert_identity_coverage(connection):
-    # CID 是官方标识，不能把非法值或尚未落库的身份随旧列一起丢弃。
-    if connection.execute(text(IDENTITY_COVERAGE_SQL)).first() is not None:
-        raise RuntimeError(
-            "legacy creative identity is not preserved; physical retirement aborted"
-        )
-
-
 def upgrade():
     connection = op.get_bind()
-    # 冻结窗口的验证必须有界，超时自动回滚；发布人可预先在线执行同一 SQL 估时。
+    # 不等待长查询无限占锁；三表 DDL、默认值和退休回执在同一事务中提交。
     previous_lock_timeout = connection.execute(text("SHOW lock_timeout")).scalar_one()
     connection.execute(text("SET LOCAL lock_timeout = '5s'"))
-    # 冻结是发布前提；数据库锁再封住验证与删列之间的写入竞态，读请求仍可继续。
-    connection.execute(
-        text("LOCK TABLE ad_material_reference,ad_creative IN SHARE ROW EXCLUSIVE MODE")
-    )
-    previous_timeout = connection.execute(text("SHOW statement_timeout")).scalar_one()
-    connection.execute(text("SET LOCAL statement_timeout = '300s'"))
-    assert_identity_coverage(connection)
     # DROP TABLE 自动移除分区、表索引和触发器；函数需单独移除，禁止 CASCADE
     # 隐藏未知依赖。所有步骤在 Alembic 的同一事务中完成。
     for table in ("material_post_link", "material_report_day", "material_link_scan"):
@@ -71,17 +26,13 @@ def upgrade():
     for table in ("material_post_link", "material_report_day"):
         for operation in ("insert", "update", "delete"):
             op.execute(f"DROP FUNCTION IF EXISTS qrm_{table}_{operation}()")
-    op.drop_constraint(
-        "ck_ad_material_creatives", "ad_material_reference", type_="check"
+    # 新程序不再写旧列；默认空数组只服务新行，不回写或抹掉尚待保全的旧 CID。
+    op.execute(
+        "ALTER TABLE ad_material_reference ALTER COLUMN creative_ids SET DEFAULT '[]'::jsonb"
     )
-    op.drop_column("ad_material_reference", "creative_ids")
     op.execute("""UPDATE ad_sync_bc SET screening_progress = screening_progress ||
-      jsonb_build_object('creative_material_physical_retirement',jsonb_build_object(
+      jsonb_build_object('creative_material_table_retirement',jsonb_build_object(
         'at',clock_timestamp(),'revision','0116_drop_legacy_material'))""")
-    connection.execute(
-        text("SELECT set_config('statement_timeout',:value,true)"),
-        {"value": previous_timeout},
-    )
     connection.execute(
         text("SELECT set_config('lock_timeout',:value,true)"),
         {"value": previous_lock_timeout},

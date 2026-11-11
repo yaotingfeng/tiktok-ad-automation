@@ -79,4 +79,10 @@ def test_directory_status_index_roundtrip_preserves_publications(monkeypatch):
                 == before
             )
         command.upgrade(config, REVISION)
-        command.check(config)
+        # 分段退休的 0117 刻意保留模型外旧列，不能用模型差异宣告可删列。
+        with engine.connect() as connection:
+            assert connection.execute(
+                text(
+                    "SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='ad_material_reference' AND column_name='creative_ids')"
+                )
+            ).scalar_one()
