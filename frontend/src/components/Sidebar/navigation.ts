@@ -33,6 +33,7 @@ export function workspaceNavigation({
     {
       label: "投放准备",
       items: [
+        { icon: SlidersHorizontal, title: "AI 优化师", path: `${prefix}/ai-workbench` },
         ...(prefix && materialProduction
           ? [
               {

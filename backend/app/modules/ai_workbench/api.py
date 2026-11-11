@@ -1,12 +1,18 @@
 """HTTP contracts for tenant AI optimizer configuration."""
 
+from datetime import date
 from uuid import UUID
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Query
 
 from app.api.deps import CurrentUser, SessionDep
 from app.core.context import TenantContext
-from app.modules.ai_workbench import service
+from app.modules.ai_workbench import plans_service, service
+from app.modules.ai_workbench.plan_schemas import (
+    DailyPlanPage,
+    DailyPlanPublic,
+    DailyPlanRequest,
+)
 from app.modules.ai_workbench.schemas import (
     OptimizerCreate,
     OptimizerPage,
@@ -59,6 +65,65 @@ def update_optimizer(
     user: CurrentUser,
 ) -> OptimizerPublic:
     result = service.update_optimizer(
+        session,
+        context=_context(user, tenant_id),
+        optimizer_id=optimizer_id,
+        body=body,
+    )
+    session.commit()
+    return result
+
+
+@router.get(
+    "/ai-optimizers/{optimizer_id}/daily-plans",
+    response_model=DailyPlanPublic | DailyPlanPage,
+)
+def get_daily_plans(
+    tenant_id: UUID,
+    optimizer_id: UUID,
+    session: SessionDep,
+    user: CurrentUser,
+    business_date: date | None = Query(default=None),
+) -> DailyPlanPublic | DailyPlanPage:
+    context = _context(user, tenant_id)
+    if business_date is None:
+        return plans_service.list_daily_plans(session, context=context, optimizer_id=optimizer_id)
+    return plans_service.get_daily_plan(
+        session, context=context, optimizer_id=optimizer_id, business_date=business_date
+    )
+
+
+@router.post(
+    "/ai-optimizers/{optimizer_id}/daily-plans",
+    response_model=DailyPlanPublic,
+    status_code=201,
+)
+def create_daily_plan(
+    tenant_id: UUID,
+    optimizer_id: UUID,
+    body: DailyPlanRequest,
+    session: SessionDep,
+    user: CurrentUser,
+) -> DailyPlanPublic:
+    result = plans_service.create_daily_plan(
+        session, context=_context(user, tenant_id), optimizer_id=optimizer_id, body=body
+    )
+    session.commit()
+    return result
+
+
+@router.patch(
+    "/ai-optimizers/{optimizer_id}/daily-plans",
+    response_model=DailyPlanPublic,
+)
+def update_daily_plan(
+    tenant_id: UUID,
+    optimizer_id: UUID,
+    body: DailyPlanRequest,
+    session: SessionDep,
+    user: CurrentUser,
+) -> DailyPlanPublic:
+    result = plans_service.update_daily_plan(
         session,
         context=_context(user, tenant_id),
         optimizer_id=optimizer_id,
