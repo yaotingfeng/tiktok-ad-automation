@@ -21,6 +21,10 @@ from app.integrations.tiktok.contracts.ads import EntityRef
 from app.modules.ad_management.previews import prepare_preview
 from app.modules.ad_management.submissions import submit_management_task
 from app.modules.ads.models import AdObject
+from app.modules.ai_workbench.rule_binding import (
+    RuleBindingScope,
+    validate_rule_binding,
+)
 from app.modules.automation_rules.actions import (
     action_field,
     action_key,
@@ -37,6 +41,7 @@ from app.modules.automation_rules.inputs import load_inputs
 from app.modules.automation_rules.models import (
     AutomationActionLedger,
     AutomationRule,
+    AutomationRuleEvidence,
     AutomationRuleHit,
     AutomationRuleRun,
 )
@@ -189,6 +194,37 @@ def execute_hits(
         run.execution_status, run.execution_summary = "FAILED", summary
         session.flush()
         return summary
+    if run.optimizer_id is not None:
+        # Optimizer executions are fenced to the exact rule/optimizer snapshot
+        # used during evaluation; edits or revoked authorization fail closed.
+        if run.rule_version != rule.version:
+            summary["error"] = "rule_version_changed"
+            run.execution_status, run.execution_summary = "FAILED", summary
+            session.flush()
+            return summary
+        try:
+            scope = validate_rule_binding(
+                session,
+                RuleBindingScope(
+                    tenant_id=run.tenant_id,
+                    optimizer_id=run.optimizer_id,
+                    rule_id=run.rule_id,
+                    bc_id="",
+                    advertiser_ids=(),
+                    authorization_revision=run.authorization_revision or 0,
+                    optimizer_version=run.optimizer_version or 0,
+                    rule_version=run.rule_version,
+                    binding_id=run.binding_id,
+                ),
+            )
+        except DomainError:
+            summary["error"] = "optimizer_scope_changed"
+            run.execution_status, run.execution_summary = "FAILED", summary
+            session.flush()
+            return summary
+        allowed = set(scope.advertiser_ids)
+    else:
+        allowed = None
     definition = RuleDefinition.model_validate(run.definition)
     action = definition.action
     key = action_key(action)
@@ -207,6 +243,12 @@ def execute_hits(
             hit.outcome = "NOT_SELECTED"
             continue
         for target in hit.targets:
+            if allowed is not None and (
+                target.get("bc_id") != scope.bc_id
+                or target.get("advertiser_id") not in allowed
+            ):
+                hit.outcome = "NOT_SELECTED"
+                continue
             _merge_target(targets, target)
             owners[target["key"]].append(hit)
     outcome: dict[str, str] = {}
@@ -359,6 +401,14 @@ def execute_hits(
     else:
         run.execution_status = "SUBMITTED"
     run.execution_summary = summary
+    if run.evidence_id is not None:
+        evidence = session.get(AutomationRuleEvidence, run.evidence_id)
+        if evidence is not None:
+            evidence.readback_status = {
+                "execution_status": run.execution_status,
+                "submitted": summary.get("submitted", 0),
+                "failed": summary.get("failed", 0),
+            }
     session.flush()
     return summary
 
@@ -532,8 +582,7 @@ def _execute_bc(
     for target_key, item in pending.items():
         outcome[target_key] = "SUBMITTED"
         summary["submitted"] += 1
-        session.add(
-            AutomationActionLedger(
+        ledger = AutomationActionLedger(
                 tenant_id=rule.tenant_id,
                 rule_id=rule.id,
                 run_id=run.id,
@@ -545,8 +594,21 @@ def _execute_bc(
                 final_value=None if item.final_value is None else str(item.final_value),
                 management_task_id=task.task_id,
                 created_at=now,
-            )
+                optimizer_id=run.optimizer_id,
+                rule_version=run.rule_version,
+                evidence_id=run.evidence_id,
         )
+        session.add(ledger)
+        if run.evidence_id is not None:
+            evidence = session.get(AutomationRuleEvidence, run.evidence_id)
+            if evidence is not None:
+                evidence.action_ledger_refs = [
+                    *evidence.action_ledger_refs,
+                    str(ledger.id),
+                ]
+                task_ref = {"bc_id": bc_id, "task_id": str(task.task_id)}
+                if task_ref not in evidence.management_tasks:
+                    evidence.management_tasks = [*evidence.management_tasks, task_ref]
     session.flush()
     return task.task_id
 

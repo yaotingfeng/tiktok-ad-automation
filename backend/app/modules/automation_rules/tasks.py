@@ -16,6 +16,7 @@ from app.core.errors import DomainError
 from app.jobs.celery_app import celery_app
 from app.jobs.outbox import enqueue_after_commit, validate_dispatch_payload
 from app.jobs.tasks import register_dispatch_task
+from app.modules.ai_workbench.models import AIOptimizerRuleBinding
 from app.modules.automation_rules.executor import execute_hits, lock_tenant
 from app.modules.automation_rules.inputs import plan_next_run
 from app.modules.automation_rules.models import (
@@ -82,13 +83,26 @@ def scan_due_rules(session: Session, *, now: datetime) -> int:
         setting = load_tenant_setting(session, rule.tenant_id)
         slot = rule.next_run_at
         assert slot is not None
-        enqueue_after_commit(
-            session,
-            context=TenantContext(rule.tenant_id, rule.updated_by, "operator"),
-            task_name="automation.run_rule",
-            task_key=f"automation-run:{rule.id}:{slot.isoformat()}",
-            payload={"rule_id": str(rule.id), "slot_at": slot.isoformat()},
-        )
+        bindings = session.exec(
+            select(AIOptimizerRuleBinding).where(
+                AIOptimizerRuleBinding.tenant_id == rule.tenant_id,
+                AIOptimizerRuleBinding.rule_id == rule.id,
+                AIOptimizerRuleBinding.active.is_(True),
+            )
+        ).all()
+        payloads = [
+            {"rule_id": str(rule.id), "slot_at": slot.isoformat(), "optimizer_id": str(binding.optimizer_id)}
+            for binding in bindings
+        ] or [{"rule_id": str(rule.id), "slot_at": slot.isoformat()}]
+        for payload in payloads:
+            suffix = payload.get("optimizer_id", "default")
+            enqueue_after_commit(
+                session,
+                context=TenantContext(rule.tenant_id, rule.updated_by, "operator"),
+                task_name="automation.run_rule",
+                task_key=f"automation-run:{rule.id}:{suffix}:{slot.isoformat()}",
+                payload=payload,
+            )
         if definition.schedule.window == "ONCE":
             rule.enabled, rule.next_run_at = False, None
         else:
@@ -140,7 +154,7 @@ def scan_due() -> int:
 )
 def run_rule(*, tenant_id: str, actor_id: str, payload: dict[str, Any]) -> str:
     del actor_id  # 运行时按规则最后修改人重建权限，不信任投递时的身份。
-    data = _payload(payload, {"rule_id", "slot_at"})
+    data = _payload(payload, {"rule_id", "slot_at"}, optional={"optimizer_id"})
     with Session(engine) as session, session.begin():
         rule = session.get(AutomationRule, UUID(data["rule_id"]))
         if rule is None:
@@ -154,6 +168,7 @@ def run_rule(*, tenant_id: str, actor_id: str, payload: dict[str, Any]) -> str:
             rule=rule,
             slot_at=datetime.fromisoformat(data["slot_at"]),
             now=datetime.now(UTC),
+            optimizer_id=UUID(data["optimizer_id"]) if data.get("optimizer_id") else None,
         )
         return run.status
 

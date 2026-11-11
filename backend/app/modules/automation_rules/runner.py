@@ -16,6 +16,8 @@ from app.core.context import TenantContext
 from app.core.errors import DomainError
 from app.jobs.outbox import enqueue_after_commit
 from app.jobs.tasks import register_dispatch_task
+from app.modules.ai_workbench.evidence import persist_evidence
+from app.modules.ai_workbench.rule_binding import RuleBindingScope, resolve_rule_binding
 from app.modules.automation_rules import feishu
 from app.modules.automation_rules.confirmations import (
     EXECUTE_TASK,
@@ -48,22 +50,34 @@ register_dispatch_task(SEND_TASK, "control")
 
 
 def _existing(
-    session: Session, rule_id: UUID, slot_at: datetime
+    session: Session, rule_id: UUID, slot_at: datetime, optimizer_id: UUID | None = None
 ) -> AutomationRuleRun | None:
-    return session.exec(
-        select(AutomationRuleRun).where(
-            AutomationRuleRun.rule_id == rule_id, AutomationRuleRun.slot_at == slot_at
-        )
-    ).first()
+    query = select(AutomationRuleRun).where(
+        AutomationRuleRun.rule_id == rule_id, AutomationRuleRun.slot_at == slot_at
+    )
+    if optimizer_id is None:
+        query = query.where(AutomationRuleRun.optimizer_id.is_(None))
+    else:
+        query = query.where(AutomationRuleRun.optimizer_id == optimizer_id)
+    return session.exec(query).first()
 
 
 def _start(
-    session: Session, rule: AutomationRule, slot_at: datetime, now: datetime
+    session: Session,
+    rule: AutomationRule,
+    slot_at: datetime,
+    now: datetime,
+    scope: RuleBindingScope | None = None,
 ) -> AutomationRuleRun | None:
     """同一槽位只允许一次运行；重复投递时返回 None 交由调用方读取已有运行。"""
     run = AutomationRuleRun(
         tenant_id=rule.tenant_id,
         rule_id=rule.id,
+        optimizer_id=scope.optimizer_id if scope else None,
+        optimizer_version=scope.optimizer_version if scope else None,
+        binding_version=scope.optimizer_version if scope else None,
+        binding_id=scope.binding_id if scope else None,
+        authorization_revision=scope.authorization_revision if scope else None,
         rule_version=rule.version,
         definition=rule.definition,
         slot_at=slot_at,
@@ -111,14 +125,37 @@ def _write_hits(
 
 
 def execute_run(
-    session: Session, *, rule: AutomationRule, slot_at: datetime, now: datetime
+    session: Session,
+    *,
+    rule: AutomationRule,
+    slot_at: datetime,
+    now: datetime,
+    optimizer_scope: RuleBindingScope | None = None,
+    optimizer_id: UUID | None = None,
 ) -> AutomationRuleRun:
-    existing = _existing(session, rule.id, slot_at)
+    if optimizer_scope is None and optimizer_id is not None:
+        optimizer_scope = resolve_rule_binding(
+            session,
+            tenant_id=rule.tenant_id,
+            optimizer_id=optimizer_id,
+            rule_id=rule.id,
+        )
+    existing = _existing(
+        session,
+        rule.id,
+        slot_at,
+        optimizer_scope.optimizer_id if optimizer_scope else None,
+    )
     if existing is not None:
         return existing
-    run = _start(session, rule, slot_at, now)
+    run = _start(session, rule, slot_at, now, optimizer_scope)
     if run is None:
-        found = _existing(session, rule.id, slot_at)
+        found = _existing(
+            session,
+            rule.id,
+            slot_at,
+            optimizer_scope.optimizer_id if optimizer_scope else None,
+        )
         assert found is not None
         return found
     # 新一轮运行开始，上一轮仍未确认的批次失效。
@@ -141,9 +178,18 @@ def execute_run(
                 definition=definition,
                 now=now,
                 slot_at=slot_at,
+                optimizer_scope=optimizer_scope,
             )
             result = evaluate(definition, inputs)
             _write_hits(session, rule, run, result)
+            persist_evidence(
+                session,
+                rule=rule,
+                run=run,
+                result=result,
+                skipped_accounts=inputs.skipped_accounts,
+                scope=optimizer_scope,
+            )
     except SoftTimeLimitExceeded:
         logger.warning("automation rule timed out", extra={"rule_id": str(rule.id)})
         return _finish_failed(run, "evaluation_timeout", now)
