@@ -7,18 +7,18 @@
 from alembic import op
 from sqlalchemy import text
 
-revision = "0115_drop_legacy_material"
-down_revision = "0114_retire_material"
+revision = "0116_drop_legacy_material"
+down_revision = "0115_copy_current_source"
 branch_labels = None
 depends_on = None
 
 
-# 先按账户/CID/完整素材关系去重，再与主键做反连接，避免每条历史素材重复索引探测。
+# 逐条核验旧关系；寻找任意缺口不需要去重，避免冻结窗口全量排序。
 # 可直接 EXPLAIN 此冻结 SQL 评估生产预算；不把在线预回填回执当作完整性证据。
 IDENTITY_COVERAGE_SQL = """
     SELECT legacy.tenant_id,legacy.advertiser_id,legacy.creative_id
     FROM (
-      SELECT DISTINCT m.tenant_id,m.advertiser_id,m.ad_remote_id,m.ad_material_id,
+      SELECT m.tenant_id,m.advertiser_id,m.ad_remote_id,m.ad_material_id,
         m.platform_material_id,m.material_type,
         CASE WHEN jsonb_typeof(c.value)='string' THEN c.value #>> '{}' END AS creative_id
       FROM ad_material_reference m
@@ -77,7 +77,7 @@ def upgrade():
     op.drop_column("ad_material_reference", "creative_ids")
     op.execute("""UPDATE ad_sync_bc SET screening_progress = screening_progress ||
       jsonb_build_object('creative_material_physical_retirement',jsonb_build_object(
-        'at',clock_timestamp(),'revision','0115_drop_legacy_material'))""")
+        'at',clock_timestamp(),'revision','0116_drop_legacy_material'))""")
     connection.execute(
         text("SELECT set_config('statement_timeout',:value,true)"),
         {"value": previous_timeout},

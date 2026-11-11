@@ -3,8 +3,8 @@
 import sqlalchemy as sa
 from alembic import op
 
-revision = "0116_directory_status_version"
-down_revision = "0114_retire_material"
+revision = "0117_directory_status_version"
+down_revision = "0116_drop_legacy_material"
 branch_labels = None
 depends_on = None
 

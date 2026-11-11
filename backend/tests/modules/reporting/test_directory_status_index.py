@@ -11,8 +11,8 @@ from app.modules.ads.sync_models import AdDirectoryRun
 from tests.migration_database import historical_database
 from tests.modules.reporting.sync_conftest import sync_seed
 
-REVISION = "0116_directory_status_version"
-PREVIOUS = "0114_retire_material"
+REVISION = "0117_directory_status_version"
+PREVIOUS = "0116_drop_legacy_material"
 INDEX = "ix_directory_status_version"
 
 

@@ -41,7 +41,10 @@ def test_migration_blocks_missing_identity_then_preserves_bounded_backfill(monke
     from tests.migration_database import historical_database
     from tests.modules.reporting.sync_conftest import sync_seed
 
-    with historical_database(monkeypatch, "0114_retire_material") as (engine, config):
+    with historical_database(monkeypatch, "0115_copy_current_source") as (
+        engine,
+        config,
+    ):
         with Session(engine) as db, db.begin():
             seed = sync_seed.__wrapped__(db)
             tenant = seed.tenant_id
@@ -91,7 +94,7 @@ def test_migration_blocks_missing_identity_then_preserves_bounded_backfill(monke
                 ],
             )
         with pytest.raises(RuntimeError, match="not preserved"):
-            command.upgrade(config, "0115_drop_legacy_material")
+            command.upgrade(config, "0116_drop_legacy_material")
         assert inspect(engine).has_table("material_post_link")
         with Session(engine) as db, db.begin():
             first = preserve_creative_identities(
@@ -116,7 +119,7 @@ def test_migration_blocks_missing_identity_then_preserves_bounded_backfill(monke
             preserve_creative_identities(db, tenant_id=tenant, advertiser_id="acc-2")
             # 相同批次重试不损失身份、不提升版本或改变轮播顺序。
             preserve_creative_identities(db, tenant_id=tenant, advertiser_id="acc-1")
-        command.upgrade(config, "0115_drop_legacy_material")
+        command.upgrade(config, "0116_drop_legacy_material")
         with engine.connect() as connection:
             actual = connection.execute(
                 text(
@@ -138,12 +141,13 @@ def test_migration_blocks_missing_identity_then_preserves_bounded_backfill(monke
                 connection.execute(
                     text("SELECT version_num FROM alembic_version")
                 ).scalar_one()
-                == "0115_drop_legacy_material"
+                == "0116_drop_legacy_material"
             )
         assert not inspect(engine).has_table("material_report_day")
+        command.upgrade(config, "head")
         command.check(config)
         with pytest.raises(RuntimeError, match="irreversible"):
-            command.downgrade(config, "0114_retire_material")
+            command.downgrade(config, "0115_copy_current_source")
 
 
 def test_existing_unknown_and_conflict_must_preserve_legacy_relationships(monkeypatch):
@@ -159,7 +163,10 @@ def test_existing_unknown_and_conflict_must_preserve_legacy_relationships(monkey
     from tests.migration_database import historical_database
     from tests.modules.reporting.sync_conftest import sync_seed
 
-    with historical_database(monkeypatch, "0114_retire_material") as (engine, config):
+    with historical_database(monkeypatch, "0115_copy_current_source") as (
+        engine,
+        config,
+    ):
         now = datetime.now(UTC)
         with Session(engine) as db, db.begin():
             seed = sync_seed.__wrapped__(db)
@@ -207,7 +214,7 @@ def test_existing_unknown_and_conflict_must_preserve_legacy_relationships(monkey
             )
         # 三个CID都存在，但空身份、缺MID和冲突行均不能直接视作已保全。
         with pytest.raises(RuntimeError, match="not preserved"):
-            command.upgrade(config, "0115_drop_legacy_material")
+            command.upgrade(config, "0116_drop_legacy_material")
         with Session(engine) as db, db.begin():
             preserve_creative_identities(db, tenant_id=tenant, advertiser_id="acc-1")
             rows = {
@@ -232,7 +239,7 @@ def test_existing_unknown_and_conflict_must_preserve_legacy_relationships(monkey
                 )["written"]
                 == 0
             )
-        command.upgrade(config, "0115_drop_legacy_material")
+        command.upgrade(config, "0116_drop_legacy_material")
         assert not inspect(engine).has_table("material_report_day")
 
 
@@ -250,7 +257,10 @@ def test_legacy_conflict_across_parent_pages_survives_future_weak_mid_observatio
     from tests.migration_database import historical_database
     from tests.modules.reporting.sync_conftest import sync_seed
 
-    with historical_database(monkeypatch, "0114_retire_material") as (engine, config):
+    with historical_database(monkeypatch, "0115_copy_current_source") as (
+        engine,
+        config,
+    ):
         with Session(engine) as db, db.begin():
             seed = sync_seed.__wrapped__(db)
             tenant = seed.tenant_id
@@ -315,4 +325,4 @@ def test_legacy_conflict_across_parent_pages_survives_future_weak_mid_observatio
                 ).scalar_one()
                 == "CONFLICT"
             )
-        command.upgrade(config, "0115_drop_legacy_material")
+        command.upgrade(config, "0116_drop_legacy_material")
