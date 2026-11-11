@@ -54,6 +54,7 @@ celery_app.conf.update(
         "app.modules.ad_management.submissions",
         "app.modules.automation_rules.tasks",
         "app.modules.business.tasks",
+        "app.modules.ai_workbench.build_tasks",
     ),
     task_queues=(
         Queue("resources"),
@@ -105,6 +106,8 @@ celery_app.conf.update(
         "automation.cleanup": {"queue": "control"},
         "automation.scan_summaries": {"queue": "control"},
         "automation.send_summary": {"queue": "control"},
+        "ai_workbench.dispatch_occurrence": {"queue": "builds"},
+        "ai_workbench.dispatch_due_plans": {"queue": "control"},
     },
     beat_schedule={
         "refresh-active-report-pages": {
@@ -311,6 +314,11 @@ celery_app.conf.update(
         "scan-automation-summaries": {
             "task": "automation.scan_summaries",
             "schedule": 60.0,
+            "options": {"queue": "control"},
+        },
+        "dispatch-ai-workbench-plans": {
+            "task": "ai_workbench.dispatch_due_plans",
+            "schedule": 30.0,
             "options": {"queue": "control"},
         },
         "cleanup-automation-runs": {

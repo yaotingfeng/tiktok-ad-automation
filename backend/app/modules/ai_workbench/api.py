@@ -4,15 +4,20 @@ from datetime import date
 from uuid import UUID
 
 from fastapi import APIRouter, Query
+from pydantic import BaseModel, ConfigDict
+from sqlmodel import select
 
 from app.api.deps import CurrentUser, SessionDep
 from app.core.context import TenantContext
 from app.modules.ai_workbench import plans_service, service
+from app.modules.ai_workbench.build_handoff import BuildHandoff
+from app.modules.ai_workbench.models import BuildOccurrence
 from app.modules.ai_workbench.plan_schemas import (
     DailyPlanPage,
     DailyPlanPublic,
     DailyPlanRequest,
 )
+from app.modules.ai_workbench.plans import AIDailyPlanRow
 from app.modules.ai_workbench.schemas import (
     OptimizerCreate,
     OptimizerPage,
@@ -21,6 +26,13 @@ from app.modules.ai_workbench.schemas import (
 )
 
 router = APIRouter(prefix="/tenants/{tenant_id}", tags=["ai_workbench"])
+
+
+class RunPlanRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    request_id: UUID
+    strategy_version_id: UUID | None = None
 
 
 def _context(user: CurrentUser, tenant_id: UUID) -> TenantContext:
@@ -131,3 +143,40 @@ def update_daily_plan(
     )
     session.commit()
     return result
+
+
+@router.post(
+    "/ai-optimizers/{optimizer_id}/plans/{plan_id}/run",
+    response_model=BuildOccurrence,
+    status_code=202,
+)
+def run_daily_plan_row(
+    tenant_id: UUID,
+    optimizer_id: UUID,
+    plan_id: UUID,
+    body: RunPlanRequest,
+    session: SessionDep,
+    user: CurrentUser,
+) -> BuildOccurrence:
+    """Create a dry local handoff; the durable outbox performs the build later."""
+    context = _context(user, tenant_id)
+    # The row itself carries optimizer ownership.  Resolve and check the path
+    # optimizer before any outbox write so a copied URL cannot cross scopes.
+    row = session.exec(
+        select(AIDailyPlanRow).where(
+            AIDailyPlanRow.tenant_id == tenant_id,
+            AIDailyPlanRow.id == plan_id,
+            AIDailyPlanRow.optimizer_id == optimizer_id,
+        )
+    ).one_or_none()
+    if row is None:
+        from app.core.errors import DomainError
+
+        raise DomainError("ai_daily_plan_row_not_found", "ai_daily_plan_row_not_found")
+    occurrence = BuildHandoff(session, context=context).create_occurrence(
+        plan_id,
+        body.request_id,
+        strategy_version_id=body.strategy_version_id,
+    )
+    session.commit()
+    return occurrence

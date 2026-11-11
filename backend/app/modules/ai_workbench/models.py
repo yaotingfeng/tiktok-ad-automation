@@ -162,3 +162,74 @@ class AIOptimizerRuleBinding(SQLModel, table=True):
     active: bool = True
     created_by: UUID = Field(foreign_key="user.id")
     created_at: datetime = Field(default_factory=_now, sa_type=DateTime(timezone=True))
+
+
+class BuildOccurrence(SQLModel, table=True):
+    """Immutable handoff ledger for one scheduled daily-plan row.
+
+    The row is the durable boundary between the AI workbench and the existing
+    build pipeline.  Account and strategy values are copied at creation time;
+    later optimizer edits therefore cannot retarget an already scheduled build.
+    """
+
+    __tablename__ = "ai_build_occurrence"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "id", name="uq_ai_build_occurrence_tenant_id"),
+        UniqueConstraint("tenant_id", "request_id", name="uq_ai_build_occurrence_request"),
+        UniqueConstraint(
+            "tenant_id",
+            "optimizer_id",
+            "plan_row_id",
+            "strategy_version_id",
+            "scheduled_at",
+            name="uq_ai_build_occurrence_schedule",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "optimizer_id"],
+            ["ai_optimizer.tenant_id", "ai_optimizer.id"],
+            name="fk_ai_build_occurrence_optimizer",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "plan_row_id"],
+            ["ai_daily_plan_row.tenant_id", "ai_daily_plan_row.id"],
+            name="fk_ai_build_occurrence_plan_row",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "strategy_version_id"],
+            ["strategy_version.tenant_id", "strategy_version.id"],
+            name="fk_ai_build_occurrence_strategy",
+        ),
+        CheckConstraint(
+            "status IN ('PENDING','WAITING_MATERIAL','DISPATCHED','PARTIAL','UNKNOWN','COMPLETE','FAILED')",
+            name="ck_ai_build_occurrence_status",
+        ),
+        Index("ix_ai_build_occurrence_due", "status", "scheduled_at", "id"),
+        Index("ix_ai_build_occurrence_optimizer", "tenant_id", "optimizer_id", "scheduled_at"),
+    )
+
+    id: UUID = Field(default_factory=uuid4, primary_key=True)
+    tenant_id: UUID = Field(foreign_key="tenant.id")
+    optimizer_id: UUID
+    plan_row_id: UUID
+    request_id: UUID
+    request_digest: str = Field(max_length=64)
+    strategy_version_id: UUID
+    # These are intentionally frozen snapshots, not mutable optimizer joins.
+    bc_id: str = Field(max_length=128)
+    advertiser_ids: list[str] = Field(sa_column=Column(JSONB, nullable=False))
+    provider_connection_id: UUID
+    application_id: str = Field(max_length=255)
+    title: str = Field(max_length=1000)
+    promotion_url: str | None = Field(default=None, max_length=8192)
+    external_drama_id: str | None = Field(default=None, max_length=255)
+    order_materials: bool = False
+    scheduled_at: datetime = Field(sa_column=Column(DateTime(timezone=True), nullable=False))
+    status: str = "PENDING"
+    draft_id: UUID | None = None
+    preview_id: UUID | None = None
+    submission_id: UUID | None = None
+    dispatch_id: UUID | None = Field(default=None, foreign_key="pending_dispatch.id")
+    evidence: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSONB, nullable=False))
+    error_code: str | None = None
+    created_at: datetime = Field(default_factory=_now, sa_type=DateTime(timezone=True))
+    updated_at: datetime = Field(default_factory=_now, sa_type=DateTime(timezone=True))
