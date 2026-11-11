@@ -185,7 +185,7 @@ def test_existing_or_dangling_output_not_overwritten(tmp_path):
 
 def manifest():
     return {
-        "parameters": {"generator_revision": 2, "accounts": 2},
+        "parameters": {"generator_revision": 3, "accounts": 2},
         "tenant_id": str(uuid4()),
         "actor_id": str(uuid4()),
         "bc_id": "bc-a",
@@ -201,7 +201,7 @@ def test_manifest_requires_frozen_synthetic_identity(tmp_path, change):
     elif change == "accounts":
         fixture["accounts"] = ["real-advertiser"]
     elif change == "revision":
-        fixture["parameters"]["generator_revision"] = 1
+        fixture["parameters"]["generator_revision"] = 2
     else:
         fixture["bc_id"] = "real-bc"
     path = tmp_path / "fixture.json"

@@ -239,8 +239,7 @@ def test_frozen_jump_requires_exact_successful_account_ad_evidence(
 
 
 def test_image_report_rows_do_not_block_existing_video_rule(session, sync_seed):
-    from app.modules.reporting.store_models import MaterialReportDay
-    from tests.modules.automation_rules.test_inputs import NOW, TODAY
+    from tests.modules.automation_rules.test_inputs import TODAY
     from tests.modules.automation_rules.test_material_inputs import (
         post,
         result,
@@ -251,21 +250,9 @@ def test_image_report_rows_do_not_block_existing_video_rule(session, sync_seed):
     setup(session, sync_seed)
     use(session, sync_seed, "a1")
     post(session, sync_seed, "a1", "video-post")
-    session.add(
-        MaterialReportDay(
-            tenant_id=sync_seed.tenant_id,
-            advertiser_id="acc-1",
-            stat_date=TODAY,
-            main_material_id="image-post",
-            main_material_type="IMAGE",
-            currency="USD",
-            timezone="Asia/Hong_Kong",
-            fetched_at=NOW,
-            sync_job_id=uuid4(),
-            spend=Decimal(100),
-        )
+    _nonvideo_fact(
+        session, sync_seed, creative_id="image-post", kind="IMAGE", day=TODAY
     )
-    session.flush()
     loaded, _ = result(session, sync_seed)
     videos = [e for e in loaded.entities.values() if e.kind == "material"]
     assert len(videos) == 1 and videos[0].judgement_issue is None
@@ -337,35 +324,87 @@ def test_flat_image_directory_stays_incomplete_without_unit_money(session, sync_
     assert result.items == () and result.carousel_creatives == ()
 
 
+def _nonvideo_fact(session, seed, *, creative_id, kind, day):
+    """创意事实与广告总账成对播种；同名资产跨类型不能借 VID 混进视频规则。"""
+    from sqlalchemy import text
+
+    from app.modules.ads.creatives import upsert_creatives
+    from app.modules.reporting.store_models import AdReportDay, CreativeReportDay
+    from tests.modules.automation_rules.test_inputs import NOW
+
+    upsert_creatives(
+        session,
+        tenant_id=seed.tenant_id,
+        advertiser_id="acc-1",
+        observed_at=NOW,
+        published_version=1,
+        rows=[
+            {
+                "creative_id": creative_id,
+                "ad_remote_id": "a1",
+                "ad_material_id": "am-a1",
+                "assets": [{"material_type": kind, "platform_material_id": "v1"}],
+            }
+        ],
+    )
+    session.add(
+        CreativeReportDay(
+            tenant_id=seed.tenant_id,
+            advertiser_id="acc-1",
+            stat_date=day,
+            creative_id=creative_id,
+            campaign_id="c1",
+            adgroup_id="g1",
+            currency="USD",
+            timezone="Asia/Hong_Kong",
+            fetched_at=NOW,
+            sync_job_id=uuid4(),
+            spend=Decimal(100),
+            revenue_total=Decimal(200),
+        )
+    )
+    session.flush()
+    totals = session.execute(
+        text("""SELECT sum(f.spend),sum(f.revenue_total)
+        FROM creative_report_day f JOIN ad_creative c USING(tenant_id,advertiser_id,creative_id)
+        WHERE f.tenant_id=:tenant AND f.advertiser_id='acc-1' AND f.stat_date=:day AND c.ad_remote_id='a1'"""),
+        {"tenant": seed.tenant_id, "day": day},
+    ).one()
+    session.merge(
+        AdReportDay(
+            tenant_id=seed.tenant_id,
+            advertiser_id="acc-1",
+            stat_date=day,
+            ad_id="a1",
+            campaign_id="c1",
+            adgroup_id="g1",
+            currency="USD",
+            timezone="Asia/Hong_Kong",
+            fetched_at=NOW,
+            sync_job_id=uuid4(),
+            spend=totals[0],
+            revenue_total=totals[1],
+        )
+    )
+    session.flush()
+
+
 @pytest.fixture
 def mixed_mid_case(session, sync_seed):
     from datetime import timedelta
 
-    from app.modules.reporting.store_models import MaterialReportDay
-    from tests.modules.automation_rules.test_inputs import NOW, TODAY
+    from tests.modules.automation_rules.test_inputs import TODAY
     from tests.modules.automation_rules.test_material_inputs import post, setup, use
 
     def seed(other_type, video_spend="10"):
         setup(session, sync_seed)
         use(session, sync_seed, "a1")
-        post(session, sync_seed, "a1", "same-mid", spend=video_spend, revenue="0")
+        post(session, sync_seed, "a1", "video-creative", spend=video_spend, revenue="0")
         start = TODAY - timedelta(days=1)
-        session.add(
-            MaterialReportDay(
-                tenant_id=sync_seed.tenant_id,
-                advertiser_id="acc-1",
-                stat_date=start,
-                main_material_id="same-mid",
-                main_material_type=other_type,
-                currency="USD",
-                timezone="Asia/Hong_Kong",
-                fetched_at=NOW,
-                sync_job_id=uuid4(),
-                spend=Decimal(100),
-                revenue_total=Decimal(200),
-            )
+        # CID 独立，不再把旧 MID 当创意 ID；同 raw asset ID 的类型边界继续覆盖。
+        _nonvideo_fact(
+            session, sync_seed, creative_id="other-creative", kind=other_type, day=start
         )
-        session.flush()
         return start, TODAY
 
     return seed
@@ -380,8 +419,20 @@ def test_mixed_mid_rules_exclude_nonvideo_facts(
     mixed_mid_case(other_type)
     loaded, _ = result(session, sync_seed)
     video = next(e for e in loaded.entities.values() if e.kind == "material")
-    assert loaded.facts["LIFETIME"][video.key]["spend"] == Decimal(10)
-    assert loaded.facts["LIFETIME"][video.key]["revenue_total"] == Decimal(0)
+    if other_type == "UNKNOWN_FUTURE":
+        from app.modules.reporting.store_models import CreativeReportDay
+        from tests.modules.automation_rules.test_inputs import TODAY
+
+        # 新来源必须保留未知创意金额，并阻断同组判断；不能把未知类型伪装成已解析。
+        assert video.judgement_issue == "MATERIAL_CREATIVE_UNRESOLVED"
+        assert video.key not in loaded.facts["LIFETIME"]
+        raw_video = session.get(
+            CreativeReportDay, (sync_seed.tenant_id, "acc-1", TODAY, "video-creative")
+        )
+        assert (raw_video.spend, raw_video.revenue_total) == (Decimal(10), Decimal(0))
+    else:
+        assert loaded.facts["LIFETIME"][video.key]["spend"] == Decimal(10)
+        assert loaded.facts["LIFETIME"][video.key]["revenue_total"] == Decimal(0)
 
 
 @pytest.mark.parametrize(

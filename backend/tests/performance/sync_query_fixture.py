@@ -62,14 +62,15 @@ class FixtureParameters:
             **asdict(self),
             "end_date": self.end_date.isoformat(),
             "active_ads": self.active_ads,
-            "generator_revision": 2,
+            "generator_revision": 3,
             "ad_objects": self.objects,
             "directory_rows": self.objects
             + self.parent_count(5)
             + self.parent_count(10),
             "reference_rows": self.objects,
+            "creative_rows": self.objects,
             "ad_day_rows": self.active_ads * self.days,
-            "material_day_rows": self.active_ads * self.days,
+            "creative_day_rows": self.active_ads * self.days,
             "currencies": ["USD"],
             "timezones": ["UTC", "Asia/Hong_Kong"],
             "full_current_scale": False,
@@ -145,9 +146,9 @@ def relation_sizes(session) -> dict:
           CASE WHEN c.reltoastrelid=0 THEN 0 ELSE pg_total_relation_size(c.reltoastrelid) END AS toast_bytes
         FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
         WHERE n.nspname='public' AND c.relkind='r'
-          AND (c.relname IN ('ad_object','ad_material_reference','material_post_link',
+          AND (c.relname IN ('ad_object','ad_material_reference','ad_creative',
                'campaign_name_projection','campaign_report_day')
-               OR c.relname LIKE 'ad_report_day_%' OR c.relname LIKE 'material_report_day_%')
+               OR c.relname LIKE 'ad_report_day_%' OR c.relname LIKE 'creative_report_day_%')
         ORDER BY c.relname
     """)
         )
@@ -248,17 +249,25 @@ def seed_fixture(engine, parameters: FixtureParameters) -> dict:
             )
         session.execute(
             text("""INSERT INTO ad_material_reference
-            (id,tenant_id,advertiser_id,ad_remote_id,platform_material_id,ad_material_id,material_type,name,creative_ids,complete,published_version)
+            (id,tenant_id,advertiser_id,ad_remote_id,platform_material_id,ad_material_id,material_type,name,complete,published_version)
             SELECT md5(CAST(:seed AS text) || ':ref:' || CAST(CAST(:tenant AS uuid) AS text) || ':' || i)::uuid, CAST(:tenant AS uuid),
               'perf-account-' || ((i-1)%:accounts+1)::text, 'ad-'||i, 'video-'||i, 'inner-'||i,
-              'VIDEO','perf-video-'||i,'[]'::jsonb,true,1 FROM generate_series(1,:n) i"""),
+              'VIDEO','perf-video-'||i,true,1 FROM generate_series(1,:n) i"""),
             args,
         )
+        # 普通广告的官方创意 ID 就是广告 ID；资产关系独立落库，不能再借帖子补链。
         session.execute(
-            text("""INSERT INTO material_post_link
-            (tenant_id,advertiser_id,main_material_id,ad_remote_id,main_material_type,ad_material_id,material_name,platform_material_id,observed_at)
-            SELECT :tenant,'perf-account-'||((i-1)%:accounts+1)::text,'post-'||i,'ad-'||i,
-             'VIDEO','inner-'||i,'perf-video-'||i,'video-'||i,:observed FROM generate_series(1,:n) i"""),
+            text("""INSERT INTO ad_creative
+            (tenant_id,advertiser_id,creative_id,ad_remote_id,ad_material_id,material_type,
+             platform_material_id,assets,name,operation_status,deleted,identity_status,
+             first_observed_at,observed_at,published_version,evidence)
+            SELECT tenant_id,advertiser_id,ad_remote_id,ad_remote_id,ad_material_id,material_type,
+              platform_material_id,assets,name,'ENABLE',false,'RESOLVED',:observed,:observed,1,
+              jsonb_build_object('original_identity',jsonb_build_object('ad_remote_id',ad_remote_id,
+                'ad_material_id',ad_material_id,'assets',assets),'conflicts','[]'::jsonb)
+            FROM (SELECT m.*,jsonb_build_array(jsonb_build_object('material_type',material_type,
+                'platform_material_id',platform_material_id)) AS assets
+              FROM ad_material_reference m WHERE tenant_id=:tenant) source"""),
             args,
         )
         # 按日提交仅是夹具构造；生产原子发布另由 publish_ad_day 实测。
@@ -289,13 +298,14 @@ def seed_fixture(engine, parameters: FixtureParameters) -> dict:
             )
             session.execute(
                 text(
-                    """INSERT INTO material_report_day
+                    """INSERT INTO creative_report_day
               (tenant_id,advertiser_id,stat_date,currency,timezone,fetched_at,sync_job_id,spend,impressions,clicks,
-               ad_impression_events,revenue_d0,revenue_total,main_material_id,main_material_type,main_material_name)
+               ad_impression_events,revenue_d0,revenue_total,creative_id,campaign_id,adgroup_id)
               """
                     + common
                     + """, ((2*(1+(:seed+i*17+:day*13)%10000)+(i+:day)%7)::numeric/100),
-              'post-'||i,'VIDEO','perf-video-'||i FROM generate_series(1,:active) i"""
+              'ad-'||i,'campaign-'||(((i-1)/(:accounts*10))*:accounts+(i-1)%:accounts+1),
+              'adgroup-'||(((i-1)/(:accounts*5))*:accounts+(i-1)%:accounts+1) FROM generate_series(1,:active) i"""
                 ),
                 fact_args,
             )
@@ -322,9 +332,9 @@ def seed_fixture(engine, parameters: FixtureParameters) -> dict:
         for name in (
             "ad_object",
             "ad_material_reference",
-            "material_post_link",
+            "ad_creative",
             "ad_report_day",
-            "material_report_day",
+            "creative_report_day",
             "campaign_report_day",
             "campaign_name_projection",
         ):

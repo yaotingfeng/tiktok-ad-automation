@@ -130,7 +130,7 @@ def read_manifest(path: Path) -> tuple[dict, str]:
     p = fixture["parameters"]
     # 固定已提交生成器的身份合同；不能把任意业务actor借给临时签名者。
     if (
-        p.get("generator_revision") != 2
+        p.get("generator_revision") != 3
         or fixture.get("bc_id") != "bc-a"
         or fixture.get("accounts")
         != [f"perf-account-{i}" for i in range(1, p["accounts"] + 1)]
