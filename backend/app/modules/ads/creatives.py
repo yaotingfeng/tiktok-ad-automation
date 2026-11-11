@@ -1,6 +1,7 @@
 """创意身份发布和本地回填；目录缺页与缺项均不构成删除证据。"""
 
 import json
+from collections.abc import Iterator, Mapping
 from datetime import datetime
 from typing import Any
 from uuid import UUID
@@ -8,6 +9,9 @@ from uuid import UUID
 from sqlalchemy import inspect, text
 from sqlmodel import Session
 
+from app.core.errors import DomainError
+from app.integrations.tiktok.adapters.ads_read import material_usages
+from app.integrations.tiktok.contracts.ads import AdMaterialUsage, EntityRef
 from app.modules.ads.creative_models import AdCreative
 
 _BATCH_SIZE = 500
@@ -284,6 +288,346 @@ def _write_groups(
     )
 
 
+def _cached_rows(
+    entity: Mapping[str, Any],
+    tenant: UUID,
+    account: str,
+    requested: frozenset[str] | None,
+) -> list[dict[str, Any]]:
+    """复用目录解析器，只使用缓存中明确的创意、父广告和资产字段。"""
+    configuration = entity["configuration"]
+    configuration = configuration if isinstance(configuration, dict) else {}
+    smart = entity["kind"] == "ad" and entity["ad_type"] == "SMART_PLUS"
+    parent = (
+        entity["parent_remote_id"]
+        if entity["kind"] == "creative"
+        else entity["remote_id"]
+    )
+    if not parent or (entity["kind"] == "creative" and parent == entity["remote_id"]):
+        return []
+    header = "smart_plus_ad_id" if smart else "ad_id"
+    valid = all(
+        configuration.get(k) in (None, v)
+        for k, v in (
+            ("advertiser_id", account),
+            (header, entity["remote_id"]),
+        )
+    )
+    if entity["kind"] == "creative":
+        valid &= configuration.get("smart_plus_ad_id") in (None, parent)
+    entries = configuration.get("creative_list", []) if smart else [configuration]
+    if not isinstance(entries, list) or (smart and not valid):
+        return []
+    rows = []
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        creative = entry.get("smart_plus_creative_id") if smart else entity["remote_id"]
+        if not isinstance(creative, str) or not creative or len(creative) > 128:
+            continue
+        if (smart and creative == parent) or (
+            requested is not None and creative not in requested
+        ):
+            continue
+        usages: list[AdMaterialUsage] = []
+        if valid:
+            try:
+                usages, _complete = material_usages(
+                    {**configuration, "creative_list": [entry]} if smart else entry,
+                    EntityRef(tenant, account, "ad", parent),
+                    smart=smart,
+                    creative_id=None if smart or entity["kind"] == "ad" else creative,
+                )
+            except DomainError as error:
+                if error.code != "ads_response_invalid":
+                    raise
+        assets = []
+        for usage in usages:
+            asset = {
+                "platform_material_id": usage.use_ref.platform_material_id,
+                "material_type": usage.use_ref.material_type,
+            }
+            if len(asset["platform_material_id"]) <= 128 and asset not in assets:
+                assets.append(asset)
+        partial_assets = []
+        images = [u for u in usages if u.use_ref.material_type == "IMAGE"]
+        if images:
+            info = entry.get("creative_info", {}) if smart else entry
+            declared = info.get("image_info" if smart else "image_ids")
+            # 解析完整性还包含音乐；财务身份只要求图片成员完整，不能把
+            # 缺一个成员的轮播缩成单图，也不能因缺音乐丢弃完整图片身份。
+            if (
+                not isinstance(declared, list)
+                or len(images) != len(declared)
+                or any(len(u.use_ref.platform_material_id) > 128 for u in images)
+            ):
+                partial_assets, assets = assets, []
+        # 没有资产内容不等于没有MID：保留显式、合法、同身份的正向MID证据。
+        explicit_mid = (
+            entry.get("ad_material_id")
+            if valid and (smart or entity["kind"] == "creative")
+            else None
+        )
+        material = (
+            explicit_mid
+            if isinstance(explicit_mid, str)
+            and explicit_mid.strip()
+            and len(explicit_mid) <= 128
+            else None
+        )
+        status = (
+            entry.get("material_operation_status")
+            if smart
+            else entity["operation_status"]
+        )
+        if status is not None and not isinstance(status, str):
+            status = None
+        if material is not None and len(material) > 128:
+            assets, material = [], None
+        rows.append(
+            {
+                "creative_id": creative,
+                "ad_remote_id": parent,
+                "ad_material_id": material,
+                "assets": assets,
+                "partial_assets": partial_assets,
+                "name": entity["name"],
+                "operation_status": status,
+                "deleted": status in {"DELETE", "DELETED"}
+                or entity["operation_status"] in {"DELETE", "DELETED"}
+                or entity.get("parent_status") in {"DELETE", "DELETED"},
+                "observed_at": entity["observed_at"],
+                "published_version": entity["published_version"],
+                "asset_order_source": "OBSERVED_CACHED_DIRECTORY",
+            }
+        )
+    return rows
+
+
+def _cached_directory_rows(
+    session: Session, tenant: UUID, account: str, requested: frozenset[str] | None
+) -> Iterator[dict[str, Any]]:
+    params: dict[str, Any] = {"tenant": tenant, "account": account, "limit": 50}
+    direct = (
+        " AND o.remote_id=ANY(CAST(:ids AS text[]))" if requested is not None else ""
+    )
+    if requested is not None:
+        params["ids"] = sorted(requested)
+    after = ("", "")
+    while True:
+        page = (
+            session.connection()
+            .execute(
+                text(f"""
+            SELECT o.*,p.operation_status AS parent_status FROM ad_object o
+            LEFT JOIN ad_object p ON p.tenant_id=o.tenant_id AND p.advertiser_id=o.advertiser_id
+                AND o.kind='creative' AND p.kind='ad' AND p.remote_id=o.parent_remote_id
+            WHERE o.tenant_id=:tenant AND o.advertiser_id=:account
+              AND ((o.kind='creative' AND o.parent_kind='ad') OR (o.kind='ad' AND o.ad_type<>'SMART_PLUS'))
+              AND (o.kind,o.remote_id)>(:kind,:after) {direct}
+            ORDER BY o.kind,o.remote_id LIMIT :limit
+        """),
+                params | {"kind": after[0], "after": after[1]},
+            )
+            .mappings()
+            .all()
+        )
+        if not page:
+            break
+        parents = {e["parent_remote_id"] for e in page if e["kind"] == "creative"}
+        if parents:
+            parent_rows = (
+                session.connection()
+                .execute(
+                    text("""
+                SELECT * FROM ad_object WHERE tenant_id=:tenant AND advertiser_id=:account
+                  AND kind='ad' AND ad_type='SMART_PLUS' AND remote_id=ANY(CAST(:parents AS text[]))
+                ORDER BY remote_id
+            """),
+                    params | {"parents": sorted(parents)},
+                )
+                .mappings()
+                .all()
+            )
+            page_ids = {e["remote_id"] for e in page if e["kind"] == "creative"}
+            # 同一目录观察先消费父配置的MID/完整内容，再消费子对象的状态。
+            # 只解析当前页创意，不能为每页反复写父广告下的全部成员。
+            for parent_row in parent_rows:
+                yield from _cached_rows(
+                    dict(parent_row), tenant, account, frozenset(page_ids)
+                )
+        for entity in page:
+            yield from _cached_rows(dict(entity), tenant, account, requested)
+        after = (page[-1]["kind"], page[-1]["remote_id"])
+    # 创意子记录不存在时，仍可从父广告的明确 creative_list 恢复官方关系。
+    # 已有完整身份无需重扫父配置；范围为一个账户，原始 JSON 每页最多50行。
+    needed = requested
+    if requested is not None:
+        known = set(
+            session.connection()
+            .execute(
+                text("""
+            SELECT creative_id FROM ad_creative WHERE tenant_id=:tenant AND advertiser_id=:account
+              AND creative_id=ANY(CAST(:ids AS text[])) AND identity_status IN ('RESOLVED','COMPOSITE','CONFLICT')
+        """),
+                params,
+            )
+            .scalars()
+        )
+        needed = requested - known
+        if not needed:
+            return
+        params["ids"] = sorted(needed)
+    match = (
+        """ AND EXISTS (SELECT 1 FROM jsonb_array_elements(
+        CASE WHEN jsonb_typeof(o.configuration->'creative_list')='array'
+        THEN o.configuration->'creative_list' ELSE '[]'::jsonb END) e
+        WHERE e->>'smart_plus_creative_id'=ANY(CAST(:ids AS text[])))"""
+        if needed is not None
+        else ""
+    )
+    after_id = ""
+    while True:
+        page = (
+            session.connection()
+            .execute(
+                text(f"""
+            SELECT o.* FROM ad_object o WHERE o.tenant_id=:tenant AND o.advertiser_id=:account
+              AND o.kind='ad' AND o.ad_type='SMART_PLUS' AND o.remote_id>:after {match}
+            ORDER BY o.remote_id LIMIT :limit
+        """),
+                params | {"after": after_id},
+            )
+            .mappings()
+            .all()
+        )
+        if not page:
+            break
+        for entity in page:
+            yield from _cached_rows(dict(entity), tenant, account, needed)
+        after_id = page[-1]["remote_id"]
+
+
+def _backfill_cached(
+    session: Session,
+    tenant: UUID,
+    account: str,
+    requested: frozenset[str] | None,
+    *,
+    primary: bool,
+) -> int:
+    count = 0
+    batch = []
+
+    def flush_unique(rows: list[dict[str, Any]]) -> int:
+        originals = {
+            r["creative_id"]: r
+            for r in session.connection()
+            .execute(
+                text("""
+            SELECT * FROM ad_creative WHERE tenant_id=:tenant AND advertiser_id=:account
+              AND creative_id=ANY(CAST(:ids AS text[]))
+        """),
+                {
+                    "tenant": tenant,
+                    "account": account,
+                    "ids": sorted({r["creative_id"] for r in rows}),
+                },
+            )
+            .mappings()
+        }
+        accepted = []
+        for row in rows:
+            original = originals.get(row["creative_id"])
+            if original:
+                same_parent = original["ad_remote_id"] == row["ad_remote_id"]
+                mid_compatible = (
+                    original["ad_material_id"] is None
+                    or row["ad_material_id"] is None
+                    or original["ad_material_id"] == row["ad_material_id"]
+                )
+                observed = row.get("partial_assets", [])
+                partial_conflict = bool(original["assets"] and observed) and not {
+                    (a["material_type"], a["platform_material_id"]) for a in observed
+                } <= {
+                    (a["material_type"], a["platform_material_id"])
+                    for a in original["assets"]
+                }
+                if partial_conflict:
+                    row["assets"] = observed
+                # 空内容/帖子引用不撤销已知主资产；保留旧的正向证据及完整轮播。
+                # 但不同的已知MID或新增图片成员是真矛盾，必须保留原始冲突证据。
+                if (
+                    same_parent
+                    and mid_compatible
+                    and not partial_conflict
+                    and not primary
+                    and original["assets"]
+                ):
+                    row["assets"] = original["assets"]
+                    if row["ad_material_id"] is None:
+                        row["ad_material_id"] = original["ad_material_id"]
+                if row["published_version"] <= original["published_version"]:
+                    enrich = (
+                        row["published_version"] == original["published_version"]
+                        and original["identity_status"] == "UNRESOLVED"
+                        and not original["assets"]
+                        and bool(row["assets"])
+                        and same_parent
+                    )
+                    conflict = row["published_version"] == original[
+                        "published_version"
+                    ] and (
+                        not same_parent
+                        or not mid_compatible
+                        or bool(
+                            original["assets"]
+                            and row["assets"]
+                            and original["assets"] != row["assets"]
+                        )
+                    )
+                    if not enrich and not conflict:
+                        continue
+                    # 同版本只补正向资产，不借缓存回放覆盖live元数据。
+                    row["name"], row["operation_status"] = (
+                        original["name"],
+                        original["operation_status"],
+                    )
+                    row["deleted"] |= original["deleted"]
+            accepted.append(row)
+        return _write_groups(
+            session, tenant_id=tenant, advertiser_id=account, rows=accepted
+        )
+
+    def flush(rows: list[dict[str, Any]]) -> int:
+        written = 0
+        # 同CID的后续观察必须读取前一轮UPSERT结果；批边界不能改变空内容保护。
+        while rows:
+            unique, remaining = {}, []
+            for row in rows:
+                if row["creative_id"] in unique:
+                    remaining.append(row)
+                else:
+                    unique[row["creative_id"]] = row
+            written += flush_unique(list(unique.values()))
+            rows = remaining
+        return written
+
+    for row in _cached_directory_rows(session, tenant, account, requested):
+        assets = row["assets"]
+        is_primary = bool(assets) and all(
+            a["material_type"] in {"VIDEO", "IMAGE"} for a in assets
+        )
+        if is_primary == primary:
+            batch.append(row)
+        if len(batch) == _BATCH_SIZE:
+            count += flush(batch)
+            batch = []
+    if batch:
+        count += flush(batch)
+    return count
+
+
 def backfill_creatives(
     session: Session,
     *,
@@ -291,7 +635,7 @@ def backfill_creatives(
     advertiser_id: str | None = None,
     creative_ids: list[str] | None = None,
 ) -> int:
-    """只从本地历史引用回填；可先处理新事实需要的身份，再推进其余历史。
+    """从本地目录快照和历史引用回填；先处理新事实需要的身份，再推进历史。
 
     筛选只减少父广告/创意范围，同一创意的全部资产仍一起读取，不截断轮播。
     不扫描平台、不推断缺失删除。
@@ -314,17 +658,27 @@ def backfill_creatives(
         filters.append("advertiser_id=:advertiser")
         params["advertiser"] = advertiser_id
     where = " WHERE " + " AND ".join(filters) if filters else ""
+    object_where = " AND ".join(
+        clause for clause in filters if "creative_ids" not in clause
+    )
+    object_where = (" AND " + object_where) if object_where else ""
     accounts = (
-        session.connection()
-        .execute(
-            text(
-                "SELECT DISTINCT tenant_id,advertiser_id FROM ad_material_reference"
-                + where
-                + " ORDER BY tenant_id,advertiser_id"
-            ),
-            params,
+        [(tenant_id, advertiser_id)]
+        if tenant_id is not None and advertiser_id is not None
+        else (
+            session.connection()
+            .execute(
+                text(
+                    "SELECT DISTINCT tenant_id,advertiser_id FROM ad_material_reference"
+                    + where
+                    + " UNION SELECT tenant_id,advertiser_id FROM ad_object WHERE kind IN ('ad','creative')"
+                    + object_where
+                    + " ORDER BY tenant_id,advertiser_id"
+                ),
+                params,
+            )
+            .all()
         )
-        .all()
     )
     count = 0
     for tenant, account in accounts:
@@ -333,6 +687,9 @@ def backfill_creatives(
             text("SELECT pg_advisory_xact_lock(hashtextextended(:scope, 0))"),
             {"scope": f"directory-publish:{tenant}:{account}"},
         )
+        # 先读取缓存中明确的VID/图片，再用引用补历史；空内容和帖子仅作最后的兜底。
+        # 所有关系均来自目录原字段，不按报表筛广告或猜测帖子对应的VID。
+        count += _backfill_cached(session, tenant, account, requested, primary=True)
         after = ""
         while True:
             scope = {
@@ -453,6 +810,7 @@ def backfill_creatives(
                     session, tenant_id=tenant, advertiser_id=account, rows=rows
                 )
             after = parents[-1]
+        count += _backfill_cached(session, tenant, account, requested, primary=False)
     return count
 
 

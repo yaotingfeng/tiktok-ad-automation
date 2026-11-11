@@ -131,7 +131,7 @@ def test_dirty_claim_reads_ordered_index_without_sorting_entire_backlog(
         EXPLAIN (ANALYZE,BUFFERS,FORMAT JSON)
         SELECT tenant_id,advertiser_id,kind,bucket,source_revision FROM read_bucket_state
         WHERE source_revision>derived_revision AND kind IN ('ad_day','creative_material')
-        ORDER BY observed_at,tenant_id,advertiser_id,kind,bucket
+        ORDER BY bucket DESC,kind,observed_at,tenant_id,advertiser_id
         LIMIT 1 FOR UPDATE SKIP LOCKED
     """)
     ).scalar_one()[0]["Plan"]

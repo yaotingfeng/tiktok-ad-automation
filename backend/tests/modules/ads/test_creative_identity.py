@@ -890,3 +890,323 @@ def test_prioritized_backfill_only_writes_requested_creatives_with_all_assets(
         ]
     else:
         assert wanted is None
+
+
+def _cached_child(session, seed, *, creative="cached", configuration=None, version=2):
+    row = AdObject(
+        tenant_id=seed.context.tenant_id,
+        advertiser_id=seed.ref.advertiser_id,
+        kind="creative",
+        remote_id=creative,
+        parent_kind="ad",
+        parent_remote_id=seed.row.remote_id,
+        ad_type="SMART_PLUS",
+        name="cached child",
+        configuration=configuration or {},
+        operation_status="ENABLE",
+        observed_at=seed.row.observed_at,
+        published_version=version,
+    )
+    session.add(row)
+    session.flush()
+    return row
+
+
+def test_backfill_reads_cached_creative_video_when_reference_was_lost(
+    session, directory_seed
+):
+    child = _cached_child(
+        session, directory_seed, configuration={"video_id": "cached-video"}
+    )
+    backfill_creatives(
+        session,
+        tenant_id=child.tenant_id,
+        advertiser_id=child.advertiser_id,
+        creative_ids=["cached"],
+    )
+    row = _get(session, directory_seed, "cached")
+    assert row is not None
+    assert (row.ad_remote_id, row.platform_material_id, row.identity_status) == (
+        directory_seed.row.remote_id,
+        "cached-video",
+        "RESOLVED",
+    )
+    assert row.observed_at == child.observed_at and row.published_version == 2
+
+
+def test_backfill_reads_parent_cached_creative_list_and_preserves_image_order(
+    session, directory_seed
+):
+    parent = directory_seed.row
+    parent.configuration = {
+        "creative_list": [
+            {
+                "smart_plus_creative_id": "cached-carousel",
+                "ad_material_id": "mid",
+                "creative_info": {"image_info": [{"image_id": "b"}, {"image_id": "a"}]},
+            }
+        ]
+    }
+    session.add(parent)
+    session.flush()
+    backfill_creatives(
+        session,
+        tenant_id=parent.tenant_id,
+        advertiser_id=parent.advertiser_id,
+        creative_ids=["cached-carousel"],
+    )
+    row = _get(session, directory_seed, "cached-carousel")
+    assert row is not None and row.identity_status == "COMPOSITE"
+    assert row.ad_material_id == "mid"
+    assert row.assets == [
+        {"material_type": "IMAGE", "platform_material_id": "b"},
+        {"material_type": "IMAGE", "platform_material_id": "a"},
+    ]
+
+
+def test_cached_empty_child_retains_older_positive_reference_and_parent_delete(
+    session, directory_seed
+):
+    owner = directory_seed.row
+    child = _cached_child(session, directory_seed)
+    owner.operation_status = "DELETE"
+    session.add(owner)
+    session.add(
+        AdMaterialReference(
+            tenant_id=owner.tenant_id,
+            advertiser_id=owner.advertiser_id,
+            ad_remote_id=owner.remote_id,
+            platform_material_id="known-video",
+            material_type="VIDEO",
+            creative_ids=["cached"],
+            complete=True,
+            published_version=1,
+        )
+    )
+    session.flush()
+    backfill_creatives(
+        session,
+        tenant_id=owner.tenant_id,
+        advertiser_id=owner.advertiser_id,
+        creative_ids=["cached"],
+    )
+    row = _get(session, directory_seed, "cached")
+    assert (
+        row.platform_material_id == "known-video" and row.identity_status == "RESOLVED"
+    )
+    assert row.deleted and row.published_version == child.published_version
+
+
+def test_cached_reference_absence_creates_unknown_and_never_uses_foreign_raw_asset(
+    session, directory_seed
+):
+    child = _cached_child(
+        session,
+        directory_seed,
+        configuration={"advertiser_id": "foreign-account", "video_id": "foreign-video"},
+    )
+    backfill_creatives(
+        session,
+        tenant_id=child.tenant_id,
+        advertiser_id=child.advertiser_id,
+        creative_ids=["cached"],
+    )
+    row = _get(session, directory_seed, "cached")
+    assert row is not None and row.identity_status == "UNRESOLVED"
+    assert row.assets == [] and row.platform_material_id is None
+
+
+def test_cached_same_version_backfill_cannot_overwrite_live_metadata(
+    session, directory_seed
+):
+    child = _cached_child(session, directory_seed, configuration={"video_id": "video"})
+    _write(
+        session,
+        directory_seed,
+        [
+            _row(
+                "cached",
+                parent=child.parent_remote_id,
+                ad_material_id=None,
+                name="live",
+                operation_status="DISABLE",
+            )
+        ],
+        version=2,
+        observed=child.observed_at,
+    )
+    child.observed_at += timedelta(seconds=10)
+    session.add(child)
+    session.flush()
+    backfill_creatives(
+        session,
+        tenant_id=child.tenant_id,
+        advertiser_id=child.advertiser_id,
+        creative_ids=["cached"],
+    )
+    row = _get(session, directory_seed, "cached")
+    assert row.name == "live" and row.operation_status == "DISABLE"
+    assert row.observed_at == child.observed_at - timedelta(seconds=10)
+
+
+@pytest.mark.parametrize("batch_size", [1, 500])
+def test_cached_post_then_empty_child_does_not_depend_on_batch_boundary(
+    session, directory_seed, monkeypatch, batch_size
+):
+    from app.modules.ads import creatives
+
+    monkeypatch.setattr(creatives, "_BATCH_SIZE", batch_size)
+    parent = directory_seed.row
+    parent.configuration = {
+        "creative_list": [
+            {
+                "smart_plus_creative_id": "cached",
+                "ad_material_id": "post-mid",
+                "creative_info": {"tiktok_item_id": "post"},
+            }
+        ]
+    }
+    session.add(parent)
+    _cached_child(session, directory_seed)
+    backfill_creatives(
+        session,
+        tenant_id=parent.tenant_id,
+        advertiser_id=parent.advertiser_id,
+        creative_ids=["cached"],
+    )
+    row = _get(session, directory_seed, "cached")
+    assert (
+        row.identity_status,
+        row.material_type,
+        row.platform_material_id,
+        row.ad_material_id,
+        row.published_version,
+    ) == ("RESOLVED", "TIKTOK_POST", "post", "post-mid", 2)
+    assert row.evidence["conflicts"] == []
+
+
+def test_cached_partial_carousel_never_becomes_a_resolved_single_image(
+    session, directory_seed
+):
+    parent = directory_seed.row
+    parent.configuration = {
+        "creative_list": [
+            {
+                "smart_plus_creative_id": "cached",
+                "creative_info": {"image_info": [{"image_id": "a"}, {}]},
+            }
+        ]
+    }
+    session.add(parent)
+    session.flush()
+    backfill_creatives(
+        session,
+        tenant_id=parent.tenant_id,
+        advertiser_id=parent.advertiser_id,
+        creative_ids=["cached"],
+    )
+    row = _get(session, directory_seed, "cached")
+    assert row.identity_status == "UNRESOLVED" and row.assets == []
+    assert row.platform_material_id is None
+
+
+def test_cached_post_cannot_hide_a_different_known_mid(session, directory_seed):
+    child = _cached_child(
+        session,
+        directory_seed,
+        configuration={"tiktok_item_id": "post", "ad_material_id": "different"},
+    )
+    _write(
+        session,
+        directory_seed,
+        [_row("cached", parent=child.parent_remote_id, ad_material_id="original")],
+        observed=child.observed_at,
+    )
+    backfill_creatives(
+        session,
+        tenant_id=child.tenant_id,
+        advertiser_id=child.advertiser_id,
+        creative_ids=["cached"],
+    )
+    row = _get(session, directory_seed, "cached")
+    assert row.identity_status == "CONFLICT" and row.ad_material_id == "original"
+    conflict = row.evidence["conflicts"][0]["identity"]
+    assert conflict["ad_material_id"] == "different"
+    assert conflict["assets"] == [
+        {"platform_material_id": "post", "material_type": "TIKTOK_POST"}
+    ]
+
+
+def test_partial_cached_images_with_a_new_member_keep_a_real_conflict(
+    session, directory_seed
+):
+    child = _cached_child(
+        session, directory_seed, configuration={"image_ids": ["a", None, "c"]}
+    )
+    _write(
+        session,
+        directory_seed,
+        [
+            _row(
+                "cached",
+                parent=child.parent_remote_id,
+                assets=[
+                    {"material_type": "IMAGE", "platform_material_id": "a"},
+                    {"material_type": "IMAGE", "platform_material_id": "b"},
+                ],
+            )
+        ],
+        observed=child.observed_at,
+    )
+    backfill_creatives(
+        session,
+        tenant_id=child.tenant_id,
+        advertiser_id=child.advertiser_id,
+        creative_ids=["cached"],
+    )
+    row = _get(session, directory_seed, "cached")
+    assert row.identity_status == "CONFLICT"
+    assert [a["platform_material_id"] for a in row.assets] == ["a", "b"]
+
+
+def test_cached_empty_content_preserves_explicit_mid_conflict(session, directory_seed):
+    child = _cached_child(
+        session, directory_seed, configuration={"ad_material_id": "different"}
+    )
+    _write(
+        session,
+        directory_seed,
+        [_row("cached", parent=child.parent_remote_id, ad_material_id="original")],
+        observed=child.observed_at,
+    )
+    backfill_creatives(
+        session,
+        tenant_id=child.tenant_id,
+        advertiser_id=child.advertiser_id,
+        creative_ids=["cached"],
+    )
+    row = _get(session, directory_seed, "cached")
+    assert row.identity_status == "CONFLICT" and row.ad_material_id == "original"
+    assert row.evidence["conflicts"][0]["identity"]["ad_material_id"] == "different"
+
+
+def test_cached_unknown_identity_keeps_mid_before_later_asset_observation(
+    session, directory_seed
+):
+    child = _cached_child(
+        session, directory_seed, configuration={"ad_material_id": "original"}
+    )
+    args = {
+        "tenant_id": child.tenant_id,
+        "advertiser_id": child.advertiser_id,
+        "creative_ids": ["cached"],
+    }
+    backfill_creatives(session, **args)
+    assert _get(session, directory_seed, "cached").ad_material_id == "original"
+    child.configuration = {"video_id": "video", "ad_material_id": "different"}
+    child.published_version = 3
+    child.observed_at += timedelta(seconds=1)
+    session.add(child)
+    session.flush()
+    backfill_creatives(session, **args)
+    assert _get(session, directory_seed, "cached").identity_status == "CONFLICT"

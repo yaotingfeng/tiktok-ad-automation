@@ -62,10 +62,10 @@ def retire(connection):
 
 
 def upgrade():
-    # 新 Worker 合并两类有效桶后，仍须按原顺序只领取有限脏桶。
+    # 新 Worker 优先近期日期；历史初始化不能挡住在线账单。
     op.execute(
         "CREATE INDEX ix_read_bucket_active_dirty ON read_bucket_state "
-        "(observed_at,tenant_id,advertiser_id,kind,bucket) "
+        "(bucket DESC,kind,observed_at,tenant_id,advertiser_id) "
         "WHERE source_revision>derived_revision AND kind IN ('ad_day','creative_material')"
     )
     retire(op.get_bind())

@@ -74,11 +74,11 @@ class ReadBucketState(SQLModel, table=True):
         ),
         Index(
             "ix_read_bucket_active_dirty",
+            text("bucket DESC"),
+            "kind",
             "observed_at",
             "tenant_id",
             "advertiser_id",
-            "kind",
-            "bucket",
             postgresql_where=text(
                 "source_revision > derived_revision AND kind IN ('ad_day','creative_material')"
             ),

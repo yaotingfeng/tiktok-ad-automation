@@ -95,15 +95,37 @@ def rebuild_pending(session: Session, *, limit: int = 25) -> list[ProjectionResu
     """Worker一次仅领取有限桶；调用方提交后才对外承认派生进展。"""
     if not 1 <= limit <= 100:
         raise ValueError("invalid projection batch size")
+    # 历史回填不能堵住近期账单。生产逐桶提交；批处理只锁同日同类，
+    # 并以租户/账户顺序取锁，避免与写入端跨桶锁序交叉。
+    query = (
+        """
+        SELECT tenant_id,advertiser_id,kind,bucket,source_revision FROM read_bucket_state
+        WHERE source_revision>derived_revision AND kind IN ('ad_day','creative_material')
+        ORDER BY bucket DESC,kind,observed_at,tenant_id,advertiser_id
+        LIMIT :limit FOR UPDATE SKIP LOCKED
+    """
+        if limit == 1
+        else """
+        WITH head AS MATERIALIZED (
+            SELECT kind,bucket FROM read_bucket_state
+            WHERE source_revision>derived_revision AND kind IN ('ad_day','creative_material')
+            ORDER BY bucket DESC,kind,observed_at,tenant_id,advertiser_id LIMIT 1
+        ), picked AS MATERIALIZED (
+            SELECT s.tenant_id,s.advertiser_id,s.kind,s.bucket FROM read_bucket_state s
+            JOIN head h ON s.kind=h.kind AND s.bucket=h.bucket
+            WHERE s.source_revision>s.derived_revision AND s.kind IN ('ad_day','creative_material')
+            ORDER BY s.observed_at,s.tenant_id,s.advertiser_id LIMIT :limit
+        )
+        SELECT s.tenant_id,s.advertiser_id,s.kind,s.bucket,s.source_revision
+        FROM read_bucket_state s JOIN picked p USING (tenant_id,advertiser_id,kind,bucket)
+        ORDER BY s.tenant_id,s.advertiser_id,s.kind,s.bucket
+        FOR UPDATE OF s SKIP LOCKED
+    """
+    )
     rows = (
         session.connection()
         .execute(
-            text("""
-        SELECT tenant_id,advertiser_id,kind,bucket,source_revision FROM read_bucket_state
-        WHERE source_revision>derived_revision AND kind IN ('ad_day','creative_material')
-        ORDER BY observed_at,tenant_id,advertiser_id,kind,bucket
-        LIMIT :limit FOR UPDATE SKIP LOCKED
-    """),
+            text(query),
             {"limit": limit},
         )
         .all()
