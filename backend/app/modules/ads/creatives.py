@@ -12,9 +12,25 @@ from app.modules.ads.creative_models import AdCreative
 
 _BATCH_SIZE = 500
 _COLUMNS = "tenant_id,advertiser_id,creative_id,ad_remote_id,ad_material_id,material_type,platform_material_id,assets,name,operation_status,deleted,identity_status,first_observed_at,observed_at,published_version,evidence"
-_SAME_IDENTITY = """jsonb_build_object('ad_remote_id',ad_creative.ad_remote_id,
-    'ad_material_id',ad_creative.ad_material_id,'assets',ad_creative.assets)
-    = EXCLUDED.evidence->'original_identity'"""
+# MID 缺失只表示观察较弱；父广告和有序资产相同才允许补全，两个已知 MID
+# 不一致仍是真冲突。历史引用可能同时包含有 MID 与无 MID 的重复记录。
+_SAME_IDENTITY = """(ad_creative.ad_remote_id=EXCLUDED.ad_remote_id
+    AND ad_creative.assets=EXCLUDED.assets
+    AND (ad_creative.ad_material_id IS NULL OR EXCLUDED.ad_material_id IS NULL
+        OR ad_creative.ad_material_id=EXCLUDED.ad_material_id))"""
+_MID_ENRICHMENT = f"""({_SAME_IDENTITY} AND ad_creative.ad_material_id IS NULL
+    AND EXCLUDED.ad_material_id IS NOT NULL)"""
+# 旧版本可能已经把空 MID 记为冲突。只在全部原始冲突证据都与当前强身份
+# 相容时恢复分类，保留原证据并追加恢复回执；任何真正的归属/资产/MID 变化不恢复。
+_WEAK_CONFLICT = """(ad_creative.identity_status='CONFLICT'
+    AND COALESCE(ad_creative.ad_material_id,EXCLUDED.ad_material_id) IS NOT NULL
+    AND jsonb_array_length(ad_creative.evidence->'conflicts')>0
+    AND NOT EXISTS (SELECT 1 FROM jsonb_array_elements(ad_creative.evidence->'conflicts') c
+        WHERE c->'identity'->>'ad_remote_id' IS DISTINCT FROM ad_creative.ad_remote_id
+           OR c->'identity'->'assets' IS DISTINCT FROM ad_creative.assets
+           OR (c->'identity'->>'ad_material_id' IS NOT NULL
+               AND c->'identity'->>'ad_material_id' IS DISTINCT FROM
+                   COALESCE(ad_creative.ad_material_id,EXCLUDED.ad_material_id))))"""
 _ENRICHMENT = """ad_creative.identity_status='UNRESOLVED' AND ad_creative.assets='[]'::jsonb
     AND ad_creative.ad_remote_id=EXCLUDED.ad_remote_id
     AND (ad_creative.ad_material_id IS NULL OR ad_creative.ad_material_id=EXCLUDED.ad_material_id)
@@ -161,13 +177,16 @@ def _upsert_values(
                   deleted=CASE WHEN {_SAME_IDENTITY} OR {_ENRICHMENT} THEN EXCLUDED.deleted ELSE ad_creative.deleted END,
                   observed_at=EXCLUDED.observed_at,
                   published_version=EXCLUDED.published_version,
-                  ad_material_id=CASE WHEN {_ENRICHMENT} THEN EXCLUDED.ad_material_id ELSE ad_creative.ad_material_id END,
+                  ad_material_id=CASE WHEN {_ENRICHMENT} THEN EXCLUDED.ad_material_id
+                    WHEN {_SAME_IDENTITY} THEN COALESCE(ad_creative.ad_material_id,EXCLUDED.ad_material_id)
+                    ELSE ad_creative.ad_material_id END,
                   assets=CASE WHEN {_ENRICHMENT} THEN EXCLUDED.assets ELSE ad_creative.assets END,
                   material_type=CASE WHEN {_ENRICHMENT} THEN EXCLUDED.material_type ELSE ad_creative.material_type END,
                   platform_material_id=CASE WHEN {_ENRICHMENT} THEN EXCLUDED.platform_material_id ELSE ad_creative.platform_material_id END,
                   identity_status=CASE WHEN {_ENRICHMENT} THEN EXCLUDED.identity_status
-                    WHEN {_SAME_IDENTITY} THEN ad_creative.identity_status ELSE 'CONFLICT' END,
-                  evidence=CASE WHEN {_ENRICHMENT} THEN
+                    WHEN {_SAME_IDENTITY} THEN CASE WHEN {_WEAK_CONFLICT} THEN EXCLUDED.identity_status
+                        ELSE ad_creative.identity_status END ELSE 'CONFLICT' END,
+                  evidence=(CASE WHEN {_ENRICHMENT} THEN
                     jsonb_set(ad_creative.evidence,'{{enrichments}}',
                       COALESCE(ad_creative.evidence->'enrichments','[]'::jsonb) || jsonb_build_array(jsonb_build_object(
                         'identity',EXCLUDED.evidence->'original_identity',
@@ -177,6 +196,16 @@ def _upsert_values(
                       (ad_creative.evidence->'conflicts') || jsonb_build_array(jsonb_build_object(
                         'identity',EXCLUDED.evidence->'original_identity',
                         'observed_at',EXCLUDED.observed_at,'published_version',EXCLUDED.published_version))) END
+                    || CASE WHEN {_MID_ENRICHMENT} THEN jsonb_build_object('enrichments',
+                        COALESCE(ad_creative.evidence->'enrichments','[]'::jsonb) || jsonb_build_array(jsonb_build_object(
+                            'identity',EXCLUDED.evidence->'original_identity',
+                            'observed_at',EXCLUDED.observed_at,'published_version',EXCLUDED.published_version)))
+                        ELSE '{{}}'::jsonb END
+                    || CASE WHEN {_SAME_IDENTITY} AND {_WEAK_CONFLICT} THEN
+                        jsonb_build_object('conflict_recoveries',COALESCE(ad_creative.evidence->'conflict_recoveries','[]'::jsonb)
+                            || jsonb_build_array(jsonb_build_object('reason','missing_ad_material_id',
+                                'observed_at',EXCLUDED.observed_at,'published_version',EXCLUDED.published_version)))
+                        ELSE '{{}}'::jsonb END)
                 WHERE ad_creative.published_version<=EXCLUDED.published_version
                   AND ad_creative.observed_at<=EXCLUDED.observed_at
                 RETURNING creative_id
@@ -256,10 +285,28 @@ def _write_groups(
 
 
 def backfill_creatives(
-    session: Session, *, tenant_id: UUID | None = None, advertiser_id: str | None = None
+    session: Session,
+    *,
+    tenant_id: UUID | None = None,
+    advertiser_id: str | None = None,
+    creative_ids: list[str] | None = None,
 ) -> int:
-    """只从本地历史引用回填，按账户/父广告分页；不扫描平台、不推断缺失删除。"""
-    filters, params = [], {}
+    """只从本地历史引用回填；可先处理新事实需要的身份，再推进其余历史。
+
+    筛选只减少父广告/创意范围，同一创意的全部资产仍一起读取，不截断轮播。
+    不扫描平台、不推断缺失删除。
+    """
+    requested = frozenset(creative_ids) if creative_ids is not None else None
+    if requested is not None and not requested:
+        return 0
+    filters: list[str] = []
+    params: dict[str, Any] = {}
+    target_clause = ""
+    if requested is not None:
+        target = "(creative_ids ?| CAST(:creative_ids AS text[]) OR ad_remote_id=ANY(CAST(:creative_ids AS text[])))"
+        filters.append(target)
+        params["creative_ids"] = sorted(requested)
+        target_clause = " AND " + target
     if tenant_id is not None:
         filters.append("tenant_id=:tenant")
         params["tenant"] = tenant_id
@@ -293,13 +340,16 @@ def backfill_creatives(
                 "account": account,
                 "after": after,
                 "limit": _BATCH_SIZE,
+                **(
+                    {"creative_ids": sorted(requested)} if requested is not None else {}
+                ),
             }
             parents = (
                 session.connection()
                 .execute(
-                    text("""
+                    text(f"""
                 SELECT DISTINCT ad_remote_id FROM ad_material_reference
-                WHERE tenant_id=:tenant AND advertiser_id=:account AND ad_remote_id>:after
+                WHERE tenant_id=:tenant AND advertiser_id=:account AND ad_remote_id>:after {target_clause}
                 ORDER BY ad_remote_id LIMIT :limit
             """),
                     scope,
@@ -327,6 +377,8 @@ def backfill_creatives(
                 .all()
             )
             rows = _group_references([dict(ref) for ref in refs])
+            if requested is not None:
+                rows = [row for row in rows if row["creative_id"] in requested]
             if rows:
                 existing = (
                     session.connection()
@@ -349,7 +401,11 @@ def backfill_creatives(
                     if (
                         original
                         and original["ad_remote_id"] == row["ad_remote_id"]
-                        and original["ad_material_id"] == row["ad_material_id"]
+                        and (
+                            original["ad_material_id"] is None
+                            or row["ad_material_id"] is None
+                            or original["ad_material_id"] == row["ad_material_id"]
+                        )
                         and {
                             (asset["material_type"], asset["platform_material_id"])
                             for asset in original["assets"]
@@ -362,6 +418,8 @@ def backfill_creatives(
                         row["assets"] = original["assets"]
                         # 父目录可能更晚同步，但它的时间不能提升旧素材引用的权威性。
                         # 相同或较旧版本的弱回填仅补不存在的身份，不覆盖live状态。
+                        # MID 缺失仍是同身份弱观察，不能借父时间提升旧引用；
+                        # 同版本的 MID 补全也留给新的强目录观察。
                         if row["published_version"] <= original["published_version"]:
                             continue
                     accepted.append(row)

@@ -669,15 +669,26 @@ def test_newer_partial_active_child_cannot_revive_explicitly_deleted_parent(
 
 
 @pytest.mark.parametrize("reference_version", [4, 5])
+@pytest.mark.parametrize(
+    "live_mid,reference_mid",
+    [("material", "material"), ("material", None), (None, "material")],
+)
 def test_same_or_older_backfill_does_not_overwrite_live_status(
-    session, directory_seed, reference_version
+    session, directory_seed, reference_version, live_mid, reference_mid
 ):
     owner = directory_seed.row
     observed = owner.observed_at
     _write(
         session,
         directory_seed,
-        [_row(parent=owner.remote_id, name="live", operation_status="DISABLE")],
+        [
+            _row(
+                parent=owner.remote_id,
+                name="live",
+                operation_status="DISABLE",
+                ad_material_id=live_mid,
+            )
+        ],
         version=5,
         observed=observed,
     )
@@ -689,7 +700,7 @@ def test_same_or_older_backfill_does_not_overwrite_live_status(
             ad_remote_id=owner.remote_id,
             platform_material_id="video",
             material_type="VIDEO",
-            ad_material_id="material",
+            ad_material_id=reference_mid,
             creative_ids=["creative"],
             complete=True,
             name="historical",
@@ -707,7 +718,8 @@ def test_same_or_older_backfill_does_not_overwrite_live_status(
         creative.operation_status,
         creative.observed_at,
         creative.published_version,
-    ) == ("live", "DISABLE", observed, 5)
+        creative.ad_material_id,
+    ) == ("live", "DISABLE", observed, 5, live_mid)
 
 
 def test_partial_backfill_preserves_complete_live_carousel(session, directory_seed):
@@ -788,3 +800,93 @@ def test_backfill_still_records_genuinely_conflicting_identity(
         and creative.ad_material_id == "material"
         and creative.platform_material_id == "video"
     )
+
+
+@pytest.mark.parametrize("first,second", [("material", None), (None, "material")])
+def test_missing_mid_does_not_conflict_with_same_parent_and_video(
+    session, directory_seed, first, second
+):
+    _write(session, directory_seed, [_row(ad_material_id=first)])
+    _write(session, directory_seed, [_row(ad_material_id=second)], version=2)
+    row = _get(session, directory_seed)
+    assert row.identity_status == "RESOLVED"
+    assert row.ad_material_id == "material"
+    assert row.assets == [{"platform_material_id": "video", "material_type": "VIDEO"}]
+    assert row.evidence["conflicts"] == []
+    assert row.evidence["original_identity"]["ad_material_id"] == first
+    if first is None:
+        assert (
+            row.evidence["enrichments"][0]["identity"]["ad_material_id"] == "material"
+        )
+
+
+def test_different_known_mid_remains_a_conflict(session, directory_seed):
+    _write(session, directory_seed, [_row(ad_material_id="original")])
+    _write(session, directory_seed, [_row(ad_material_id="different")], version=2)
+    _write(session, directory_seed, [_row(ad_material_id=None)], version=3)
+    row = _get(session, directory_seed)
+    assert row.identity_status == "CONFLICT"
+    assert row.ad_material_id == "original"
+    assert row.evidence["conflicts"][0]["identity"]["ad_material_id"] == "different"
+
+
+@pytest.mark.parametrize("real_conflict", [False, True])
+def test_new_observation_reclassifies_only_old_missing_mid_conflicts(
+    session, directory_seed, real_conflict
+):
+    _write(session, directory_seed, [_row()])
+    row = _get(session, directory_seed)
+    identity = dict(row.evidence["original_identity"], ad_material_id=None)
+    conflicts = [{"identity": identity, "published_version": 1}]
+    if real_conflict:
+        conflicts.append({"identity": dict(identity, ad_material_id="different")})
+    row.identity_status = "CONFLICT"
+    row.evidence = dict(row.evidence, conflicts=conflicts)
+    session.add(row)
+    session.flush()
+    _write(session, directory_seed, [_row()], version=2)
+    row = _get(session, directory_seed)
+    assert row.identity_status == ("CONFLICT" if real_conflict else "RESOLVED")
+    assert row.evidence["conflicts"] == conflicts
+    if not real_conflict:
+        assert (
+            row.evidence["conflict_recoveries"][0]["reason"] == "missing_ad_material_id"
+        )
+
+
+@pytest.mark.parametrize("targets", [["wanted"], []])
+def test_prioritized_backfill_only_writes_requested_creatives_with_all_assets(
+    session, directory_seed, targets
+):
+    owner = directory_seed.row
+    for image in ["a", "b"]:
+        session.add(
+            AdMaterialReference(
+                tenant_id=owner.tenant_id,
+                advertiser_id=owner.advertiser_id,
+                ad_remote_id=owner.remote_id,
+                platform_material_id=image,
+                material_type="IMAGE",
+                ad_material_id="carousel",
+                creative_ids=["wanted", "other"],
+                complete=True,
+                published_version=1,
+            )
+        )
+    session.flush()
+    backfill_creatives(
+        session,
+        tenant_id=owner.tenant_id,
+        advertiser_id=owner.advertiser_id,
+        creative_ids=targets,
+    )
+    assert _get(session, directory_seed, "other") is None
+    wanted = _get(session, directory_seed, "wanted")
+    if targets:
+        assert wanted.identity_status == "COMPOSITE"
+        assert wanted.assets == [
+            {"platform_material_id": "a", "material_type": "IMAGE"},
+            {"platform_material_id": "b", "material_type": "IMAGE"},
+        ]
+    else:
+        assert wanted is None
