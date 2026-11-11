@@ -21,3 +21,12 @@ def test_single_class_borrows_idle_capacity_without_accumulating_future_debt():
         winner, state = choose_work_class(state, WEIGHTS)
         served[winner] += 1
     assert dict(served) == WEIGHTS
+
+
+def test_large_history_debt_cannot_starve_realtime():
+    state = {"history": 185300.0, "realtime": 10810.0}
+    winners = []
+    for _ in range(20):
+        winner, state = choose_work_class(state, ["realtime", "history"])
+        winners.append(winner)
+    assert "realtime" in winners

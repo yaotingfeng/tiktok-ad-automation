@@ -13,6 +13,9 @@ from app.modules.reporting.store_models import (
 )
 
 WEIGHTS = {"realtime": 50, "history": 30, "directory": 15, "maintenance": 5}
+# 公平债务只用于短期轮转，不能让历史积压把实时任务推迟数千次派发。
+# 超过该领先量时压回到有界窗口；历史仍会继续获得轮次，不会被实时永久排除。
+MAX_CLASS_LEAD = 1000.0
 
 
 def choose_work_class(
@@ -27,6 +30,10 @@ def choose_work_class(
     if not eligible:
         return None, dict(state)
     result = {key: float(state.get(key, 0)) for key in WEIGHTS}
+    if len(eligible) > 1:
+        floor = min(result[key] for key in eligible)
+        for key in eligible:
+            result[key] = min(result[key], floor + MAX_CLASS_LEAD)
     winner = max(eligible, key=lambda key: (result[key] + WEIGHTS[key], WEIGHTS[key]))
     charged = set(eligible if accounting is None else accounting) & WEIGHTS.keys()
     charged.add(winner)
