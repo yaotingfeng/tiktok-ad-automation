@@ -11,7 +11,12 @@ from sqlalchemy import text
 from sqlmodel import Session
 
 from app.core.db import engine
-from app.modules.ads.creatives import _backfill_cached, _group_references, _write_groups
+from app.modules.ads.creatives import (
+    _backfill_cached,
+    _group_references,
+    _upsert_values,
+    _value,
+)
 
 
 def _same_assets(first, second):
@@ -148,10 +153,12 @@ def preserve_creative_identities(
     written = 0
     if needed:
         # 仅未承接关系解析官方缓存，主映射及其原有冲突证据始终优先保留。
-        written += _backfill_cached(
+        cached_written = _backfill_cached(
             session, tenant_id, advertiser_id, needed, primary=True, parent_ids=parents
         )
-        known = identities()
+        written += cached_written
+        if cached_written:
+            known.update(identities(needed))
         statuses = (
             connection.execute(
                 text("""
@@ -172,6 +179,7 @@ def preserve_creative_identities(
             pending.setdefault(row["creative_id"], deque()).append(row)
         while pending:
             publications, proofs = [], []
+            new_proofs = {}
             for observations in pending.values():
                 row = observations.popleft()
                 original = known.get(row["creative_id"])
@@ -195,6 +203,7 @@ def preserve_creative_identities(
                 conflict = False
                 if original is None:
                     publications.append(row)
+                    new_proofs[row["creative_id"]] = proof
                 elif (
                     original["ad_remote_id"] == row["ad_remote_id"]
                     and original["ad_material_id"] in (None, row["ad_material_id"])
@@ -222,25 +231,48 @@ def preserve_creative_identities(
                     publications.append(enriched)
                 else:
                     conflict = True
-                proofs.append(
-                    {"cid": row["creative_id"], "proof": proof, "conflict": conflict}
-                )
+                if original is not None:
+                    proofs.append(
+                        {
+                            "cid": row["creative_id"],
+                            "proof": proof,
+                            "conflict": conflict,
+                        }
+                    )
             if publications:
-                written += _write_groups(
+                values = []
+                for row in publications:
+                    value = _value(
+                        row,
+                        tenant_id=tenant_id,
+                        advertiser_id=advertiser_id,
+                        observed_at=row["observed_at"],
+                        published_version=row["published_version"],
+                    )
+                    if row["creative_id"] in new_proofs:
+                        # 账户锁覆盖首次写入；把同一份证明随新身份插入，避免立即再改写一遍。
+                        value["evidence"]["legacy_identities"] = [
+                            new_proofs[row["creative_id"]]
+                        ]
+                    values.append(value)
+                written += _upsert_values(
                     session,
                     tenant_id=tenant_id,
                     advertiser_id=advertiser_id,
-                    rows=publications,
+                    values=values,
                 )
             if proofs:
                 written += _append_proofs(connection, scope, proofs)
-                # 只回读本轮变动 CID 一次；不随每条观察反复传输整页身份。
-                known.update(identities({item["cid"] for item in proofs}))
             pending = {
                 cid: observations
                 for cid, observations in pending.items()
                 if observations
             }
+            changed = set(new_proofs) | {item["cid"] for item in proofs}
+            # 只有同 CID 还有后继观察才需要最终状态；末轮无需传输不会再使用的身份。
+            refresh = changed & pending.keys()
+            if refresh:
+                known.update(identities(refresh))
 
     return {
         "written": written,

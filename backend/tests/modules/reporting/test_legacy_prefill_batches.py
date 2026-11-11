@@ -12,17 +12,20 @@ from sqlalchemy import event, text
 from sqlmodel import Session
 
 from app.modules.ads.creatives import upsert_creatives
+from app.modules.ads.models import AdObject
 from scripts.preserve_legacy_creative_identities import preserve_creative_identities
 from tests.migration_database import historical_database
 from tests.modules.reporting.sync_conftest import sync_seed
 
 
-def _reference(db, tenant, ids, *, parent="parent", video="video", mid="mid"):
+def _reference(
+    db, tenant, ids, *, parent="parent", video="video", mid="mid", kind="VIDEO"
+):
     db.execute(
         text("""INSERT INTO ad_material_reference
         (id,tenant_id,advertiser_id,ad_remote_id,platform_material_id,ad_material_id,
          material_type,name,creative_ids,complete,published_version)
-        VALUES (:id,:tenant,'acc-1',:parent,:video,:mid,'VIDEO','legacy',CAST(:ids AS jsonb),true,1)
+        VALUES (:id,:tenant,'acc-1',:parent,:video,:mid,:kind,'legacy',CAST(:ids AS jsonb),true,1)
     """),
         {
             "id": uuid4(),
@@ -31,6 +34,7 @@ def _reference(db, tenant, ids, *, parent="parent", video="video", mid="mid"):
             "parent": parent,
             "video": video,
             "mid": mid,
+            "kind": kind,
         },
     )
 
@@ -78,9 +82,9 @@ def test_large_single_parent_page_has_bounded_identity_reads_and_writes(
         record_property("identity_writes", len(writes))
         record_property("sql_roundtrips", len(statements))
         record_property("elapsed_seconds", perf_counter() - started)
-        assert len(reads) <= 4, (count, len(reads), len(statements))
-        assert len(writes) <= 2 * ceil(count / 500), (count, len(writes))
-        assert result["done"] and result["written"] >= count
+        assert len(reads) == 1, (count, len(reads), len(statements))
+        assert len(writes) <= ceil(count / 500), (count, len(writes))
+        assert result["done"] and result["written"] == count
         with Session(engine) as db, db.begin():
             records = (
                 db.execute(
@@ -105,6 +109,79 @@ def test_large_single_parent_page_has_bounded_identity_reads_and_writes(
                 )["written"]
                 == 0
             )
+
+
+@pytest.mark.parametrize("kind,assets", [("VIDEO", ["video"]), ("IMAGE", ["b", "a"])])
+def test_missing_identity_writes_once_with_exact_legacy_evidence(
+    monkeypatch, kind, assets
+):
+    with historical_database(monkeypatch, "0115_copy_current_source") as (engine, _):
+        with Session(engine) as db, db.begin():
+            db.execute(text("SET LOCAL TIME ZONE 'UTC'"))
+            tenant = sync_seed.__wrapped__(db).tenant_id
+            for asset in assets:
+                _reference(db, tenant, ["new"], video=asset, kind=kind)
+            # 数据库行级触发器计数真实写入，防止一条 SQL 内再次改写同一身份。
+            db.execute(
+                text("CREATE TABLE prefill_write_audit (operation text NOT NULL)")
+            )
+            db.execute(
+                text("""CREATE FUNCTION audit_prefill_write() RETURNS trigger
+                LANGUAGE plpgsql AS $$ BEGIN
+                  INSERT INTO prefill_write_audit VALUES (TG_OP); RETURN NEW;
+                END $$""")
+            )
+            db.execute(
+                text("""CREATE TRIGGER audit_prefill_write
+                AFTER INSERT OR UPDATE ON ad_creative FOR EACH ROW
+                EXECUTE FUNCTION audit_prefill_write()""")
+            )
+            preserve_creative_identities(db, tenant_id=tenant, advertiser_id="acc-1")
+            row = dict(
+                db.execute(text("SELECT * FROM ad_creative WHERE creative_id='new'"))
+                .mappings()
+                .one()
+            )
+            identity = {
+                "ad_remote_id": "parent",
+                "ad_material_id": "mid",
+                "assets": [
+                    {"material_type": kind, "platform_material_id": asset}
+                    for asset in sorted(assets)
+                ],
+            }
+            epoch = datetime(1970, 1, 1, tzinfo=UTC)
+            assert row == {
+                "tenant_id": tenant,
+                "advertiser_id": "acc-1",
+                "creative_id": "new",
+                **identity,
+                "material_type": "VIDEO" if kind == "VIDEO" else "CAROUSEL",
+                "platform_material_id": "video" if kind == "VIDEO" else None,
+                "name": "legacy",
+                "operation_status": None,
+                "deleted": False,
+                "identity_status": "RESOLVED" if kind == "VIDEO" else "COMPOSITE",
+                "first_observed_at": epoch,
+                "observed_at": epoch,
+                "published_version": 1,
+                "evidence": {
+                    "original_identity": identity,
+                    "conflicts": [],
+                    "asset_order_source": "CANONICAL_REFERENCE_SORT",
+                    "legacy_identities": [
+                        {
+                            "identity": identity,
+                            "published_version": 1,
+                            "observed_at": "1970-01-01T00:00:00+00:00",
+                            "asset_order_source": "CANONICAL_REFERENCE_SORT",
+                        }
+                    ],
+                },
+            }
+            assert db.execute(
+                text("SELECT operation FROM prefill_write_audit")
+            ).scalars().all() == ["INSERT"]
 
 
 def test_batch_enrichment_preserves_newer_state_and_every_conflict_proof(monkeypatch):
@@ -188,6 +265,79 @@ def test_batch_enrichment_preserves_newer_state_and_every_conflict_proof(monkeyp
             )
 
 
+@pytest.mark.parametrize("legacy_asset,conflict", [("a", False), ("c", True)])
+def test_cache_publication_is_refreshed_before_legacy_classification(
+    monkeypatch, legacy_asset, conflict
+):
+    with historical_database(monkeypatch, "0115_copy_current_source") as (engine, _):
+        with Session(engine) as db, db.begin():
+            tenant = sync_seed.__wrapped__(db).tenant_id
+            observed = datetime(2026, 11, 11, tzinfo=UTC)
+            db.add(
+                AdObject(
+                    tenant_id=tenant,
+                    advertiser_id="acc-1",
+                    kind="ad",
+                    remote_id="parent",
+                    ad_type="SMART_PLUS",
+                    name="cached",
+                    operation_status="DISABLE",
+                    observed_at=observed,
+                    published_version=9,
+                    configuration={
+                        "creative_list": [
+                            {
+                                "smart_plus_creative_id": "cached",
+                                "ad_material_id": "mid",
+                                "material_operation_status": "DISABLE",
+                                "creative_info": {
+                                    "image_info": [{"image_id": "b"}, {"image_id": "a"}]
+                                },
+                            }
+                        ]
+                    },
+                )
+            )
+            db.flush()
+            _reference(db, tenant, ["cached"], video=legacy_asset, kind="IMAGE")
+            preserve_creative_identities(db, tenant_id=tenant, advertiser_id="acc-1")
+            row = (
+                db.execute(text("SELECT * FROM ad_creative WHERE creative_id='cached'"))
+                .mappings()
+                .one()
+            )
+            assert row["assets"] == [
+                {"material_type": "IMAGE", "platform_material_id": "b"},
+                {"material_type": "IMAGE", "platform_material_id": "a"},
+            ]
+            assert (
+                row["published_version"],
+                row["observed_at"],
+                row["name"],
+                row["operation_status"],
+            ) == (9, observed, "cached", "DISABLE")
+            if conflict:
+                assert row["identity_status"] == "CONFLICT"
+                assert (
+                    row["evidence"]["conflicts"] == row["evidence"]["legacy_identities"]
+                )
+                proof = row["evidence"]["conflicts"][0]
+                assert proof["published_version"] == 1
+                assert proof["identity"]["assets"] == [
+                    {"material_type": "IMAGE", "platform_material_id": "c"}
+                ]
+            else:
+                assert row["identity_status"] == "COMPOSITE"
+                assert row["evidence"]["conflicts"] == []
+                assert "legacy_identities" not in row["evidence"]
+            assert (
+                preserve_creative_identities(
+                    db, tenant_id=tenant, advertiser_id="acc-1"
+                )["written"]
+                == 0
+            )
+
+
 def test_multiple_observations_of_one_cid_keep_parent_order_and_all_proofs(monkeypatch):
     with historical_database(monkeypatch, "0115_copy_current_source") as (
         engine,
@@ -213,6 +363,10 @@ def test_multiple_observations_of_one_cid_keep_parent_order_and_all_proofs(monke
                 assert (
                     row["evidence"]["conflicts"][0]["identity"]["ad_remote_id"] == "b"
                 )
+                assert [
+                    proof["identity"]["ad_remote_id"]
+                    for proof in row["evidence"]["legacy_identities"]
+                ] == ["a", "b"]
             assert (
                 preserve_creative_identities(
                     db, tenant_id=tenant, advertiser_id="acc-1"
