@@ -51,6 +51,21 @@ def test_strategy_binding_has_active_scope_index():
     assert "uq_ai_binding_one_active" in indexes
 
 
+def test_version_binding_fk_includes_optimizer_scope():
+    from app.modules.ai_workbench.models import AIOptimizerVersion
+
+    binding_fk = next(
+        fk
+        for fk in AIOptimizerVersion.__table__.foreign_key_constraints
+        if fk.name == "fk_ai_version_binding"
+    )
+    assert [column.name for column in binding_fk.columns] == [
+        "tenant_id",
+        "optimizer_id",
+        "strategy_binding_id",
+    ]
+
+
 def seed_optimizer_dependencies(session: Session, context, *, account="acc-1"):
     """Seed only local tenant facts; no provider/API calls are made."""
     connection = TikTokConnection(tenant_id=context.tenant_id, status="ACTIVE")

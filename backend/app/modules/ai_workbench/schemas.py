@@ -57,22 +57,9 @@ class OptimizerUpdate(BaseModel):
 
     @model_validator(mode="after")
     def require_change(self) -> OptimizerUpdate:
-        if all(
-            value is None
-            for value in (
-                self.name,
-                self.daily_spend,
-                self.target_roas,
-                self.priority,
-                self.bc_id,
-                self.advertiser_ids,
-                self.optimization_mode,
-                self.authorization_limits,
-                self.strategy_version_id,
-                self.rule_ids,
-                self.active,
-            )
-        ):
+        # ``target_roas: null`` is an intentional clear operation; use field-set
+        # semantics instead of treating every nullable value as omission.
+        if not (self.model_fields_set - {"request_id"}):
             raise ValueError("At least one optimizer field is required")
         return self
 
