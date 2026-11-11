@@ -25,3 +25,8 @@ inactive optimizers are excluded and rejected; evidence includes report sync
 rows, dates, timezones, sources and publication versions plus all checked
 objects; asynchronous management readback updates the evidence snapshot; and
 the executor revalidates the scope immediately before each management submit.
+
+Round 2 fix: the final scope revalidation now runs inside `_execute_bc` after
+preview preparation and directly before `submit_management_task`, closing the
+preview-to-submit race window. A focused ordering regression test covers this
+boundary.

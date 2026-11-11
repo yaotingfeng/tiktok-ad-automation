@@ -1,3 +1,4 @@
+import inspect
 from datetime import UTC, datetime
 from uuid import uuid4
 
@@ -155,3 +156,11 @@ def test_ordinary_and_optimizer_runs_have_distinct_partial_uniqueness_indexes():
         "uq_automation_run_unscoped_slot",
         "uq_automation_run_optimizer_slot",
     } <= indexes
+
+
+def test_submit_boundary_revalidation_runs_after_preview_preparation():
+    from app.modules.automation_rules.executor import _execute_bc
+
+    source = inspect.getsource(_execute_bc)
+    assert source.index("prepare_preview(") < source.index("validate_rule_binding(")
+    assert source.index("validate_rule_binding(") < source.index("submit_management_task(")

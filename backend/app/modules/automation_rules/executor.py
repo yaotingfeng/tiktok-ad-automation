@@ -354,10 +354,6 @@ def execute_hits(
         before = dict(outcome)
         try:
             with session.begin_nested():
-                if scope is not None:
-                    # A rule/optimizer edit can happen while previews are being
-                    # prepared; fence again at the exact submission boundary.
-                    validate_rule_binding(session, scope)
                 submitted = _execute_bc(
                     session,
                     context=context,
@@ -369,6 +365,7 @@ def execute_hits(
                     now=now,
                     outcome=outcome,
                     summary=summary,
+                    optimizer_scope=scope,
                 )
                 if submitted:
                     summary["tasks"].append({"bc_id": bc_id, "task_id": str(submitted)})
@@ -534,6 +531,7 @@ def _execute_bc(
     now: datetime,
     outcome: dict[str, str],
     summary: dict[str, Any],
+    optimizer_scope: RuleBindingScope | None = None,
 ) -> UUID | None:
     definition = RuleDefinition.model_validate(run.definition)
     selection = _selection(
@@ -578,6 +576,11 @@ def _execute_bc(
             summary["failed"] += 1
     if not pending:
         return None
+    if optimizer_scope is not None:
+        # This is intentionally the last local operation before handing the
+        # frozen preview to the management outbox.  Rechecking earlier in the
+        # executor alone would leave a race window while previewing.
+        validate_rule_binding(session, optimizer_scope)
     task = submit_management_task(
         session,
         context,
