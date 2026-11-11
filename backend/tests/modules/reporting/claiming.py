@@ -66,7 +66,7 @@ def claim_jobs(session, *, now, limit):
         # 本文件消费者用transport替身直接调用execute_job，没有SDK admission交接。
         # 只释放本机queued占位；PG围栏、平台计数和真实dispatch行为均不改写。
         for job in jobs:
-            endpoint = report_endpoint(job.kind)
+            endpoint = report_endpoint(job.kind, job.progress)
             release_dispatch(
                 redis,
                 reservation_id=job.claim_token,

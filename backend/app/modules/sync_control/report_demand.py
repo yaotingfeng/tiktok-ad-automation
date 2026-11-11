@@ -598,7 +598,7 @@ def adopt_report_job(session: Session, job: ReportSyncJob) -> int:
             session,
             scope=scope,
             work_class=work_class,
-            endpoint=report_endpoint(job.kind),
+            endpoint=report_endpoint(job.kind, job.progress),
             due_at=job.due_at,
             oldest_pending_at=job.created_at,
         )

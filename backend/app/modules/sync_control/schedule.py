@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
 from uuid import UUID
 
-from sqlalchemy import func
+from sqlalchemy import case, func
 from sqlalchemy.dialects.postgresql import insert
 from sqlmodel import Session, col, select
 
@@ -24,12 +24,18 @@ from app.modules.sync_control.models import (
 )
 
 
-def report_endpoint(kind: str) -> str:
-    return sdk_endpoint(
-        {
-            "operation_log": "changelog.create",
-        }.get(kind, "reports.integrated")
+def report_endpoint(kind: str, progress: Mapping | None = None) -> str:
+    if kind != "operation_log":
+        return sdk_endpoint("reports.integrated")
+    # 阶段属于持久执行，不能用报表kind把轮询/下载继续记到创建接口。
+    # 无效阶段仍交给worker的原错误处理，不让发现头因解析异常丢失需求。
+    state = (progress or {}).get("operation_log", {})
+    phase = state.get("phase", "CREATE") if isinstance(state, Mapping) else "CREATE"
+    phase = phase if isinstance(phase, str) else "CREATE"
+    operation = {"CHECK": "changelog.check", "DOWNLOAD": "changelog.download"}.get(
+        phase, "changelog.create"
     )
+    return sdk_endpoint(operation)
 
 
 def report_class(_kind: str, priority: int) -> str:
@@ -108,8 +114,53 @@ def record_report_outcome(session: Session, job: ReportSyncJob) -> None:
         head.active = due is not None
         if due is not None:
             head.next_eligible_at = due
+            if job.kind == "operation_log":
+                endpoint = _pending_operation_endpoint(
+                    session, head, now=datetime.now(UTC)
+                )
+                if endpoint is not None:
+                    head.physical_endpoint = endpoint
         if terminal and not head.active:
             head.wait_reason = terminal
+
+
+def _pending_operation_endpoint(
+    session: Session, head: SyncSchedule, *, now: datetime
+) -> str | None:
+    """单scope可有多个阶段；路由属于下一有效候选，而非刚退出的那条执行。"""
+    from app.modules.sync_control.requirements import execution_owner_current
+
+    job = session.exec(
+        select(ReportSyncJob)
+        .join(SyncExecutionScope, SyncExecutionScope.report_job_id == ReportSyncJob.id)
+        .join(SyncRequirement, SyncRequirement.id == SyncExecutionScope.requirement_id)
+        .where(
+            SyncExecutionScope.scope_id == head.scope_id,
+            SyncExecutionScope.status == "PENDING",
+            SyncRequirement.source == head.work_class,
+            SyncRequirement.satisfied_revision < SyncRequirement.desired_revision,
+            col(ReportSyncJob.status).in_(("QUEUED", "WAITING", "RUNNING")),
+            execution_owner_current(ReportSyncJob, "report_job_id"),
+        )
+        .order_by(
+            # 已到期候选保持dispatcher的冻结revision/创建次序；没有到期任务
+            # 时才按最早due选下一阶段，不能让刚轮询的30秒等待挡住另一日桶。
+            case((ReportSyncJob.due_at <= now, 0), else_=1),
+            case((ReportSyncJob.due_at > now, ReportSyncJob.due_at), else_=None),
+            case(
+                (
+                    SyncExecutionScope.frozen_revision
+                    == SyncRequirement.desired_revision,
+                    0,
+                ),
+                else_=1,
+            ),
+            ReportSyncJob.created_at,
+            ReportSyncJob.id,
+        )
+        .limit(1)
+    ).first()
+    return report_endpoint(job.kind, job.progress) if job is not None else None
 
 
 def retire_execution_children(

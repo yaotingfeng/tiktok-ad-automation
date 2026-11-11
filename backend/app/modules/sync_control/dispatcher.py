@@ -177,6 +177,9 @@ def _dispatch_due(
             report_endpoint(kind)
             for kind in ("ad_day", "creative_day", "operation_log")
         )
+    ) + tuple(
+        report_endpoint("operation_log", {"operation_log": {"phase": phase}})
+        for phase in ("CHECK", "DOWNLOAD")
     )
     # Worker槽不足时跨物理接口轮转；某接口提额不能永远占满全部槽。
     endpoints = session.exec(
@@ -222,7 +225,11 @@ def _dispatch_due(
         # 每轮各租户先给一页；槽多于租户时在下方有界循环公平借用。
         # 只读发现不提前锁head；被锁执行需要跳过候选后继续填槽，最多多探16个。
         skipped_scopes: set[UUID] = set()
+        corrected = 0
+        correction_limit = min(claim_limit, 4)
         for _round in range(claim_limit - dispatched + 16):
+            if corrected >= correction_limit:
+                break
             progressed = False
             for tenant_id in tenants:
                 if dispatched >= claim_limit or not (
@@ -286,6 +293,7 @@ def _dispatch_due(
                     continue
                 # 同批前一租户可能刚填满某池；仅有当前可用池的候选才算获得机会。
                 # 其后的锁/配额阻塞仍轮转，避免受阻租户长期占住发现入口。
+                previous_dispatched_at = cursor.last_dispatched_at
                 cursor.last_dispatched_at = max(cursor.last_dispatched_at, now)
                 retained, inflight_classes = cost_classes(
                     session, tenant_id=tenant_id, endpoint=endpoint, now=now
@@ -435,6 +443,22 @@ def _dispatch_due(
                 if execution_heads is None:
                     skipped_scopes.add(head.scope_id)
                     progressed = True
+                    continue
+                actual_endpoint = report_endpoint(job.kind, job.progress)
+                if actual_endpoint != endpoint:
+                    # 旧CREATE头/同scope混阶段仅修正路由；保持job→整组head锁序。
+                    # 当前接口的cursor不能为另一接口领取、计费或预占Redis。
+                    for sibling in execution_heads:
+                        sibling.physical_endpoint = actual_endpoint
+                        sibling.wait_reason = None
+                    cursor.last_dispatched_at = previous_dispatched_at
+                    skipped_scopes.add(head.scope_id)
+                    progressed = True
+                    # 纠正也消耗本轮查询时间；小批提交旧头迁移，不能无领取地
+                    # 扫到整事务超时回滚。只让出当前接口，其他报表接口仍有机会。
+                    corrected += 1
+                    if corrected >= correction_limit:
+                        break
                     continue
                 token = uuid4()
                 ready = reserve_dispatch(

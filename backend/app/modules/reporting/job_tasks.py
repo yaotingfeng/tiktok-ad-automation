@@ -91,21 +91,32 @@ def _context(row):
 
 
 @contextmanager
-def _reader_for(*, database_engine, redis_client, plan, deadline, workload="live"):
+def _reader_for(
+    *,
+    database_engine,
+    redis_client,
+    plan,
+    deadline,
+    workload="live",
+    reservation_endpoint=None,
+):
     from contextlib import nullcontext
 
     from app.modules.sync_control.occupancy import dispatch_context
     from app.modules.sync_control.schedule import report_endpoint
 
     reservation = getattr(plan, "claim_token", None)
+    endpoint = reservation_endpoint or report_endpoint(
+        plan.kind, getattr(plan, "progress", None)
+    )
     budget = (
         dispatch_context(
             redis_client,
             reservation_id=reservation,
             scope={
                 "app_scope": settings.TIKTOK_APP_ID,
-                "endpoint": report_endpoint(plan.kind),
-                "rate_group": report_endpoint(plan.kind),
+                "endpoint": endpoint,
+                "rate_group": endpoint,
                 "tenant_id": plan.tenant_id,
                 "advertiser_id": plan.advertiser_ids[0],
             },
@@ -1069,8 +1080,37 @@ def run_job_step(*, database_engine, redis_client, job_id, claim_token):
         if job is None:
             return "FAILED"
         tenant_id, generation = job.tenant_id, job.claim_generation
-        advertiser, endpoint = job.advertiser_ids[0], report_endpoint(job.kind)
+        advertiser, endpoint = (
+            job.advertiser_ids[0],
+            report_endpoint(job.kind, job.progress),
+        )
         valid_claim = job.claim_token == claim_token
+        if job.kind == "operation_log" and valid_claim:
+            from app.modules.sync_control.models import SyncCostLedger
+
+            # 滚动发布时旧dispatcher可能已给CHECK签发CREATE票。冻结同代主收据
+            # 的入口，不按执行后变化的phase释放；网关仍对真实发送接口独立准入。
+            reserved_endpoint = session.exec(
+                select(SyncCostLedger.physical_endpoint)
+                .where(
+                    SyncCostLedger.tenant_id == tenant_id,
+                    SyncCostLedger.report_job_id == job_id,
+                    SyncCostLedger.generation == generation,
+                )
+                .order_by(col(SyncCostLedger.reserved_units).desc(), SyncCostLedger.id)
+                .limit(1)
+            ).first()
+            endpoint = reserved_endpoint or endpoint
+        # 旧消息可能跨代重放，而当前phase/ledger已经属于新票。仅在三个已知
+        # 日志接口按旧token幂等清理queued占位；不触碰新票、平台次数或inflight。
+        release_endpoints = (
+            tuple(
+                report_endpoint("operation_log", {"operation_log": {"phase": phase}})
+                for phase in ("CREATE", "CHECK", "DOWNLOAD")
+            )
+            if job.kind == "operation_log" and not valid_claim
+            else (endpoint,)
+        )
     try:
         if not valid_claim:
             return "FAILED"
@@ -1086,25 +1126,29 @@ def run_job_step(*, database_engine, redis_client, job_id, claim_token):
                 redis_client=redis_client,
                 job_id=job_id,
                 claim_token=claim_token,
+                reservation_endpoint=endpoint,
             )
     finally:
         try:
             # 发送前撤权也必须释放本消息的queued占位；旧token不会清新代，
             # 此函数只动dispatch键，不退还原平台已消费次数或正在发送的inflight。
-            release_dispatch(
-                redis_client,
-                reservation_id=claim_token,
-                app_scope=settings.TIKTOK_APP_ID,
-                endpoint=endpoint,
-                rate_group=endpoint,
-                tenant_id=tenant_id,
-                advertiser_id=advertiser,
-            )
+            for release_endpoint in release_endpoints:
+                release_dispatch(
+                    redis_client,
+                    reservation_id=claim_token,
+                    app_scope=settings.TIKTOK_APP_ID,
+                    endpoint=release_endpoint,
+                    rate_group=release_endpoint,
+                    tenant_id=tenant_id,
+                    advertiser_id=advertiser,
+                )
         except RedisError:
             logger.warning("report queued occupancy release deferred to expiry")
 
 
-def _run_job_step(*, database_engine, redis_client, job_id, claim_token):
+def _run_job_step(
+    *, database_engine, redis_client, job_id, claim_token, reservation_endpoint=None
+):
     queued_token = claim_token
     with diagnostics.stage("step_prepare"):
         with Session(database_engine, expire_on_commit=False) as session:
@@ -1170,6 +1214,7 @@ def _run_job_step(*, database_engine, redis_client, job_id, claim_token):
                 plan=job.model_copy(update={"claim_token": queued_token}),
                 deadline=deadline,
                 workload=workload,
+                reservation_endpoint=reservation_endpoint,
             ) as reader:
                 if reader is None:
                     raise DomainError("api_binding_required", "报表需要 API 绑定")
