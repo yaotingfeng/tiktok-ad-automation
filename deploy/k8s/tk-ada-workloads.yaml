@@ -102,9 +102,9 @@ spec:
           image: __APP_IMAGE__
           imagePullPolicy: IfNotPresent
           resources:
-            requests: {cpu: "1", memory: 2Gi}
-            limits: {cpu: "2", memory: 4Gi}
-          command: [celery, -A, "app.jobs.celery_app:celery_app", worker, -Q, "resources,resource-results", --pool, prefork, --concurrency, "4", --loglevel=INFO, --hostname, "resources@%h"]
+            requests: {cpu: "1500m", memory: 4Gi}
+            limits: {cpu: "4", memory: 8Gi}
+          command: [celery, -A, "app.jobs.celery_app:celery_app", worker, -Q, "resources,resource-results", --pool, prefork, --concurrency, "8", --loglevel=INFO, --hostname, "resources@%h"]
           readinessProbe:
             exec:
               command: [python, -c, "import socket; from app.jobs.celery_app import celery_app; r=celery_app.control.ping(destination=['resources@'+socket.gethostname()], timeout=5); raise SystemExit(0 if r else 1)"]
@@ -234,11 +234,11 @@ spec:
           image: __APP_IMAGE__
           imagePullPolicy: IfNotPresent
           resources:
-            requests: {cpu: "500m", memory: 1Gi}
-            limits: {cpu: "2", memory: 2Gi}
-          # 搭建步骤以等待 TikTok 为主（单进程约 400Mi）。3 个子进程与建单端点
-          # 并发上限 3 对齐，实际调用仍受共享额度准入约束；数据库连接 +6。
-          command: [celery, -A, "app.jobs.celery_app:celery_app", worker, -Q, builds, --pool, prefork, --concurrency, "3", --loglevel=INFO, --hostname, "builds@%h"]
+            requests: {cpu: "500m", memory: 1536Mi}
+            limits: {cpu: "4", memory: 3Gi}
+          # 搭建六槽增加远端I/O并行，调用仍共用官方物理接口额度。
+          # 按约400Mi/子进程估算峰值，数据库连接预算随并发核对。
+          command: [celery, -A, "app.jobs.celery_app:celery_app", worker, -Q, builds, --pool, prefork, --concurrency, "6", --loglevel=INFO, --hostname, "builds@%h"]
           readinessProbe:
             exec:
               command: [python, -c, "import socket; from app.jobs.celery_app import celery_app; r=celery_app.control.ping(destination=['builds@'+socket.gethostname()], timeout=5); raise SystemExit(0 if r else 1)"]
@@ -443,16 +443,31 @@ spec:
         nodeAffinity:
           requiredDuringSchedulingIgnoredDuringExecution:
             nodeSelectorTerms:
-              - matchExpressions:
-                  - {key: topology.kubernetes.io/zone, operator: NotIn, values: [ap-southeast-1b]}
+            - matchExpressions:
+              - key: topology.kubernetes.io/zone
+                operator: NotIn
+                values:
+                - ap-southeast-1b
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+          - labelSelector:
+              matchLabels:
+                app: tiktok-ad-automation
+              matchExpressions:
+              - key: role
+                operator: In
+                values:
+                - worker-ads-backfill
+                - worker-ads-reporting
+            topologyKey: kubernetes.io/hostname
       containers:
         - name: worker-ads-reporting
           image: __APP_IMAGE__
           imagePullPolicy: IfNotPresent
           resources:
-            requests: {cpu: "2", memory: 4Gi}
-            limits: {cpu: "4", memory: 6Gi}
-          command: [celery, -A, "app.jobs.celery_app:celery_app", worker, -Q, ads-reporting, --pool, prefork, --concurrency, "12", --loglevel=INFO, --hostname, "ads-reporting@%h"]
+            requests: {cpu: "2", memory: 8Gi}
+            limits: {cpu: "6", memory: 10Gi}
+          command: [celery, -A, "app.jobs.celery_app:celery_app", worker, -Q, ads-reporting, --pool, prefork, --concurrency, "24", --loglevel=INFO, --hostname, "ads-reporting@%h"]
           readinessProbe:
             exec:
               command: [python, -c, "import socket; from app.jobs.celery_app import celery_app; r=celery_app.control.ping(destination=['ads-reporting@'+socket.gethostname()], timeout=5); raise SystemExit(0 if r else 1)"]
@@ -641,16 +656,29 @@ spec:
         - name: tiktok-ad-automation-registry
       automountServiceAccountToken: false
       terminationGracePeriodSeconds: 120
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+          - labelSelector:
+              matchLabels:
+                app: tiktok-ad-automation
+              matchExpressions:
+              - key: role
+                operator: In
+                values:
+                - worker-ads-backfill
+                - worker-ads-reporting
+            topologyKey: kubernetes.io/hostname
       containers:
         - name: worker-ads-backfill
           image: __APP_IMAGE__
           imagePullPolicy: IfNotPresent
           resources:
-            requests: {cpu: "1", memory: 10Gi}
-            limits: {cpu: "3", memory: 10Gi}
-          # 后台十二槽与持久化background池12/12配套；调整须先排空且确认旧Pod退出。
-          # 子进程超过500MiB后完成当前任务再回收；10Gi申请保留父进程和任务峰值余量。
-          command: [celery, -A, "app.jobs.celery_app:celery_app", worker, -Q, "ads-backfill,ads-directory", --pool, prefork, --concurrency, "12", --max-memory-per-child, "512000", --loglevel=INFO, --hostname, "ads-backfill@%h"]
+            requests: {cpu: "2", memory: 16Gi}
+            limits: {cpu: "6", memory: 16Gi}
+          # 后台32槽与持久化background池32/12配套；调整须先排空且确认旧Pod退出。
+          # 子进程超过500MiB后完成当前任务再回收；16Gi申请保留父进程和任务峰值余量，并限制在可容纳的大节点。
+          command: [celery, -A, "app.jobs.celery_app:celery_app", worker, -Q, "ads-backfill,ads-directory", --pool, prefork, --concurrency, "32", --max-memory-per-child, "512000", --loglevel=INFO, --hostname, "ads-backfill@%h"]
           readinessProbe:
             exec:
               command: [python, -c, "import socket; from app.jobs.celery_app import celery_app; r=celery_app.control.ping(destination=['ads-backfill@'+socket.gethostname()], timeout=5); raise SystemExit(0 if r else 1)"]
@@ -714,11 +742,11 @@ spec:
           image: __APP_IMAGE__
           imagePullPolicy: IfNotPresent
           resources:
-            requests: {cpu: "500m", memory: 2560Mi}
-            limits: {cpu: "3", memory: 3Gi}
+            requests: {cpu: "1", memory: 4Gi}
+            limits: {cpu: "4", memory: 6Gi}
           # 实时消费者不抓取后台全量/历史依赖；本地发布由独立 ads-publish 池执行。
-          # 8槽实测约95%被远端I/O占用；12槽预计2.2–2.4Gi，池上限增加12连接。
-          command: [celery, -A, "app.jobs.celery_app:celery_app", worker, -Q, ads-live-directory, --pool, prefork, --concurrency, "12", --loglevel=INFO, --hostname, "ads-live-directory@%h"]
+          # 远端I/O占主导，24槽预留4Gi申请/6Gi上限；连接池仍为每进程2+1。
+          command: [celery, -A, "app.jobs.celery_app:celery_app", worker, -Q, ads-live-directory, --pool, prefork, --concurrency, "24", --loglevel=INFO, --hostname, "ads-live-directory@%h"]
           readinessProbe:
             exec:
               command: [python, -c, "import socket; from app.jobs.celery_app import celery_app; r=celery_app.control.ping(destination=['ads-live-directory@'+socket.gethostname()], timeout=5); raise SystemExit(0 if r else 1)"]

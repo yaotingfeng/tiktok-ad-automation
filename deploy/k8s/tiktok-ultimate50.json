@@ -1,0 +1,291 @@
+{
+  "sdk_level": "ULTIMATE",
+  "policies": {
+    "base": {
+      "app_max_inflight": 192,
+      "endpoint_max_inflight": 3,
+      "tenant_max_inflight": 192,
+      "advertiser_max_inflight": 96,
+      "app_calls_per_window": 10,
+      "endpoint_calls_per_window": 3,
+      "window_ms": 1000,
+      "lease_ms": 960000
+    },
+    "endpoints": {
+      "OFFICIAL_API:GET /open_api/v1.3/ad/get/": {
+        "endpoint_max_inflight": 96
+      },
+      "OFFICIAL_API:GET /open_api/v1.3/adgroup/get/": {
+        "endpoint_max_inflight": 96
+      },
+      "OFFICIAL_API:GET /open_api/v1.3/advertiser/balance/get/": {
+        "endpoint_max_inflight": 96
+      },
+      "OFFICIAL_API:GET /open_api/v1.3/advertiser/info/": {
+        "endpoint_max_inflight": 96
+      },
+      "OFFICIAL_API:GET /open_api/v1.3/bc/asset/get/": {
+        "endpoint_max_inflight": 96
+      },
+      "OFFICIAL_API:GET /open_api/v1.3/bc/get/": {
+        "endpoint_max_inflight": 96
+      },
+      "OFFICIAL_API:GET /open_api/v1.3/bc/member/get/": {
+        "endpoint_max_inflight": 96
+      },
+      "OFFICIAL_API:GET /open_api/v1.3/campaign/get/": {
+        "endpoint_max_inflight": 96
+      },
+      "OFFICIAL_API:GET /open_api/v1.3/changelog/task/check/": {
+        "endpoint_max_inflight": 96
+      },
+      "OFFICIAL_API:GET /open_api/v1.3/changelog/task/download/": {
+        "endpoint_max_inflight": 96
+      },
+      "OFFICIAL_API:GET /open_api/v1.3/creative/cta/recommend/": {
+        "endpoint_max_inflight": 96
+      },
+      "OFFICIAL_API:GET /open_api/v1.3/creative/portfolio/get/": {
+        "endpoint_max_inflight": 96
+      },
+      "OFFICIAL_API:GET /open_api/v1.3/file/image/ad/info/": {
+        "endpoint_max_inflight": 96
+      },
+      "OFFICIAL_API:GET /open_api/v1.3/file/image/ad/search/": {
+        "endpoint_max_inflight": 96
+      },
+      "OFFICIAL_API:GET /open_api/v1.3/file/music/get/": {
+        "endpoint_max_inflight": 96
+      },
+      "OFFICIAL_API:GET /open_api/v1.3/file/video/ad/info/": {
+        "endpoint_max_inflight": 96
+      },
+      "OFFICIAL_API:GET /open_api/v1.3/file/video/ad/search/": {
+        "endpoint_max_inflight": 96
+      },
+      "OFFICIAL_API:GET /open_api/v1.3/file/video/suggestcover/": {
+        "endpoint_max_inflight": 96
+      },
+      "OFFICIAL_API:GET /open_api/v1.3/identity/get/": {
+        "endpoint_max_inflight": 96
+      },
+      "OFFICIAL_API:GET /open_api/v1.3/identity/video/info/": {
+        "endpoint_max_inflight": 96
+      },
+      "OFFICIAL_API:GET /open_api/v1.3/minis/get/": {
+        "endpoint_max_inflight": 96
+      },
+      "OFFICIAL_API:GET /open_api/v1.3/oauth2/advertiser/get/": {
+        "endpoint_max_inflight": 96
+      },
+      "OFFICIAL_API:GET /open_api/v1.3/optimizer/rule/list/": {
+        "endpoint_max_inflight": 96
+      },
+      "OFFICIAL_API:GET /open_api/v1.3/report/integrated/get/": {
+        "endpoint_max_inflight": 96
+      },
+      "OFFICIAL_API:GET /open_api/v1.3/smart_plus/ad/get/": {
+        "endpoint_max_inflight": 96
+      },
+      "OFFICIAL_API:GET /open_api/v1.3/smart_plus/adgroup/get/": {
+        "endpoint_max_inflight": 96
+      },
+      "OFFICIAL_API:GET /open_api/v1.3/smart_plus/campaign/get/": {
+        "endpoint_max_inflight": 96
+      },
+      "OFFICIAL_API:GET /open_api/v1.3/smart_plus/material_report/breakdown/": {
+        "endpoint_max_inflight": 96
+      },
+      "OFFICIAL_API:GET /open_api/v1.3/smart_plus/material_report/overview/": {
+        "endpoint_max_inflight": 96
+      },
+      "OFFICIAL_API:GET /open_api/v1.3/tool/region/": {
+        "endpoint_max_inflight": 96
+      },
+      "OFFICIAL_API:GET /open_api/v1.3/tool/vbo_status/": {
+        "endpoint_max_inflight": 96
+      },
+      "OFFICIAL_API:POST /open_api/v1.3/ad/status/update/": {
+        "endpoint_max_inflight": 96
+      },
+      "OFFICIAL_API:POST /open_api/v1.3/ad/update/": {
+        "endpoint_max_inflight": 96
+      },
+      "OFFICIAL_API:POST /open_api/v1.3/adgroup/budget/update/": {
+        "endpoint_max_inflight": 96
+      },
+      "OFFICIAL_API:POST /open_api/v1.3/adgroup/status/update/": {
+        "endpoint_max_inflight": 96
+      },
+      "OFFICIAL_API:POST /open_api/v1.3/adgroup/update/": {
+        "endpoint_max_inflight": 96
+      },
+      "OFFICIAL_API:POST /open_api/v1.3/campaign/status/update/": {
+        "endpoint_max_inflight": 96
+      },
+      "OFFICIAL_API:POST /open_api/v1.3/campaign/update/": {
+        "endpoint_max_inflight": 96
+      },
+      "OFFICIAL_API:POST /open_api/v1.3/changelog/task/create/": {
+        "endpoint_max_inflight": 96
+      },
+      "OFFICIAL_API:POST /open_api/v1.3/creative/asset/share/": {
+        "endpoint_max_inflight": 96
+      },
+      "OFFICIAL_API:POST /open_api/v1.3/creative/portfolio/create/": {
+        "endpoint_max_inflight": 96
+      },
+      "OFFICIAL_API:POST /open_api/v1.3/file/image/ad/upload/": {
+        "endpoint_max_inflight": 96
+      },
+      "OFFICIAL_API:POST /open_api/v1.3/file/video/ad/upload/": {
+        "endpoint_max_inflight": 4
+      },
+      "OFFICIAL_API:POST /open_api/v1.3/oauth2/access_token/": {
+        "endpoint_max_inflight": 96
+      },
+      "OFFICIAL_API:POST /open_api/v1.3/smart_plus/ad/create/": {
+        "endpoint_max_inflight": 96
+      },
+      "OFFICIAL_API:POST /open_api/v1.3/smart_plus/ad/material_status/update/": {
+        "endpoint_max_inflight": 96
+      },
+      "OFFICIAL_API:POST /open_api/v1.3/smart_plus/ad/status/update/": {
+        "endpoint_max_inflight": 96
+      },
+      "OFFICIAL_API:POST /open_api/v1.3/smart_plus/ad/update/": {
+        "endpoint_max_inflight": 96
+      },
+      "OFFICIAL_API:POST /open_api/v1.3/smart_plus/adgroup/budget/update/": {
+        "endpoint_max_inflight": 96
+      },
+      "OFFICIAL_API:POST /open_api/v1.3/smart_plus/adgroup/create/": {
+        "endpoint_max_inflight": 96
+      },
+      "OFFICIAL_API:POST /open_api/v1.3/smart_plus/adgroup/status/update/": {
+        "endpoint_max_inflight": 96
+      },
+      "OFFICIAL_API:POST /open_api/v1.3/smart_plus/adgroup/update/": {
+        "endpoint_max_inflight": 96
+      },
+      "OFFICIAL_API:POST /open_api/v1.3/smart_plus/campaign/create/": {
+        "endpoint_max_inflight": 96
+      },
+      "OFFICIAL_API:POST /open_api/v1.3/smart_plus/campaign/status/update/": {
+        "endpoint_max_inflight": 96
+      },
+      "OFFICIAL_API:POST /open_api/v1.3/smart_plus/campaign/update/": {
+        "endpoint_max_inflight": 96
+      },
+      "ads.get_ads": {
+        "endpoint_max_inflight": 6
+      },
+      "materials.upload_video_file": {
+        "endpoint_max_inflight": 4
+      },
+      "materials.upload_video_url": {
+        "endpoint_max_inflight": 4
+      },
+      "reports.material_breakdown": {
+        "endpoint_calls_per_window": 5
+      }
+    },
+    "sdk_level": "ULTIMATE"
+  },
+  "environment": {
+    "MATERIAL_SDK_UPLOAD_MAX_INFLIGHT": "4",
+    "AD_MANAGEMENT_REQUEST_CONCURRENCY": "50",
+    "ADS_REPORTING_WORKER_CONCURRENCY": "24",
+    "ADS_DIRECTORY_WORKER_CONCURRENCY": "8"
+  },
+  "background_pool": {
+    "capacity": 32,
+    "prefetch_slots": 12
+  },
+  "workers": {
+    "worker-ads-backfill": {
+      "concurrency": 32,
+      "resources": {
+        "requests": {
+          "cpu": "2",
+          "memory": "16Gi"
+        },
+        "limits": {
+          "cpu": "6",
+          "memory": "16Gi"
+        }
+      },
+      "avoid_colocation_with": [
+        "worker-ads-backfill",
+        "worker-ads-reporting"
+      ]
+    },
+    "worker-ads-reporting": {
+      "concurrency": 24,
+      "resources": {
+        "requests": {
+          "cpu": "2",
+          "memory": "8Gi"
+        },
+        "limits": {
+          "cpu": "6",
+          "memory": "10Gi"
+        }
+      },
+      "avoid_colocation_with": [
+        "worker-ads-backfill",
+        "worker-ads-reporting"
+      ]
+    },
+    "worker-ads-live-directory": {
+      "concurrency": 24,
+      "resources": {
+        "requests": {
+          "cpu": "1",
+          "memory": "4Gi"
+        },
+        "limits": {
+          "cpu": "4",
+          "memory": "6Gi"
+        }
+      }
+    },
+    "worker-builds": {
+      "concurrency": 6,
+      "resources": {
+        "requests": {
+          "cpu": "500m",
+          "memory": "1536Mi"
+        },
+        "limits": {
+          "cpu": "4",
+          "memory": "3Gi"
+        }
+      }
+    },
+    "worker-resource": {
+      "concurrency": 8,
+      "resources": {
+        "requests": {
+          "cpu": "1500m",
+          "memory": "4Gi"
+        },
+        "limits": {
+          "cpu": "4",
+          "memory": "8Gi"
+        }
+      }
+    }
+  },
+  "polling": {
+    "sync_dispatch_seconds": 1,
+    "projection_seconds": 5,
+    "worker_prefetch_multiplier": 1,
+    "report_dispatch_window": 36,
+    "request_refill": "immediate after step",
+    "hot_refresh_seconds": 900,
+    "material_refresh_seconds": 900,
+    "directory_full_refresh_seconds": 10800,
+    "hour_trend_cache_seconds": 1800
+  }
+}
