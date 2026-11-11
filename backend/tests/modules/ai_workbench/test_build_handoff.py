@@ -88,6 +88,9 @@ def test_unknown_occurrence_is_never_re_dispatched(monkeypatch: pytest.MonkeyPat
         def one_or_none(self) -> BuildOccurrence:
             return occurrence
 
+        def first(self) -> None:
+            return None
+
     class Session:
         def exec(self, _query: object) -> Result:
             return Result()
@@ -254,6 +257,9 @@ def test_needs_review_aggregate_maps_to_unknown(monkeypatch: pytest.MonkeyPatch)
         def one_or_none(self) -> BuildOccurrence:
             return occurrence
 
+        def first(self) -> None:
+            return None
+
     class Session:
         def exec(self, _query: object) -> Result:
             return Result()
@@ -273,4 +279,35 @@ def test_needs_review_aggregate_maps_to_unknown(monkeypatch: pytest.MonkeyPatch)
     ).record_submission_result(submission_id, state="UNKNOWN")
     assert result is occurrence
     assert occurrence.status == "UNKNOWN"
+
+
+def test_needs_review_with_active_sibling_stays_dispatched(monkeypatch: pytest.MonkeyPatch) -> None:
+    submission_id = uuid4()
+    occurrence = BuildOccurrence(
+        tenant_id=uuid4(), optimizer_id=uuid4(), plan_row_id=uuid4(), request_id=uuid4(),
+        request_digest="h" * 64, strategy_version_id=uuid4(), bc_id="bc-1",
+        advertiser_ids=["adv-1"], provider_connection_id=uuid4(), application_id="app-1",
+        title="剧目", scheduled_at=datetime.now(UTC), status="DISPATCHED", submission_id=submission_id,
+    )
+
+    class Result:
+        def one_or_none(self) -> BuildOccurrence:
+            return occurrence
+
+        def first(self) -> object:
+            return object()
+
+    class Session:
+        def exec(self, _query: object) -> Result:
+            return Result()
+
+        def get(self, _model: object, _identity: object) -> object:
+            return type("Submission", (), {"status": "NEEDS_REVIEW"})()
+
+    monkeypatch.setattr(BuildHandoff, "_authorize", lambda self: None)
+    result = BuildHandoff(
+        Session(), context=type("Context", (), {"tenant_id": occurrence.tenant_id, "actor_id": uuid4()})()
+    ).record_submission_result(submission_id, state="UNKNOWN")
+    assert result is None
+    assert occurrence.status == "DISPATCHED"
 

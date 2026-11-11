@@ -80,3 +80,15 @@ Round 2 verification:
 Round 3 verification:
 
 - Focused handoff tests — `12 passed`.
+
+## Review fix round 4
+
+- `NEEDS_REVIEW` reconciliation now checks the existing submission's active
+  units and queued/running execution steps. An attention result with a live
+  sibling remains DISPATCHED until the aggregate submission is settled.
+- Added a regression covering an UNKNOWN child alongside active sibling work.
+
+Round 4 verification:
+
+- Ruff passed.
+- Focused handoff tests — `13 passed`.

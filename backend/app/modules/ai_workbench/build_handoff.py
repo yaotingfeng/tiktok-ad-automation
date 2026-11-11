@@ -13,7 +13,7 @@ from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID, uuid5
 
-from sqlalchemy import text
+from sqlalchemy import or_, text
 from sqlalchemy.orm import Session as SQLAlchemySession
 from sqlmodel import Session, select
 
@@ -423,6 +423,32 @@ class BuildHandoff:
             # existing finalizer reports an aggregate terminal status there is
             # no occurrence transition to record.
             return None
+        if submission.status == "NEEDS_REVIEW":
+            from app.modules.builds.execution_models import (
+                ExecutionStep,
+                SubmissionUnit,
+            )
+
+            active_unit = self.session.exec(
+                select(SubmissionUnit.unit_id).where(
+                    SubmissionUnit.tenant_id == self.context.tenant_id,
+                    SubmissionUnit.submission_id == submission_id,
+                    SubmissionUnit.disposition == "INCLUDED",
+                    or_(
+                        SubmissionUnit.expanded.is_(False),
+                        SubmissionUnit.dispatch_id.is_not(None),
+                    ),
+                ).limit(1)
+            ).first()
+            active_step = self.session.exec(
+                select(ExecutionStep.id).where(
+                    ExecutionStep.tenant_id == self.context.tenant_id,
+                    ExecutionStep.submission_id == submission_id,
+                    ExecutionStep.status.in_(["QUEUED", "RUNNING"]),
+                ).limit(1)
+            ).first()
+            if active_unit is not None or active_step is not None:
+                return None
         mapped = {
             "COMPLETED": "COMPLETE",
             "PARTIAL": "PARTIAL",
