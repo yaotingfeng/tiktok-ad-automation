@@ -1,0 +1,15 @@
+{
+  "theme": "neutral",
+  "er": {
+    "layoutDirection": "TB",
+    "entityPadding": 12,
+    "fontSize": 13
+  },
+  "flowchart": {
+    "htmlLabels": true
+  },
+  "themeVariables": {
+    "fontFamily": "PingFang SC, -apple-system, sans-serif"
+  },
+  "themeCSS": "foreignObject{overflow:visible}foreignObject div{line-height:normal}"
+}

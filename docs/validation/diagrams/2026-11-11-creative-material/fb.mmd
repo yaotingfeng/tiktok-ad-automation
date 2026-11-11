@@ -1,0 +1,18 @@
+flowchart TD
+  A1["基础报表 ad_id_v2 × 天"] --> A2[("ad_report_day")]
+  M1["素材拆分报表 主素材 × 天"] --> M2[("material_report_day")]
+  M2 --> Q{"帖子缺关联?"}
+  Q -->|否| OK["素材维度可查"]
+  Q -->|是| OV["概览报表 广告 × 主素材"]
+  OV -->|命中| LK[("material_post_link")]
+  OV -->|旧帖查不到| LOC["按广告筛选拆分报表定位"]
+  LOC --> LK
+  LK -->|缺 VID| DIR["定向目录补读(含已删除)"]
+  DIR --> AMR[("ad_material_reference")]
+  AMR --> LK
+  LK --> OK
+  D0["周期目录同步"] --> AMR
+  classDef cost fill:#fde2e2,stroke:#c0392b,color:#000
+  classDef n fill:#f4f6fa,stroke:#8896ab,color:#000
+  class A1,M1,Q,OV,OK,D0,A2,M2,LK,AMR n
+  class LOC,DIR cost

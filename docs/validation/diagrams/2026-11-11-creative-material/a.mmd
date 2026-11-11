@@ -1,0 +1,77 @@
+erDiagram
+  CAMPAIGN ||--o{ ADGROUP : "campaign_id"
+  ADGROUP ||--o{ SMART_AD : "adgroup_id"
+  SMART_AD ||--|{ CREATIVE : "smart_plus_ad_id"
+  CREATIVE }o--o| VIDEO : "video_id (VID)"
+  CREATIVE }o--o{ IMAGE : "web_uri (轮播)"
+  SMART_AD ||--o{ RPT_AD_V2 : "ad_id_v2 = smart_plus_ad_id"
+  CREATIVE ||--o{ RPT_CREATIVE : "ad_id = smart_plus_creative_id"
+  VIDEO ||--o{ RPT_VIDEO : "video_material_id = material_id (MID)"
+  SMART_AD ||--o{ RPT_VIDEO : "ad_id_v2"
+  SMART_AD ||--o{ RPT_OVERVIEW : "smart_plus_ad_id"
+  CREATIVE }o--o{ RPT_OVERVIEW : "指定分组返回创意ID列表"
+  POST ||--o{ RPT_OVERVIEW : "main_material_id (Spark)"
+  POST ||--o{ RPT_BREAKDOWN : "main_material_id (Spark)"
+  VIDEO ||--o{ RPT_BREAKDOWN : "main_material_id = MID (非Spark)"
+  VIDEO ||--o{ RPT_CREATIVE_API : "material_id (MID)"
+  POST }o--o{ RPT_CREATIVE_API : "tiktok_item_ids (Spark帖子列表)"
+
+  CAMPAIGN["系列 CAMPAIGN"] {
+    string campaign_id PK "系列ID"
+  }
+  ADGROUP["广告组 ADGROUP"] {
+    string adgroup_id PK "广告组ID"
+    string campaign_id FK "系列ID"
+  }
+  SMART_AD["Smart+广告 SMART_AD"] {
+    string smart_plus_ad_id PK "广告ID(整条Smart+广告)"
+    string adgroup_id FK "广告组ID"
+  }
+  CREATIVE["创意 CREATIVE"] {
+    string smart_plus_creative_id PK "创意ID"
+    string ad_material_id "广告内素材ID(重建会换)"
+    string smart_plus_ad_id FK "广告ID"
+    string video_id FK "视频ID(VID), 轮播为空"
+    json image_info "图片成员; 可多图"
+  }
+  VIDEO["视频素材 VIDEO"] {
+    string video_id PK "视频ID(VID, v10033g...)"
+    string material_id UK "素材库ID(MID, 纯数字)"
+  }
+  IMAGE["轮播图片 IMAGE"] {
+    string web_uri PK "图片ID"
+  }
+  POST["帖子 POST"] {
+    string post_id PK "帖子ID(tiktok_item_id)"
+  }
+  RPT_AD_V2["基础报表-广告级 RPT_AD_V2"] {
+    string ad_id_v2 FK "广告ID"
+    string adgroup_id FK "广告组ID"
+    string campaign_id FK "系列ID"
+    date stat_time_day "日期"
+  }
+  RPT_CREATIVE["基础报表-创意级 RPT_CREATIVE"] {
+    string ad_id FK "创意ID"
+    string adgroup_id FK "广告组ID"
+    date stat_time_day "日期"
+  }
+  RPT_VIDEO["基础报表-视频级 RPT_VIDEO"] {
+    string video_material_id FK "素材库ID(MID)"
+    string ad_id_v2 FK "广告ID"
+    date stat_time_day "日期; Native收入未支持"
+  }
+  RPT_OVERVIEW["素材概览报表 RPT_OVERVIEW"] {
+    json smart_plus_creative_id "创意ID列表; 限定分组"
+    string smart_plus_ad_id FK "广告ID"
+    string main_material_id FK "主素材ID"
+    string ad_material_id FK "广告内素材ID"
+  }
+  RPT_BREAKDOWN["素材拆分报表 RPT_BREAKDOWN"] {
+    string main_material_id FK "主素材ID(帖子ID或MID)"
+    string main_material_type "主素材类型"
+    date stat_time_day "日期, 无广告ID"
+  }
+  RPT_CREATIVE_API["视频洞察 RPT_CREATIVE_API"] {
+    string material_id FK "素材库ID(MID)"
+    json tiktok_item_ids "该视频的Spark帖子列表"
+  }

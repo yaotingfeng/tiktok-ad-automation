@@ -1,0 +1,22 @@
+flowchart TB
+  DIR["周期目录发布<br/>完整性及来源版本保护"] --> ID[("ad_creative<br/>持久创意身份与完整资产")]
+  DIR --> REF[("ad_material_reference<br/>当前使用位置与本地文件")]
+  AD["基础报表 ad_id_v2 × 当地日<br/>ad_day"] --> LEDGER[("ad_report_day<br/>广告总账")]
+  CR["基础报表 ad_id × 当地日<br/>creative_day"] --> FACT[("creative_report_day<br/>全部创意事实")]
+  FACT --> JOIN["LEFT JOIN 创意身份<br/>未匹配创意仍保留全部金额"]
+  ID --> JOIN
+  JOIN --> PROJ[("creative_material_entity_day<br/>先按作用域筛选再按素材汇总")]
+  LEDGER --> REC["同租户 × 账户 × 广告组 × 当地日<br/>逐指标：广告总账 − 全部创意事实"]
+  FACT --> REC
+  REC -->|"正负差额单列; NULL及来源未就绪保持未知"| PROJ
+  PROJ --> UI["素材页 · 广告详情 · 趋势 · 导出<br/>素材金额 / 未关联创意 / 总账差额"]
+  FACT --> RULE["素材规则读取创意事实及身份<br/>缺口-冲突-缺值-不同步时跳过执行"]
+  ID --> RULE
+  REF --> RULE
+  OFF["退役 material_day / material_links<br/>不自动拉拆分或概览补数<br/>保留非补链业务的目录读取"]
+  classDef added fill:#e8f5e9,stroke:#35864a,color:#111
+  classDef kept fill:#edf2f7,stroke:#73849b,color:#111
+  classDef retired fill:#f4f4f4,stroke:#999,stroke-dasharray:4 3,color:#555
+  class ID,FACT,JOIN,PROJ,REC,CR added
+  class DIR,REF,AD,LEDGER,UI,RULE kept
+  class OFF retired

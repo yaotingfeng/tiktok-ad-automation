@@ -1,0 +1,69 @@
+erDiagram
+  ad_object ||..o{ ad_creative : "同租户账户内 ad_remote_id"
+  ad_object ||..o{ ad_material_reference : "广告当前使用位置"
+  ad_object ||..o{ ad_report_day : "ad_id 存 ad_id_v2"
+  creative_report_day }o..o| ad_creative : "LEFT JOIN creative_id; 未匹配保留"
+  creative_report_day ||..o| creative_material_entity_day : "每个创意事实只记一次"
+  ad_creative o|..o{ creative_material_entity_day : "身份及完整有序 assets"
+  ad_material_reference }o..o| material_file : "local_material_id"
+
+  ad_object["广告目录 ad_object"] {
+    uuid tenant_id PK "租户ID"
+    string advertiser_id PK "账户ID"
+    string kind PK "campaign-adgroup-ad"
+    string remote_id PK "平台对象ID"
+    string parent_remote_id "上级ID"
+  }
+  ad_creative["持久创意身份 ad_creative"] {
+    uuid tenant_id PK "租户ID"
+    string advertiser_id PK "账户ID"
+    string creative_id PK "报表ad_id"
+    string ad_remote_id "所属广告ID"
+    string ad_material_id "广告内素材ID; 可空"
+    string platform_material_id "素材或组合ID; 可空"
+    jsonb assets "有序资产; 多图整项"
+    string identity_status "解析-组合-未知-冲突"
+    boolean deleted "有删除证据仍保留历史"
+    bigint published_version "目录发布版本"
+  }
+  ad_report_day["广告总账 ad_report_day"] {
+    uuid tenant_id PK "租户ID"
+    string advertiser_id PK "账户ID"
+    date stat_date PK "账户当地日"
+    string ad_id PK "整条广告ID"
+    string adgroup_id "广告组ID"
+    string campaign_id "系列ID"
+    decimal metrics "消耗与各收入列"
+  }
+  creative_report_day["创意事实 creative_report_day"] {
+    uuid tenant_id PK "租户ID"
+    string advertiser_id PK "账户ID"
+    date stat_date PK "当地日; 月分区"
+    string creative_id PK "来源基础报表ad_id"
+    string adgroup_id "广告组ID"
+    string campaign_id "系列ID"
+    decimal metrics "同口径; 保留NULL"
+  }
+  creative_material_entity_day["独立素材投影 creative_material_entity_day"] {
+    uuid tenant_id PK "租户ID"
+    string advertiser_id PK "账户ID"
+    date stat_date PK "账户当地日"
+    string fact_key PK "创意事实或差额唯一键"
+    string row_key "素材或未知或差额键"
+    string creative_id "创意ID; 差额为空"
+    string ad_remote_id "所属广告ID; 可空"
+    string adgroup_id "广告组ID"
+    string attribution_status "已关联或未知或差额"
+    string source_status "来源就绪状态"
+    jsonb assets "多图整项金额只记一次"
+  }
+  ad_material_reference["当前素材使用 ad_material_reference"] {
+    uuid id PK "本地主键"
+    string ad_remote_id "所属广告ID"
+    string ad_material_id "当前操作位置"
+    string platform_material_id "素材身份"
+    uuid local_material_id "本地文件关联"
+  }
+  material_file["本地文件 material_file"] {
+    uuid id PK "本地素材文件ID"
+  }
