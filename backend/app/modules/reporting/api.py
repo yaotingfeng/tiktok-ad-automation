@@ -18,7 +18,7 @@ from zoneinfo import ZoneInfo
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import Response
 from redis import Redis, RedisError
-from sqlalchemy import bindparam, func, text
+from sqlalchemy import bindparam, text
 from sqlmodel import Session, col, select
 
 from app.api.deps import CurrentUser, SessionDep
@@ -26,7 +26,6 @@ from app.core.config import settings
 from app.core.context import TenantContext
 from app.integrations.tiktok.contracts.ads import EntityRef
 from app.modules.accounts.models import AdvertiserAccount, TenantBC
-from app.modules.ads.sync_models import AdDirectoryRun
 from app.modules.reporting.ad_materials import (
     AdMaterialsPublic,
     freeze_ad_material_selection,
@@ -727,14 +726,22 @@ def get_ad_sync_status_route(
     balance_version = [(b.advertiser_id, str(b.id)) for b in balances]
     # 启停/预算修改后先回读目录，可能尚无新的日报。目录发布必须独立推进版本，
     # 否则报表页面看不到已回读的最新开关。限定当前租户、BC 及可见账户，未发布不计入。
-    directory_version = session.exec(
-        select(func.max(AdDirectoryRun.published_version)).where(
-            AdDirectoryRun.tenant_id == tenant_id,
-            AdDirectoryRun.bc_id == bc_id,
-            col(AdDirectoryRun.advertiser_id).in_(allowed),
-            AdDirectoryRun.status == "COMPLETE",
-        )
-    ).one()
+    # 每账户只读发布索引的首行；不能为每次轮询扫描已归档前的全部运行历史。
+    # 仍以运行账本为准：空目录发布也推进版本，不能用当前 ad_object 代替。
+    directory_version = session.execute(
+        text("""
+        SELECT max(latest.published_version)
+        FROM unnest(CAST(:advertisers AS text[])) AS a(advertiser_id)
+        CROSS JOIN LATERAL (
+          SELECT r.published_version FROM ad_directory_run r
+          WHERE r.tenant_id=:tenant_id AND r.bc_id=:bc_id
+            AND r.advertiser_id=a.advertiser_id AND r.status='COMPLETE'
+            AND r.published_version IS NOT NULL
+          ORDER BY r.published_version DESC LIMIT 1
+        ) latest
+        """),
+        {"tenant_id": tenant_id, "bc_id": bc_id, "advertisers": list(allowed)},
+    ).scalar_one()
     # 素材发布与失败覆盖也推进版本，页面不能只看广告日的最后成功时间。
     version = sha256(
         repr(

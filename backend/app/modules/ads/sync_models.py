@@ -124,6 +124,17 @@ class AdDirectoryRun(SyncRunFields, table=True):
     )
     __tablename__ = "ad_directory_run"
     __table_args__ = (
+        # 状态轮询逐账户取一个已发布版本，扫描量不随目录运行历史增长。
+        Index(
+            "ix_directory_status_version",
+            "tenant_id",
+            "bc_id",
+            "advertiser_id",
+            text("published_version DESC"),
+            postgresql_where=text(
+                "status='COMPLETE' AND published_version IS NOT NULL"
+            ),
+        ),
         # 归档只查同范围或完整快照的充分覆盖证据；避免逐历史运行扫描JSON。
         Index(
             "ix_directory_archive_partition_cover",

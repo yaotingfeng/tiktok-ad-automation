@@ -238,3 +238,98 @@ def test_directory_publication_advances_status_version_without_new_metrics(
     session.add(run)
     session.flush()
     assert version() != before
+
+
+def test_status_directory_version_reads_one_row_per_account(
+    sync_api, session, sync_seed, record_property
+):
+    """状态轮询不能随已完成目录运行历史增长；空快照仍须推进版本。"""
+    from uuid import uuid4
+
+    from sqlalchemy import event, text
+
+    from app.modules.accounts.routing import freeze_route
+    from app.modules.ads.sync_models import AdDirectoryRun
+
+    route = freeze_route(
+        session,
+        context=sync_seed.context,
+        bc_id="bc-a",
+        connection_id=sync_seed.connection.id,
+    )
+    run = AdDirectoryRun(
+        tenant_id=sync_seed.tenant_id,
+        advertiser_id="acc-1",
+        bc_id="bc-a",
+        actor_id=sync_seed.actor_id,
+        connection_id=sync_seed.connection.id,
+        channel="OFFICIAL_API",
+        frozen_route=route.model_dump(mode="json"),
+        partition_key=uuid4().hex * 2,
+        query={},
+        kind="ad",
+        ad_type="REGULAR",
+        status="COMPLETE",
+        published_version=1,
+    )
+    session.add(run)
+    session.flush()
+    # 不复制唯一自增序号；只有本地测试历史，未播种任何平台对象。
+    columns = [
+        c.name for c in AdDirectoryRun.__table__.columns if c.name != "request_sequence"
+    ]
+    session.execute(
+        text(f"""
+        INSERT INTO ad_directory_run ({",".join(columns)})
+        SELECT {",".join("incoming." + c for c in columns)}
+        FROM ad_directory_run r CROSS JOIN generate_series(2,25001) i
+        CROSS JOIN LATERAL jsonb_populate_record(NULL::ad_directory_run,
+          to_jsonb(r)||jsonb_build_object('id',gen_random_uuid(),
+            'request_id',gen_random_uuid(),'published_version',i)) incoming
+        WHERE r.id=:id
+        """),
+        {"id": run.id},
+    )
+    session.execute(text("ANALYZE ad_directory_run"))
+    captured = []
+
+    def capture(_conn, _cursor, statement, parameters, _context, _many):
+        if "ad_directory_run" in statement and "published_version" in statement:
+            captured.append((statement, parameters))
+
+    connection = session.connection()
+    event.listen(connection, "before_cursor_execute", capture)
+    client, path = sync_api
+    try:
+        response = client.get(
+            f"{path}/ad-sync-status",
+            params={
+                "bc_id": "bc-a",
+                "start_date": "2026-11-11",
+                "end_date": "2026-11-11",
+            },
+        )
+    finally:
+        event.remove(connection, "before_cursor_execute", capture)
+    assert response.status_code == 200, response.text
+    assert len(captured) == 1
+    statement, parameters = captured[0]
+    assert connection.exec_driver_sql(statement, parameters).scalar_one() == 25001
+    plan = connection.exec_driver_sql(
+        "EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) " + statement,
+        parameters,
+    ).scalar_one()[0]
+
+    def scans(node):
+        own = 0
+        if node.get("Relation Name") == "ad_directory_run":
+            own = (
+                node.get("Actual Rows", 0) + node.get("Rows Removed by Filter", 0)
+            ) * node.get("Actual Loops", 1)
+        return own + sum(scans(child) for child in node.get("Plans", []))
+
+    scanned = scans(plan["Plan"])
+    record_property("directory_history_rows", 25001)
+    record_property("directory_rows_scanned", scanned)
+    record_property("directory_probe_ms", plan["Execution Time"])
+    assert scanned <= 2, plan
