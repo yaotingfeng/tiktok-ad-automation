@@ -147,17 +147,6 @@ def finish_delivery(
         step.updated_at = datetime.now(UTC)
         session.add(step)
         submission_id = step.submission_id
-        if read_result is not None and not read_result.needs_more:
-            # AI workbench occurrences reference the same Submission; import
-            # the existing bounded readback result instead of creating a second
-            # reconciliation path or replaying an UNKNOWN submission.
-            from app.modules.ai_workbench.build_handoff import BuildHandoff
-
-            BuildHandoff(session, context=context).record_submission_result(
-                submission_id,
-                state=read_result.state,
-                evidence={"step_id": str(step.id), "revision": revision},
-            )
         attention = (
             step.status == "UNKNOWN" or step.mismatch
         ) and not is_obsolete_readback(session, step)
@@ -170,6 +159,17 @@ def finish_delivery(
         submission_id=submission_id,
         attention=attention,
     )
+    if read_result is not None and not read_result.needs_more:
+        # Finalize first: one submission can contain many units/steps, and a
+        # single readback must not terminalize the occurrence prematurely.
+        from app.modules.ai_workbench.build_handoff import BuildHandoff
+
+        with Session(database_engine) as session, session.begin():
+            BuildHandoff(session, context=context).record_submission_result(
+                submission_id,
+                state=read_result.state,
+                evidence={"step_id": str(step_id), "revision": revision},
+            )
 
 
 def deliver_step(

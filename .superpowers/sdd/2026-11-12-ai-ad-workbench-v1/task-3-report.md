@@ -52,3 +52,20 @@ Fix round verification:
 
 - `uv run ruff check --fix backend/app/modules/ai_workbench/build_handoff.py backend/app/modules/ai_workbench/build_tasks.py backend/app/modules/builds/tasks.py backend/app/core/errors.py backend/tests/modules/ai_workbench/test_build_handoff.py` — passed.
 - Focused handoff tests — `10 passed`.
+
+## Review fix round 2
+
+- Moved the workbench result hook after `finalize_submission` and made it read
+  the aggregate `Submission.status`. Intermediate child-step readbacks now
+  leave a multi-step occurrence DISPATCHED until the existing finalizer reports
+  COMPLETED, PARTIAL, FAILED, or NEEDS_REVIEW.
+- Result transitions are monotonic: a completed occurrence cannot regress to a
+  partial/unknown child result, while a later aggregate completion may close an
+  UNKNOWN occurrence without resubmitting it.
+- Added a focused multi-step regression test covering the nonterminal aggregate
+  guard.
+
+Round 2 verification:
+
+- `uv run ruff check --fix backend/tests/modules/ai_workbench/test_build_handoff.py` — passed.
+- Focused handoff tests — `11 passed`.

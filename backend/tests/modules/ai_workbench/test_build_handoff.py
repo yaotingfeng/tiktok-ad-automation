@@ -92,6 +92,9 @@ def test_unknown_occurrence_is_never_re_dispatched(monkeypatch: pytest.MonkeyPat
         def exec(self, _query: object) -> Result:
             return Result()
 
+        def get(self, _model: object, _identity: object) -> object:
+            return type("Submission", (), {"status": "COMPLETED"})()
+
         def add(self, _row: object) -> None:
             raise AssertionError("UNKNOWN occurrence must not be mutated")
 
@@ -121,6 +124,9 @@ def test_waiting_material_can_be_rearmed_with_a_new_outbox_generation(
     class Session:
         def exec(self, _query: object) -> Result:
             return Result()
+
+        def get(self, _model: object, _identity: object) -> object:
+            return type("Submission", (), {"status": "COMPLETED"})()
 
         def add(self, _row: object) -> None:
             return None
@@ -183,6 +189,9 @@ def test_result_hook_maps_existing_readback_to_complete(monkeypatch: pytest.Monk
         def exec(self, _query: object) -> Result:
             return Result()
 
+        def get(self, _model: object, _identity: object) -> object:
+            return type("Submission", (), {"status": "COMPLETED"})()
+
         def add(self, _row: object) -> None:
             return None
 
@@ -200,4 +209,34 @@ def test_result_hook_maps_existing_readback_to_complete(monkeypatch: pytest.Monk
 
 def test_material_readiness_errors_are_resumable() -> None:
     assert {"material_preparing", "material_unavailable"}.issubset(MATERIAL_WAIT_ERRORS)
+
+
+def test_nonterminal_submission_does_not_terminalize_multi_step_occurrence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    submission_id = uuid4()
+    occurrence = BuildOccurrence(
+        tenant_id=uuid4(), optimizer_id=uuid4(), plan_row_id=uuid4(), request_id=uuid4(),
+        request_digest="f" * 64, strategy_version_id=uuid4(), bc_id="bc-1",
+        advertiser_ids=["adv-1"], provider_connection_id=uuid4(), application_id="app-1",
+        title="剧目", scheduled_at=datetime.now(UTC), status="DISPATCHED", submission_id=submission_id,
+    )
+
+    class Result:
+        def one_or_none(self) -> BuildOccurrence:
+            return occurrence
+
+    class Session:
+        def exec(self, _query: object) -> Result:
+            return Result()
+
+        def get(self, _model: object, _identity: object) -> object:
+            return type("Submission", (), {"status": "RUNNING"})()
+
+    monkeypatch.setattr(BuildHandoff, "_authorize", lambda self: None)
+    result = BuildHandoff(
+        Session(), context=type("Context", (), {"tenant_id": occurrence.tenant_id, "actor_id": uuid4()})()
+    ).record_submission_result(submission_id, state="SUCCEEDED")
+    assert result is None
+    assert occurrence.status == "DISPATCHED"
 

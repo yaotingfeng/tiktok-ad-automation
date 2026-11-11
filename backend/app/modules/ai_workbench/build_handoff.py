@@ -399,8 +399,8 @@ class BuildHandoff:
         state: str,
         evidence: dict[str, Any] | None = None,
     ) -> BuildOccurrence | None:
-        """Result-worker hook translating existing build readback into ledger state."""
-        mapped = {
+        """Import the aggregate submission result after all steps settle."""
+        mapped_step = {
             "SUCCEEDED": "COMPLETE",
             "VERIFIED_REPLACEMENT": "COMPLETE",
             "NOT_REQUIRED": "COMPLETE",
@@ -408,8 +408,27 @@ class BuildHandoff:
             "FAILED": "FAILED",
             "UNKNOWN": "UNKNOWN",
         }.get(state)
-        if mapped is None:
+        if mapped_step is None:
             return None
+        from app.modules.builds.execution_models import Submission
+
+        submission = self.session.get(Submission, submission_id)
+        if submission is None or submission.status not in {
+            "COMPLETED",
+            "PARTIAL",
+            "FAILED",
+            "NEEDS_REVIEW",
+        }:
+            # finish_delivery can be called for every child step; until the
+            # existing finalizer reports an aggregate terminal status there is
+            # no occurrence transition to record.
+            return None
+        mapped = {
+            "COMPLETED": "COMPLETE",
+            "PARTIAL": "PARTIAL",
+            "FAILED": "FAILED",
+            "NEEDS_REVIEW": "PARTIAL",
+        }[submission.status]
         occurrence = self.session.exec(
             select(BuildOccurrence)
             .where(
@@ -420,12 +439,21 @@ class BuildHandoff:
         ).one_or_none()
         if occurrence is None:
             return None
-        if occurrence.status == "UNKNOWN" and mapped == "COMPLETE":
-            # A later readback may close UNKNOWN; it is never treated as a new
-            # submission and therefore cannot create a second platform effect.
-            pass
+        if occurrence.status == "COMPLETE" and mapped != "COMPLETE":
+            return occurrence
+        if occurrence.status == "FAILED" and mapped in {"PARTIAL", "UNKNOWN"}:
+            return occurrence
+        if occurrence.status == "UNKNOWN" and mapped == "DISPATCHED":
+            return occurrence
         occurrence.status = mapped
-        occurrence.evidence = {**occurrence.evidence, "readback": {"state": state, **(evidence or {})}}
+        occurrence.evidence = {
+            **occurrence.evidence,
+            "readback": {
+                "state": state,
+                "aggregate_status": submission.status,
+                **(evidence or {}),
+            },
+        }
         occurrence.updated_at = datetime.now(UTC)
         self.session.add(occurrence)
         self.session.flush()
