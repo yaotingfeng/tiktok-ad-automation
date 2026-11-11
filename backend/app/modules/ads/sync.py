@@ -511,12 +511,20 @@ def _material_stage(session):
 def _creative_material_stage(session):
     name = f"directory_creative_materials_{uuid4().hex}"
     # 创意成员属于观察本身：同素材跨页可能属于不同创意，不能被canonical使用键覆盖。
-    # 独立保留完整观察及其顺序，不改变旧素材表的去重/覆盖语义。
+    # 只继承明确的素材列类型，避免分段退休时把尚未删掉的旧 creative_ids 一并复制。
+    # 本次观察的 CID 和顺序独立保存，不改变素材使用表的去重/覆盖语义。
     session.connection().execute(
         text(f"""
-        CREATE TEMP TABLE {name} (LIKE ad_material_reference INCLUDING DEFAULTS
-            INCLUDING CONSTRAINTS, creative_ids jsonb NOT NULL,
-            creative_asset_ordinal bigint GENERATED ALWAYS AS IDENTITY) ON COMMIT DROP
+        CREATE TEMP TABLE {name} ON COMMIT DROP AS
+            SELECT {_MATERIAL_COLUMNS} FROM ad_material_reference WITH NO DATA
+    """)
+    )
+    session.connection().execute(
+        text(f"""
+        ALTER TABLE {name}
+            ADD COLUMN creative_ids jsonb NOT NULL CHECK (jsonb_typeof(creative_ids)='array'),
+            ADD COLUMN creative_asset_ordinal bigint GENERATED ALWAYS AS IDENTITY,
+            ADD CHECK (published_version > 0)
     """)
     )
     return name
