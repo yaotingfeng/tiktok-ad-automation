@@ -5132,3 +5132,11 @@ c34b生产快速切换约3分28秒完成、锁释放/CI恢复；五分钟仍4.88
 定位到创意报表已完成但素材身份仍未收敛的原因：`creative_day` 发布后没有触发创意 ID 目录补读，健康修复只覆盖广告/广告组/系列；同时报表驱动的定向目录请求没有带删除对象范围。新增独立 identity 目录队列：按账户和平台广告类型分组，每批最多100个未解析且有金额的创意，带 `include_deleted` 与 identity service，使用 background workload，不阻塞报表 SLO；手动/旧 Smart+ 创意按广告 ID回读，Upgraded Smart+按 creative ID 回读。普通报表驱动目录补读也统一包含删除对象范围。
 
 真实 PostgreSQL18/Redis8 隔离回归：目录刷新与创意日报相关 70 项通过；新增用例验证创意 ID、删除范围、identity service、background workload 及租户隔离。Ruff、格式检查、compileall、`git diff --check` 通过；ty 仅保留 jobs.py 原有两项存量诊断。尚未发布生产，待提交并按发布流程上线后观察未映射创意和目录缺口。
+
+## 2026-11-12 — JB-6 / M2 历史核算必要日志（本地候选）
+
+- 唯一产品改动为 Operation Log Evidence 的每账户 IANA 本地日期冻结边界；原选锚策略、核算 start/end、公式、接口和生命周期保持，必要早期 coverage/export 进入既有语义签名。
+- 已批准反例真实 PG 先红（NULL/LOG_CHAIN_INCOMPLETE）、后绿（50/pending）；管理员 API→advance→发布→查询/实际 CSV 下载完整贯通。旧 run/day/依据/CSV bytes 不变，失败重试和来源失效均经真实链路验证。
+- 相关回归 166 passed / 1 既有失败；该 repair-000 时区 fixture KeyError 已用 af24 原文件独立复现。最终新增及日志 worker 专项18 passed，六类真实变异均被拒绝并 cmp 恢复，恢复后新增14 passed；不重复无变化全量检查。
+- M2 自有有限模型78,732来源转移通过，五个负向模型失败；只覆盖声明的有界假设，不冒用M1或宣称全系统证明。Ruff、格式、语法、diff检查通过。
+- 无迁移、外部调用、推送或部署；独立审查/集成待root。专用jb6-pg/jb6-redis及/tmp/jb6-venv保留供复用；命令、源码blob、T/R映射和边界见[JB-6验证记录](validation/2026-11-12-jb6-historical-log-evidence.md)。
