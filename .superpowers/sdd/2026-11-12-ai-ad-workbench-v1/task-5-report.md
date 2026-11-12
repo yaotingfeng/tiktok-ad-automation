@@ -59,3 +59,12 @@ Validation:
 - `.venv/bin/ruff check backend/app/modules/ai_workbench backend/tests/modules/ai_workbench` — passed.
 - `.venv/bin/python -m compileall -q backend/app/modules/ai_workbench backend/tests/modules/ai_workbench` — passed.
 - 11 pure AI workbench regression checks (including terminal-state and scope checks) — passed.
+
+## Reviewer fix round 4
+
+- Repeated cancellation of a CANCELLED task is idempotent when the fence still
+  matches; stale fences continue to fail before terminal handling.
+
+Validation:
+
+- Terminal cancellation/restart and stale-fence regressions, Ruff, compileall and diff checks — passed.

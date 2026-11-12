@@ -57,11 +57,20 @@ def test_terminal_dsh_tasks_are_not_rewritten(monkeypatch):
         monkeypatch.setattr(ai_tasks, "authorize", lambda *args, **kwargs: None)
         monkeypatch.setattr(ai_tasks, "_task", lambda *args, _task=task, **kwargs: _task)
         session = SimpleNamespace(flush=lambda: None)
-        if status == "COMPLETE":
-            assert ai_tasks.cancel_task(
-                session, context=context, optimizer_id=task.optimizer_id,
-                task_id=task.id, fence="current"
-            ).status == "COMPLETE"
+        assert ai_tasks.cancel_task(
+            session, context=context, optimizer_id=task.optimizer_id,
+            task_id=task.id, fence="current"
+        ).status == status
+        if status == "CANCELLED":
+            try:
+                ai_tasks.cancel_task(
+                    session, context=context, optimizer_id=task.optimizer_id,
+                    task_id=task.id, fence="stale"
+                )
+            except Exception as error:
+                assert getattr(error, "code", None) == "ai_task_fence_conflict"
+            else:
+                raise AssertionError("stale cancellation fence must be rejected")
         assert ai_tasks.restart_task(
             session, context=context, optimizer_id=task.optimizer_id, task_id=task.id
         ).status == status

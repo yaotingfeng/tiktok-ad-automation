@@ -32,10 +32,14 @@ def _task(session: Session, *, context: TenantContext, optimizer_id: UUID, task_
     return row
 
 
-def _check_fence(row: DSHReviewTask, *, fence: str) -> None:
+def _check_fence(
+    row: DSHReviewTask, *, fence: str, allow_cancelled_terminal: bool = False
+) -> None:
     if fence != row.fence:
         raise DomainError("ai_task_fence_conflict", "DSH task fence is stale")
-    if row.cancellation_requested:
+    if row.cancellation_requested and not (
+        allow_cancelled_terminal and row.status == "CANCELLED"
+    ):
         raise DomainError("ai_task_cancelled", "DSH task was cancelled")
 
 
@@ -72,7 +76,7 @@ def finish_task(session: Session, *, context: TenantContext, optimizer_id: UUID,
 def cancel_task(session: Session, *, context: TenantContext, optimizer_id: UUID, task_id: UUID, fence: str) -> DSHReviewTask:
     authorize(session, context, write=True)
     row = _task(session, context=context, optimizer_id=optimizer_id, task_id=task_id, lock=True)
-    _check_fence(row, fence=fence)
+    _check_fence(row, fence=fence, allow_cancelled_terminal=True)
     if row.status in {"COMPLETE", "CANCELLED"}:
         return row
     row.cancellation_requested = True
