@@ -15,12 +15,15 @@ from uuid import UUID
 from sqlmodel import Session, col, select
 
 from app.core.context import TenantContext
-from app.modules.ai_workbench.models import AIOptimizer, BuildOccurrence
+from app.modules.ai_workbench.models import (
+    AIOptimizer,
+    AIOptimizerRuleBinding,
+    BuildOccurrence,
+)
 from app.modules.ai_workbench.plans import AIDailyPlanRow
-from app.modules.automation_rules.models import AutomationRuleEvidence, AutomationRule
+from app.modules.automation_rules.models import AutomationRule, AutomationRuleEvidence
 
-
-TERMINAL_BUILD_STATUSES = {"COMPLETE", "FAILED", "UNKNOWN"}
+TERMINAL_BUILD_STATUSES = {"COMPLETE", "PARTIAL", "FAILED", "UNKNOWN"}
 
 
 def _iso(value: Any) -> Any:
@@ -147,7 +150,14 @@ def build_daily_report(
         frozen_ids.update(_evidence_ids_from_value(occurrence.evidence))
 
     plan_public: list[dict[str, Any]] = []
-    target_counts = {"planned": len(rows), "completed": 0, "pending": 0, "failed": 0, "unknown": 0}
+    target_counts = {
+        "planned": len(rows),
+        "completed": 0,
+        "partial": 0,
+        "pending": 0,
+        "failed": 0,
+        "unknown": 0,
+    }
     material = {"requested": 0, "not_requested": 0, "pending": 0, "matched": 0, "unknown": 0}
     build_outcomes: list[dict[str, Any]] = []
     for row in rows:
@@ -155,6 +165,9 @@ def build_daily_report(
         status = occurrence.status if occurrence else "NOT_DISPATCHED"
         if status == "COMPLETE":
             target_counts["completed"] += 1
+        elif status == "PARTIAL":
+            # PARTIAL 已有平台回执，是可观察的终态；不能继续显示为待执行。
+            target_counts["partial"] += 1
         elif status == "UNKNOWN":
             target_counts["unknown"] += 1
         elif status == "FAILED":
@@ -167,8 +180,12 @@ def build_daily_report(
                 material["pending"] += 1
             elif occurrence and occurrence.evidence.get("readback"):
                 material["matched"] += 1
-            elif status == "UNKNOWN":
-                material["unknown"] += 1
+            elif status in {"PARTIAL", "UNKNOWN"}:
+                # 部分成功仍保留平台回读/缺口证据，不能回退成“等待素材”。
+                if occurrence and occurrence.evidence.get("readback"):
+                    material["matched"] += 1
+                else:
+                    material["unknown"] += 1
         else:
             material["not_requested"] += 1
         plan_public.append({
@@ -207,7 +224,25 @@ def build_daily_report(
         }
         for row in day_evidence
     ]
-    rules = session.exec(select(AutomationRule).where(AutomationRule.tenant_id == context.tenant_id)).all()
+    # 下一触发只显示当前优化师仍然启用的规则绑定；同租户其他优化师的规则
+    # 不能因为共享租户而泄露到本优化师的报告。
+    bound_rule_ids = session.exec(
+        select(AIOptimizerRuleBinding.rule_id).where(
+            AIOptimizerRuleBinding.tenant_id == context.tenant_id,
+            AIOptimizerRuleBinding.optimizer_id == optimizer_id,
+            AIOptimizerRuleBinding.active.is_(True),
+        )
+    ).all()
+    rules = (
+        session.exec(
+            select(AutomationRule).where(
+                AutomationRule.tenant_id == context.tenant_id,
+                col(AutomationRule.id).in_(bound_rule_ids),
+            )
+        ).all()
+        if bound_rule_ids
+        else []
+    )
     current = now or datetime.now(UTC)
     report = {
         "tenant_id": str(context.tenant_id),

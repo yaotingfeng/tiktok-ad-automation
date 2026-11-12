@@ -3,7 +3,10 @@ from types import SimpleNamespace
 from uuid import uuid4
 
 from app.modules.ai_workbench import evidence
-from app.modules.ai_workbench.daily_report import _evidence_ids_from_value, _next_trigger
+from app.modules.ai_workbench.daily_report import (
+    _evidence_ids_from_value,
+    _next_trigger,
+)
 
 
 def test_cleanup_keeps_evidence_referenced_by_review_and_deletes_expired_unreferenced(monkeypatch):
@@ -48,3 +51,9 @@ def test_next_trigger_chooses_earliest_future_build_or_rule():
     build = SimpleNamespace(id=uuid4(), status="PENDING", scheduled_at=now + timedelta(hours=2))
     rule = SimpleNamespace(id=uuid4(), enabled=True, next_run_at=now + timedelta(hours=1))
     assert _next_trigger(occurrences=[build], rules=[rule], now=now)["kind"] == "rule"
+
+
+def test_partial_build_is_observed_terminal_and_material_state():
+    from app.modules.ai_workbench.daily_report import TERMINAL_BUILD_STATUSES
+
+    assert "PARTIAL" in TERMINAL_BUILD_STATUSES

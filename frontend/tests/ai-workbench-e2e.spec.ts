@@ -20,3 +20,73 @@ test("切换优化师后每日报告请求保持租户边界", async ({ page }) 
   await expect.poll(() => requested.length).toBeGreaterThan(0)
   expect(requested.every((url) => url.includes(`/api/tenants/${tenant}/`))).toBeTruthy()
 })
+
+test("双租户双优化师切换保留 AUTO/MANUAL、下单路径和回读边界", async ({ page }) => {
+  const tenantA = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+  const tenantB = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
+  const optimizerA = "aaaaaaaa-0000-4000-8000-aaaaaaaaaaaa"
+  const optimizerAManual = "aaaaaaaa-0001-4000-8000-aaaaaaaaaaaa"
+  const optimizerB = "bbbbbbbb-0000-4000-8000-bbbbbbbbbbbb"
+  const reportRequests: string[] = []
+  const optimizerPayload = (id: string, mode: "AUTO" | "MANUAL", name: string) => ({
+    id,
+    name,
+    active: true,
+    version: mode === "AUTO" ? 2 : 3,
+    bc_id: id.startsWith("bbbb") ? "bc-b" : "bc-a",
+    advertiser_ids: [id.startsWith("bbbb") ? "acc-b" : "acc-a"],
+    strategy_version_id: `strategy-${id}`,
+    optimization_mode: mode,
+    rule_ids: [id.startsWith("bbbb") ? "rule-b-account" : "rule-a-account"],
+  })
+  await page.route("**/api/tenants/*/ai-optimizers", async (route) => {
+    const url = route.request().url()
+    if (url.includes(`/tenants/${tenantA}/`)) {
+      await route.fulfill({ json: { items: [optimizerPayload(optimizerA, "AUTO", "自动优化师 A"), optimizerPayload(optimizerAManual, "MANUAL", "手动优化师 A")] } })
+      return
+    }
+    if (url.includes(`/tenants/${tenantB}/`)) {
+      await route.fulfill({ json: { items: [optimizerPayload(optimizerB, "MANUAL", "手动优化师 B")] } })
+      return
+    }
+    await route.fulfill({ status: 404, json: { detail: "cross-tenant optimizer lookup" } })
+  })
+  await page.route("**/api/tenants/*/ai-optimizers/*/daily-report**", async (route) => {
+    const url = route.request().url()
+    reportRequests.push(url)
+    const tenantMatch = url.match(/\/api\/tenants\/([^/]+)\/ai-optimizers\/([^/]+)\//)
+    const reportTenant = tenantMatch?.[1]
+    const reportOptimizer = tenantMatch?.[2]
+    const valid = (reportTenant === tenantA && [optimizerA, optimizerAManual].includes(reportOptimizer ?? "")) || (reportTenant === tenantB && reportOptimizer === optimizerB)
+    if (!valid) {
+      await route.fulfill({ status: 404, json: { detail: "cross-tenant report lookup" } })
+      return
+    }
+    await route.fulfill({ json: {
+      business_date: "2026-11-12",
+      optimization_mode: reportOptimizer === optimizerA ? "AUTO" : "MANUAL",
+      target_progress: { planned: 2, completed: 1, partial: 1, pending: 0, failed: 0, unknown: 0 },
+      schedule_rows: [
+        { id: `${reportOptimizer}-ordered`, title: "需下单剧", status: "PARTIAL", order_materials: true },
+        { id: `${reportOptimizer}-existing`, title: "已有素材剧", status: "COMPLETE", order_materials: false },
+      ],
+      material: { requested: 1, not_requested: 1, pending: 0, matched: 1, unknown: 0 },
+      rule_actions: [{ rule_id: reportOptimizer === optimizerB ? "rule-b-account" : "rule-a-account" }],
+      pending_proposals: [{ id: `${reportOptimizer}-proposal`, status: "PENDING" }],
+      frozen_evidence_ids: [`${reportOptimizer}-evidence`],
+      next_trigger: null,
+    } })
+  })
+
+  await page.goto(`/tenants/${tenantA}/ai-workbench?optimizer_id=${optimizerA}`)
+  await expect(page.getByTestId("ai-daily-report")).toContainText("AUTO")
+  await expect(page.getByTestId("ai-daily-report")).toContainText("部分完成")
+  await expect(page.getByTestId("ai-daily-report")).toContainText("需下单剧")
+  await page.goto(`/tenants/${tenantA}/ai-workbench?optimizer_id=${optimizerAManual}`)
+  await expect(page.getByTestId("ai-daily-report")).toContainText("MANUAL")
+  await page.goto(`/tenants/${tenantB}/ai-workbench?optimizer_id=${optimizerB}`)
+  await expect(page.getByTestId("ai-daily-report")).toContainText("手动优化师 B")
+  await expect.poll(() => reportRequests.length).toBeGreaterThanOrEqual(3)
+  expect(reportRequests.every((url) => url.includes("/api/tenants/") && !url.includes(`/tenants/${tenantA}/ai-optimizers/${optimizerB}/`))).toBeTruthy()
+  expect(reportRequests.some((url) => url.includes(`/tenants/${tenantB}/ai-optimizers/${optimizerB}/`))).toBeTruthy()
+})

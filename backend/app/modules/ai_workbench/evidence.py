@@ -19,7 +19,6 @@ from app.modules.automation_rules.models import (
 )
 from app.modules.automation_rules.schemas import RuleDefinition
 
-
 DEFAULT_EVIDENCE_RETENTION = timedelta(days=365)
 
 
@@ -272,10 +271,15 @@ def cleanup_evidence(
     if limit < 1:
         raise ValueError("limit must be positive")
     now = now or datetime.now(UTC)
-    cutoff = now - timedelta(days=retention_days)
+    # ``retention_until`` already stores the full retention fence (normally
+    # creation time + 365 days).  Subtracting ``retention_days`` here would
+    # apply the same window twice and retain rows for roughly 730 days.
+    # Keep ``retention_days`` as a validated compatibility argument while the
+    # persisted fence remains authoritative.
+    cutoff = now
     protected = referenced_evidence_ids(session, tenant_id=tenant_id)
     query = select(AutomationRuleEvidence).where(
-        col(AutomationRuleEvidence.retention_until) < cutoff
+        col(AutomationRuleEvidence.retention_until) <= cutoff
     ).order_by(col(AutomationRuleEvidence.created_at)).limit(limit)
     if tenant_id is not None:
         query = query.where(AutomationRuleEvidence.tenant_id == tenant_id)

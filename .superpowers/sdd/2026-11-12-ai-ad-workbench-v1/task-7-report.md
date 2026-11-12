@@ -23,3 +23,27 @@ Validation in this environment:
 - PostgreSQL/Redis acceptance and Bun/Playwright integration require the
   repository test services/dependencies and were not claimed as live provider
   validation.
+
+## Reviewer follow-up
+
+- Daily report `next_trigger` now reads only rules linked through an active
+  `AIOptimizerRuleBinding` for the requested tenant and optimizer; inactive or
+  sibling-optimizer rules are excluded.
+- Evidence cleanup now treats each row's persisted `retention_until` as the
+  complete retention fence. The compatibility `retention_days` argument is
+  still validated, but no second 365-day subtraction is applied.
+- `PARTIAL` build outcomes are observed terminal states. They have a dedicated
+  progress count and preserve readback/material evidence instead of appearing
+  as pending work.
+- Backend acceptance coverage now exercises tenant/optimizer route isolation;
+  frontend transport-double E2E covers two tenants, two optimizers, AUTO and
+  MANUAL, order/no-order rows, PARTIAL readback, account-scoped rule IDs and
+  pending proposals. Proposal contract checks retain next immutable optimizer
+  version/request behavior.
+
+Reviewer follow-up validation:
+
+- `uv run --frozen python -m compileall -q backend/app/modules/ai_workbench backend/tests/modules/ai_workbench/test_daily_report.py backend/tests/acceptance/test_ai_workbench_flow.py` — passed.
+- `uv run --frozen ruff check backend/app/modules/ai_workbench/daily_report.py backend/app/modules/ai_workbench/evidence.py backend/tests/modules/ai_workbench/test_daily_report.py backend/tests/acceptance/test_ai_workbench_flow.py` — passed.
+- `git diff --check` — passed.
+- Full PostgreSQL/Redis acceptance and Playwright execution remain environment-dependent; no external provider calls or writes were made.
