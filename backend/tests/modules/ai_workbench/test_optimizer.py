@@ -147,7 +147,9 @@ def seed_optimizer_dependencies(session: Session, context, *, account="acc-1"):
     """Seed only local tenant facts; no provider/API calls are made."""
     connection = TikTokConnection(tenant_id=context.tenant_id, status="ACTIVE")
     session.add(connection)
-    session.add(TenantBC(tenant_id=context.tenant_id, bc_id="bc-a"))
+    # 同一租户可多次播种不同账户，BC 行只建一次。
+    if session.get(TenantBC, (context.tenant_id, "bc-a")) is None:
+        session.add(TenantBC(tenant_id=context.tenant_id, bc_id="bc-a"))
     session.add(
         AdvertiserAccount(
             tenant_id=context.tenant_id,
@@ -157,6 +159,8 @@ def seed_optimizer_dependencies(session: Session, context, *, account="acc-1"):
             remote_status="ENABLE",
         )
     )
+    # 先落父表：bc_account_access 的复合外键不会被 ORM 用来排序插入。
+    session.flush()
     session.add(
         BCAccountAccess(
             tenant_id=context.tenant_id,

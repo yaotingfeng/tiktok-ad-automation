@@ -2,6 +2,24 @@ import { expect, test } from "@playwright/test"
 
 const tenant = "11111111-1111-4111-8111-111111111111"
 const optimizer = "22222222-2222-4222-8222-222222222222"
+const sessionTenants = [
+  tenant,
+  "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+  "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+]
+
+// 登录态与租户列表的 transport double；用例里后注册的路由优先于这里的兜底。
+test.beforeEach(async ({ page }) => {
+  await page.addInitScript(() => localStorage.setItem("access_token", "ai-workbench-test-token"))
+  await page.route("**/api/**", async (route) => {
+    const path = new URL(route.request().url()).pathname
+    if (path === "/api/users/me")
+      return route.fulfill({ json: { id: "44444444-4444-4444-8444-444444444444", username: "ai-test", full_name: "AI 测试", is_active: true, is_superuser: false } })
+    if (path === "/api/me/tenants")
+      return route.fulfill({ json: { items: sessionTenants.map((id, index) => ({ id, name: `租户 ${index + 1}`, active: true, role: "tenant_admin", default_bc_id: "bc-a" })), next_cursor: null, total: sessionTenants.length } })
+    return route.fulfill({ json: { items: [], next_cursor: null, total: 0 } })
+  })
+})
 
 test("AI 每日报告使用 transport double 展示冻结证据和待确认状态", async ({ page }) => {
   await page.route(`**/api/tenants/${tenant}/ai-optimizers`, (route) => route.fulfill({ json: { items: [{ id: optimizer, name: "自动优化师", active: true, version: 2, bc_id: "bc-a", advertiser_ids: ["acc-1"], strategy_version_id: "strategy-2", optimization_mode: "AUTO", rule_ids: [] }] } }))
@@ -86,7 +104,11 @@ test("双租户双优化师切换保留 AUTO/MANUAL、下单路径和回读边�
     versionRequests.push(body)
     await route.fulfill({ json: { ...optimizerPayload(optimizerAManual, "MANUAL", "手动优化师 A"), version: 4, request_id: body.request_id } })
   })
-  await page.route(`**/api/tenants/${tenantA}/ai-optimizers/${optimizerAManual}/proposals/*/accept`, async (route) => {
+  await page.route(`**/api/tenants/${tenantA}/ai-optimizers/${optimizerAManual}/proposals**`, async (route) => {
+    if (route.request().method() === "GET") {
+      await route.fulfill({ json: [{ id: `${optimizerAManual}-proposal`, status: "PENDING", title: "复盘建议" }] })
+      return
+    }
     proposalRequests.push(route.request().url())
     await route.fulfill({ json: { id: `${optimizerAManual}-proposal`, status: "ACCEPTED", published_version_id: "strategy-next" } })
   })
@@ -98,15 +120,26 @@ test("双租户双优化师切换保留 AUTO/MANUAL、下单路径和回读边�
   await page.goto(`/tenants/${tenantA}/ai-workbench?optimizer_id=${optimizerAManual}`)
   await expect(page.getByTestId("ai-daily-report")).toContainText("MANUAL")
   await expect(page.getByTestId("ai-daily-report")).toContainText("部分完成")
-  const nextVersion = await page.request.patch(`/api/tenants/${tenantA}/ai-optimizers/${optimizerAManual}`, { data: { strategy_version_id: "strategy-next", request_id: "next-version-request" } })
-  expect(nextVersion.ok()).toBeTruthy()
-  expect((await nextVersion.json()).version).toBe(4)
-  const accepted = await page.request.post(`/api/tenants/${tenantA}/ai-optimizers/${optimizerAManual}/proposals/${optimizerAManual}-proposal/accept`, { data: { request_id: "proposal-accept-request" } })
-  expect(accepted.ok()).toBeTruthy()
-  expect(proposalRequests).toHaveLength(1)
+  const nextVersion = await page.evaluate(async ({ tenantId, optimizerId }) => {
+    const response = await fetch(`/api/tenants/${tenantId}/ai-optimizers/${optimizerId}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ strategy_version_id: "strategy-next", request_id: "next-version-request" }),
+    })
+    return { ok: response.ok, payload: await response.json() }
+  }, { tenantId: tenantA, optimizerId: optimizerAManual })
+  expect(nextVersion.ok).toBeTruthy()
+  expect(nextVersion.payload.version).toBe(4)
+  await page.goto(`/tenants/${tenantA}/ai-workbench?optimizer_id=${optimizerAManual}&view=pending`)
+  await expect(page.getByTestId("ai-pending-view")).toContainText("复盘建议")
+  await page.getByRole("button", { name: "接受" }).click()
+  await expect.poll(() => proposalRequests.length).toBe(1)
+  expect(proposalRequests[0]).toContain(`/proposals/${optimizerAManual}-proposal/accept`)
   expect(versionRequests).toEqual([{ strategy_version_id: "strategy-next", request_id: "next-version-request" }])
   await page.goto(`/tenants/${tenantB}/ai-workbench?optimizer_id=${optimizerB}`)
-  await expect(page.getByTestId("ai-daily-report")).toContainText("手动优化师 B")
+  // 优化师名称显示在左侧列表；报告卡片只承载模式与冻结证据。
+  await expect(page.getByTestId("ai-workbench-shell")).toContainText("手动优化师 B")
+  await expect(page.getByTestId("ai-daily-report")).toContainText("MANUAL")
   await expect.poll(() => reportRequests.length).toBeGreaterThanOrEqual(3)
   expect(reportRequests.every((url) => url.includes("/api/tenants/") && !url.includes(`/tenants/${tenantA}/ai-optimizers/${optimizerB}/`))).toBeTruthy()
   expect(reportRequests.some((url) => url.includes(`/tenants/${tenantB}/ai-optimizers/${optimizerB}/`))).toBeTruthy()

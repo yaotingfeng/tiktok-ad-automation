@@ -1,5 +1,4 @@
 import { expect, test } from "@playwright/test"
-import { workspaceNavigation } from "../src/components/Sidebar/navigation"
 import { canWriteAutomationContext, mergeAutomationSearch } from "../src/features/automation-rules/AutomationRulesPage"
 import { filterBoundRules } from "../src/features/automation-rules/RuleList"
 import { strategyContextSearch } from "../src/features/strategies/StrategyForm"
@@ -14,6 +13,9 @@ import {
   applyPlanPaste,
   emptyPlanRow,
 } from "../src/features/ai-workbench/DramaPlanGrid"
+// 必须排在其他组件模块之后：先加载 navigation 会让 Playwright 的 Node 端转换
+// 先解析 lucide-react 源码入口，导致 react.createContext 未定义而整份用例无法加载。
+import { workspaceNavigation } from "../src/components/Sidebar/navigation"
 
 test("AI 剧单工作表默认十行并保留 TSV 文本值", () => {
   const rows = Array.from({ length: 10 }, () =>

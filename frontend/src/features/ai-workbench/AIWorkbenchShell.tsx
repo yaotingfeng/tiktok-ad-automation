@@ -76,8 +76,12 @@ export function AIWorkbenchShell({
   const onLoaded = useCallback((items: AIOptimizer[]) => setOptimizers(items), [])
   const selectOptimizer = useCallback((next: string) => {
     // 先在 URL 清空旧记录标识，再由 key 强制丢弃表格、提案和执行详情状态。
-    void navigate({ search: (previous) => buildAIWorkbenchSwitchSearch(previous, next) })
-  }, [navigate])
+    void navigate({
+      to: "/tenants/$tenantId/ai-workbench",
+      params: { tenantId },
+      search: (previous) => buildAIWorkbenchSwitchSearch(previous, next),
+    })
+  }, [navigate, tenantId])
   const hrefFor = useMemo(
     () => (next: View) => buildAIWorkbenchHref(tenantId, optimizerId, next, context),
     [context, optimizerId, tenantId],

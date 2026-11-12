@@ -1,9 +1,10 @@
 import { createFileRoute } from "@tanstack/react-router"
+import type { StrategyScopeSearch } from "./tenants.$tenantId.strategies"
 import { StrategyEditor } from "@/features/strategies/StrategyEditor"
 export const Route = createFileRoute(
   "/_layout/tenants/$tenantId/strategies/new",
 )({
-  validateSearch: (search: Record<string, unknown>) => ({
+  validateSearch: (search: Record<string, unknown>): StrategyScopeSearch & { copy_version_id?: string } => ({
     copy_version_id: typeof search.copy_version_id === "string" ? search.copy_version_id : undefined,
     ai_optimizer_id: typeof search.ai_optimizer_id === "string" ? search.ai_optimizer_id : undefined,
     return_to: typeof search.return_to === "string" ? search.return_to : undefined,
