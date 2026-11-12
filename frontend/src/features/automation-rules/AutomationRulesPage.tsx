@@ -9,6 +9,10 @@ import { RunHistory } from "./RunHistory"
 
 const route = getRouteApi("/_layout/tenants/$tenantId/automation-rules")
 
+export function mergeAutomationSearch<T extends object, P extends object>(previous: T, patch: P): T & P {
+  return { ...previous, ...patch }
+}
+
 export function canWriteAutomationContext(write: boolean, boundContext: boolean) {
   return write && !boundContext
 }
@@ -44,8 +48,7 @@ export function AutomationRulesPage() {
         value={tab}
         onValueChange={(value) =>
           void navigate({
-            search: (previous) => ({
-              ...previous,
+            search: (previous) => mergeAutomationSearch(previous, {
               tab:
                 value === "runs" || value === "confirmations"
                   ? value
@@ -69,7 +72,7 @@ export function AutomationRulesPage() {
             write={canWriteAutomationContext(write, boundContext)}
             openConfirmation={search.confirmation}
             onOpenConfirmation={(confirmation) =>
-              void navigate({ search: (previous) => ({ ...previous, tab: "confirmations", confirmation }) })
+              void navigate({ search: (previous) => mergeAutomationSearch(previous, { tab: "confirmations", confirmation }) })
             }
           />
         </TabsContent>
@@ -77,7 +80,7 @@ export function AutomationRulesPage() {
           <RunHistory
             tenantId={tenantId!}
             openRun={search.run}
-            onOpenRun={(run) => void navigate({ search: (previous) => ({ ...previous, tab: "runs", run }) })}
+            onOpenRun={(run) => void navigate({ search: (previous) => mergeAutomationSearch(previous, { tab: "runs", run }) })}
           />
         </TabsContent>
       </Tabs>

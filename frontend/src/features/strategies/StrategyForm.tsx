@@ -104,6 +104,31 @@ const fieldNames: Record<string, string> = {
   name: "策略名称",
   targeting: "受众定向",
 }
+export function strategyContextSearch({
+  aiOptimizerId,
+  recordId,
+  versionId,
+  returnContext,
+  readonly,
+  scope,
+}: {
+  aiOptimizerId?: string
+  recordId?: string
+  versionId?: string
+  returnContext?: string
+  readonly?: boolean
+  scope?: "bound" | "tenant"
+}) {
+  return {
+    ai_optimizer_id: aiOptimizerId,
+    record_id: recordId,
+    version_id: versionId,
+    return_to: returnContext,
+    readonly,
+    scope,
+  }
+}
+
 export function StrategyForm({
   strategy,
   version,
@@ -416,10 +441,10 @@ export function StrategyForm({
       void navigate({
         to: "/tenants/$tenantId/strategies/$strategyId",
         params: { tenantId: tenantId!, strategyId: completed.strategy_id },
-        search: { bc_id: scope?.bcId || undefined, ai_optimizer_id: aiOptimizerId, record_id: contextRecordId, version_id: completed.id, return_to: returnContext, readonly: aiOptimizerId ? true : undefined, scope: aiOptimizerId ? "bound" : undefined },
+        search: { bc_id: scope?.bcId || undefined, ...strategyContextSearch({ aiOptimizerId, recordId: contextRecordId, versionId: completed.id, returnContext, readonly: aiOptimizerId ? true : undefined, scope: aiOptimizerId ? "bound" : undefined }) },
         replace: true,
       })
-  }, [completed, navigate, tenantId, scope?.bcId, returnContext, aiOptimizerId])
+  }, [completed, navigate, tenantId, scope?.bcId, returnContext, aiOptimizerId, contextRecordId])
   const save = async () => {
     if (
       inFlight.current ||
@@ -1263,7 +1288,7 @@ export function StrategyForm({
               void navigate({
                 to: "/tenants/$tenantId/strategies",
                 params: { tenantId: tenantId! },
-                search: { bc_id: scope?.bcId || undefined, ai_optimizer_id: aiOptimizerId, record_id: contextRecordId, version_id: version?.id, return_to: returnContext, readonly: aiOptimizerId ? true : undefined, scope: aiOptimizerId ? "bound" : undefined },
+                search: { bc_id: scope?.bcId || undefined, ...strategyContextSearch({ aiOptimizerId, recordId: contextRecordId, versionId: version?.id, returnContext, readonly: aiOptimizerId ? true : undefined, scope: aiOptimizerId ? "bound" : undefined }) },
               })
             }
           >

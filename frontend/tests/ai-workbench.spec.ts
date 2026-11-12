@@ -1,7 +1,8 @@
 import { expect, test } from "@playwright/test"
 import { workspaceNavigation } from "../src/components/Sidebar/navigation"
-import { canWriteAutomationContext } from "../src/features/automation-rules/AutomationRulesPage"
+import { canWriteAutomationContext, mergeAutomationSearch } from "../src/features/automation-rules/AutomationRulesPage"
 import { filterBoundRules } from "../src/features/automation-rules/RuleList"
+import { strategyContextSearch } from "../src/features/strategies/StrategyForm"
 import {
   aiWorkbenchMenu,
   aiOccurrenceEndpoint,
@@ -93,4 +94,13 @@ test("优化师没有绑定规则时不会泄露租户规则", () => {
 test("AI 绑定规则上下文禁止待确认写操作", () => {
   expect(canWriteAutomationContext(true, true)).toBe(false)
   expect(canWriteAutomationContext(true, false)).toBe(true)
+})
+
+
+test("策略编辑上下文同时保留优化师、记录、版本和返回地址", () => {
+  expect(strategyContextSearch({ aiOptimizerId: "optimizer-b", recordId: "record-c", versionId: "version-d", returnContext: "/tenants/tenant-a/ai-workbench", readonly: true, scope: "bound" })).toEqual({ ai_optimizer_id: "optimizer-b", record_id: "record-c", version_id: "version-d", return_to: "/tenants/tenant-a/ai-workbench", readonly: true, scope: "bound" })
+})
+
+test("自动规则切换标签合并而不是覆盖 AI 搜索上下文", () => {
+  expect(mergeAutomationSearch({ ai_optimizer_id: "optimizer-b", record_id: "record-c", return_to: "/ai" }, { tab: "runs" })).toEqual({ ai_optimizer_id: "optimizer-b", record_id: "record-c", return_to: "/ai", tab: "runs" })
 })

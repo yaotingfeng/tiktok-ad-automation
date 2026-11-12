@@ -47,3 +47,10 @@ Verification: `python3 -m compileall -q backend/app/modules/ai_workbench/api.py`
 - Added read-only confirmation and context propagation regression assertions.
 
 Verification: `git diff --check` and backend compile check passed. Frontend Bun/Playwright build remains unavailable without Bun/dependencies.
+
+## Fix round 4
+
+- Added the missing `contextRecordId` dependency to strategy save navigation.
+- Centralized strategy-context query construction and automation search merging, with static assertions covering optimizer/record/version/return preservation and tab merge behavior.
+
+Verification: `git diff --check` passed. Frontend build remains unavailable without Bun/dependencies.
