@@ -9,6 +9,7 @@ import { AIOptimizerConfig } from "./AIOptimizerConfig"
 import { AIOptimizerList, type AIOptimizer } from "./AIOptimizerList"
 import { AIOptimizerOverview } from "./AIOptimizerOverview"
 import { AIOptimizerReviews } from "./AIOptimizerReviews"
+import { DailyReport } from "./DailyReport"
 
 type View = "overview" | "schedule" | "execution" | "review" | "pending"
 
@@ -99,7 +100,7 @@ export function AIWorkbenchShell({
           <div className="flex flex-wrap items-center gap-2 rounded-lg border bg-background px-4 py-3 text-sm" data-testid="ai-inherited-context">
             <span className="text-muted-foreground">继承上下文</span><Separator orientation="vertical" className="h-4" /><strong>{selected?.bc_id ? `BC ${selected.bc_id}` : "BC 未读取"}</strong><span className="text-muted-foreground">·</span><span>{selected?.advertiser_ids.join("、") || "账户未读取"}</span><span className="text-muted-foreground">·</span><span>{selected?.strategy_version_id ? `策略 ${selected.strategy_version_id}` : "策略未读取"}</span><span className="ml-auto rounded-full bg-muted px-2 py-0.5 text-xs">{selected?.optimization_mode ?? "—"}</span>
           </div>
-          {view === "overview" && <><AIOptimizerOverview optimizer={selected} /><AIOptimizerConfig tenantId={tenantId} optimizer={selected} recordId={recordId} versionId={versionId} returnContext={context} /></>}
+          {view === "overview" && <><AIOptimizerOverview optimizer={selected} /><AIOptimizerConfig tenantId={tenantId} optimizer={selected} recordId={recordId} versionId={versionId} returnContext={context} />{selected && <DailyReport tenantId={tenantId} optimizerId={selected.id} />}</>}
           {view === "schedule" && <AIWorkbenchPage key={`${tenantId}:${optimizerId}:schedule`} tenantId={tenantId} optimizerId={optimizerId} />}
           {view === "execution" && <ExecutionView tenantId={tenantId} optimizerId={optimizerId} recordId={recordId} />}
           {view === "review" && <AIOptimizerReviews tenantId={tenantId} optimizerId={optimizerId} />}

@@ -134,11 +134,16 @@ def scan_due_rules(session: Session, *, now: datetime) -> int:
 
 
 def cleanup_runs(session: Session, *, now: datetime) -> int:
+    # Rule runs are short-lived, while AI decision snapshots have their own
+    # retention fence and protected review/proposal references.
+    from app.modules.ai_workbench.evidence import cleanup_evidence
+
     result = session.connection().execute(
         delete(AutomationRuleRun).where(
             col(AutomationRuleRun.started_at) < now - RUN_RETENTION
         )
     )
+    cleanup_evidence(session, now=now)
     return int(result.rowcount or 0)
 
 

@@ -100,6 +100,14 @@ def _digest(value: Any) -> str:
     return hashlib.sha256(payload).hexdigest()
 
 
+def _is_uuid(value: str) -> bool:
+    try:
+        UUID(value)
+    except (TypeError, ValueError):
+        return False
+    return True
+
+
 def _reporting_frozen_refs(
     session: Session,
     *,
@@ -437,6 +445,33 @@ def create_review_task(
     request_digest = request_digest or hashlib.sha256(
         json.dumps({"evidence_ids": [str(item) for item in evidence_ids], "knowledge_refs": knowledge_refs or [], "authorization_ttl_seconds": authorization_ttl_seconds, "dsh_task_id": dsh_task_id}, sort_keys=True, default=str).encode()
     ).hexdigest()
+    frozen = frozen_evidence(
+        session,
+        context=context,
+        optimizer=optimizer,
+        version=version,
+        evidence_ids=evidence_ids,
+        knowledge_refs=knowledge_refs,
+    )
+    # A review is a durable reference to its decision snapshot.  Extend the
+    # source row's retention fence as a convenience for operators that run
+    # short-term cleanup before the review itself is archived; cleanup also
+    # checks the frozen JSON references and therefore remains safe on retries.
+    referenced = frozen_evidence_ids(frozen)
+    if referenced:
+        retention_until = _now() + timedelta(days=365)
+        evidence_rows = session.exec(
+            select(AutomationRuleEvidence).where(
+                AutomationRuleEvidence.tenant_id == context.tenant_id,
+                col(AutomationRuleEvidence.optimizer_id) == optimizer.id,
+                col(AutomationRuleEvidence.id).in_(
+                    [UUID(item) for item in referenced if _is_uuid(item)]
+                ),
+            )
+        ).all()
+        for row in evidence_rows:
+            if row.retention_until < retention_until:
+                row.retention_until = retention_until
     task = DSHReviewTask(
         tenant_id=context.tenant_id,
         optimizer_id=optimizer.id,
@@ -446,8 +481,7 @@ def create_review_task(
         authorization_expires_at=_now() + timedelta(seconds=authorization_ttl_seconds),
         fence=uuid4().hex,
         optimizer_version=version.number,
-        evidence=frozen_evidence(session, context=context, optimizer=optimizer, version=version,
-                                 evidence_ids=evidence_ids, knowledge_refs=knowledge_refs),
+        evidence=frozen,
         created_by=context.actor_id,
     )
     session.add(task)

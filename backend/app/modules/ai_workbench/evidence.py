@@ -7,16 +7,20 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import UUID
 
-from sqlmodel import Session
+from sqlmodel import Session, col, select
 
 from app.modules.ai_workbench.rule_binding import RuleBindingScope
 from app.modules.automation_rules.evaluate import Evaluation
 from app.modules.automation_rules.models import (
+    AutomationActionLedger,
     AutomationRule,
     AutomationRuleEvidence,
     AutomationRuleRun,
 )
 from app.modules.automation_rules.schemas import RuleDefinition
+
+
+DEFAULT_EVIDENCE_RETENTION = timedelta(days=365)
 
 
 @dataclass(frozen=True)
@@ -132,7 +136,7 @@ class RuleEvidenceSnapshot:
             skipped_accounts=tuple(skipped_accounts),
             checked_objects=checked_objects or derived_checked_objects,
             hits=hits,
-            retention_until=datetime.now(UTC) + timedelta(days=365),
+            retention_until=datetime.now(UTC) + DEFAULT_EVIDENCE_RETENTION,
         )
 
     def persist(
@@ -164,7 +168,7 @@ class RuleEvidenceSnapshot:
             action_ledger_refs=list(self.action_ledger_refs),
             management_tasks=list(self.management_tasks),
             readback_status=self.readback_status,
-            retention_until=self.retention_until or (datetime.now(UTC) + timedelta(days=365)),
+            retention_until=self.retention_until or (datetime.now(UTC) + DEFAULT_EVIDENCE_RETENTION),
         )
         session.add(row)
         session.flush()
@@ -196,3 +200,96 @@ def persist_evidence(
     row = snapshot.persist(session, run_id=run.id)
     run.evidence_id = row.id
     return row
+
+
+def referenced_evidence_ids(session: Session, *, tenant_id: UUID | None = None) -> set[UUID]:
+    """Return evidence IDs still referenced by durable decision records.
+
+    Rule runs and action ledgers keep direct foreign-key references.  DSH review
+    tasks and proposals store a sanitized frozen JSON document, so those IDs are
+    collected through :func:`frozen_evidence_ids` without loading any live
+    reporting rows.  This lets normal retention cleanup remove transient rows
+    while preserving the explanation for an accepted/rejected decision.
+    """
+    run_query = select(AutomationRuleRun.evidence_id).where(
+        col(AutomationRuleRun.evidence_id).is_not(None)
+    )
+    ledger_query = select(AutomationActionLedger.evidence_id).where(
+        col(AutomationActionLedger.evidence_id).is_not(None)
+    )
+    if tenant_id is not None:
+        run_query = run_query.where(AutomationRuleRun.tenant_id == tenant_id)
+        ledger_query = ledger_query.where(AutomationActionLedger.tenant_id == tenant_id)
+    result = {
+        value for value in session.exec(run_query).all() if isinstance(value, UUID)
+    }
+    result.update(
+        value for value in session.exec(ledger_query).all() if isinstance(value, UUID)
+    )
+
+    # Keep these imports lazy: reviews/proposals import the evidence helpers and
+    # importing their SQLModel tables at module load time would create a cycle.
+    from app.modules.ai_workbench.proposals import AIProposal
+    from app.modules.ai_workbench.reviews import DSHReviewTask, frozen_evidence_ids
+
+    review_query = select(DSHReviewTask).where(DSHReviewTask.evidence.is_not(None))
+    proposal_query = select(AIProposal).where(AIProposal.evidence.is_not(None))
+    if tenant_id is not None:
+        review_query = review_query.where(DSHReviewTask.tenant_id == tenant_id)
+        proposal_query = proposal_query.where(AIProposal.tenant_id == tenant_id)
+    for task in session.exec(review_query).all():
+        for value in frozen_evidence_ids(task.evidence):
+            try:
+                result.add(UUID(value))
+            except (TypeError, ValueError):
+                continue
+    for proposal in session.exec(proposal_query).all():
+        for value in frozen_evidence_ids(proposal.evidence):
+            try:
+                result.add(UUID(value))
+            except (TypeError, ValueError):
+                continue
+    return result
+
+
+def cleanup_evidence(
+    session: Session,
+    *,
+    now: datetime | None = None,
+    retention_days: int = 365,
+    tenant_id: UUID | None = None,
+    limit: int = 500,
+) -> int:
+    """Delete expired, unreferenced rule evidence in a bounded batch.
+
+    ``retention_until`` is the configured retention fence for unreferenced
+    snapshots.  Any snapshot cited by a run, action ledger, review or proposal
+    is always retained, even after its rule is deleted or reporting refreshes
+    the source data.
+    """
+    if retention_days < 1:
+        raise ValueError("retention_days must be positive")
+    if limit < 1:
+        raise ValueError("limit must be positive")
+    now = now or datetime.now(UTC)
+    cutoff = now - timedelta(days=retention_days)
+    protected = referenced_evidence_ids(session, tenant_id=tenant_id)
+    query = select(AutomationRuleEvidence).where(
+        col(AutomationRuleEvidence.retention_until) < cutoff
+    ).order_by(col(AutomationRuleEvidence.created_at)).limit(limit)
+    if tenant_id is not None:
+        query = query.where(AutomationRuleEvidence.tenant_id == tenant_id)
+    removed = 0
+    for row in session.exec(query).all():
+        if row.id in protected:
+            continue
+        session.delete(row)
+        removed += 1
+    session.flush()
+    return removed
+
+
+# Descriptive aliases keep the maintenance entry point discoverable to the
+# automation cleanup task and to operators invoking a one-off cleanup.
+cleanup_rule_evidence = cleanup_evidence
+collect_referenced_evidence_ids = referenced_evidence_ids

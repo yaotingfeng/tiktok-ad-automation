@@ -10,6 +10,7 @@ from sqlmodel import select
 from app.api.deps import CurrentUser, SessionDep
 from app.core.context import TenantContext
 from app.modules.ai_workbench import (
+    daily_report,
     plans_service,
     proposals,
     reviews,
@@ -214,6 +215,23 @@ def list_occurrences(
         statement = statement.where(BuildOccurrence.status == status)
     rows = session.exec(statement).all()
     return [row.model_dump(mode="json") for row in rows]
+
+
+@router.get("/ai-optimizers/{optimizer_id}/daily-report")
+def get_daily_report(
+    tenant_id: UUID,
+    optimizer_id: UUID,
+    session: SessionDep,
+    user: CurrentUser,
+    business_date: date | None = Query(default=None),
+) -> dict:
+    """Return the read-only daily summary built from frozen workbench evidence."""
+    return daily_report.build_daily_report(
+        session,
+        context=_context(user, tenant_id),
+        optimizer_id=optimizer_id,
+        business_date=business_date or date.today(),
+    )
 
 @router.post("/ai-optimizers/{optimizer_id}/reviews", response_model=ReviewResponse, status_code=201)
 def create_review(
