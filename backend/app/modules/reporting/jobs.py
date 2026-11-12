@@ -27,7 +27,6 @@ from app.modules.reporting import (
 )
 from app.modules.reporting.checkpoints import BASIC_KINDS, CheckpointReader
 from app.modules.reporting.directory_refresh import (
-    refresh_report_creative_directory,
     refresh_report_directory,
 )
 from app.modules.reporting.lanes import (
