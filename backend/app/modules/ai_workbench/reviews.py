@@ -155,10 +155,26 @@ def _reporting_frozen_refs(
         version_ids.update(row.evidence_versions or ())
     evidence_versions = session.exec(
         select(ReportEvidenceVersion).where(
-            col(ReportEvidenceVersion.id).in_(version_ids)
+            col(ReportEvidenceVersion.id).in_(version_ids),
+            ReportEvidenceVersion.tenant_id == context.tenant_id,
+            col(ReportEvidenceVersion.advertiser_id).in_(version.advertiser_ids),
         )
     ).all() if version_ids else []
     evidence_by_id = {row.id: row for row in evidence_versions}
+    if len(evidence_by_id) != len(version_ids):
+        raise DomainError(
+            "ai_evidence_not_found",
+            "reporting snapshot evidence is incomplete or outside optimizer scope",
+        )
+    if any(
+        row.tenant_id != context.tenant_id
+        or row.advertiser_id not in set(version.advertiser_ids)
+        for row in evidence_versions
+    ):
+        raise DomainError(
+            "ai_evidence_not_found",
+            "reporting snapshot evidence is outside optimizer scope",
+        )
     refs_by_snapshot: dict[UUID, list[dict[str, Any]]] = {}
     seen_refs: set[tuple[UUID, str | None, UUID]] = set()
 
@@ -309,8 +325,30 @@ def frozen_evidence(
     )
     business_scopes = session.exec(select(BusinessRun).where(BusinessRun.tenant_id == context.tenant_id, BusinessRun.bc_id == version.bc_id).order_by(col(BusinessRun.created_at).desc()).limit(50)).all()
     business_pubs = session.exec(select(BusinessPublication).where(BusinessPublication.tenant_id == context.tenant_id, BusinessPublication.bc_id == version.bc_id)).all()
-    operation_coverage = session.exec(select(OperationCoverage).where(OperationCoverage.tenant_id == context.tenant_id, col(OperationCoverage.advertiser_id).in_(version.advertiser_ids))).all()
-    operation_exports = session.exec(select(OperationExport).where(OperationExport.tenant_id == context.tenant_id, col(OperationExport.advertiser_id).in_(version.advertiser_ids)).order_by(col(OperationExport.observed_at).desc()).limit(50)).all()
+    operation_coverage = session.exec(
+        select(OperationCoverage)
+        .join(
+            OperationExport,
+            (OperationExport.id == OperationCoverage.export_id)
+            & (OperationExport.tenant_id == OperationCoverage.tenant_id)
+            & (OperationExport.advertiser_id == OperationCoverage.advertiser_id),
+        )
+        .where(
+            OperationCoverage.tenant_id == context.tenant_id,
+            col(OperationCoverage.advertiser_id).in_(version.advertiser_ids),
+            OperationExport.bc_id == version.bc_id,
+        )
+    ).all()
+    operation_exports = session.exec(
+        select(OperationExport)
+        .where(
+            OperationExport.tenant_id == context.tenant_id,
+            OperationExport.bc_id == version.bc_id,
+            col(OperationExport.advertiser_id).in_(version.advertiser_ids),
+        )
+        .order_by(col(OperationExport.observed_at).desc())
+        .limit(50)
+    ).all()
     # These snapshots intentionally retain IDs/status/version only.  Full report
     # and business rows remain in their own append-only stores and are referenced.
     frozen = sanitize_public({

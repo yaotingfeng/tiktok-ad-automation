@@ -40,3 +40,22 @@ Validation:
 - `.venv/bin/python -m compileall -q backend/app/modules/ai_workbench backend/tests/modules/ai_workbench` — passed.
 - Pure sanitizer, evidence-ID, malformed-scope and metadata contract checks — passed.
 - Full pytest still requires the repository PostgreSQL test database and Redis service.
+
+## Reviewer fix round 3
+
+- Rule AUTO authorization now normalizes only bounded legacy account payloads,
+  requires explicit `ALL`/`BC`/`ACCOUNTS` semantics, rejects broad `ALL`,
+  requires the corresponding IDs, and limits BC/account scopes to the optimizer
+  scope.
+- Reporting evidence refs are tenant and advertiser filtered; missing or
+  cross-scope `ReportEvidenceVersion` rows fail the review instead of being
+  silently omitted. Operation exports and coverage are BC scoped as well.
+- Public evidence rejects non-finite floats, and terminal DSH tasks preserve
+  COMPLETE/CANCELLED state across cancel/restart calls while stale fences remain
+  enforced.
+
+Validation:
+
+- `.venv/bin/ruff check backend/app/modules/ai_workbench backend/tests/modules/ai_workbench` — passed.
+- `.venv/bin/python -m compileall -q backend/app/modules/ai_workbench backend/tests/modules/ai_workbench` — passed.
+- 11 pure AI workbench regression checks (including terminal-state and scope checks) — passed.

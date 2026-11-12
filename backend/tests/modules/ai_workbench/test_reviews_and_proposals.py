@@ -35,6 +35,38 @@ def test_review_fence_rejects_stale_worker():
         raise AssertionError("stale worker fence must be rejected")
 
 
+def test_terminal_dsh_tasks_are_not_rewritten(monkeypatch):
+    from types import SimpleNamespace
+
+    import app.modules.ai_workbench.ai_tasks as ai_tasks
+
+    context = SimpleNamespace(tenant_id=uuid4(), actor_id=uuid4())
+    for status in ("COMPLETE", "CANCELLED"):
+        task = DSHReviewTask(
+            tenant_id=context.tenant_id,
+            optimizer_id=uuid4(),
+            request_id=uuid4(),
+            dsh_task_id="dsh:test",
+            authorization_expires_at=datetime.now(UTC),
+            fence="current",
+            optimizer_version=1,
+            status=status,
+            cancellation_requested=status == "CANCELLED",
+            created_by=context.actor_id,
+        )
+        monkeypatch.setattr(ai_tasks, "authorize", lambda *args, **kwargs: None)
+        monkeypatch.setattr(ai_tasks, "_task", lambda *args, _task=task, **kwargs: _task)
+        session = SimpleNamespace(flush=lambda: None)
+        if status == "COMPLETE":
+            assert ai_tasks.cancel_task(
+                session, context=context, optimizer_id=task.optimizer_id,
+                task_id=task.id, fence="current"
+            ).status == "COMPLETE"
+        assert ai_tasks.restart_task(
+            session, context=context, optimizer_id=task.optimizer_id, task_id=task.id
+        ).status == status
+
+
 def test_sanitizer_removes_provider_credentials_and_reasoning_trace():
     assert sanitize_public({"provider_password": "x", "provider_credential": "x", "reasoning_trace": "x", "ok": 1}) == {"ok": 1}
 
@@ -57,13 +89,68 @@ def test_sanitizer_handles_secret_key_variants_and_json_scalars():
     assert value["payload"] == "aGVsbG8="
 
 
+def test_sanitizer_rejects_non_finite_floats():
+    for value in (float("nan"), float("inf"), float("-inf")):
+        try:
+            sanitize_public(value)
+        except ValueError as error:
+            assert "non-finite" in str(error)
+        else:
+            raise AssertionError("non-finite evidence values must be rejected")
+
+
 def test_nested_rule_scope_is_checked():
     from decimal import Decimal
 
     from app.modules.ai_workbench.models import AIOptimizerVersion
     from app.modules.ai_workbench.proposals import _within_authorization
     version = AIOptimizerVersion(tenant_id=uuid4(), optimizer_id=uuid4(), number=1, daily_spend=Decimal("1"), priority="BALANCED", bc_id="bc-a", advertiser_ids=["acc-1"], optimization_mode="AUTO", authorization_limits={"rule": True}, strategy_binding_id=uuid4(), request_id=uuid4(), request_digest="x"*64, created_by=uuid4())
-    assert _within_authorization(version=version, kind="rule", before={}, after={"definition": {"accounts": {"advertiser_ids": ["acc-2"]}}})[0] is False
+    assert _within_authorization(
+        version=version,
+        kind="rule",
+        before={},
+        after={
+            "definition": {
+                "accounts": {"mode": "ACCOUNTS", "advertiser_ids": ["acc-2"]}
+            }
+        },
+    )[0] is False
+
+
+def test_rule_auto_authorization_fails_closed_for_broad_or_malformed_scopes():
+    from app.core.errors import DomainError
+    from app.modules.ai_workbench.models import AIOptimizerVersion
+    from app.modules.ai_workbench.proposals import _within_authorization
+
+    version = AIOptimizerVersion(
+        tenant_id=uuid4(), optimizer_id=uuid4(), number=1,
+        daily_spend=Decimal("1"), priority="BALANCED", bc_id="bc-a",
+        advertiser_ids=["acc-1"], optimization_mode="AUTO",
+        authorization_limits={"rule": True}, strategy_binding_id=uuid4(),
+        request_id=uuid4(), request_digest="x" * 64, created_by=uuid4(),
+    )
+    assert _within_authorization(
+        version=version, kind="rule", before={},
+        after={"definition": {"accounts": {"mode": "ALL"}}},
+    ) == (False, "account_scope_not_authorized")
+    for accounts in (
+        {"mode": "BC"},
+        {"mode": "ACCOUNTS"},
+        {"mode": "ACCOUNTS", "advertiser_ids": ["acc-1"], "bc_ids": ["bc-a"]},
+    ):
+        try:
+            _within_authorization(
+                version=version, kind="rule", before={},
+                after={"definition": {"accounts": accounts}},
+            )
+        except DomainError as error:
+            assert error.code == "ai_invalid_rule_scope"
+        else:
+            raise AssertionError("malformed rule account scope must fail closed")
+    assert _within_authorization(
+        version=version, kind="rule", before={},
+        after={"definition": {"accounts": {"mode": "BC", "bc_ids": ["bc-a"]}}},
+    ) == (True, None)
 
 
 def test_malformed_nested_rule_scope_raises_domain_error():

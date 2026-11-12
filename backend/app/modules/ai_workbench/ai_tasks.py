@@ -73,6 +73,8 @@ def cancel_task(session: Session, *, context: TenantContext, optimizer_id: UUID,
     authorize(session, context, write=True)
     row = _task(session, context=context, optimizer_id=optimizer_id, task_id=task_id, lock=True)
     _check_fence(row, fence=fence)
+    if row.status in {"COMPLETE", "CANCELLED"}:
+        return row
     row.cancellation_requested = True
     row.status = "CANCELLED"
     row.finished_at = datetime.now(UTC)
@@ -84,6 +86,8 @@ def restart_task(session: Session, *, context: TenantContext, optimizer_id: UUID
     """Fence a restart so an old worker cannot write a result after recovery."""
     authorize(session, context, write=True)
     row = _task(session, context=context, optimizer_id=optimizer_id, task_id=task_id, lock=True)
+    if row.status in {"COMPLETE", "CANCELLED"}:
+        return row
     row.restart_generation += 1
     row.fence = uuid4().hex
     row.status = "PENDING"

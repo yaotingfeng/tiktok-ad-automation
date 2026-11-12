@@ -175,13 +175,35 @@ def _within_authorization(*, version: AIOptimizerVersion, kind: str, before: dic
         definition = after.get("definition", after)
         if not isinstance(definition, Mapping):
             raise DomainError("ai_invalid_rule_scope", "rule definition scope must be an object")
-        accounts = definition.get("accounts", {})
+        accounts = definition.get("accounts")
+        # Older proposal payloads placed the account IDs directly under the
+        # definition (or omitted ``mode`` inside ``accounts``).  Normalize
+        # those unambiguous, bounded shapes before applying the strict scope
+        # checks; an empty/broad shape still fails closed below.
         if accounts is None:
-            accounts = {}
+            legacy = {
+                key: definition[key]
+                for key in ("bc_ids", "advertiser_ids")
+                if key in definition
+            }
+            if "advertiser_ids" in legacy:
+                legacy["mode"] = "ACCOUNTS"
+            elif "bc_ids" in legacy:
+                legacy["mode"] = "BC"
+            accounts = legacy
+        elif isinstance(accounts, Mapping) and "mode" not in accounts:
+            accounts = dict(accounts)
+            if "advertiser_ids" in accounts:
+                accounts["mode"] = "ACCOUNTS"
+            elif "bc_ids" in accounts:
+                accounts["mode"] = "BC"
         if not isinstance(accounts, Mapping):
             raise DomainError("ai_invalid_rule_scope", "nested rule accounts scope must be an object")
-        advertiser_ids = accounts.get("advertiser_ids", definition.get("advertiser_ids"))
-        bc_ids = accounts.get("bc_ids", definition.get("bc_ids"))
+        mode = accounts.get("mode")
+        if mode not in {"ALL", "BC", "ACCOUNTS"}:
+            raise DomainError("ai_invalid_rule_scope", "account scope mode is required")
+        advertiser_ids = accounts.get("advertiser_ids")
+        bc_ids = accounts.get("bc_ids")
         if advertiser_ids is not None and (
             not isinstance(advertiser_ids, (list, tuple, set))
             or not all(isinstance(item, str) for item in advertiser_ids)
@@ -192,9 +214,25 @@ def _within_authorization(*, version: AIOptimizerVersion, kind: str, before: dic
             or not all(isinstance(item, str) for item in bc_ids)
         ):
             raise DomainError("ai_invalid_rule_scope", "business center scope must be a list")
-        if advertiser_ids is not None and not set(advertiser_ids).issubset(set(version.advertiser_ids)):
+        advertiser_scope = set(advertiser_ids or ())
+        bc_scope = set(bc_ids or ())
+        if mode == "ALL":
+            # ALL ignores account IDs at execution time and would therefore
+            # grant an AUTO proposal a broader scope than the optimizer.
+            return False, "account_scope_not_authorized"
+        if mode == "BC" and not bc_scope:
+            raise DomainError("ai_invalid_rule_scope", "bc scope requires bc_ids")
+        if mode == "ACCOUNTS" and not advertiser_scope:
+            raise DomainError(
+                "ai_invalid_rule_scope", "account scope requires advertiser_ids"
+            )
+        if mode == "BC" and advertiser_scope:
+            raise DomainError("ai_invalid_rule_scope", "bc scope cannot include advertiser_ids")
+        if mode == "ACCOUNTS" and bc_scope:
+            raise DomainError("ai_invalid_rule_scope", "account scope cannot include bc_ids")
+        if advertiser_scope and not advertiser_scope.issubset(set(version.advertiser_ids)):
             return False, "advertiser_scope_out_of_scope"
-        if bc_ids is not None and version.bc_id not in set(bc_ids):
+        if mode == "BC" and bc_scope != {version.bc_id}:
             return False, "bc_scope_out_of_scope"
         if definition.get("bc_id") is not None and not isinstance(definition["bc_id"], str):
             raise DomainError("ai_invalid_rule_scope", "business center scope must be a string")

@@ -7,6 +7,7 @@ returned to an API caller.
 from __future__ import annotations
 
 import base64
+import math
 import re
 from collections.abc import Mapping
 from decimal import Decimal
@@ -64,6 +65,8 @@ def sanitize_public(value: Any) -> Any:
         return str(value)
     if isinstance(value, bytes):
         return base64.b64encode(value).decode("ascii")
+    if isinstance(value, float) and not math.isfinite(value):
+        raise ValueError("non-finite float cannot be serialized as public evidence")
     if hasattr(value, "isoformat") and not isinstance(value, (str, bytes)):
         return value.isoformat()
     # Evidence is persisted in JSONB.  Unknown scalar objects must never make
