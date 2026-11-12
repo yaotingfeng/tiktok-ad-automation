@@ -15,7 +15,9 @@ class OptimizerFields(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     daily_spend: Decimal = Field(gt=0, max_digits=38, decimal_places=12)
-    target_roas: Decimal | None = Field(default=None, gt=0, max_digits=38, decimal_places=12)
+    target_roas: Decimal | None = Field(
+        default=None, gt=0, max_digits=38, decimal_places=12
+    )
     priority: Priority = "BALANCED"
     bc_id: str = Field(min_length=1, max_length=128)
     advertiser_ids: tuple[str, ...] = Field(min_length=1, max_length=1000)
@@ -43,11 +45,17 @@ class OptimizerUpdate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     name: str | None = Field(default=None, min_length=1, max_length=120)
-    daily_spend: Decimal | None = Field(default=None, gt=0, max_digits=38, decimal_places=12)
-    target_roas: Decimal | None = Field(default=None, gt=0, max_digits=38, decimal_places=12)
+    daily_spend: Decimal | None = Field(
+        default=None, gt=0, max_digits=38, decimal_places=12
+    )
+    target_roas: Decimal | None = Field(
+        default=None, gt=0, max_digits=38, decimal_places=12
+    )
     priority: Priority | None = None
     bc_id: str | None = Field(default=None, min_length=1, max_length=128)
-    advertiser_ids: tuple[str, ...] | None = Field(default=None, min_length=1, max_length=1000)
+    advertiser_ids: tuple[str, ...] | None = Field(
+        default=None, min_length=1, max_length=1000
+    )
     optimization_mode: OptimizationMode | None = None
     authorization_limits: dict[str, object] | None = None
     strategy_version_id: UUID | None = None

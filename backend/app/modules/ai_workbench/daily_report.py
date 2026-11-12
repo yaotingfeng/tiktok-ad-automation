@@ -58,10 +58,20 @@ def _next_trigger(
     for row in occurrences:
         if row.status in TERMINAL_BUILD_STATUSES or row.scheduled_at < now:
             continue
-        candidates.append((row.scheduled_at, {"kind": "build", "id": str(row.id), "at": row.scheduled_at}))
+        candidates.append(
+            (
+                row.scheduled_at,
+                {"kind": "build", "id": str(row.id), "at": row.scheduled_at},
+            )
+        )
     for rule in rules:
         if rule.enabled and rule.next_run_at and rule.next_run_at >= now:
-            candidates.append((rule.next_run_at, {"kind": "rule", "id": str(rule.id), "at": rule.next_run_at}))
+            candidates.append(
+                (
+                    rule.next_run_at,
+                    {"kind": "rule", "id": str(rule.id), "at": rule.next_run_at},
+                )
+            )
     if not candidates:
         return None
     return min(candidates, key=lambda item: item[0])[1]
@@ -103,15 +113,19 @@ def build_daily_report(
         .order_by(col(AIDailyPlanRow.position))
     ).all()
     plan_ids = {row.id for row in rows}
-    occurrences = session.exec(
-        select(BuildOccurrence)
-        .where(
-            BuildOccurrence.tenant_id == context.tenant_id,
-            BuildOccurrence.optimizer_id == optimizer_id,
-            col(BuildOccurrence.plan_row_id).in_(plan_ids),
-        )
-        .order_by(col(BuildOccurrence.scheduled_at), col(BuildOccurrence.id))
-    ).all() if plan_ids else []
+    occurrences = (
+        session.exec(
+            select(BuildOccurrence)
+            .where(
+                BuildOccurrence.tenant_id == context.tenant_id,
+                BuildOccurrence.optimizer_id == optimizer_id,
+                col(BuildOccurrence.plan_row_id).in_(plan_ids),
+            )
+            .order_by(col(BuildOccurrence.scheduled_at), col(BuildOccurrence.id))
+        ).all()
+        if plan_ids
+        else []
+    )
     occurrence_by_plan = {row.plan_row_id: row for row in occurrences}
 
     evidence_rows = session.exec(
@@ -126,22 +140,32 @@ def build_daily_report(
     # this business day; no metric is recomputed here.
     day_text = business_date.isoformat()
     day_evidence = [
-        row for row in evidence_rows
-        if day_text in {
+        row
+        for row in evidence_rows
+        if day_text
+        in {
             str(item.get("stat_date"))
-            for item in (row.data_freshness.get("rows", []) if isinstance(row.data_freshness, dict) else [])
+            for item in (
+                row.data_freshness.get("rows", [])
+                if isinstance(row.data_freshness, dict)
+                else []
+            )
             if isinstance(item, dict) and item.get("stat_date")
         }
         or _iso(row.created_at).startswith(day_text)
     ]
 
     review_tasks = session.exec(
-        select(reviews.DSHReviewTask).where(
+        select(reviews.DSHReviewTask)
+        .where(
             reviews.DSHReviewTask.tenant_id == context.tenant_id,
             reviews.DSHReviewTask.optimizer_id == optimizer_id,
-        ).order_by(col(reviews.DSHReviewTask.created_at).desc())
+        )
+        .order_by(col(reviews.DSHReviewTask.created_at).desc())
     ).all()
-    pending = proposals.list_proposals(session, context=context, optimizer_id=optimizer_id, status="PENDING")
+    pending = proposals.list_proposals(
+        session, context=context, optimizer_id=optimizer_id, status="PENDING"
+    )
 
     frozen_ids: set[str] = {str(row.id) for row in day_evidence}
     for task in review_tasks:
@@ -158,7 +182,13 @@ def build_daily_report(
         "failed": 0,
         "unknown": 0,
     }
-    material = {"requested": 0, "not_requested": 0, "pending": 0, "matched": 0, "unknown": 0}
+    material = {
+        "requested": 0,
+        "not_requested": 0,
+        "pending": 0,
+        "matched": 0,
+        "unknown": 0,
+    }
     build_outcomes: list[dict[str, Any]] = []
     for row in rows:
         occurrence = occurrence_by_plan.get(row.id)
@@ -188,28 +218,36 @@ def build_daily_report(
                     material["unknown"] += 1
         else:
             material["not_requested"] += 1
-        plan_public.append({
-            "id": str(row.id),
-            "title": row.title,
-            "position": row.position,
-            "scheduled_time": row.scheduled_time,
-            "order_materials": row.order_materials,
-            "external_drama_id": row.external_drama_id,
-            "occurrence_id": str(occurrence.id) if occurrence else None,
-            "status": status,
-        })
+        plan_public.append(
+            {
+                "id": str(row.id),
+                "title": row.title,
+                "position": row.position,
+                "scheduled_time": row.scheduled_time,
+                "order_materials": row.order_materials,
+                "external_drama_id": row.external_drama_id,
+                "occurrence_id": str(occurrence.id) if occurrence else None,
+                "status": status,
+            }
+        )
         if occurrence:
-            build_outcomes.append({
-                "id": str(occurrence.id),
-                "plan_row_id": str(row.id),
-                "status": occurrence.status,
-                "scheduled_at": occurrence.scheduled_at,
-                "preview_id": str(occurrence.preview_id) if occurrence.preview_id else None,
-                "submission_id": str(occurrence.submission_id) if occurrence.submission_id else None,
-                "error_code": occurrence.error_code,
-                "readback": occurrence.evidence.get("readback", {}),
-                "evidence": occurrence.evidence,
-            })
+            build_outcomes.append(
+                {
+                    "id": str(occurrence.id),
+                    "plan_row_id": str(row.id),
+                    "status": occurrence.status,
+                    "scheduled_at": occurrence.scheduled_at,
+                    "preview_id": str(occurrence.preview_id)
+                    if occurrence.preview_id
+                    else None,
+                    "submission_id": str(occurrence.submission_id)
+                    if occurrence.submission_id
+                    else None,
+                    "error_code": occurrence.error_code,
+                    "readback": occurrence.evidence.get("readback", {}),
+                    "evidence": occurrence.evidence,
+                }
+            )
 
     actions = [
         {
@@ -257,7 +295,9 @@ def build_daily_report(
         "rule_actions": actions,
         "pending_proposals": pending,
         "frozen_evidence_ids": sorted(frozen_ids),
-        "next_trigger": _next_trigger(occurrences=occurrences, rules=rules, now=current),
+        "next_trigger": _next_trigger(
+            occurrences=occurrences, rules=rules, now=current
+        ),
         "generated_at": current,
     }
     return report

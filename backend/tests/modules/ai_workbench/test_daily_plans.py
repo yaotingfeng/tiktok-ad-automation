@@ -161,4 +161,3 @@ def test_daily_plan_rejects_inactive_optimizer_and_missing_active_binding(
         json=_plan_body(active["id"], connection.id),
     )
     assert missing_binding.status_code == 409
-

@@ -94,4 +94,3 @@ def downgrade() -> None:
     op.drop_table("ai_daily_plan_row")
     op.drop_index("ix_ai_daily_plan_optimizer_day", table_name="ai_daily_plan")
     op.drop_table("ai_daily_plan")
-

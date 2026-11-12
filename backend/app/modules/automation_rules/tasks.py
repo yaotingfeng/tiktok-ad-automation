@@ -104,7 +104,11 @@ def scan_due_rules(session: Session, *, now: datetime) -> int:
             )
         ).all()
         payloads = [
-            {"rule_id": str(rule.id), "slot_at": slot.isoformat(), "optimizer_id": str(binding.optimizer_id)}
+            {
+                "rule_id": str(rule.id),
+                "slot_at": slot.isoformat(),
+                "optimizer_id": str(binding.optimizer_id),
+            }
             for binding in bindings
         ]
         if not all_bindings:
@@ -188,7 +192,9 @@ def run_rule(*, tenant_id: str, actor_id: str, payload: dict[str, Any]) -> str:
             rule=rule,
             slot_at=datetime.fromisoformat(data["slot_at"]),
             now=datetime.now(UTC),
-            optimizer_id=UUID(data["optimizer_id"]) if data.get("optimizer_id") else None,
+            optimizer_id=UUID(data["optimizer_id"])
+            if data.get("optimizer_id")
+            else None,
         )
         return run.status
 

@@ -12,7 +12,10 @@ def test_occurrence_worker_rejects_extra_payload_fields() -> None:
             database_engine=object(),
             tenant_id=uuid4(),
             actor_id=uuid4(),
-            payload={"occurrence_id": str(uuid4()), "strategy_version_id": str(uuid4())},
+            payload={
+                "occurrence_id": str(uuid4()),
+                "strategy_version_id": str(uuid4()),
+            },
         )
     assert caught.value.code == "dispatch_payload_invalid"
 

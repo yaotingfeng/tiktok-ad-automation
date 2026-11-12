@@ -133,15 +133,22 @@ def test_scope_validation_fences_each_connection_revision(monkeypatch):
         rule_version=3,
         binding_id=uuid4(),
     )
-    monkeypatch.setattr(rule_binding, "resolve_rule_binding", lambda *_args, **_kwargs: scope)
+    monkeypatch.setattr(
+        rule_binding, "resolve_rule_binding", lambda *_args, **_kwargs: scope
+    )
     assert validate_rule_binding(object(), scope).authorization_revisions[-1][1] == 4
     changed = RuleBindingScope(
         **{
             **scope.__dict__,
-            "authorization_revisions": (("a-1:connection-a", 0), ("a-2:connection-b", 5)),
+            "authorization_revisions": (
+                ("a-1:connection-a", 0),
+                ("a-2:connection-b", 5),
+            ),
         }
     )
-    monkeypatch.setattr(rule_binding, "resolve_rule_binding", lambda *_args, **_kwargs: changed)
+    monkeypatch.setattr(
+        rule_binding, "resolve_rule_binding", lambda *_args, **_kwargs: changed
+    )
     try:
         validate_rule_binding(object(), scope)
     except Exception as error:
@@ -163,7 +170,9 @@ def test_submit_boundary_revalidation_runs_after_preview_preparation():
 
     source = inspect.getsource(_execute_bc)
     assert source.index("prepare_preview(") < source.index("validate_rule_binding(")
-    assert source.index("validate_rule_binding(") < source.index("submit_management_task(")
+    assert source.index("validate_rule_binding(") < source.index(
+        "submit_management_task("
+    )
 
 
 def test_failed_submit_fence_restores_preview_unsupported_details():

@@ -170,4 +170,3 @@ def validate_plan_rows(rows: list[DailyPlanRowInput]) -> list[DailyPlanRowInput]
             raise ValueError("title must be unique within a business day")
         seen.add(key)
     return rows
-

@@ -38,7 +38,9 @@ from app.modules.tenants.models import AuditEvent
 from app.modules.tenants.permissions import require_tenant
 
 
-def _authorize(session: Session, context: TenantContext, *, write: bool = False) -> None:
+def _authorize(
+    session: Session, context: TenantContext, *, write: bool = False
+) -> None:
     require_tenant(
         session,
         actor_id=context.actor_id,
@@ -49,7 +51,9 @@ def _authorize(session: Session, context: TenantContext, *, write: bool = False)
 
 def _digest(payload: dict[str, Any]) -> str:
     return hashlib.sha256(
-        json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
+        json.dumps(
+            payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+        ).encode()
     ).hexdigest()
 
 
@@ -103,7 +107,9 @@ def _validate_strategy(
         )
     ).one_or_none()
     if row is None:
-        raise DomainError("ai_strategy_binding_required", "ai_strategy_binding_required")
+        raise DomainError(
+            "ai_strategy_binding_required", "ai_strategy_binding_required"
+        )
     return row
 
 
@@ -125,7 +131,9 @@ def _guard_shared_strategy(
         .with_for_update()
     ).one_or_none()
     if strategy is None:
-        raise DomainError("ai_strategy_binding_required", "ai_strategy_binding_required")
+        raise DomainError(
+            "ai_strategy_binding_required", "ai_strategy_binding_required"
+        )
     existing = session.exec(
         select(AIOptimizerStrategyBinding)
         .where(
@@ -156,10 +164,14 @@ def _validate_rules(
 
 
 def _fields(body: OptimizerCreate | OptimizerFields) -> OptimizerFields:
-    return OptimizerFields.model_validate(body.model_dump(exclude={"name", "request_id", "active"}))
+    return OptimizerFields.model_validate(
+        body.model_dump(exclude={"name", "request_id", "active"})
+    )
 
 
-def _active_version(session: Session, *, tenant_id: UUID, optimizer: AIOptimizer) -> AIOptimizerVersion:
+def _active_version(
+    session: Session, *, tenant_id: UUID, optimizer: AIOptimizer
+) -> AIOptimizerVersion:
     row = session.exec(
         select(AIOptimizerVersion).where(
             AIOptimizerVersion.tenant_id == tenant_id,
@@ -168,11 +180,15 @@ def _active_version(session: Session, *, tenant_id: UUID, optimizer: AIOptimizer
         )
     ).one_or_none()
     if row is None:
-        raise DomainError("ai_optimizer_version_missing", "ai_optimizer_version_missing")
+        raise DomainError(
+            "ai_optimizer_version_missing", "ai_optimizer_version_missing"
+        )
     return row
 
 
-def _active_binding(session: Session, *, tenant_id: UUID, optimizer_id: UUID) -> AIOptimizerStrategyBinding:
+def _active_binding(
+    session: Session, *, tenant_id: UUID, optimizer_id: UUID
+) -> AIOptimizerStrategyBinding:
     row = session.exec(
         select(AIOptimizerStrategyBinding).where(
             AIOptimizerStrategyBinding.tenant_id == tenant_id,
@@ -181,7 +197,9 @@ def _active_binding(session: Session, *, tenant_id: UUID, optimizer_id: UUID) ->
         )
     ).one_or_none()
     if row is None:
-        raise DomainError("ai_strategy_binding_required", "ai_strategy_binding_required")
+        raise DomainError(
+            "ai_strategy_binding_required", "ai_strategy_binding_required"
+        )
     return row
 
 
@@ -243,7 +261,9 @@ def _sync_bindings(
     return binding
 
 
-def _public(session: Session, optimizer: AIOptimizer, version: AIOptimizerVersion) -> OptimizerPublic:
+def _public(
+    session: Session, optimizer: AIOptimizer, version: AIOptimizerVersion
+) -> OptimizerPublic:
     rules = session.exec(
         select(AIOptimizerRuleBinding.rule_id).where(
             AIOptimizerRuleBinding.tenant_id == optimizer.tenant_id,
@@ -265,7 +285,9 @@ def _public(session: Session, optimizer: AIOptimizer, version: AIOptimizerVersio
         optimization_mode=version.optimization_mode,
         authorization_limits=version.authorization_limits,
         strategy_version_id=(
-            session.get(AIOptimizerStrategyBinding, version.strategy_binding_id).strategy_version_id
+            session.get(
+                AIOptimizerStrategyBinding, version.strategy_binding_id
+            ).strategy_version_id
         ),
         rule_ids=tuple(rules),
         strategy_binding_id=version.strategy_binding_id,
@@ -301,8 +323,17 @@ def create_optimizer(
             raise DomainError("idempotency_conflict", "idempotency_conflict")
         optimizer = _optimizer(session, context, existing.optimizer_id)
         return _public(session, optimizer, existing)
-    _validate_scope(session, tenant_id=context.tenant_id, bc_id=fields.bc_id, advertiser_ids=fields.advertiser_ids)
-    _validate_strategy(session, tenant_id=context.tenant_id, strategy_version_id=fields.strategy_version_id)
+    _validate_scope(
+        session,
+        tenant_id=context.tenant_id,
+        bc_id=fields.bc_id,
+        advertiser_ids=fields.advertiser_ids,
+    )
+    _validate_strategy(
+        session,
+        tenant_id=context.tenant_id,
+        strategy_version_id=fields.strategy_version_id,
+    )
     _validate_rules(session, tenant_id=context.tenant_id, rule_ids=fields.rule_ids)
     optimizer = AIOptimizer(
         tenant_id=context.tenant_id,
@@ -313,7 +344,12 @@ def create_optimizer(
     )
     session.add(optimizer)
     session.flush()
-    _guard_shared_strategy(session, tenant_id=context.tenant_id, optimizer_id=optimizer.id, strategy_version_id=fields.strategy_version_id)
+    _guard_shared_strategy(
+        session,
+        tenant_id=context.tenant_id,
+        optimizer_id=optimizer.id,
+        strategy_version_id=fields.strategy_version_id,
+    )
     binding = _sync_bindings(
         session,
         context=context,
@@ -352,29 +388,52 @@ def create_optimizer(
     return _public(session, optimizer, version)
 
 
-def get_optimizer(session: Session, *, context: TenantContext, optimizer_id: UUID) -> OptimizerPublic:
+def get_optimizer(
+    session: Session, *, context: TenantContext, optimizer_id: UUID
+) -> OptimizerPublic:
     _authorize(session, context)
     optimizer = _optimizer(session, context, optimizer_id)
-    return _public(session, optimizer, _active_version(session, tenant_id=context.tenant_id, optimizer=optimizer))
+    return _public(
+        session,
+        optimizer,
+        _active_version(session, tenant_id=context.tenant_id, optimizer=optimizer),
+    )
 
 
 def list_optimizers(session: Session, *, context: TenantContext) -> OptimizerPage:
     _authorize(session, context)
-    statement = select(AIOptimizer).where(AIOptimizer.tenant_id == context.tenant_id).order_by(col(AIOptimizer.created_at).desc())
+    statement = (
+        select(AIOptimizer)
+        .where(AIOptimizer.tenant_id == context.tenant_id)
+        .order_by(col(AIOptimizer.created_at).desc())
+    )
     rows = session.exec(statement).all()
     return OptimizerPage(
-        items=[_public(session, row, _active_version(session, tenant_id=context.tenant_id, optimizer=row)) for row in rows],
+        items=[
+            _public(
+                session,
+                row,
+                _active_version(session, tenant_id=context.tenant_id, optimizer=row),
+            )
+            for row in rows
+        ],
         total=count_rows(session, statement),
     )
 
 
 def update_optimizer(
-    session: Session, *, context: TenantContext, optimizer_id: UUID, body: OptimizerUpdate
+    session: Session,
+    *,
+    context: TenantContext,
+    optimizer_id: UUID,
+    body: OptimizerUpdate,
 ) -> OptimizerPublic:
     _authorize(session, context, write=True)
     optimizer = _optimizer(session, context, optimizer_id, lock=True)
     current = _active_version(session, tenant_id=context.tenant_id, optimizer=optimizer)
-    current_binding = _active_binding(session, tenant_id=context.tenant_id, optimizer_id=optimizer.id)
+    current_binding = _active_binding(
+        session, tenant_id=context.tenant_id, optimizer_id=optimizer.id
+    )
     current_rules = tuple(
         session.exec(
             select(AIOptimizerRuleBinding.rule_id).where(
@@ -385,7 +444,9 @@ def update_optimizer(
         ).all()
     )
     values = {
-        "daily_spend": body.daily_spend if body.daily_spend is not None else current.daily_spend,
+        "daily_spend": body.daily_spend
+        if body.daily_spend is not None
+        else current.daily_spend,
         "target_roas": (
             body.target_roas
             if "target_roas" in body.model_fields_set
@@ -393,18 +454,43 @@ def update_optimizer(
         ),
         "priority": body.priority or current.priority,
         "bc_id": body.bc_id or current.bc_id,
-        "advertiser_ids": body.advertiser_ids if body.advertiser_ids is not None else tuple(current.advertiser_ids),
+        "advertiser_ids": body.advertiser_ids
+        if body.advertiser_ids is not None
+        else tuple(current.advertiser_ids),
         "optimization_mode": body.optimization_mode or current.optimization_mode,
-        "authorization_limits": body.authorization_limits if body.authorization_limits is not None else current.authorization_limits,
-        "strategy_version_id": body.strategy_version_id or current_binding.strategy_version_id,
+        "authorization_limits": body.authorization_limits
+        if body.authorization_limits is not None
+        else current.authorization_limits,
+        "strategy_version_id": body.strategy_version_id
+        or current_binding.strategy_version_id,
         "rule_ids": body.rule_ids if body.rule_ids is not None else current_rules,
     }
     fields = OptimizerFields.model_validate(values)
-    _validate_scope(session, tenant_id=context.tenant_id, bc_id=fields.bc_id, advertiser_ids=fields.advertiser_ids)
-    _validate_strategy(session, tenant_id=context.tenant_id, strategy_version_id=fields.strategy_version_id)
+    _validate_scope(
+        session,
+        tenant_id=context.tenant_id,
+        bc_id=fields.bc_id,
+        advertiser_ids=fields.advertiser_ids,
+    )
+    _validate_strategy(
+        session,
+        tenant_id=context.tenant_id,
+        strategy_version_id=fields.strategy_version_id,
+    )
     _validate_rules(session, tenant_id=context.tenant_id, rule_ids=fields.rule_ids)
-    _guard_shared_strategy(session, tenant_id=context.tenant_id, optimizer_id=optimizer.id, strategy_version_id=fields.strategy_version_id)
-    payload = {"kind": "update", "optimizer_id": str(optimizer.id), "name": body.name, "active": body.active, **fields.model_dump(mode="json")}
+    _guard_shared_strategy(
+        session,
+        tenant_id=context.tenant_id,
+        optimizer_id=optimizer.id,
+        strategy_version_id=fields.strategy_version_id,
+    )
+    payload = {
+        "kind": "update",
+        "optimizer_id": str(optimizer.id),
+        "name": body.name,
+        "active": body.active,
+        **fields.model_dump(mode="json"),
+    }
     digest = _digest(payload)
     request_id = body.request_id
     _request_lock(session, tenant_id=context.tenant_id, request_id=request_id)
@@ -453,7 +539,11 @@ def update_optimizer(
             actor_id=context.actor_id,
             action="ai_optimizer.update",
             target_id=str(optimizer.id),
-            details={"request_id": str(request_id), "digest": digest, "version": version.number},
+            details={
+                "request_id": str(request_id),
+                "digest": digest,
+                "version": version.number,
+            },
         )
     )
     session.flush()

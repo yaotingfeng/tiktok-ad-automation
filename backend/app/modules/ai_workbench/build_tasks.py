@@ -34,8 +34,10 @@ def dispatch_occurrence_task(
         raise DomainError("dispatch_payload_invalid", "AI 搭建发生记录投递参数无效")
     try:
         occurrence_id = UUID(payload["occurrence_id"])
-    except (TypeError, ValueError, AttributeError):
-        raise DomainError("dispatch_payload_invalid", "AI 搭建发生记录标识无效") from None
+    except TypeError, ValueError, AttributeError:
+        raise DomainError(
+            "dispatch_payload_invalid", "AI 搭建发生记录标识无效"
+        ) from None
     context = TenantContext(tenant_id=tenant_id, actor_id=actor_id, role="operator")
     with Session(database_engine) as session, session.begin():
         BuildHandoff(session, context=context).dispatch_occurrence(occurrence_id)
@@ -54,7 +56,11 @@ def dispatch_due_plans(*, database_engine: Any = engine, limit: int = 100) -> in
     with Session(database_engine) as session, session.begin():
         rows = session.exec(
             select(AIDailyPlanRow)
-            .order_by(col(AIDailyPlanRow.business_date), col(AIDailyPlanRow.scheduled_time), col(AIDailyPlanRow.id))
+            .order_by(
+                col(AIDailyPlanRow.business_date),
+                col(AIDailyPlanRow.scheduled_time),
+                col(AIDailyPlanRow.id),
+            )
             .limit(limit)
             .with_for_update(skip_locked=True)
         ).all()
@@ -68,7 +74,11 @@ def dispatch_due_plans(*, database_engine: Any = engine, limit: int = 100) -> in
             ).one_or_none()
             if optimizer is None or not optimizer.active:
                 if optimizer is not None:
-                    context = TenantContext(tenant_id=row.tenant_id, actor_id=optimizer.created_by, role="operator")
+                    context = TenantContext(
+                        tenant_id=row.tenant_id,
+                        actor_id=optimizer.created_by,
+                        role="operator",
+                    )
                     BuildHandoff(session, context=context).create_occurrence(
                         row.id,
                         uuid5(OCCURRENCE_NAMESPACE, f"skip:{row.id}:inactive"),
@@ -83,7 +93,9 @@ def dispatch_due_plans(*, database_engine: Any = engine, limit: int = 100) -> in
                 OCCURRENCE_NAMESPACE,
                 f"scheduled:{row.id}:{scheduled_at.isoformat()}:{optimizer.latest_version}",
             )
-            context = TenantContext(tenant_id=row.tenant_id, actor_id=actor_id, role="operator")
+            context = TenantContext(
+                tenant_id=row.tenant_id, actor_id=actor_id, role="operator"
+            )
             handoff = BuildHandoff(session, context=context)
             if scheduled_at > now:
                 occurrence = handoff.create_occurrence(
@@ -141,4 +153,3 @@ def dispatch_occurrence_celery(
 @celery_app.task(name=PLAN_DISPATCH_TASK, time_limit=60, soft_time_limit=55)  # type: ignore[untyped-decorator]
 def dispatch_due_plans_task() -> int:
     return dispatch_due_plans(database_engine=engine)
-

@@ -248,21 +248,25 @@ def _freshness_metadata(
     """Capture per-account stat date, timezone, source and publication watermark."""
     if not accounts:
         return [], {}
-    rows = session.connection().execute(
-        text(
-            "SELECT advertiser_id, report_kind, stat_date, status, last_success_at, "
-            "observed_at, publication_version FROM report_sync_state "
-            "WHERE tenant_id=:t AND advertiser_id = ANY(:advs) "
-            "AND report_kind = ANY(:kinds) AND stat_date >= :since "
-            "ORDER BY advertiser_id, report_kind, stat_date"
-        ),
-        {
-            "t": tenant_id,
-            "advs": list(accounts),
-            "kinds": list(report_kinds),
-            "since": now.date() - timedelta(days=31),
-        },
-    ).all()
+    rows = (
+        session.connection()
+        .execute(
+            text(
+                "SELECT advertiser_id, report_kind, stat_date, status, last_success_at, "
+                "observed_at, publication_version FROM report_sync_state "
+                "WHERE tenant_id=:t AND advertiser_id = ANY(:advs) "
+                "AND report_kind = ANY(:kinds) AND stat_date >= :since "
+                "ORDER BY advertiser_id, report_kind, stat_date"
+            ),
+            {
+                "t": tenant_id,
+                "advs": list(accounts),
+                "kinds": list(report_kinds),
+                "since": now.date() - timedelta(days=31),
+            },
+        )
+        .all()
+    )
     freshness: list[dict[str, Any]] = []
     versions: dict[str, int] = {}
     for row in rows:
@@ -563,8 +567,12 @@ def load_inputs(
         skipped.extend(ledger_skipped)
     if not accounts:
         return Inputs(
-            accounts={}, entities={}, facts={}, skipped_accounts=skipped,
-            freshness=freshness, publication_versions=publication_versions,
+            accounts={},
+            entities={},
+            facts={},
+            skipped_accounts=skipped,
+            freshness=freshness,
+            publication_versions=publication_versions,
         )
     ranges: list[str] = sorted(
         {

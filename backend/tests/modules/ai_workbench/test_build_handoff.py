@@ -40,7 +40,11 @@ def test_scheduled_occurrence_is_timezone_aware_and_preserves_leading_zero_id() 
 
 
 def test_occurrence_digest_is_stable_for_frozen_snapshot() -> None:
-    payload = {"optimizer_id": str(uuid4()), "advertiser_ids": ["a-1"], "strategy": "s-1"}
+    payload = {
+        "optimizer_id": str(uuid4()),
+        "advertiser_ids": ["a-1"],
+        "strategy": "s-1",
+    }
     assert _digest(payload) == _digest(dict(payload))
     assert _digest({**payload, "advertiser_ids": ["a-2"]}) != _digest(payload)
 
@@ -67,7 +71,9 @@ def test_occurrence_status_contract_and_frozen_scope() -> None:
     assert occurrence.strategy_version_id == strategy_id
 
 
-def test_unknown_occurrence_is_never_re_dispatched(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_unknown_occurrence_is_never_re_dispatched(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     occurrence = BuildOccurrence(
         tenant_id=uuid4(),
         optimizer_id=uuid4(),
@@ -105,7 +111,12 @@ def test_unknown_occurrence_is_never_re_dispatched(monkeypatch: pytest.MonkeyPat
             raise AssertionError("UNKNOWN occurrence must not be flushed")
 
     monkeypatch.setattr(BuildHandoff, "_authorize", lambda self: None)
-    result = BuildHandoff(Session(), context=type("Context", (), {"tenant_id": occurrence.tenant_id, "actor_id": uuid4()})()).dispatch_occurrence(occurrence.id)
+    result = BuildHandoff(
+        Session(),
+        context=type(
+            "Context", (), {"tenant_id": occurrence.tenant_id, "actor_id": uuid4()}
+        )(),
+    ).dispatch_occurrence(occurrence.id)
     assert result.status == "UNKNOWN"
 
 
@@ -113,10 +124,19 @@ def test_waiting_material_can_be_rearmed_with_a_new_outbox_generation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     occurrence = BuildOccurrence(
-        tenant_id=uuid4(), optimizer_id=uuid4(), plan_row_id=uuid4(), request_id=uuid4(),
-        request_digest="c" * 64, strategy_version_id=uuid4(), bc_id="bc-1",
-        advertiser_ids=["adv-1"], provider_connection_id=uuid4(), application_id="app-1",
-        title="剧目", scheduled_at=datetime.now(UTC), status="WAITING_MATERIAL",
+        tenant_id=uuid4(),
+        optimizer_id=uuid4(),
+        plan_row_id=uuid4(),
+        request_id=uuid4(),
+        request_digest="c" * 64,
+        strategy_version_id=uuid4(),
+        bc_id="bc-1",
+        advertiser_ids=["adv-1"],
+        provider_connection_id=uuid4(),
+        application_id="app-1",
+        title="剧目",
+        scheduled_at=datetime.now(UTC),
+        status="WAITING_MATERIAL",
         evidence={"retry_generation": 2},
     )
 
@@ -143,7 +163,10 @@ def test_waiting_material_can_be_rearmed_with_a_new_outbox_generation(
         lambda *args, **kwargs: uuid4(),
     )
     result = BuildHandoff(
-        Session(), context=type("Context", (), {"tenant_id": occurrence.tenant_id, "actor_id": uuid4()})()
+        Session(),
+        context=type(
+            "Context", (), {"tenant_id": occurrence.tenant_id, "actor_id": uuid4()}
+        )(),
     ).schedule_retry(occurrence.id)
     assert result.status == "PENDING"
     assert result.evidence["retry_generation"] == 3
@@ -153,10 +176,19 @@ def test_unknown_cannot_be_marked_dispatched_without_explicit_retry(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     occurrence = BuildOccurrence(
-        tenant_id=uuid4(), optimizer_id=uuid4(), plan_row_id=uuid4(), request_id=uuid4(),
-        request_digest="d" * 64, strategy_version_id=uuid4(), bc_id="bc-1",
-        advertiser_ids=["adv-1"], provider_connection_id=uuid4(), application_id="app-1",
-        title="剧目", scheduled_at=datetime.now(UTC), status="UNKNOWN",
+        tenant_id=uuid4(),
+        optimizer_id=uuid4(),
+        plan_row_id=uuid4(),
+        request_id=uuid4(),
+        request_digest="d" * 64,
+        strategy_version_id=uuid4(),
+        bc_id="bc-1",
+        advertiser_ids=["adv-1"],
+        provider_connection_id=uuid4(),
+        application_id="app-1",
+        title="剧目",
+        scheduled_at=datetime.now(UTC),
+        status="UNKNOWN",
     )
 
     class Result:
@@ -170,18 +202,33 @@ def test_unknown_cannot_be_marked_dispatched_without_explicit_retry(
     monkeypatch.setattr(BuildHandoff, "_authorize", lambda self: None)
     with pytest.raises(DomainError) as caught:
         BuildHandoff(
-            Session(), context=type("Context", (), {"tenant_id": occurrence.tenant_id, "actor_id": uuid4()})()
+            Session(),
+            context=type(
+                "Context", (), {"tenant_id": occurrence.tenant_id, "actor_id": uuid4()}
+            )(),
         ).reconcile_occurrence(occurrence.id, state="DISPATCHED")
     assert getattr(caught.value, "code", None) == "ai_build_occurrence_retry_required"
 
 
-def test_result_hook_maps_existing_readback_to_complete(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_result_hook_maps_existing_readback_to_complete(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     submission_id = uuid4()
     occurrence = BuildOccurrence(
-        tenant_id=uuid4(), optimizer_id=uuid4(), plan_row_id=uuid4(), request_id=uuid4(),
-        request_digest="e" * 64, strategy_version_id=uuid4(), bc_id="bc-1",
-        advertiser_ids=["adv-1"], provider_connection_id=uuid4(), application_id="app-1",
-        title="剧目", scheduled_at=datetime.now(UTC), status="DISPATCHED", submission_id=submission_id,
+        tenant_id=uuid4(),
+        optimizer_id=uuid4(),
+        plan_row_id=uuid4(),
+        request_id=uuid4(),
+        request_digest="e" * 64,
+        strategy_version_id=uuid4(),
+        bc_id="bc-1",
+        advertiser_ids=["adv-1"],
+        provider_connection_id=uuid4(),
+        application_id="app-1",
+        title="剧目",
+        scheduled_at=datetime.now(UTC),
+        status="DISPATCHED",
+        submission_id=submission_id,
     )
 
     class Result:
@@ -203,8 +250,13 @@ def test_result_hook_maps_existing_readback_to_complete(monkeypatch: pytest.Monk
 
     monkeypatch.setattr(BuildHandoff, "_authorize", lambda self: None)
     result = BuildHandoff(
-        Session(), context=type("Context", (), {"tenant_id": occurrence.tenant_id, "actor_id": uuid4()})()
-    ).record_submission_result(submission_id, state="SUCCEEDED", evidence={"remote_id": "123"})
+        Session(),
+        context=type(
+            "Context", (), {"tenant_id": occurrence.tenant_id, "actor_id": uuid4()}
+        )(),
+    ).record_submission_result(
+        submission_id, state="SUCCEEDED", evidence={"remote_id": "123"}
+    )
     assert result is occurrence
     assert occurrence.status == "COMPLETE"
     assert occurrence.evidence["readback"]["remote_id"] == "123"
@@ -219,10 +271,20 @@ def test_nonterminal_submission_does_not_terminalize_multi_step_occurrence(
 ) -> None:
     submission_id = uuid4()
     occurrence = BuildOccurrence(
-        tenant_id=uuid4(), optimizer_id=uuid4(), plan_row_id=uuid4(), request_id=uuid4(),
-        request_digest="f" * 64, strategy_version_id=uuid4(), bc_id="bc-1",
-        advertiser_ids=["adv-1"], provider_connection_id=uuid4(), application_id="app-1",
-        title="剧目", scheduled_at=datetime.now(UTC), status="DISPATCHED", submission_id=submission_id,
+        tenant_id=uuid4(),
+        optimizer_id=uuid4(),
+        plan_row_id=uuid4(),
+        request_id=uuid4(),
+        request_digest="f" * 64,
+        strategy_version_id=uuid4(),
+        bc_id="bc-1",
+        advertiser_ids=["adv-1"],
+        provider_connection_id=uuid4(),
+        application_id="app-1",
+        title="剧目",
+        scheduled_at=datetime.now(UTC),
+        status="DISPATCHED",
+        submission_id=submission_id,
     )
 
     class Result:
@@ -238,19 +300,34 @@ def test_nonterminal_submission_does_not_terminalize_multi_step_occurrence(
 
     monkeypatch.setattr(BuildHandoff, "_authorize", lambda self: None)
     result = BuildHandoff(
-        Session(), context=type("Context", (), {"tenant_id": occurrence.tenant_id, "actor_id": uuid4()})()
+        Session(),
+        context=type(
+            "Context", (), {"tenant_id": occurrence.tenant_id, "actor_id": uuid4()}
+        )(),
     ).record_submission_result(submission_id, state="SUCCEEDED")
     assert result is None
     assert occurrence.status == "DISPATCHED"
 
 
-def test_needs_review_aggregate_maps_to_unknown(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_needs_review_aggregate_maps_to_unknown(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     submission_id = uuid4()
     occurrence = BuildOccurrence(
-        tenant_id=uuid4(), optimizer_id=uuid4(), plan_row_id=uuid4(), request_id=uuid4(),
-        request_digest="g" * 64, strategy_version_id=uuid4(), bc_id="bc-1",
-        advertiser_ids=["adv-1"], provider_connection_id=uuid4(), application_id="app-1",
-        title="剧目", scheduled_at=datetime.now(UTC), status="DISPATCHED", submission_id=submission_id,
+        tenant_id=uuid4(),
+        optimizer_id=uuid4(),
+        plan_row_id=uuid4(),
+        request_id=uuid4(),
+        request_digest="g" * 64,
+        strategy_version_id=uuid4(),
+        bc_id="bc-1",
+        advertiser_ids=["adv-1"],
+        provider_connection_id=uuid4(),
+        application_id="app-1",
+        title="剧目",
+        scheduled_at=datetime.now(UTC),
+        status="DISPATCHED",
+        submission_id=submission_id,
     )
 
     class Result:
@@ -275,19 +352,34 @@ def test_needs_review_aggregate_maps_to_unknown(monkeypatch: pytest.MonkeyPatch)
 
     monkeypatch.setattr(BuildHandoff, "_authorize", lambda self: None)
     result = BuildHandoff(
-        Session(), context=type("Context", (), {"tenant_id": occurrence.tenant_id, "actor_id": uuid4()})()
+        Session(),
+        context=type(
+            "Context", (), {"tenant_id": occurrence.tenant_id, "actor_id": uuid4()}
+        )(),
     ).record_submission_result(submission_id, state="UNKNOWN")
     assert result is occurrence
     assert occurrence.status == "UNKNOWN"
 
 
-def test_needs_review_with_active_sibling_stays_dispatched(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_needs_review_with_active_sibling_stays_dispatched(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     submission_id = uuid4()
     occurrence = BuildOccurrence(
-        tenant_id=uuid4(), optimizer_id=uuid4(), plan_row_id=uuid4(), request_id=uuid4(),
-        request_digest="h" * 64, strategy_version_id=uuid4(), bc_id="bc-1",
-        advertiser_ids=["adv-1"], provider_connection_id=uuid4(), application_id="app-1",
-        title="剧目", scheduled_at=datetime.now(UTC), status="DISPATCHED", submission_id=submission_id,
+        tenant_id=uuid4(),
+        optimizer_id=uuid4(),
+        plan_row_id=uuid4(),
+        request_id=uuid4(),
+        request_digest="h" * 64,
+        strategy_version_id=uuid4(),
+        bc_id="bc-1",
+        advertiser_ids=["adv-1"],
+        provider_connection_id=uuid4(),
+        application_id="app-1",
+        title="剧目",
+        scheduled_at=datetime.now(UTC),
+        status="DISPATCHED",
+        submission_id=submission_id,
     )
 
     class Result:
@@ -306,7 +398,10 @@ def test_needs_review_with_active_sibling_stays_dispatched(monkeypatch: pytest.M
 
     monkeypatch.setattr(BuildHandoff, "_authorize", lambda self: None)
     result = BuildHandoff(
-        Session(), context=type("Context", (), {"tenant_id": occurrence.tenant_id, "actor_id": uuid4()})()
+        Session(),
+        context=type(
+            "Context", (), {"tenant_id": occurrence.tenant_id, "actor_id": uuid4()}
+        )(),
     ).record_submission_result(submission_id, state="UNKNOWN")
     assert result is None
     assert occurrence.status == "DISPATCHED"
@@ -317,10 +412,20 @@ def test_obsolete_readback_is_excluded_from_active_sibling_guard(
 ) -> None:
     submission_id = uuid4()
     occurrence = BuildOccurrence(
-        tenant_id=uuid4(), optimizer_id=uuid4(), plan_row_id=uuid4(), request_id=uuid4(),
-        request_digest="i" * 64, strategy_version_id=uuid4(), bc_id="bc-1",
-        advertiser_ids=["adv-1"], provider_connection_id=uuid4(), application_id="app-1",
-        title="剧目", scheduled_at=datetime.now(UTC), status="DISPATCHED", submission_id=submission_id,
+        tenant_id=uuid4(),
+        optimizer_id=uuid4(),
+        plan_row_id=uuid4(),
+        request_id=uuid4(),
+        request_digest="i" * 64,
+        strategy_version_id=uuid4(),
+        bc_id="bc-1",
+        advertiser_ids=["adv-1"],
+        provider_connection_id=uuid4(),
+        application_id="app-1",
+        title="剧目",
+        scheduled_at=datetime.now(UTC),
+        status="DISPATCHED",
+        submission_id=submission_id,
     )
     queries: list[str] = []
 
@@ -347,9 +452,11 @@ def test_obsolete_readback_is_excluded_from_active_sibling_guard(
 
     monkeypatch.setattr(BuildHandoff, "_authorize", lambda self: None)
     result = BuildHandoff(
-        Session(), context=type("Context", (), {"tenant_id": occurrence.tenant_id, "actor_id": uuid4()})()
+        Session(),
+        context=type(
+            "Context", (), {"tenant_id": occurrence.tenant_id, "actor_id": uuid4()}
+        )(),
     ).record_submission_result(submission_id, state="UNKNOWN")
     assert result is occurrence
     assert occurrence.status == "UNKNOWN"
     assert any("receipt_source" in query for query in queries)
-

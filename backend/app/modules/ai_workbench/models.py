@@ -89,7 +89,9 @@ class AIOptimizerVersion(SQLModel, table=True):
         UniqueConstraint(
             "tenant_id", "optimizer_id", "number", name="uq_ai_optimizer_version_number"
         ),
-        UniqueConstraint("tenant_id", "request_id", name="uq_ai_optimizer_version_request"),
+        UniqueConstraint(
+            "tenant_id", "request_id", name="uq_ai_optimizer_version_request"
+        ),
         ForeignKeyConstraint(
             ["tenant_id", "optimizer_id"],
             ["ai_optimizer.tenant_id", "ai_optimizer.id"],
@@ -114,7 +116,9 @@ class AIOptimizerVersion(SQLModel, table=True):
         CheckConstraint(
             "optimization_mode IN ('AUTO','MANUAL')", name="ck_ai_optimizer_mode"
         ),
-        Index("ix_ai_optimizer_version_optimizer", "tenant_id", "optimizer_id", "number"),
+        Index(
+            "ix_ai_optimizer_version_optimizer", "tenant_id", "optimizer_id", "number"
+        ),
     )
 
     id: UUID = Field(default_factory=uuid4, primary_key=True)
@@ -175,7 +179,9 @@ class BuildOccurrence(SQLModel, table=True):
     __tablename__ = "ai_build_occurrence"
     __table_args__ = (
         UniqueConstraint("tenant_id", "id", name="uq_ai_build_occurrence_tenant_id"),
-        UniqueConstraint("tenant_id", "request_id", name="uq_ai_build_occurrence_request"),
+        UniqueConstraint(
+            "tenant_id", "request_id", name="uq_ai_build_occurrence_request"
+        ),
         UniqueConstraint(
             "tenant_id",
             "optimizer_id",
@@ -204,7 +210,12 @@ class BuildOccurrence(SQLModel, table=True):
             name="ck_ai_build_occurrence_status",
         ),
         Index("ix_ai_build_occurrence_due", "status", "scheduled_at", "id"),
-        Index("ix_ai_build_occurrence_optimizer", "tenant_id", "optimizer_id", "scheduled_at"),
+        Index(
+            "ix_ai_build_occurrence_optimizer",
+            "tenant_id",
+            "optimizer_id",
+            "scheduled_at",
+        ),
     )
 
     id: UUID = Field(default_factory=uuid4, primary_key=True)
@@ -223,13 +234,17 @@ class BuildOccurrence(SQLModel, table=True):
     promotion_url: str | None = Field(default=None, max_length=8192)
     external_drama_id: str | None = Field(default=None, max_length=255)
     order_materials: bool = False
-    scheduled_at: datetime = Field(sa_column=Column(DateTime(timezone=True), nullable=False))
+    scheduled_at: datetime = Field(
+        sa_column=Column(DateTime(timezone=True), nullable=False)
+    )
     status: str = "PENDING"
     draft_id: UUID | None = None
     preview_id: UUID | None = None
     submission_id: UUID | None = None
     dispatch_id: UUID | None = Field(default=None, foreign_key="pending_dispatch.id")
-    evidence: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSONB, nullable=False))
+    evidence: dict[str, Any] = Field(
+        default_factory=dict, sa_column=Column(JSONB, nullable=False)
+    )
     error_code: str | None = None
     created_at: datetime = Field(default_factory=_now, sa_type=DateTime(timezone=True))
     updated_at: datetime = Field(default_factory=_now, sa_type=DateTime(timezone=True))

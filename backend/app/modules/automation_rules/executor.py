@@ -223,7 +223,9 @@ def execute_hits(
                     bc_id="",
                     advertiser_ids=(),
                     authorization_revision=run.authorization_revision or 0,
-                    authorization_revisions=tuple(sorted(run.authorization_revisions.items())),
+                    authorization_revisions=tuple(
+                        sorted(run.authorization_revisions.items())
+                    ),
                     optimizer_version=run.optimizer_version or 0,
                     rule_version=run.rule_version,
                     binding_id=run.binding_id,
@@ -607,20 +609,20 @@ def _execute_bc(
         outcome[target_key] = "SUBMITTED"
         summary["submitted"] += 1
         ledger = AutomationActionLedger(
-                tenant_id=rule.tenant_id,
-                rule_id=rule.id,
-                run_id=run.id,
-                target_key=target_key,
-                action=action_name,
-                original_value=None
-                if item.original_value is None
-                else str(item.original_value),
-                final_value=None if item.final_value is None else str(item.final_value),
-                management_task_id=task.task_id,
-                created_at=now,
-                optimizer_id=run.optimizer_id,
-                rule_version=run.rule_version,
-                evidence_id=run.evidence_id,
+            tenant_id=rule.tenant_id,
+            rule_id=rule.id,
+            run_id=run.id,
+            target_key=target_key,
+            action=action_name,
+            original_value=None
+            if item.original_value is None
+            else str(item.original_value),
+            final_value=None if item.final_value is None else str(item.final_value),
+            management_task_id=task.task_id,
+            created_at=now,
+            optimizer_id=run.optimizer_id,
+            rule_version=run.rule_version,
+            evidence_id=run.evidence_id,
         )
         session.add(ledger)
         if run.evidence_id is not None:

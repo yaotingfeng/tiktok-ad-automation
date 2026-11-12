@@ -4,6 +4,7 @@ The review loop stores only references and public metadata.  Credentials and mod
 internal reasoning are deliberately removed before any JSON is persisted or
 returned to an API caller.
 """
+
 from __future__ import annotations
 
 import base64
@@ -15,9 +16,23 @@ from typing import Any
 from uuid import UUID
 
 _SENSITIVE = {
-    "token", "access_token", "refresh_token", "password", "secret", "credential",
-    "cookie", "authorization", "api_key", "apikey", "private_key", "chain_of_thought",
-    "reasoning", "thoughts", "model_trace", "internal_reasoning", "prompt_tokens",
+    "token",
+    "access_token",
+    "refresh_token",
+    "password",
+    "secret",
+    "credential",
+    "cookie",
+    "authorization",
+    "api_key",
+    "apikey",
+    "private_key",
+    "chain_of_thought",
+    "reasoning",
+    "thoughts",
+    "model_trace",
+    "internal_reasoning",
+    "prompt_tokens",
     "completion_tokens",
 }
 
@@ -76,7 +91,13 @@ def sanitize_public(value: Any) -> Any:
     return str(value)
 
 
-def versioned_reference(*, key: str, version: str | int, source: str, metadata: Mapping[str, Any] | None = None) -> dict[str, Any]:
+def versioned_reference(
+    *,
+    key: str,
+    version: str | int,
+    source: str,
+    metadata: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
     """Build the stable public shape used inside frozen review evidence."""
     return {
         "key": key,
@@ -86,16 +107,22 @@ def versioned_reference(*, key: str, version: str | int, source: str, metadata: 
     }
 
 
-def snapshot_knowledge_refs(refs: list[Mapping[str, Any]] | tuple[Mapping[str, Any], ...] | None) -> list[dict[str, Any]]:
+def snapshot_knowledge_refs(
+    refs: list[Mapping[str, Any]] | tuple[Mapping[str, Any], ...] | None,
+) -> list[dict[str, Any]]:
     """Freeze caller-provided knowledge references without exposing private data."""
     result: list[dict[str, Any]] = []
     for ref in refs or ():
         if not ref.get("key") or ref.get("version") is None:
             continue
-        result.append(versioned_reference(
-            key=str(ref["key"]),
-            version=ref["version"],
-            source=str(ref.get("source", "DSH")),
-            metadata=ref.get("metadata") if isinstance(ref.get("metadata"), Mapping) else {},
-        ))
+        result.append(
+            versioned_reference(
+                key=str(ref["key"]),
+                version=ref["version"],
+                source=str(ref.get("source", "DSH")),
+                metadata=ref.get("metadata")
+                if isinstance(ref.get("metadata"), Mapping)
+                else {},
+            )
+        )
     return result

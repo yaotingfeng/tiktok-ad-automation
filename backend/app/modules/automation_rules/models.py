@@ -111,7 +111,9 @@ class AutomationRuleRun(SQLModel, table=True):
     execution_summary: dict[str, Any] = Field(
         default_factory=dict, sa_column=Column(JSONB, nullable=False)
     )
-    evidence_id: UUID | None = Field(default=None, foreign_key="automation_rule_evidence.id")
+    evidence_id: UUID | None = Field(
+        default=None, foreign_key="automation_rule_evidence.id"
+    )
 
 
 class AutomationRuleEvidence(SQLModel, table=True):
@@ -135,8 +137,12 @@ class AutomationRuleEvidence(SQLModel, table=True):
 
     id: UUID = Field(default_factory=uuid4, primary_key=True)
     tenant_id: UUID = Field(foreign_key="tenant.id")
-    run_id: UUID | None = Field(default=None, foreign_key="automation_rule_run.id", ondelete="SET NULL")
-    rule_id: UUID | None = Field(default=None, foreign_key="automation_rule.id", ondelete="SET NULL")
+    run_id: UUID | None = Field(
+        default=None, foreign_key="automation_rule_run.id", ondelete="SET NULL"
+    )
+    rule_id: UUID | None = Field(
+        default=None, foreign_key="automation_rule.id", ondelete="SET NULL"
+    )
     rule_version: int
     definition: dict[str, Any] = Field(sa_column=Column(JSONB, nullable=False))
     optimizer_id: UUID | None = None
@@ -144,20 +150,40 @@ class AutomationRuleEvidence(SQLModel, table=True):
     binding_version: int | None = None
     binding_id: UUID | None = None
     bc_id: str | None = Field(default=None, max_length=128)
-    advertiser_ids: list[str] = Field(default_factory=list, sa_column=Column(JSONB, nullable=False))
+    advertiser_ids: list[str] = Field(
+        default_factory=list, sa_column=Column(JSONB, nullable=False)
+    )
     authorization_revision: int | None = None
     authorization_revisions: dict[str, int] = Field(
         default_factory=dict, sa_column=Column(JSONB, nullable=False)
     )
-    checked_metrics: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSONB, nullable=False))
-    data_freshness: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSONB, nullable=False))
-    publication_versions: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSONB, nullable=False))
-    skipped_accounts: list[dict[str, Any]] = Field(default_factory=list, sa_column=Column(JSONB, nullable=False))
-    checked_objects: list[dict[str, Any]] = Field(default_factory=list, sa_column=Column(JSONB, nullable=False))
-    hits: list[dict[str, Any]] = Field(default_factory=list, sa_column=Column(JSONB, nullable=False))
-    action_ledger_refs: list[str] = Field(default_factory=list, sa_column=Column(JSONB, nullable=False))
-    management_tasks: list[dict[str, Any]] = Field(default_factory=list, sa_column=Column(JSONB, nullable=False))
-    readback_status: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSONB, nullable=False))
+    checked_metrics: dict[str, Any] = Field(
+        default_factory=dict, sa_column=Column(JSONB, nullable=False)
+    )
+    data_freshness: dict[str, Any] = Field(
+        default_factory=dict, sa_column=Column(JSONB, nullable=False)
+    )
+    publication_versions: dict[str, Any] = Field(
+        default_factory=dict, sa_column=Column(JSONB, nullable=False)
+    )
+    skipped_accounts: list[dict[str, Any]] = Field(
+        default_factory=list, sa_column=Column(JSONB, nullable=False)
+    )
+    checked_objects: list[dict[str, Any]] = Field(
+        default_factory=list, sa_column=Column(JSONB, nullable=False)
+    )
+    hits: list[dict[str, Any]] = Field(
+        default_factory=list, sa_column=Column(JSONB, nullable=False)
+    )
+    action_ledger_refs: list[str] = Field(
+        default_factory=list, sa_column=Column(JSONB, nullable=False)
+    )
+    management_tasks: list[dict[str, Any]] = Field(
+        default_factory=list, sa_column=Column(JSONB, nullable=False)
+    )
+    readback_status: dict[str, Any] = Field(
+        default_factory=dict, sa_column=Column(JSONB, nullable=False)
+    )
     retention_until: datetime = Field(sa_type=AwareDateTime)
     created_at: datetime = Field(default_factory=_now, sa_type=AwareDateTime)
 

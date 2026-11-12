@@ -209,7 +209,11 @@ def api_headers(context):
 
 
 def create_body(strategy_version_id, **overrides):
-    value = payload(strategy_version_id=str(strategy_version_id), priority="BALANCED", target_roas=None)
+    value = payload(
+        strategy_version_id=str(strategy_version_id),
+        priority="BALANCED",
+        target_roas=None,
+    )
     value.update(overrides)
     return value
 
@@ -232,7 +236,9 @@ def test_tenant_and_optimizer_ids_are_isolated(client, session, context, other_c
     )
 
 
-def test_invalid_scope_and_missing_strategy_binding_are_rejected(client, session, context):
+def test_invalid_scope_and_missing_strategy_binding_are_rejected(
+    client, session, context
+):
     strategy = seed_optimizer_dependencies(session, context)
     url = f"/api/tenants/{context.tenant_id}/ai-optimizers"
     invalid_scope = client.post(
@@ -249,10 +255,14 @@ def test_invalid_scope_and_missing_strategy_binding_are_rejected(client, session
     assert missing_strategy.status_code == 409
 
 
-def test_shared_strategy_and_explicit_target_roas_clear_are_guarded(client, session, context):
+def test_shared_strategy_and_explicit_target_roas_clear_are_guarded(
+    client, session, context
+):
     strategy = seed_optimizer_dependencies(session, context)
     url = f"/api/tenants/{context.tenant_id}/ai-optimizers"
-    first = client.post(url, headers=api_headers(context), json=create_body(strategy.id)).json()
+    first = client.post(
+        url, headers=api_headers(context), json=create_body(strategy.id)
+    ).json()
     second = client.post(
         url,
         headers=api_headers(context),

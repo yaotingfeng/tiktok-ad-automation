@@ -22,7 +22,9 @@ from app.modules.providers.models import ProviderApplication
 from app.modules.tenants.permissions import require_tenant
 
 
-def _authorize(session: Session, context: TenantContext, *, write: bool = False) -> None:
+def _authorize(
+    session: Session, context: TenantContext, *, write: bool = False
+) -> None:
     require_tenant(
         session,
         actor_id=context.actor_id,
@@ -31,7 +33,9 @@ def _authorize(session: Session, context: TenantContext, *, write: bool = False)
     )
 
 
-def _optimizer(session: Session, context: TenantContext, optimizer_id: UUID) -> AIOptimizer:
+def _optimizer(
+    session: Session, context: TenantContext, optimizer_id: UUID
+) -> AIOptimizer:
     row = session.exec(
         select(AIOptimizer).where(
             AIOptimizer.tenant_id == context.tenant_id,
@@ -57,13 +61,17 @@ def _optimizer_context(
         )
     ).all()
     if len(bindings) != 1:
-        raise DomainError("ai_strategy_binding_required", "ai_strategy_binding_required")
+        raise DomainError(
+            "ai_strategy_binding_required", "ai_strategy_binding_required"
+        )
     return optimizer
 
 
 def _request_rows(body: DailyPlanRequest) -> list[DailyPlanRowInput]:
     try:
-        rows = parse_plan_tsv(body.tsv) if body.tsv is not None else list(body.rows or [])
+        rows = (
+            parse_plan_tsv(body.tsv) if body.tsv is not None else list(body.rows or [])
+        )
         return validate_plan_rows(rows)
     except (TypeError, ValueError) as error:
         raise DomainError("ai_daily_plan_invalid", str(error)) from error
@@ -84,13 +92,17 @@ def _public(session: Session, plan: AIDailyPlan) -> DailyPlanPublic:
         optimizer_id=plan.optimizer_id,
         business_date=plan.business_date,
         revision=plan.revision,
-        rows=[DailyPlanRowPublic.model_validate(row, from_attributes=True) for row in rows],
+        rows=[
+            DailyPlanRowPublic.model_validate(row, from_attributes=True) for row in rows
+        ],
     )
 
 
 def _validate_rows(rows: list[DailyPlanRowInput], *, optimizer_id: UUID) -> date:
     if any(row.optimizer_id != optimizer_id for row in rows):
-        raise DomainError("ai_daily_plan_optimizer_mismatch", "ai_daily_plan_optimizer_mismatch")
+        raise DomainError(
+            "ai_daily_plan_optimizer_mismatch", "ai_daily_plan_optimizer_mismatch"
+        )
     dates = {row.business_date for row in rows}
     if len(dates) > 1:
         raise DomainError("ai_daily_plan_day_mismatch", "ai_daily_plan_day_mismatch")
@@ -187,7 +199,9 @@ def update_daily_plan(
     if plan is None:
         raise DomainError("ai_daily_plan_not_found", "ai_daily_plan_not_found")
     if body.revision != plan.revision:
-        raise DomainError("ai_daily_plan_revision_conflict", "ai_daily_plan_revision_conflict")
+        raise DomainError(
+            "ai_daily_plan_revision_conflict", "ai_daily_plan_revision_conflict"
+        )
     if rows and _validate_rows(rows, optimizer_id=optimizer_id) != requested_date:
         raise DomainError("ai_daily_plan_day_mismatch", "ai_daily_plan_day_mismatch")
     plan.revision += 1
@@ -233,10 +247,14 @@ def list_daily_plans(
         )
         .order_by(col(AIDailyPlan.business_date).desc())
     ).all()
-    return DailyPlanPage(items=[_public(session, plan) for plan in plans], total=len(plans))
+    return DailyPlanPage(
+        items=[_public(session, plan) for plan in plans], total=len(plans)
+    )
 
 
-def _replace_rows(session: Session, plan: AIDailyPlan, rows: list[DailyPlanRowInput]) -> None:
+def _replace_rows(
+    session: Session, plan: AIDailyPlan, rows: list[DailyPlanRowInput]
+) -> None:
     # Complete replacement keeps revision semantics simple and prevents stale
     # rows from surviving a user's Excel paste/delete operation.
     session.exec(
@@ -262,4 +280,3 @@ def _replace_rows(session: Session, plan: AIDailyPlan, rows: list[DailyPlanRowIn
                 position=position,
             )
         )
-

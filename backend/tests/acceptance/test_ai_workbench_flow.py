@@ -12,7 +12,9 @@ from app.modules.automation_rules.models import AutomationRule
 from app.modules.strategies.models import CopyPoolVersion, Strategy, StrategyVersion
 
 # 以测试文件定位源码，避免依赖 pytest 的启动目录。
-AI_WORKBENCH_DIR = Path(__file__).resolve().parents[2] / "app" / "modules" / "ai_workbench"
+AI_WORKBENCH_DIR = (
+    Path(__file__).resolve().parents[2] / "app" / "modules" / "ai_workbench"
+)
 
 
 @pytest.fixture
@@ -50,6 +52,7 @@ def test_two_tenants_and_two_optimizers_keep_daily_report_scope(
         create_body,
         seed_optimizer_dependencies,
     )
+
     context, other_context = ai_workbench_contexts
     first_strategy = seed_optimizer_dependencies(session, context, account="acc-1")
     # Keep both optimizers in the same tenant so the report proves sibling
@@ -63,7 +66,12 @@ def test_two_tenants_and_two_optimizers_keep_daily_report_scope(
         strategy_id=second_strategy.id,
         number=1,
         copy_pool_version_id=second_pool.id,
-        config={"budget": "10", "currency": "USD", "copy_pool_version": str(second_pool.id), "target_roas": None},
+        config={
+            "budget": "10",
+            "currency": "USD",
+            "copy_pool_version": str(second_pool.id),
+            "target_roas": None,
+        },
         budget="10",
         target_roas=None,
         created_by=context.actor_id,
@@ -73,12 +81,16 @@ def test_two_tenants_and_two_optimizers_keep_daily_report_scope(
     )
     session.add(sibling_strategy)
     session.flush()
-    other_strategy = seed_optimizer_dependencies(session, other_context, account="acc-1")
+    other_strategy = seed_optimizer_dependencies(
+        session, other_context, account="acc-1"
+    )
     base = f"/api/tenants/{context.tenant_id}/ai-optimizers"
     first = client.post(
         base,
         headers=api_headers(context),
-        json=create_body(first_strategy.id, name="自动优化师", optimization_mode="AUTO"),
+        json=create_body(
+            first_strategy.id, name="自动优化师", optimization_mode="AUTO"
+        ),
     )
     assert first.status_code == 201, first.text
     sibling = client.post(

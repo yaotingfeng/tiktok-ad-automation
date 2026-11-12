@@ -63,20 +63,28 @@ def _current_revision(
     ).all()
     found = {grant.advertiser_id for grant in grants}
     if found != advertiser_ids:
-        raise DomainError("ai_invalid_rule_scope", "optimizer account authorization is stale")
+        raise DomainError(
+            "ai_invalid_rule_scope", "optimizer account authorization is stale"
+        )
     revision_rows = session.exec(
-        select(TikTokConnection.id, TikTokConnection.authorization_revision)
-        .where(
+        select(TikTokConnection.id, TikTokConnection.authorization_revision).where(
             TikTokConnection.tenant_id == tenant_id,
             col(TikTokConnection.id).in_([grant.connection_id for grant in grants]),
         )
     ).all()
-    by_connection = {connection_id: int(revision) for connection_id, revision in revision_rows}
+    by_connection = {
+        connection_id: int(revision) for connection_id, revision in revision_rows
+    }
     if any(grant.connection_id not in by_connection for grant in grants):
-        raise DomainError("ai_invalid_rule_scope", "authorization revision is unavailable")
+        raise DomainError(
+            "ai_invalid_rule_scope", "authorization revision is unavailable"
+        )
     revisions = tuple(
         sorted(
-            (f"{advertiser_id}:{grant.connection_id}", by_connection[grant.connection_id])
+            (
+                f"{advertiser_id}:{grant.connection_id}",
+                by_connection[grant.connection_id],
+            )
             for grant in grants
             for advertiser_id in [grant.advertiser_id]
         )
@@ -109,7 +117,9 @@ def resolve_rule_binding(
         )
     ).one_or_none()
     if version is None:
-        raise DomainError("ai_optimizer_version_missing", "ai_optimizer_version_missing")
+        raise DomainError(
+            "ai_optimizer_version_missing", "ai_optimizer_version_missing"
+        )
     binding = session.exec(
         select(AIOptimizerRuleBinding).where(
             AIOptimizerRuleBinding.tenant_id == tenant_id,
@@ -135,7 +145,9 @@ def resolve_rule_binding(
     if requested is not None:
         allowed &= requested
     if not allowed:
-        raise DomainError("ai_invalid_rule_scope", "rule and optimizer account scopes do not overlap")
+        raise DomainError(
+            "ai_invalid_rule_scope", "rule and optimizer account scopes do not overlap"
+        )
     authorized, revision, revisions = _current_revision(
         session, tenant_id=tenant_id, bc_id=version.bc_id, advertiser_ids=allowed
     )

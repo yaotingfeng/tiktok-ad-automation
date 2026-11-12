@@ -78,7 +78,9 @@ class RuleEvidenceSnapshot:
     ) -> RuleEvidenceSnapshot:
         definition = RuleDefinition.model_validate(rule.definition)
         checked_metrics = {
-            f"{condition.metric}:{condition.range}" if condition.range else condition.metric: list(condition.values)
+            f"{condition.metric}:{condition.range}"
+            if condition.range
+            else condition.metric: list(condition.values)
             for condition in definition.conditions
         }
         hits = tuple(
@@ -109,13 +111,21 @@ class RuleEvidenceSnapshot:
             rule_version=run.rule_version,
             definition=dict(rule.definition),
             optimizer_id=scope.optimizer_id if scope else run.optimizer_id,
-            optimizer_version=scope.optimizer_version if scope else run.optimizer_version,
+            optimizer_version=scope.optimizer_version
+            if scope
+            else run.optimizer_version,
             binding_version=scope.optimizer_version if scope else run.binding_version,
             binding_id=scope.binding_id if scope else run.binding_id,
             bc_id=scope.bc_id if scope else None,
             advertiser_ids=scope.advertiser_ids if scope else (),
-            authorization_revision=scope.authorization_revision if scope else run.authorization_revision,
-            authorization_revisions=(scope.authorization_revisions if scope else tuple(run.authorization_revisions.items())),
+            authorization_revision=scope.authorization_revision
+            if scope
+            else run.authorization_revision,
+            authorization_revisions=(
+                scope.authorization_revisions
+                if scope
+                else tuple(run.authorization_revisions.items())
+            ),
             checked_metrics=checked_metrics,
             data_freshness={
                 "evaluated_at": run.finished_at.isoformat()
@@ -125,10 +135,18 @@ class RuleEvidenceSnapshot:
                 "rows": list(freshness or []),
                 "sources": sorted({item.get("source", "") for item in freshness or []}),
                 "stat_dates": sorted(
-                    {item.get("stat_date") for item in freshness or [] if item.get("stat_date")}
+                    {
+                        item.get("stat_date")
+                        for item in freshness or []
+                        if item.get("stat_date")
+                    }
                 ),
                 "timezones": sorted(
-                    {item.get("timezone") for item in freshness or [] if item.get("timezone")}
+                    {
+                        item.get("timezone")
+                        for item in freshness or []
+                        if item.get("timezone")
+                    }
                 ),
             },
             publication_versions=publication_versions or {},
@@ -167,7 +185,8 @@ class RuleEvidenceSnapshot:
             action_ledger_refs=list(self.action_ledger_refs),
             management_tasks=list(self.management_tasks),
             readback_status=self.readback_status,
-            retention_until=self.retention_until or (datetime.now(UTC) + DEFAULT_EVIDENCE_RETENTION),
+            retention_until=self.retention_until
+            or (datetime.now(UTC) + DEFAULT_EVIDENCE_RETENTION),
         )
         session.add(row)
         session.flush()
@@ -201,7 +220,9 @@ def persist_evidence(
     return row
 
 
-def referenced_evidence_ids(session: Session, *, tenant_id: UUID | None = None) -> set[UUID]:
+def referenced_evidence_ids(
+    session: Session, *, tenant_id: UUID | None = None
+) -> set[UUID]:
     """Return evidence IDs still referenced by durable decision records.
 
     Rule runs and action ledgers keep direct foreign-key references.  DSH review
@@ -240,13 +261,13 @@ def referenced_evidence_ids(session: Session, *, tenant_id: UUID | None = None) 
         for value in frozen_evidence_ids(task.evidence):
             try:
                 result.add(UUID(value))
-            except (TypeError, ValueError):
+            except TypeError, ValueError:
                 continue
     for proposal in session.exec(proposal_query).all():
         for value in frozen_evidence_ids(proposal.evidence):
             try:
                 result.add(UUID(value))
-            except (TypeError, ValueError):
+            except TypeError, ValueError:
                 continue
     return result
 
@@ -278,9 +299,12 @@ def cleanup_evidence(
     # persisted fence remains authoritative.
     cutoff = now
     protected = referenced_evidence_ids(session, tenant_id=tenant_id)
-    query = select(AutomationRuleEvidence).where(
-        col(AutomationRuleEvidence.retention_until) <= cutoff
-    ).order_by(col(AutomationRuleEvidence.created_at)).limit(limit)
+    query = (
+        select(AutomationRuleEvidence)
+        .where(col(AutomationRuleEvidence.retention_until) <= cutoff)
+        .order_by(col(AutomationRuleEvidence.created_at))
+        .limit(limit)
+    )
     if tenant_id is not None:
         query = query.where(AutomationRuleEvidence.tenant_id == tenant_id)
     removed = 0

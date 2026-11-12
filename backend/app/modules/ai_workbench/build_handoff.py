@@ -52,7 +52,13 @@ MATERIAL_WAIT_ERRORS = frozenset(
 
 def _digest(payload: dict[str, Any]) -> str:
     return hashlib.sha256(
-        json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False, default=str).encode()
+        json.dumps(
+            payload,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+            default=str,
+        ).encode()
     ).hexdigest()
 
 
@@ -94,7 +100,9 @@ class BuildHandoff:
             .with_for_update()
         ).one_or_none()
         if row is None:
-            raise DomainError("ai_daily_plan_row_not_found", "ai_daily_plan_row_not_found")
+            raise DomainError(
+                "ai_daily_plan_row_not_found", "ai_daily_plan_row_not_found"
+            )
         optimizer = self.session.exec(
             select(AIOptimizer)
             .where(
@@ -115,9 +123,16 @@ class BuildHandoff:
             )
         ).one_or_none()
         if binding is None:
-            raise DomainError("ai_strategy_binding_required", "ai_strategy_binding_required")
-        if caller_strategy_version_id is not None and caller_strategy_version_id != binding.strategy_version_id:
-            raise DomainError("ai_strategy_binding_mismatch", "ai_strategy_binding_mismatch")
+            raise DomainError(
+                "ai_strategy_binding_required", "ai_strategy_binding_required"
+            )
+        if (
+            caller_strategy_version_id is not None
+            and caller_strategy_version_id != binding.strategy_version_id
+        ):
+            raise DomainError(
+                "ai_strategy_binding_mismatch", "ai_strategy_binding_mismatch"
+            )
         version = self.session.exec(
             select(AIOptimizerVersion).where(
                 AIOptimizerVersion.tenant_id == self.context.tenant_id,
@@ -126,9 +141,13 @@ class BuildHandoff:
             )
         ).one_or_none()
         if version is None:
-            raise DomainError("ai_optimizer_version_missing", "ai_optimizer_version_missing")
+            raise DomainError(
+                "ai_optimizer_version_missing", "ai_optimizer_version_missing"
+            )
         if version.strategy_binding_id != binding.id:
-            raise DomainError("ai_strategy_binding_mismatch", "ai_strategy_binding_mismatch")
+            raise DomainError(
+                "ai_strategy_binding_mismatch", "ai_strategy_binding_mismatch"
+            )
         # Provider rows are validated when the plan is saved; repeat the scoped
         # check here because an application can be disabled after scheduling.
         application = self.session.exec(
@@ -139,7 +158,9 @@ class BuildHandoff:
             )
         ).one_or_none()
         if application is None and not allow_missing_provider:
-            raise DomainError("ai_provider_application_not_found", "ai_provider_application_not_found")
+            raise DomainError(
+                "ai_provider_application_not_found", "ai_provider_application_not_found"
+            )
         return row, optimizer, version, binding.strategy_version_id
 
     def create_occurrence(
@@ -183,15 +204,26 @@ class BuildHandoff:
         digest = _digest(payload)
         # Serialize request and schedule checks without relying on caller-side
         # Celery task IDs for deduplication.
-        key = int.from_bytes(hashlib.sha256(f"ai-occurrence:{self.context.tenant_id}:{request_id}".encode()).digest()[:8], signed=True)
-        SQLAlchemySession.execute(self.session, text("SELECT pg_advisory_xact_lock(:key)"), {"key": key})
+        key = int.from_bytes(
+            hashlib.sha256(
+                f"ai-occurrence:{self.context.tenant_id}:{request_id}".encode()
+            ).digest()[:8],
+            signed=True,
+        )
+        SQLAlchemySession.execute(
+            self.session, text("SELECT pg_advisory_xact_lock(:key)"), {"key": key}
+        )
         schedule_key = int.from_bytes(
             hashlib.sha256(
                 f"ai-schedule:{self.context.tenant_id}:{optimizer.id}:{row.id}:{resolved_strategy}:{scheduled_at.isoformat()}".encode()
             ).digest()[:8],
             signed=True,
         )
-        SQLAlchemySession.execute(self.session, text("SELECT pg_advisory_xact_lock(:key)"), {"key": schedule_key})
+        SQLAlchemySession.execute(
+            self.session,
+            text("SELECT pg_advisory_xact_lock(:key)"),
+            {"key": schedule_key},
+        )
         prior = self.session.exec(
             select(BuildOccurrence).where(
                 BuildOccurrence.tenant_id == self.context.tenant_id,
@@ -229,7 +261,10 @@ class BuildHandoff:
             external_drama_id=row.external_drama_id,
             order_materials=row.order_materials,
             scheduled_at=scheduled_at,
-            evidence={"snapshot": payload, **({"skip_reason": skip_reason} if skip_reason else {})},
+            evidence={
+                "snapshot": payload,
+                **({"skip_reason": skip_reason} if skip_reason else {}),
+            },
         )
         if skip_reason and skip_reason != "future":
             occurrence.status = "FAILED"
@@ -260,7 +295,9 @@ class BuildHandoff:
             .with_for_update()
         ).one_or_none()
         if occurrence is None:
-            raise DomainError("ai_build_occurrence_not_found", "ai_build_occurrence_not_found")
+            raise DomainError(
+                "ai_build_occurrence_not_found", "ai_build_occurrence_not_found"
+            )
         if occurrence.status in TERMINAL:
             # UNKNOWN is deliberately terminal until an explicit reconciliation
             # changes evidence; a retry must never create a second submission.
@@ -303,7 +340,9 @@ class BuildHandoff:
             )
             preview_id = occurrence.preview_id
             if preview_id is None:
-                draft = drafts.get_draft(self.session, context=self.context, draft_id=occurrence.draft_id)
+                draft = drafts.get_draft(
+                    self.session, context=self.context, draft_id=occurrence.draft_id
+                )
                 preview_id = previews.generate_preview(
                     self.session,
                     context=self.context,
@@ -314,7 +353,9 @@ class BuildHandoff:
             preview = self.session.get(BuildPreview, occurrence.preview_id)
             if preview is None or preview.status not in {"FROZEN"}:
                 occurrence.status = "WAITING_MATERIAL"
-                occurrence.evidence["preview_status"] = getattr(preview, "status", "BUILDING")
+                occurrence.evidence["preview_status"] = getattr(
+                    preview, "status", "BUILDING"
+                )
             else:
                 receipt = submissions.submit_preview(
                     self.session,
@@ -327,7 +368,9 @@ class BuildHandoff:
             occurrence.error_code = None
         except DomainError as error:
             occurrence.error_code = error.code
-            occurrence.status = "WAITING_MATERIAL" if error.code in MATERIAL_WAIT_ERRORS else "FAILED"
+            occurrence.status = (
+                "WAITING_MATERIAL" if error.code in MATERIAL_WAIT_ERRORS else "FAILED"
+            )
         occurrence.updated_at = datetime.now(UTC)
         self.session.add(occurrence)
         self.session.flush()
@@ -338,11 +381,16 @@ class BuildHandoff:
         self._authorize()
         occurrence = self.session.exec(
             select(BuildOccurrence)
-            .where(BuildOccurrence.tenant_id == self.context.tenant_id, BuildOccurrence.id == occurrence_id)
+            .where(
+                BuildOccurrence.tenant_id == self.context.tenant_id,
+                BuildOccurrence.id == occurrence_id,
+            )
             .with_for_update()
         ).one_or_none()
         if occurrence is None:
-            raise DomainError("ai_build_occurrence_not_found", "ai_build_occurrence_not_found")
+            raise DomainError(
+                "ai_build_occurrence_not_found", "ai_build_occurrence_not_found"
+            )
         if occurrence.status != "WAITING_MATERIAL":
             return occurrence
         generation = int(occurrence.evidence.get("retry_generation", 0)) + 1
@@ -369,18 +417,28 @@ class BuildHandoff:
     ) -> BuildOccurrence:
         """Import an existing build readback without replaying unknown work."""
         if state not in {"PARTIAL", "UNKNOWN", "COMPLETE", "FAILED", "DISPATCHED"}:
-            raise DomainError("ai_build_occurrence_state_invalid", "ai_build_occurrence_state_invalid")
+            raise DomainError(
+                "ai_build_occurrence_state_invalid", "ai_build_occurrence_state_invalid"
+            )
         self._authorize()
         occurrence = self.session.exec(
             select(BuildOccurrence)
-            .where(BuildOccurrence.tenant_id == self.context.tenant_id, BuildOccurrence.id == occurrence_id)
+            .where(
+                BuildOccurrence.tenant_id == self.context.tenant_id,
+                BuildOccurrence.id == occurrence_id,
+            )
             .with_for_update()
         ).one_or_none()
         if occurrence is None:
-            raise DomainError("ai_build_occurrence_not_found", "ai_build_occurrence_not_found")
+            raise DomainError(
+                "ai_build_occurrence_not_found", "ai_build_occurrence_not_found"
+            )
         if occurrence.status == "UNKNOWN" and state == "DISPATCHED":
             if not (evidence or {}).get("explicit_retry"):
-                raise DomainError("ai_build_occurrence_retry_required", "ai_build_occurrence_retry_required")
+                raise DomainError(
+                    "ai_build_occurrence_retry_required",
+                    "ai_build_occurrence_retry_required",
+                )
         occurrence.status = state
         if evidence:
             occurrence.evidence = {**occurrence.evidence, "readback": evidence}
@@ -431,7 +489,8 @@ class BuildHandoff:
             from app.modules.builds.receipt_completion import obsolete_readback_sql
 
             active_unit = self.session.exec(
-                select(SubmissionUnit.unit_id).where(
+                select(SubmissionUnit.unit_id)
+                .where(
                     SubmissionUnit.tenant_id == self.context.tenant_id,
                     SubmissionUnit.submission_id == submission_id,
                     SubmissionUnit.disposition == "INCLUDED",
@@ -439,15 +498,18 @@ class BuildHandoff:
                         SubmissionUnit.expanded.is_(False),
                         SubmissionUnit.dispatch_id.is_not(None),
                     ),
-                ).limit(1)
+                )
+                .limit(1)
             ).first()
             active_step = self.session.exec(
-                select(ExecutionStep.id).where(
+                select(ExecutionStep.id)
+                .where(
                     ExecutionStep.tenant_id == self.context.tenant_id,
                     ExecutionStep.submission_id == submission_id,
                     ExecutionStep.status.in_(["QUEUED", "RUNNING"]),
                     text("NOT " + obsolete_readback_sql("execution_step")),
-                ).limit(1)
+                )
+                .limit(1)
             ).first()
             if active_unit is not None or active_step is not None:
                 return None
@@ -489,4 +551,3 @@ class BuildHandoff:
         self.session.add(occurrence)
         self.session.flush()
         return occurrence
-

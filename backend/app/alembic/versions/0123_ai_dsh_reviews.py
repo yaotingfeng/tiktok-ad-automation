@@ -20,7 +20,9 @@ def upgrade() -> None:
         sa.Column("request_digest", sa.String(length=64), nullable=False),
         sa.Column("dsh_task_id", sa.String(length=160), nullable=False),
         sa.Column("status", sa.String(length=16), nullable=False),
-        sa.Column("authorization_expires_at", sa.DateTime(timezone=True), nullable=False),
+        sa.Column(
+            "authorization_expires_at", sa.DateTime(timezone=True), nullable=False
+        ),
         sa.Column("fence", sa.String(length=64), nullable=False),
         sa.Column("restart_generation", sa.Integer(), nullable=False),
         sa.Column("cancellation_requested", sa.Boolean(), nullable=False),

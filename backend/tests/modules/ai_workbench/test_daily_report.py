@@ -9,17 +9,35 @@ from app.modules.ai_workbench.daily_report import (
 )
 
 
-def test_cleanup_keeps_evidence_referenced_by_review_and_deletes_expired_unreferenced(monkeypatch):
+def test_cleanup_keeps_evidence_referenced_by_review_and_deletes_expired_unreferenced(
+    monkeypatch,
+):
     protected_id, stale_id, recent_expired_id, future_id = (uuid4() for _ in range(4))
     now = datetime(2026, 11, 12, tzinfo=UTC)
     rows = [
-        SimpleNamespace(id=protected_id, retention_until=now - timedelta(days=2), created_at=now - timedelta(days=10)),
-        SimpleNamespace(id=stale_id, retention_until=now - timedelta(days=2), created_at=now - timedelta(days=10)),
+        SimpleNamespace(
+            id=protected_id,
+            retention_until=now - timedelta(days=2),
+            created_at=now - timedelta(days=10),
+        ),
+        SimpleNamespace(
+            id=stale_id,
+            retention_until=now - timedelta(days=2),
+            created_at=now - timedelta(days=10),
+        ),
         # This row is expired by its persisted fence even when the compatibility
         # argument remains at the default 365 days; the cleanup must not apply
         # that window a second time.
-        SimpleNamespace(id=recent_expired_id, retention_until=now - timedelta(days=2), created_at=now - timedelta(days=10)),
-        SimpleNamespace(id=future_id, retention_until=now + timedelta(days=1), created_at=now - timedelta(days=10)),
+        SimpleNamespace(
+            id=recent_expired_id,
+            retention_until=now - timedelta(days=2),
+            created_at=now - timedelta(days=10),
+        ),
+        SimpleNamespace(
+            id=future_id,
+            retention_until=now + timedelta(days=1),
+            created_at=now - timedelta(days=10),
+        ),
     ]
 
     class Result:
@@ -40,7 +58,9 @@ def test_cleanup_keeps_evidence_referenced_by_review_and_deletes_expired_unrefer
         def flush(self):
             return None
 
-    monkeypatch.setattr(evidence, "referenced_evidence_ids", lambda *_args, **_kwargs: {protected_id})
+    monkeypatch.setattr(
+        evidence, "referenced_evidence_ids", lambda *_args, **_kwargs: {protected_id}
+    )
     session = FakeSession()
     assert evidence.cleanup_evidence(session, now=now, retention_days=365) == 2
     assert session.deleted == [stale_id, recent_expired_id]
@@ -54,8 +74,12 @@ def test_daily_report_uses_frozen_ids_from_execution_and_review_shapes():
 
 def test_next_trigger_chooses_earliest_future_build_or_rule():
     now = datetime(2026, 11, 12, 8, tzinfo=UTC)
-    build = SimpleNamespace(id=uuid4(), status="PENDING", scheduled_at=now + timedelta(hours=2))
-    rule = SimpleNamespace(id=uuid4(), enabled=True, next_run_at=now + timedelta(hours=1))
+    build = SimpleNamespace(
+        id=uuid4(), status="PENDING", scheduled_at=now + timedelta(hours=2)
+    )
+    rule = SimpleNamespace(
+        id=uuid4(), enabled=True, next_run_at=now + timedelta(hours=1)
+    )
     assert _next_trigger(occurrences=[build], rules=[rule], now=now)["kind"] == "rule"
 
 

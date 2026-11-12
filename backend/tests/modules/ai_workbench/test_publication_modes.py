@@ -25,16 +25,24 @@ def optimizer_version(*, mode: str, limits: dict) -> AIOptimizerVersion:
 
 
 def test_auto_publication_is_in_scope_only_when_explicitly_authorized():
-    version = optimizer_version(mode="AUTO", limits={"strategy": True, "max_budget_delta": 5})
-    assert _within_authorization(version=version, kind="strategy", before={"budget": 10}, after={"budget": 14}) == (True, None)
-    allowed, reason = _within_authorization(version=version, kind="strategy", before={"budget": 10}, after={"budget": 20})
+    version = optimizer_version(
+        mode="AUTO", limits={"strategy": True, "max_budget_delta": 5}
+    )
+    assert _within_authorization(
+        version=version, kind="strategy", before={"budget": 10}, after={"budget": 14}
+    ) == (True, None)
+    allowed, reason = _within_authorization(
+        version=version, kind="strategy", before={"budget": 10}, after={"budget": 20}
+    )
     assert allowed is False
     assert reason == "budget_delta_out_of_scope"
 
 
 def test_manual_mode_does_not_change_authorization_scope():
     version = optimizer_version(mode="MANUAL", limits={"strategy": True})
-    assert _within_authorization(version=version, kind="strategy", before={}, after={"config": {}}) == (True, None)
+    assert _within_authorization(
+        version=version, kind="strategy", before={}, after={"config": {}}
+    ) == (True, None)
 
 
 def test_rule_scope_rejects_another_bc_or_account():
@@ -50,7 +58,14 @@ def test_rule_scope_rejects_another_bc_or_account():
 
 
 def test_nested_strategy_budget_delta_is_checked():
-    version = optimizer_version(mode="AUTO", limits={"strategy": {"allowed": True, "max_budget_delta": 2}})
-    allowed, reason = _within_authorization(version=version, kind="strategy", before={"config": {"budget": 10}}, after={"config": {"budget": 20}})
+    version = optimizer_version(
+        mode="AUTO", limits={"strategy": {"allowed": True, "max_budget_delta": 2}}
+    )
+    allowed, reason = _within_authorization(
+        version=version,
+        kind="strategy",
+        before={"config": {"budget": 10}},
+        after={"config": {"budget": 20}},
+    )
     assert allowed is False
     assert reason == "budget_delta_out_of_scope"

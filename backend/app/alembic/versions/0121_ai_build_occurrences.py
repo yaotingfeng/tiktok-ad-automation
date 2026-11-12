@@ -57,9 +57,15 @@ def upgrade() -> None:
         sa.ForeignKeyConstraint(["dispatch_id"], ["pending_dispatch.id"]),
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint("tenant_id", "id", name="uq_ai_build_occurrence_tenant_id"),
-        sa.UniqueConstraint("tenant_id", "request_id", name="uq_ai_build_occurrence_request"),
         sa.UniqueConstraint(
-            "tenant_id", "optimizer_id", "plan_row_id", "strategy_version_id", "scheduled_at",
+            "tenant_id", "request_id", name="uq_ai_build_occurrence_request"
+        ),
+        sa.UniqueConstraint(
+            "tenant_id",
+            "optimizer_id",
+            "plan_row_id",
+            "strategy_version_id",
+            "scheduled_at",
             name="uq_ai_build_occurrence_schedule",
         ),
         sa.CheckConstraint(
@@ -68,10 +74,14 @@ def upgrade() -> None:
         ),
     )
     op.create_index(
-        "ix_ai_build_occurrence_due", "ai_build_occurrence", ["status", "scheduled_at", "id"]
+        "ix_ai_build_occurrence_due",
+        "ai_build_occurrence",
+        ["status", "scheduled_at", "id"],
     )
     op.create_index(
-        "ix_ai_build_occurrence_optimizer", "ai_build_occurrence", ["tenant_id", "optimizer_id", "scheduled_at"]
+        "ix_ai_build_occurrence_optimizer",
+        "ai_build_occurrence",
+        ["tenant_id", "optimizer_id", "scheduled_at"],
     )
 
 

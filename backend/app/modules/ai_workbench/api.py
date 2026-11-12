@@ -65,7 +65,9 @@ def create_optimizer(
     session: SessionDep,
     user: CurrentUser,
 ) -> OptimizerPublic:
-    result = service.create_optimizer(session, context=_context(user, tenant_id), body=body)
+    result = service.create_optimizer(
+        session, context=_context(user, tenant_id), body=body
+    )
     session.commit()
     return result
 
@@ -110,7 +112,9 @@ def get_daily_plans(
 ) -> DailyPlanPublic | DailyPlanPage:
     context = _context(user, tenant_id)
     if business_date is None:
-        return plans_service.list_daily_plans(session, context=context, optimizer_id=optimizer_id)
+        return plans_service.list_daily_plans(
+            session, context=context, optimizer_id=optimizer_id
+        )
     return plans_service.get_daily_plan(
         session, context=context, optimizer_id=optimizer_id, business_date=business_date
     )
@@ -193,8 +197,6 @@ def run_daily_plan_row(
     return occurrence
 
 
-
-
 @router.get("/ai-optimizers/{optimizer_id}/occurrences", response_model=list[dict])
 def list_occurrences(
     tenant_id: UUID,
@@ -207,10 +209,15 @@ def list_occurrences(
     """Return tenant/optimizer-scoped handoff and readback evidence for the workbench."""
     context = _context(user, tenant_id)
     service.get_optimizer(session, context=context, optimizer_id=optimizer_id)
-    statement = select(BuildOccurrence).where(
-        BuildOccurrence.tenant_id == tenant_id,
-        BuildOccurrence.optimizer_id == optimizer_id,
-    ).order_by(BuildOccurrence.scheduled_at.desc(), BuildOccurrence.id.desc()).limit(limit)
+    statement = (
+        select(BuildOccurrence)
+        .where(
+            BuildOccurrence.tenant_id == tenant_id,
+            BuildOccurrence.optimizer_id == optimizer_id,
+        )
+        .order_by(BuildOccurrence.scheduled_at.desc(), BuildOccurrence.id.desc())
+        .limit(limit)
+    )
     if status:
         statement = statement.where(BuildOccurrence.status == status)
     rows = session.exec(statement).all()
@@ -233,57 +240,129 @@ def get_daily_report(
         business_date=business_date or date.today(),
     )
 
-@router.post("/ai-optimizers/{optimizer_id}/reviews", response_model=ReviewResponse, status_code=201)
+
+@router.post(
+    "/ai-optimizers/{optimizer_id}/reviews",
+    response_model=ReviewResponse,
+    status_code=201,
+)
 def create_review(
-    tenant_id: UUID, optimizer_id: UUID, body: proposals.ReviewRequest,
-    session: SessionDep, user: CurrentUser,
+    tenant_id: UUID,
+    optimizer_id: UUID,
+    body: proposals.ReviewRequest,
+    session: SessionDep,
+    user: CurrentUser,
 ) -> ReviewResponse:
     context = _context(user, tenant_id)
     task = reviews.create_review_task(
-        session, context=context, optimizer_id=optimizer_id, request_id=body.request_id,
-        evidence_ids=body.evidence_ids, knowledge_refs=body.knowledge_refs,
-        authorization_ttl_seconds=body.authorization_ttl_seconds, dsh_task_id=body.dsh_task_id,
-        request_digest=__import__("hashlib").sha256(__import__("json").dumps(body.model_dump(mode="json", exclude={"request_id"}), sort_keys=True).encode()).hexdigest(),
+        session,
+        context=context,
+        optimizer_id=optimizer_id,
+        request_id=body.request_id,
+        evidence_ids=body.evidence_ids,
+        knowledge_refs=body.knowledge_refs,
+        authorization_ttl_seconds=body.authorization_ttl_seconds,
+        dsh_task_id=body.dsh_task_id,
+        request_digest=__import__("hashlib")
+        .sha256(
+            __import__("json")
+            .dumps(body.model_dump(mode="json", exclude={"request_id"}), sort_keys=True)
+            .encode()
+        )
+        .hexdigest(),
     )
     rows: list[proposals.AIProposal] = []
     for index, change in enumerate(body.proposals):
         # One review request may contain several changes; derive stable child
         # request IDs so retries cannot create duplicate proposals.
         child_request = UUID(int=(body.request_id.int + index + 1) % (1 << 128))
-        rows.append(proposals.create_proposal(
-            session, context=context, optimizer_id=optimizer_id, review_task=task,
-            change=change, request_id=child_request,
-        ))
+        rows.append(
+            proposals.create_proposal(
+                session,
+                context=context,
+                optimizer_id=optimizer_id,
+                review_task=task,
+                change=change,
+                request_id=child_request,
+            )
+        )
     proposals.publish_auto_proposals(
-        session, context=context, optimizer_id=optimizer_id, review_task_id=task.id,
+        session,
+        context=context,
+        optimizer_id=optimizer_id,
+        review_task_id=task.id,
     )
     session.commit()
-    return ReviewResponse(task={"id": task.id, "tenant_id": task.tenant_id, "optimizer_id": task.optimizer_id, "dsh_task_id": task.dsh_task_id, "status": task.status, "fence": task.fence, "restart_generation": task.restart_generation, "optimizer_version": task.optimizer_version, "authorization_expires_at": task.authorization_expires_at, "evidence": task.evidence, "result": task.result}, proposals=[proposals._public(row) for row in rows])
+    return ReviewResponse(
+        task={
+            "id": task.id,
+            "tenant_id": task.tenant_id,
+            "optimizer_id": task.optimizer_id,
+            "dsh_task_id": task.dsh_task_id,
+            "status": task.status,
+            "fence": task.fence,
+            "restart_generation": task.restart_generation,
+            "optimizer_version": task.optimizer_version,
+            "authorization_expires_at": task.authorization_expires_at,
+            "evidence": task.evidence,
+            "result": task.result,
+        },
+        proposals=[proposals._public(row) for row in rows],
+    )
 
 
 @router.get("/ai-optimizers/{optimizer_id}/proposals")
 def get_proposals(
-    tenant_id: UUID, optimizer_id: UUID, session: SessionDep, user: CurrentUser,
+    tenant_id: UUID,
+    optimizer_id: UUID,
+    session: SessionDep,
+    user: CurrentUser,
     status: str | None = Query(default=None),
 ) -> list[dict]:
-    return proposals.list_proposals(session, context=_context(user, tenant_id), optimizer_id=optimizer_id, status=status)
+    return proposals.list_proposals(
+        session,
+        context=_context(user, tenant_id),
+        optimizer_id=optimizer_id,
+        status=status,
+    )
 
 
 @router.post("/ai-optimizers/{optimizer_id}/proposals/{proposal_id}/accept")
 def accept_proposal(
-    tenant_id: UUID, optimizer_id: UUID, proposal_id: UUID,
-    _body: proposals.DecisionRequest, session: SessionDep, user: CurrentUser,
+    tenant_id: UUID,
+    optimizer_id: UUID,
+    proposal_id: UUID,
+    _body: proposals.DecisionRequest,
+    session: SessionDep,
+    user: CurrentUser,
 ) -> dict:
-    row = proposals.accept_proposal(session, context=_context(user, tenant_id), optimizer_id=optimizer_id, proposal_id=proposal_id, request_id=_body.request_id)
+    row = proposals.accept_proposal(
+        session,
+        context=_context(user, tenant_id),
+        optimizer_id=optimizer_id,
+        proposal_id=proposal_id,
+        request_id=_body.request_id,
+    )
     session.commit()
     return proposals._public(row)
 
 
 @router.post("/ai-optimizers/{optimizer_id}/proposals/{proposal_id}/reject")
 def reject_proposal(
-    tenant_id: UUID, optimizer_id: UUID, proposal_id: UUID,
-    body: proposals.DecisionRequest, session: SessionDep, user: CurrentUser,
+    tenant_id: UUID,
+    optimizer_id: UUID,
+    proposal_id: UUID,
+    body: proposals.DecisionRequest,
+    session: SessionDep,
+    user: CurrentUser,
 ) -> dict:
-    row = proposals.reject_proposal(session, context=_context(user, tenant_id), optimizer_id=optimizer_id, proposal_id=proposal_id, reason=body.reason, request_id=body.request_id)
+    row = proposals.reject_proposal(
+        session,
+        context=_context(user, tenant_id),
+        optimizer_id=optimizer_id,
+        proposal_id=proposal_id,
+        reason=body.reason,
+        request_id=body.request_id,
+    )
     session.commit()
     return proposals._public(row)

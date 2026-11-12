@@ -4,6 +4,7 @@ The DSH worker receives a short-lived authorization and an opaque fence.  It
 never receives provider credentials or database access and can only return the
 structured evidence/proposal payload persisted by the review service.
 """
+
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
@@ -18,7 +19,14 @@ from app.modules.ai_workbench.knowledge_refs import sanitize_public
 from app.modules.ai_workbench.reviews import DSHReviewTask, authorize
 
 
-def _task(session: Session, *, context: TenantContext, optimizer_id: UUID, task_id: UUID, lock: bool = False) -> DSHReviewTask:
+def _task(
+    session: Session,
+    *,
+    context: TenantContext,
+    optimizer_id: UUID,
+    task_id: UUID,
+    lock: bool = False,
+) -> DSHReviewTask:
     query = select(DSHReviewTask).where(
         DSHReviewTask.tenant_id == context.tenant_id,
         DSHReviewTask.optimizer_id == optimizer_id,
@@ -43,9 +51,18 @@ def _check_fence(
         raise DomainError("ai_task_cancelled", "DSH task was cancelled")
 
 
-def start_task(session: Session, *, context: TenantContext, optimizer_id: UUID, task_id: UUID, fence: str) -> DSHReviewTask:
+def start_task(
+    session: Session,
+    *,
+    context: TenantContext,
+    optimizer_id: UUID,
+    task_id: UUID,
+    fence: str,
+) -> DSHReviewTask:
     authorize(session, context)
-    row = _task(session, context=context, optimizer_id=optimizer_id, task_id=task_id, lock=True)
+    row = _task(
+        session, context=context, optimizer_id=optimizer_id, task_id=task_id, lock=True
+    )
     _check_fence(row, fence=fence)
     if row.authorization_expires_at <= datetime.now(UTC):
         raise DomainError("ai_dsh_authorization_expired", "DSH authorization expired")
@@ -57,9 +74,19 @@ def start_task(session: Session, *, context: TenantContext, optimizer_id: UUID, 
     return row
 
 
-def finish_task(session: Session, *, context: TenantContext, optimizer_id: UUID, task_id: UUID, fence: str, result: dict[str, Any]) -> DSHReviewTask:
+def finish_task(
+    session: Session,
+    *,
+    context: TenantContext,
+    optimizer_id: UUID,
+    task_id: UUID,
+    fence: str,
+    result: dict[str, Any],
+) -> DSHReviewTask:
     authorize(session, context)
-    row = _task(session, context=context, optimizer_id=optimizer_id, task_id=task_id, lock=True)
+    row = _task(
+        session, context=context, optimizer_id=optimizer_id, task_id=task_id, lock=True
+    )
     _check_fence(row, fence=fence)
     if row.status == "COMPLETE":
         return row
@@ -73,9 +100,18 @@ def finish_task(session: Session, *, context: TenantContext, optimizer_id: UUID,
     return row
 
 
-def cancel_task(session: Session, *, context: TenantContext, optimizer_id: UUID, task_id: UUID, fence: str) -> DSHReviewTask:
+def cancel_task(
+    session: Session,
+    *,
+    context: TenantContext,
+    optimizer_id: UUID,
+    task_id: UUID,
+    fence: str,
+) -> DSHReviewTask:
     authorize(session, context, write=True)
-    row = _task(session, context=context, optimizer_id=optimizer_id, task_id=task_id, lock=True)
+    row = _task(
+        session, context=context, optimizer_id=optimizer_id, task_id=task_id, lock=True
+    )
     _check_fence(row, fence=fence, allow_cancelled_terminal=True)
     if row.status in {"COMPLETE", "CANCELLED"}:
         return row
@@ -86,10 +122,14 @@ def cancel_task(session: Session, *, context: TenantContext, optimizer_id: UUID,
     return row
 
 
-def restart_task(session: Session, *, context: TenantContext, optimizer_id: UUID, task_id: UUID) -> DSHReviewTask:
+def restart_task(
+    session: Session, *, context: TenantContext, optimizer_id: UUID, task_id: UUID
+) -> DSHReviewTask:
     """Fence a restart so an old worker cannot write a result after recovery."""
     authorize(session, context, write=True)
-    row = _task(session, context=context, optimizer_id=optimizer_id, task_id=task_id, lock=True)
+    row = _task(
+        session, context=context, optimizer_id=optimizer_id, task_id=task_id, lock=True
+    )
     if row.status in {"COMPLETE", "CANCELLED"}:
         return row
     row.restart_generation += 1

@@ -25,7 +25,9 @@ def upgrade() -> None:
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint("tenant_id", "id", name="uq_ai_optimizer_tenant_id"),
     )
-    op.create_index("ix_ai_optimizer_tenant", "ai_optimizer", ["tenant_id", "created_at"])
+    op.create_index(
+        "ix_ai_optimizer_tenant", "ai_optimizer", ["tenant_id", "created_at"]
+    )
 
     op.create_table(
         "ai_optimizer_strategy_binding",
@@ -101,15 +103,25 @@ def upgrade() -> None:
             name="fk_ai_version_binding",
         ),
         sa.PrimaryKeyConstraint("id"),
-        sa.UniqueConstraint("tenant_id", "id", name="uq_ai_optimizer_version_tenant_id"),
-        sa.UniqueConstraint("tenant_id", "optimizer_id", "number", name="uq_ai_optimizer_version_number"),
-        sa.UniqueConstraint("tenant_id", "request_id", name="uq_ai_optimizer_version_request"),
+        sa.UniqueConstraint(
+            "tenant_id", "id", name="uq_ai_optimizer_version_tenant_id"
+        ),
+        sa.UniqueConstraint(
+            "tenant_id", "optimizer_id", "number", name="uq_ai_optimizer_version_number"
+        ),
+        sa.UniqueConstraint(
+            "tenant_id", "request_id", name="uq_ai_optimizer_version_request"
+        ),
         sa.CheckConstraint(
             "number > 0 AND daily_spend > 0 AND (target_roas IS NULL OR target_roas > 0)",
             name="ck_ai_optimizer_version_values",
         ),
-        sa.CheckConstraint("priority IN ('SPEND','ROAS','BALANCED')", name="ck_ai_optimizer_priority"),
-        sa.CheckConstraint("optimization_mode IN ('AUTO','MANUAL')", name="ck_ai_optimizer_mode"),
+        sa.CheckConstraint(
+            "priority IN ('SPEND','ROAS','BALANCED')", name="ck_ai_optimizer_priority"
+        ),
+        sa.CheckConstraint(
+            "optimization_mode IN ('AUTO','MANUAL')", name="ck_ai_optimizer_mode"
+        ),
     )
     op.create_index(
         "ix_ai_optimizer_version_optimizer",
@@ -135,7 +147,9 @@ def upgrade() -> None:
             name="fk_ai_rule_binding_optimizer",
         ),
         sa.PrimaryKeyConstraint("id"),
-        sa.UniqueConstraint("tenant_id", "optimizer_id", "rule_id", name="uq_ai_optimizer_rule"),
+        sa.UniqueConstraint(
+            "tenant_id", "optimizer_id", "rule_id", name="uq_ai_optimizer_rule"
+        ),
     )
     op.create_index(
         "ix_ai_rule_binding_optimizer",
@@ -145,12 +159,18 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.drop_index("ix_ai_rule_binding_optimizer", table_name="ai_optimizer_rule_binding")
+    op.drop_index(
+        "ix_ai_rule_binding_optimizer", table_name="ai_optimizer_rule_binding"
+    )
     op.drop_table("ai_optimizer_rule_binding")
-    op.drop_index("ix_ai_optimizer_version_optimizer", table_name="ai_optimizer_version")
+    op.drop_index(
+        "ix_ai_optimizer_version_optimizer", table_name="ai_optimizer_version"
+    )
     op.drop_table("ai_optimizer_version")
     op.drop_index("ix_ai_binding_optimizer", table_name="ai_optimizer_strategy_binding")
-    op.drop_index("uq_ai_binding_one_active", table_name="ai_optimizer_strategy_binding")
+    op.drop_index(
+        "uq_ai_binding_one_active", table_name="ai_optimizer_strategy_binding"
+    )
     op.drop_table("ai_optimizer_strategy_binding")
     op.drop_index("ix_ai_optimizer_tenant", table_name="ai_optimizer")
     op.drop_table("ai_optimizer")

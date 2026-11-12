@@ -36,7 +36,12 @@ class AIDailyPlan(SQLModel, table=True):
             name="fk_ai_daily_plan_optimizer",
         ),
         CheckConstraint("revision > 0", name="ck_ai_daily_plan_revision"),
-        Index("ix_ai_daily_plan_optimizer_day", "tenant_id", "optimizer_id", "business_date"),
+        Index(
+            "ix_ai_daily_plan_optimizer_day",
+            "tenant_id",
+            "optimizer_id",
+            "business_date",
+        ),
     )
 
     id: UUID = Field(default_factory=uuid4, primary_key=True)
@@ -54,7 +59,9 @@ class AIDailyPlanRow(SQLModel, table=True):
     __tablename__ = "ai_daily_plan_row"
     __table_args__ = (
         UniqueConstraint("tenant_id", "id", name="uq_ai_daily_plan_row_tenant_id"),
-        UniqueConstraint("tenant_id", "plan_id", "position", name="uq_ai_daily_plan_row_position"),
+        UniqueConstraint(
+            "tenant_id", "plan_id", "position", name="uq_ai_daily_plan_row_position"
+        ),
         ForeignKeyConstraint(
             ["tenant_id", "plan_id"],
             ["ai_daily_plan.tenant_id", "ai_daily_plan.id"],
@@ -74,7 +81,13 @@ class AIDailyPlanRow(SQLModel, table=True):
             ],
             name="fk_ai_daily_plan_row_provider_application",
         ),
-        Index("ix_ai_daily_plan_row_day", "tenant_id", "optimizer_id", "business_date", "position"),
+        Index(
+            "ix_ai_daily_plan_row_day",
+            "tenant_id",
+            "optimizer_id",
+            "business_date",
+            "position",
+        ),
     )
 
     id: UUID = Field(default_factory=uuid4, primary_key=True)
@@ -91,4 +104,3 @@ class AIDailyPlanRow(SQLModel, table=True):
     external_drama_id: str | None = Field(default=None, max_length=255)
     order_materials: bool = False
     position: int = Field(default=0, ge=0)
-
