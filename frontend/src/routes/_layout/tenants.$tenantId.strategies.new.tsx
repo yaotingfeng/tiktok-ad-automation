@@ -12,5 +12,5 @@ export const Route = createFileRoute(
 })
 function Page() {
   const search = Route.useSearch()
-  return <StrategyEditor copyVersionId={search.copy_version_id} returnContext={search.return_to} readonly={!!search.ai_optimizer_id} />
+  return <StrategyEditor copyVersionId={search.copy_version_id} aiOptimizerId={search.ai_optimizer_id} returnContext={search.return_to} readonly={!!search.ai_optimizer_id} />
 }

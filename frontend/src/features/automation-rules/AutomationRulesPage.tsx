@@ -16,7 +16,7 @@ export function AutomationRulesPage() {
   const write = !!scope && scope.role !== "viewer"
   // 平台管理员与租户管理员都能保存自动执行规则（与后端 manage 权限一致）。
   const admin = canManage(scope?.role)
-  const boundContext = !!search.ai_optimizer_id && search.scope === "bound"
+  const boundContext = !!search.ai_optimizer_id
   const boundRuleIds = search.rule_ids?.split(",").filter(Boolean) ?? []
   const tab = search.tab ?? "rules"
   return (
@@ -56,7 +56,7 @@ export function AutomationRulesPage() {
           <TabsTrigger value="runs">执行记录</TabsTrigger>
         </TabsList>
         <TabsContent value="rules">
-          <RuleList tenantId={tenantId!} write={write && !boundContext} admin={admin} boundRuleIds={boundRuleIds} />
+          <RuleList tenantId={tenantId!} write={write && !boundContext} admin={admin} boundOnly={boundContext} boundRuleIds={boundRuleIds} />
         </TabsContent>
         <TabsContent value="confirmations">
           <Confirmations

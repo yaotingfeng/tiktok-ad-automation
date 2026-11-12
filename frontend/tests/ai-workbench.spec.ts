@@ -1,5 +1,6 @@
 import { expect, test } from "@playwright/test"
 import { workspaceNavigation } from "../src/components/Sidebar/navigation"
+import { filterBoundRules } from "../src/features/automation-rules/RuleList"
 import {
   aiWorkbenchMenu,
   aiOccurrenceEndpoint,
@@ -79,4 +80,10 @@ test("切换优化师会清掉旧的记录、版本和返回上下文", () => {
 
 test("执行视图使用租户和优化师作用域的 occurrence API", () => {
   expect(aiOccurrenceEndpoint("tenant-a", "optimizer-b")).toBe("/api/tenants/tenant-a/ai-optimizers/optimizer-b/occurrences")
+})
+
+
+test("优化师没有绑定规则时不会泄露租户规则", () => {
+  expect(filterBoundRules([{ id: "rule-a" }, { id: "rule-b" }], true, [])).toEqual([])
+  expect(filterBoundRules([{ id: "rule-a" }, { id: "rule-b" }], true, ["rule-b"])).toEqual([{ id: "rule-b" }])
 })

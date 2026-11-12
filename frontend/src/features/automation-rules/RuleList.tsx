@@ -62,6 +62,10 @@ function hasFilters(filters: Filters) {
   return Object.values(filters).some((value) => value !== "ALL")
 }
 
+export function filterBoundRules<T extends { id: string }>(rows: T[], boundOnly: boolean, boundRuleIds: string[]) {
+  return boundOnly ? rows.filter((rule) => boundRuleIds.includes(rule.id)) : rows
+}
+
 function matchesFilters(rule: RulePublic, filters: Filters) {
   const def = rule.definition
   return (
@@ -165,11 +169,13 @@ export function RuleList({
   tenantId,
   write,
   admin,
+  boundOnly = false,
   boundRuleIds = [],
 }: {
   tenantId: string
   write: boolean
   admin: boolean
+  boundOnly?: boolean
   boundRuleIds?: string[]
 }) {
   const client = useQueryClient()
@@ -226,10 +232,8 @@ export function RuleList({
       await refresh()
     },
   })
-  const rows = (rules.data?.items ?? []).filter(
-    (rule) =>
-      (!boundRuleIds.length || boundRuleIds.includes(rule.id)) &&
-      rule.name.includes(search.trim()) && matchesFilters(rule, filters),
+  const rows = filterBoundRules(rules.data?.items ?? [], boundOnly, boundRuleIds).filter(
+    (rule) => rule.name.includes(search.trim()) && matchesFilters(rule, filters),
   )
   const toggleSelected = useCallback(
     (id: string, checked: boolean) =>

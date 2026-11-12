@@ -30,3 +30,11 @@ Implemented the TK-ADA AI optimizer workbench shell and reused configuration ent
 - Added static route/menu/scope regression assertions.
 
 Verification: `python3 -m compileall -q backend/app/modules/ai_workbench/api.py` and `git diff --check` passed. Frontend Bun/Playwright build remains unavailable because this environment has no Bun or installed frontend dependencies.
+
+## Fix round 2
+
+- Bound rule mode is now explicit: any optimizer context is read-only and filters by exact bound rule IDs; an optimizer with zero bindings renders zero rules instead of leaking tenant-wide rules.
+- Strategy version history, detail and cancel/back navigation now carry optimizer, record/version, return and read-only context through the existing route/search contracts.
+- Added static regression coverage for zero-rule isolation and switch/occurrence scope helpers.
+
+Verification: `python3 -m compileall -q backend/app/modules/ai_workbench/api.py` and `git diff --check` passed. Frontend build remains unavailable without Bun/dependencies.

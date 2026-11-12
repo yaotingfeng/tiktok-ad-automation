@@ -360,6 +360,10 @@ export function StrategyList() {
           strategyId={history.id}
           name={history.name}
           onClose={() => setHistory(null)}
+          aiOptimizerId={contextSearch.ai_optimizer_id}
+          recordId={contextSearch.record_id}
+          versionId={contextSearch.version_id}
+          returnContext={contextSearch.return_to}
         />
       )}
       <Dialog
