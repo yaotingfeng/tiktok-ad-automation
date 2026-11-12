@@ -28,6 +28,8 @@ test("双租户双优化师切换保留 AUTO/MANUAL、下单路径和回读边�
   const optimizerAManual = "aaaaaaaa-0001-4000-8000-aaaaaaaaaaaa"
   const optimizerB = "bbbbbbbb-0000-4000-8000-bbbbbbbbbbbb"
   const reportRequests: string[] = []
+  const proposalRequests: string[] = []
+  const versionRequests: Array<Record<string, unknown>> = []
   const optimizerPayload = (id: string, mode: "AUTO" | "MANUAL", name: string) => ({
     id,
     name,
@@ -70,12 +72,23 @@ test("双租户双优化师切换保留 AUTO/MANUAL、下单路径和回读边�
         { id: `${reportOptimizer}-ordered`, title: "需下单剧", status: "PARTIAL", order_materials: true },
         { id: `${reportOptimizer}-existing`, title: "已有素材剧", status: "COMPLETE", order_materials: false },
       ],
+      build_outcomes: [{ id: `${reportOptimizer}-build`, status: "PARTIAL", submission_id: `${reportOptimizer}-submission`, readback: { matched: 1, source: "tkada" } }],
       material: { requested: 1, not_requested: 1, pending: 0, matched: 1, unknown: 0 },
       rule_actions: [{ rule_id: reportOptimizer === optimizerB ? "rule-b-account" : "rule-a-account" }],
       pending_proposals: [{ id: `${reportOptimizer}-proposal`, status: "PENDING" }],
       frozen_evidence_ids: [`${reportOptimizer}-evidence`],
       next_trigger: null,
     } })
+  })
+  await page.route(`**/api/tenants/${tenantA}/ai-optimizers/${optimizerAManual}`, async (route) => {
+    if (route.request().method() !== "PATCH") return route.continue()
+    const body = route.request().postDataJSON() as Record<string, unknown>
+    versionRequests.push(body)
+    await route.fulfill({ json: { ...optimizerPayload(optimizerAManual, "MANUAL", "手动优化师 A"), version: 4, request_id: body.request_id } })
+  })
+  await page.route(`**/api/tenants/${tenantA}/ai-optimizers/${optimizerAManual}/proposals/*/accept`, async (route) => {
+    proposalRequests.push(route.request().url())
+    await route.fulfill({ json: { id: `${optimizerAManual}-proposal`, status: "ACCEPTED", published_version_id: "strategy-next" } })
   })
 
   await page.goto(`/tenants/${tenantA}/ai-workbench?optimizer_id=${optimizerA}`)
@@ -84,6 +97,14 @@ test("双租户双优化师切换保留 AUTO/MANUAL、下单路径和回读边�
   await expect(page.getByTestId("ai-daily-report")).toContainText("需下单剧")
   await page.goto(`/tenants/${tenantA}/ai-workbench?optimizer_id=${optimizerAManual}`)
   await expect(page.getByTestId("ai-daily-report")).toContainText("MANUAL")
+  await expect(page.getByTestId("ai-daily-report")).toContainText("部分完成")
+  const nextVersion = await page.request.patch(`/api/tenants/${tenantA}/ai-optimizers/${optimizerAManual}`, { data: { strategy_version_id: "strategy-next", request_id: "next-version-request" } })
+  expect(nextVersion.ok()).toBeTruthy()
+  expect((await nextVersion.json()).version).toBe(4)
+  const accepted = await page.request.post(`/api/tenants/${tenantA}/ai-optimizers/${optimizerAManual}/proposals/${optimizerAManual}-proposal/accept`, { data: { request_id: "proposal-accept-request" } })
+  expect(accepted.ok()).toBeTruthy()
+  expect(proposalRequests).toHaveLength(1)
+  expect(versionRequests).toEqual([{ strategy_version_id: "strategy-next", request_id: "next-version-request" }])
   await page.goto(`/tenants/${tenantB}/ai-workbench?optimizer_id=${optimizerB}`)
   await expect(page.getByTestId("ai-daily-report")).toContainText("手动优化师 B")
   await expect.poll(() => reportRequests.length).toBeGreaterThanOrEqual(3)
