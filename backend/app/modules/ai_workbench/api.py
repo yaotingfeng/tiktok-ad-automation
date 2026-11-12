@@ -505,3 +505,179 @@ def material_options(tenant_id: UUID, session: SessionDep, user: CurrentUser) ->
             if isinstance(item, dict)
         ],
     }
+
+
+# 知识资产独立于优化师：公共版本跨租户复用，私有版本受成员权限约束。
+from pydantic import Field  # noqa: E402
+from sqlalchemy import or_  # noqa: E402
+from sqlmodel import col  # noqa: E402
+
+from app.modules.ai_workbench.knowledge import (  # noqa: E402
+    KnowledgeInput,
+    KnowledgeVersion,
+    create_version,
+    latest_query,
+    promote_public,
+)
+from app.modules.tenants.permissions import require_tenant  # noqa: E402
+
+
+@router.get("/ai-knowledge")
+def list_ai_knowledge(
+    tenant_id: UUID, session: SessionDep, user: CurrentUser, bc_id: str | None = None
+) -> list[dict]:
+    require_tenant(session, actor_id=user.id, tenant_id=tenant_id, action="read")
+    query = latest_query().where(
+        or_(KnowledgeVersion.scope == "PUBLIC", KnowledgeVersion.tenant_id == tenant_id)
+    )
+    if bc_id:
+        query = query.where(
+            or_(KnowledgeVersion.bc_id.is_(None), KnowledgeVersion.bc_id == bc_id)
+        )
+    rows = session.exec(
+        query.order_by(col(KnowledgeVersion.created_at).desc()).limit(100)
+    ).all()
+    # 不返回公共知识的创建者/审核原文等内部身份信息。
+    return [
+        r.model_dump(mode="json", exclude={"created_by", "sharing_review", "tenant_id"})
+        for r in rows
+    ]
+
+
+@router.post("/ai-knowledge", status_code=201)
+def create_ai_knowledge(
+    tenant_id: UUID, body: KnowledgeInput, session: SessionDep, user: CurrentUser
+) -> dict:
+    row = create_version(session, context=_context(user, tenant_id), body=body)
+    session.commit()
+    return {"id": str(row.id), "asset_id": str(row.asset_id), "version": row.version}
+
+
+@router.post("/ai-knowledge/{asset_id}/versions", status_code=201)
+def revise_ai_knowledge(
+    tenant_id: UUID,
+    asset_id: UUID,
+    body: KnowledgeInput,
+    session: SessionDep,
+    user: CurrentUser,
+) -> dict:
+    row = create_version(
+        session, context=_context(user, tenant_id), body=body, asset_id=asset_id
+    )
+    session.commit()
+    return {"id": str(row.id), "asset_id": str(row.asset_id), "version": row.version}
+
+
+class PublicPromotion(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    body: str = Field(min_length=1, max_length=12000)
+    review: str = Field(min_length=1, max_length=2000)
+
+
+@router.post("/ai-knowledge/{version_id}/promote", status_code=201)
+def share_ai_knowledge(
+    tenant_id: UUID,
+    version_id: UUID,
+    body: PublicPromotion,
+    session: SessionDep,
+    user: CurrentUser,
+) -> dict:
+    row = promote_public(
+        session,
+        context=_context(user, tenant_id),
+        version_id=version_id,
+        body=body.body,
+        review=body.review,
+    )
+    session.commit()
+    return {"id": str(row.id), "asset_id": str(row.asset_id), "version": row.version}
+
+
+class CandidateValidation(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    kind: str
+    target_id: UUID | None = None
+    after: dict
+
+
+@router.post("/ai-optimizers/{optimizer_id}/validate-proposal")
+def validate_ai_proposal(
+    tenant_id: UUID,
+    optimizer_id: UUID,
+    body: CandidateValidation,
+    session: SessionDep,
+    user: CurrentUser,
+) -> dict:
+    from app.modules.ai_workbench.capabilities import validate_candidate
+
+    return validate_candidate(
+        session,
+        context=_context(user, tenant_id),
+        optimizer_id=optimizer_id,
+        kind=body.kind,
+        target_id=body.target_id,
+        after=body.after,
+    )
+
+
+class ConfirmExperience(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    validation_result: str = Field(min_length=1, max_length=2000)
+
+
+@router.post(
+    "/ai-optimizers/{optimizer_id}/reviews/{task_id}/experiences/{index}/confirm",
+    status_code=201,
+)
+def confirm_ai_experience(
+    tenant_id: UUID,
+    optimizer_id: UUID,
+    task_id: UUID,
+    index: int,
+    body: ConfirmExperience,
+    session: SessionDep,
+    user: CurrentUser,
+) -> dict:
+    from app.core.errors import DomainError
+
+    context = _context(user, tenant_id)
+    require_tenant(session, actor_id=user.id, tenant_id=tenant_id, action="manage")
+    task = reviews.get_review_task(
+        session, context=context, optimizer_id=optimizer_id, task_id=task_id
+    )
+    candidates = task.result.get("experience_candidates", [])
+    if task.status != "COMPLETE" or index < 0 or index >= len(candidates):
+        raise DomainError("ai_experience_not_found", "没有可确认的经验候选")
+    candidate = candidates[index]
+    # 稳定标识使重复点击幂等；只进入原租户/原 BC，不能借确认升级成公共经验。
+    key = f"review-{task_id}-{index}"
+    existing = session.exec(
+        latest_query().where(
+            KnowledgeVersion.tenant_id == tenant_id, KnowledgeVersion.key == key
+        )
+    ).first()
+    if existing:
+        return {
+            "id": str(existing.id),
+            "asset_id": str(existing.asset_id),
+            "version": existing.version,
+        }
+    row = create_version(
+        session,
+        context=context,
+        body=KnowledgeInput(
+            key=key,
+            scope="BC",
+            bc_id=task.evidence["optimizer"]["bc_id"],
+            title=candidate["title"],
+            body=candidate["body"],
+            source=f"review:{task_id}",
+            source_verified=True,
+            applicability=candidate["applicability"]
+            + "\n人工验证："
+            + body.validation_result,
+            evidence_ids=candidate["evidence_ids"],
+        ),
+    )
+    session.commit()
+    return {"id": str(row.id), "asset_id": str(row.asset_id), "version": row.version}

@@ -5149,3 +5149,12 @@ c34b生产快速切换约3分28秒完成、锁释放/CI恢复；五分钟仍4.88
 - 集成f8d053b3（实现8a969b91）：operation_log CREATE/CHECK/DOWNLOAD端点统一；混阶段重选、有界旧头纠正、领取前冻结票据端点及跨代旧消息只清自身占位。无DDL，保留原头级冷却、官方SDK准入/配额和全部owner/lease代数保护。
 - 72项真实PG/Redis相关回归与Ruff/格式检查通过，独立审查Ready；集成工作树另外2项关键行为回归通过。
 - 计划按现行无DDL快速镜像切换发布，保留11角色全部配置/资源/退出宽限、50QPS和四开关；不新建备份、恢复演练或全量停服排空。真实时效尚待验，具体边界见物理退休验证记录。
+
+## 2026-11-13 AI review methods/knowledge/learning
+
+- Implemented active local review data pack: account-local complete days, maturity, currency, missing/zero distinction, bounded dimensions and frozen input budget; no prior query snapshot or provider call required.
+- Added versioned workbench main Skill and builds/rules/materials/business/scale references. Frozen task stores body/hash/version and capability status; transfer review remains local-only.
+- Added versioned PUBLIC/TENANT/BC knowledge with scope checks, expiry/conflict metadata, body hashing, bounded retrieval, explicit platform-admin sanitized public promotion, task freezing and confirmation API for private experience candidates.
+- Added history feedback assembly for proposals and reviews, execution/readback/observation maturity states, deterministic observational comparisons, candidate experience contract, and AUTO/MANUAL-safe capability prevalidation.
+- DSH completion tool now accepts bounded recommendations and evidence-backed experience candidates while retaining a single structured tool and no shell/platform mutation.
+- Verification: focused AI workbench tests 25 passed; Node runtime syntax check passed; ruff checks passed. Full AI suite has unrelated date-sensitive completion expectations when run on 2026-11-13; no build-handoff behavior was changed.

@@ -30,10 +30,32 @@ router = APIRouter(
 bearer = HTTPBearer(auto_error=False)
 
 
+class Recommendation(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    problem: str = Field(min_length=1, max_length=2000)
+    suggestion: str = Field(min_length=1, max_length=4000)
+    evidence_ids: list[UUID] = Field(default_factory=list, max_length=30)
+    validation: str = Field(default="", max_length=2000)
+    capability_request: str | None = Field(default=None, max_length=100)
+
+
+class ExperienceCandidate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    title: str = Field(min_length=1, max_length=200)
+    body: str = Field(min_length=1, max_length=4000)
+    applicability: str = Field(min_length=1, max_length=2000)
+    evidence_ids: list[UUID] = Field(min_length=1, max_length=30)
+    validation: str = Field(min_length=1, max_length=2000)
+
+
 class ReviewResult(BaseModel):
     model_config = ConfigDict(extra="forbid")
     summary: str = Field(min_length=1, max_length=20000)
     proposals: list[ProposalInput] = Field(default_factory=list, max_length=20)
+    recommendations: list[Recommendation] = Field(default_factory=list, max_length=20)
+    experience_candidates: list[ExperienceCandidate] = Field(
+        default_factory=list, max_length=10
+    )
     failed: bool = False
 
 
@@ -210,7 +232,14 @@ def complete(
         return {"id": str(task.id), "status": task.status}
     if task.status != "RUNNING":
         raise DomainError("ai_task_fence_conflict", "复盘任务未领取")
-    if body.failed and body.proposals:
+    cited = {
+        str(e)
+        for item in [*body.recommendations, *body.experience_candidates]
+        for e in item.evidence_ids
+    }
+    if not cited.issubset(reviews.frozen_evidence_ids(task.evidence)):
+        raise DomainError("ai_evidence_not_found", "建议或经验引用了任务范围外的证据")
+    if body.failed and (body.proposals or body.experience_candidates):
         raise DomainError("ai_proposal_invalid", "失败复盘不能发布提案")
     for index, change in enumerate(body.proposals):
         proposals.create_proposal(

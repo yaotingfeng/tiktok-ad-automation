@@ -501,3 +501,41 @@ def snapshot_naming_versions(
     for advertiser, campaign, revision in rows:
         naming_versions[f"{advertiser}:{campaign}"] = revision
     return naming_versions
+
+
+def freeze_review_page(
+    session: Session,
+    *,
+    context: TenantContext,
+    bc_id: str,
+    filters: ReportingFilter,
+    limit: int = 50,
+) -> dict:
+    """领域消费者复用相同报表构建/物化口径，并复制正文到长寿命冻结任务。
+
+    不提交/回滚调用方事务，不使用发起人的历史查询，不触发平台请求。
+    """
+    snapshot = _build_snapshot(session, context=context, bc_id=bc_id, filters=filters)
+    page = _read_page(
+        session,
+        context=context,
+        bc_id=bc_id,
+        filters=filters,
+        snapshot=snapshot,
+        cursor=None,
+        limit=min(limit, 100),
+    )
+    return {
+        "id": str(snapshot.id),
+        "status": snapshot.coverage["status"],
+        "filters": filters.model_dump(mode="json"),
+        "publication_versions": snapshot.publication_versions,
+        "summary": snapshot.summary,
+        "coverage": snapshot.coverage,
+        "metrics_observed_at": page.metrics_observed_at.isoformat()
+        if page.metrics_observed_at
+        else None,
+        "rows": [row.model_dump(mode="json") for row in page.items],
+        "rows_truncated": snapshot.total > len(page.items),
+        "total": snapshot.total,
+    }

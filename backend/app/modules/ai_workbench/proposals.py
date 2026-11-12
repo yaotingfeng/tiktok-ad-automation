@@ -46,7 +46,10 @@ class ProposalInput(BaseModel):
     kind: Literal["strategy", "rule"]
     target_id: UUID | None = None
     after: dict[str, Any] = Field(default_factory=dict)
-    rationale: str = ""
+    rationale: str = Field(default="", max_length=4000)
+    problem: str = Field(default="", max_length=2000)
+    expected_effect: str = Field(default="", max_length=2000)
+    validation: str = Field(default="", max_length=2000)
     evidence_ids: tuple[UUID, ...] = ()
 
 
@@ -522,6 +525,9 @@ def create_proposal(
             "review_task_id": str(review_task.id),
             "captured_optimizer_version": version.number,
             "rationale": change.rationale,
+            "problem": change.problem,
+            "expected_effect": change.expected_effect,
+            "validation": change.validation,
         },
         authorization={
             "allowed": allowed,

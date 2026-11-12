@@ -129,65 +129,6 @@ def _is_uuid(value: str) -> bool:
     return True
 
 
-def _reporting_frozen_refs(
-    session: Session,
-    *,
-    context: TenantContext,
-    version: AIOptimizerVersion,
-) -> list[dict[str, Any]]:
-    """Return immutable query/evidence references, never live report rows."""
-    from app.modules.reporting.query_models import QuerySnapshot, QuerySnapshotRow
-    from app.modules.reporting.read_models.evidence import ReportEvidenceVersion
-
-    snapshots = session.exec(
-        select(QuerySnapshot)
-        .where(
-            QuerySnapshot.tenant_id == context.tenant_id,
-            QuerySnapshot.bc_id == version.bc_id,
-            QuerySnapshot.actor_id == context.actor_id,
-        )
-        .order_by(col(QuerySnapshot.created_at).desc())
-        .limit(50)
-    ).all()
-    account_ids = set(version.advertiser_ids)
-    result = []
-    for snapshot in snapshots:
-        # 汇总不能从更大的账户快照中直接摘取，否则会泄露其他优化师的数据。
-        if not snapshot.advertiser_ids or not set(snapshot.advertiser_ids).issubset(
-            account_ids
-        ):
-            continue
-        rows = session.exec(
-            select(QuerySnapshotRow)
-            .where(QuerySnapshotRow.snapshot_id == snapshot.id)
-            .order_by(QuerySnapshotRow.stable_sequence)
-            .limit(1000)
-        ).all()
-        evidence_ids = {item for row in rows for item in row.evidence_versions}
-        versions = (
-            session.exec(
-                select(ReportEvidenceVersion).where(
-                    col(ReportEvidenceVersion.id).in_(evidence_ids),
-                    ReportEvidenceVersion.tenant_id == context.tenant_id,
-                    col(ReportEvidenceVersion.advertiser_id).in_(
-                        version.advertiser_ids
-                    ),
-                )
-            ).all()
-            if evidence_ids
-            else []
-        )
-        if len(versions) != len(evidence_ids):
-            raise DomainError("ai_evidence_not_found", "报表证据已失效或超出账户范围")
-        frozen = snapshot.model_dump(mode="json")
-        frozen["rows"] = [row.model_dump(mode="json") for row in rows]
-        frozen["rows_truncated"] = snapshot.total > len(rows)
-        frozen["evidence"] = [row.model_dump(mode="json") for row in versions]
-        frozen["digest"] = _digest(frozen)
-        result.append(frozen)
-    return result
-
-
 def frozen_evidence_ids(evidence: Mapping[str, Any] | None) -> set[str]:
     """Collect identifiers for every frozen evidence category.
 
@@ -199,6 +140,7 @@ def frozen_evidence_ids(evidence: Mapping[str, Any] | None) -> set[str]:
         return set()
 
     fields_by_category: dict[str, tuple[str, ...]] = {
+        "knowledge": ("id",),
         "plans": ("id",),
         "build_occurrences": ("id", "strategy_version_id"),
         "rule_evidence": ("id",),
@@ -259,24 +201,41 @@ def frozen_evidence(
             AIDailyPlanRow.tenant_id == context.tenant_id,
             AIDailyPlanRow.optimizer_id == optimizer.id,
         )
-        .order_by(col(AIDailyPlanRow.business_date), col(AIDailyPlanRow.position))
+        .order_by(
+            col(AIDailyPlanRow.business_date).desc(), col(AIDailyPlanRow.position)
+        )
+        .limit(201)
     ).all()
     occurrences = session.exec(
         select(BuildOccurrence)
         .where(
             BuildOccurrence.tenant_id == context.tenant_id,
             BuildOccurrence.optimizer_id == optimizer.id,
+            BuildOccurrence.bc_id == version.bc_id,
         )
-        .order_by(col(BuildOccurrence.scheduled_at))
+        .order_by(col(BuildOccurrence.scheduled_at).desc())
+        .limit(201)
     ).all()
+    occurrences = [
+        row
+        for row in occurrences
+        if set(row.advertiser_ids).issubset(set(version.advertiser_ids))
+    ]
     all_rule_evidence = session.exec(
         select(AutomationRuleEvidence)
         .where(
             AutomationRuleEvidence.tenant_id == context.tenant_id,
             AutomationRuleEvidence.optimizer_id == optimizer.id,
+            AutomationRuleEvidence.bc_id == version.bc_id,
         )
-        .order_by(col(AutomationRuleEvidence.created_at))
+        .order_by(col(AutomationRuleEvidence.created_at).desc())
+        .limit(201)
     ).all()
+    all_rule_evidence = [
+        row
+        for row in all_rule_evidence
+        if set(row.advertiser_ids).issubset(set(version.advertiser_ids))
+    ]
     rule_evidence = (
         [row for row in all_rule_evidence if row.id in set(evidence_ids)]
         if evidence_ids
@@ -284,12 +243,12 @@ def frozen_evidence(
     )
     # Freeze IDs, revisions and digests from append-only reporting, business and
     # operation stores so later source updates never change this review input.
+    from app.modules.ai_workbench.review_data import build_data_pack
     from app.modules.business.models import BusinessPublication, BusinessRun
     from app.modules.operation_logs.models import OperationCoverage, OperationExport
 
-    reporting_snapshots = _reporting_frozen_refs(
-        session, context=context, version=version
-    )
+    data_pack = build_data_pack(session, context=context, version=version)
+    reporting_snapshots = data_pack["reporting"]
     business_scopes = session.exec(
         select(BusinessRun)
         .where(
@@ -370,6 +329,7 @@ def frozen_evidence(
     )
     frozen = sanitize_public(
         {
+            "data_pack": data_pack,
             "strategy": {
                 "id": strategy.id,
                 "strategy_id": strategy.strategy_id,
@@ -398,6 +358,11 @@ def frozen_evidence(
                 "authorization_limits": version.authorization_limits,
                 "strategy_binding_id": str(version.strategy_binding_id),
             },
+            "execution_truncated": {
+                "plans": len(plan_rows) > 200,
+                "builds": len(occurrences) > 200,
+                "rules": len(all_rule_evidence) > 200,
+            },
             "plans": [
                 {
                     "id": str(row.id),
@@ -405,7 +370,7 @@ def frozen_evidence(
                     "title": row.title,
                     "position": row.position,
                 }
-                for row in plan_rows
+                for row in plan_rows[:200]
             ],
             "build_occurrences": [
                 {
@@ -415,7 +380,7 @@ def frozen_evidence(
                     "strategy_version_id": str(row.strategy_version_id),
                     "evidence": row.evidence,
                 }
-                for row in occurrences
+                for row in occurrences[:200]
             ],
             "rule_evidence": [
                 {
@@ -431,7 +396,7 @@ def frozen_evidence(
                     "management_tasks": row.management_tasks,
                     "readback_status": row.readback_status,
                 }
-                for row in rule_evidence
+                for row in rule_evidence[:200]
             ],
             # Reporting/business/operation stores are append-only sources owned by
             # their modules.  Freeze their identity/version references here instead
@@ -440,7 +405,10 @@ def frozen_evidence(
                 "source": "reporting_store",
                 "account_ids": list(version.advertiser_ids),
                 "optimizer_version": version.number,
-                "snapshots": reporting_snapshots,
+                "snapshots": [
+                    {key: value for key, value in row.items() if key != "rows"}
+                    for row in reporting_snapshots
+                ],
             },
             "business": {
                 "source": "business_store",
@@ -489,12 +457,42 @@ def frozen_evidence(
             "captured_at": _now(),
         }
     )
+    from app.modules.ai_workbench.methods import freeze_methods
+
+    frozen["methods"] = freeze_methods(frozen)
+    from app.modules.ai_workbench.knowledge import select_knowledge
+
+    frozen["knowledge"] = select_knowledge(
+        session,
+        context=context,
+        bc_id=version.bc_id,
+        tags={item["key"] for item in freeze_methods(frozen)["references"]},
+    )
+    frozen["knowledge_selection"] = {
+        "max_entries": 20,
+        "max_body_chars": 32000,
+        "policy": "latest confirmed scoped versions; expired/unverified are context only",
+        "exhaustive": False,
+    }
+    from app.modules.ai_workbench.capabilities import catalog
+    from app.modules.ai_workbench.learning import freeze_history
+
+    frozen["history"] = freeze_history(
+        session,
+        context=context,
+        optimizer_id=optimizer.id,
+        version=version,
+        data_pack=data_pack,
+    )
+    frozen["capabilities"] = catalog(version)
     requested = {str(item) for item in evidence_ids}
     if requested and not requested.issubset(frozen_evidence_ids(frozen)):
         raise DomainError(
             "ai_evidence_not_found", "requested evidence is outside optimizer scope"
         )
-    return frozen
+    from app.modules.ai_workbench.input_budget import enforce_input_budget
+
+    return enforce_input_budget(frozen)
 
 
 def create_review_task(
