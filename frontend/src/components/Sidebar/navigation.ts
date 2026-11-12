@@ -33,15 +33,6 @@ export function workspaceNavigation({
     {
       label: "投放准备",
       items: [
-        ...(prefix
-          ? [
-              {
-                icon: SlidersHorizontal,
-                title: "AI 优化师",
-                path: `${prefix}/ai-workbench`,
-              },
-            ]
-          : []),
         ...(prefix && materialProduction
           ? [
               {
@@ -113,5 +104,16 @@ export function workspaceNavigation({
           : []),
       ],
     },
+    // AI 工作台是独立二级菜单，放在所有常规分组之后、体验版入口之前。
+    ...(prefix
+      ? [
+          {
+            label: "AI 优化师",
+            items: [
+              { icon: SlidersHorizontal, title: "AI 优化师", path: `${prefix}/ai-workbench` },
+            ],
+          },
+        ]
+      : []),
   ]
 }

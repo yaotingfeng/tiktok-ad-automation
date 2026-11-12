@@ -40,11 +40,12 @@ export function AppSidebar({
           ))}
       </SidebarContent>
       <SidebarFooter>
-        <SidebarGroup>
+        {/* workspaceNavigation 将 AI 独立分组放到这里之前，保证它紧邻体验版入口。 */}
+        <SidebarGroup data-testid="experience-entry-group">
           <SidebarGroupContent>
             <SidebarMenu>
               <SidebarMenuItem>
-                <SidebarMenuButton tooltip="打开体验版" asChild>
+                <SidebarMenuButton tooltip="打开体验版" data-testid="experience-entry" asChild>
                   <a href="/demo/" target="_blank" rel="noopener noreferrer">
                     <FlaskConical />
                     <span>打开体验版</span>

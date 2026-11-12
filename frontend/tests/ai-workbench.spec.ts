@@ -1,4 +1,10 @@
 import { expect, test } from "@playwright/test"
+import { workspaceNavigation } from "../src/components/Sidebar/navigation"
+import {
+  aiWorkbenchMenu,
+  buildAIWorkbenchHref,
+} from "../src/features/ai-workbench/AIWorkbenchShell"
+
 import {
   applyPlanPaste,
   emptyPlanRow,
@@ -33,4 +39,33 @@ test("AI 剧单粘贴可以扩展到十行之外并保持租户上下文", () =>
   expect(next).toHaveLength(10)
   expect(next[9].optimizer_id).toBe("optimizer-a")
   expect(next[9].title).toBe("剧集 B")
+})
+
+test("AI 入口是体验版之前的独立二级菜单，不混入广告投放", () => {
+  const groups = workspaceNavigation({ prefix: "/tenants/tenant-a", manage: true })
+  const aiIndex = groups.findIndex((group) => group.label === "AI 优化师")
+  const settingsIndex = groups.findIndex((group) => group.label === "设置")
+  expect(aiIndex).toBeGreaterThan(settingsIndex)
+  expect(groups[aiIndex]?.items[0]?.path).toBe("/tenants/tenant-a/ai-workbench")
+  expect(groups.find((group) => group.label === "广告投放")?.items.some((item) => item.title === "AI 优化师")).toBe(false)
+})
+
+test("AI 二级菜单链接保留租户、优化师和返回上下文", () => {
+  expect(aiWorkbenchMenu.map((item) => item.id)).toEqual([
+    "overview",
+    "schedule",
+    "execution",
+    "review",
+    "pending",
+  ])
+  const href = buildAIWorkbenchHref(
+    "tenant-a",
+    "optimizer-b",
+    "review",
+    "/tenants/tenant-a/ai-workbench?optimizer_id=optimizer-b",
+  )
+  expect(href).toContain("/tenants/tenant-a/ai-workbench?")
+  expect(href).toContain("optimizer_id=optimizer-b")
+  expect(href).toContain("view=review")
+  expect(href).toContain("return_to=")
 })
