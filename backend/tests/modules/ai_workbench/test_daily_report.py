@@ -87,3 +87,28 @@ def test_partial_build_is_observed_terminal_and_material_state():
     from app.modules.ai_workbench.daily_report import TERMINAL_BUILD_STATUSES
 
     assert "PARTIAL" in TERMINAL_BUILD_STATUSES
+
+
+def test_future_unfrozen_plan_is_a_next_trigger():
+    from datetime import date, time
+
+    from app.modules.ai_workbench.plans import AIDailyPlanRow
+
+    row = AIDailyPlanRow(
+        tenant_id=uuid4(),
+        optimizer_id=uuid4(),
+        plan_id=uuid4(),
+        business_date=date(2026, 11, 12),
+        scheduled_time=time(20, 0),
+        title="待搭建",
+        provider_connection_id=uuid4(),
+        application_id="app",
+    )
+    result = _next_trigger(
+        occurrences=[],
+        rules=[],
+        plans=[row],
+        now=datetime(2026, 11, 12, 10, tzinfo=UTC),
+    )
+    assert result["kind"] == "build"
+    assert result["at"] == datetime(2026, 11, 12, 12, tzinfo=UTC)

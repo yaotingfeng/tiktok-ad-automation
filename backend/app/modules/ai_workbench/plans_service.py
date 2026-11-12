@@ -1,13 +1,18 @@
 """Tenant-scoped daily plan transactions."""
 
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 from uuid import UUID
 
-from sqlmodel import Session, col, delete, select
+from sqlmodel import Session, col, select
 
 from app.core.context import TenantContext
 from app.core.errors import DomainError
-from app.modules.ai_workbench.models import AIOptimizer, AIOptimizerStrategyBinding
+from app.modules.ai_workbench.models import (
+    AIOptimizer,
+    AIOptimizerStrategyBinding,
+    AIOptimizerVersion,
+    BuildOccurrence,
+)
 from app.modules.ai_workbench.plan_schemas import (
     DailyPlanPage,
     DailyPlanPublic,
@@ -86,6 +91,24 @@ def _public(session: Session, plan: AIDailyPlan) -> DailyPlanPublic:
         )
         .order_by(col(AIDailyPlanRow.position))
     ).all()
+    from app.modules.ai_workbench.orders import MaterialOrder
+
+    order_rows = set(
+        session.exec(
+            select(MaterialOrder.plan_row_id).where(
+                MaterialOrder.tenant_id == plan.tenant_id,
+                MaterialOrder.optimizer_id == plan.optimizer_id,
+            )
+        ).all()
+    )
+    frozen = set(
+        session.exec(
+            select(BuildOccurrence.plan_row_id).where(
+                BuildOccurrence.tenant_id == plan.tenant_id,
+                BuildOccurrence.optimizer_id == plan.optimizer_id,
+            )
+        ).all()
+    )
     return DailyPlanPublic(
         id=plan.id,
         tenant_id=plan.tenant_id,
@@ -93,7 +116,10 @@ def _public(session: Session, plan: AIDailyPlan) -> DailyPlanPublic:
         business_date=plan.business_date,
         revision=plan.revision,
         rows=[
-            DailyPlanRowPublic.model_validate(row, from_attributes=True) for row in rows
+            DailyPlanRowPublic.model_validate(row, from_attributes=True).model_copy(
+                update={"read_only": row.id in frozen or row.id in order_rows}
+            )
+            for row in rows
         ],
     )
 
@@ -255,28 +281,89 @@ def list_daily_plans(
 def _replace_rows(
     session: Session, plan: AIDailyPlan, rows: list[DailyPlanRowInput]
 ) -> None:
-    # Complete replacement keeps revision semantics simple and prevents stale
-    # rows from surviving a user's Excel paste/delete operation.
-    session.exec(
-        delete(AIDailyPlanRow).where(
+    # 保留行标识及发生记录引用；已经冻结的行不可更改或移除，避免重复搭建。
+    existing = session.exec(
+        select(AIDailyPlanRow)
+        .where(
             AIDailyPlanRow.tenant_id == plan.tenant_id,
             AIDailyPlanRow.plan_id == plan.id,
         )
+        .with_for_update()
+    ).all()
+    by_id = {row.id: row for row in existing}
+    from app.modules.ai_workbench.orders import MaterialOrder
+
+    order_rows = set(
+        session.exec(
+            select(MaterialOrder.plan_row_id).where(
+                MaterialOrder.tenant_id == plan.tenant_id,
+                MaterialOrder.optimizer_id == plan.optimizer_id,
+            )
+        ).all()
     )
-    for position, row in enumerate(rows):
-        session.add(
-            AIDailyPlanRow(
+    frozen = set(
+        session.exec(
+            select(BuildOccurrence.plan_row_id).where(
+                BuildOccurrence.tenant_id == plan.tenant_id,
+                BuildOccurrence.optimizer_id == plan.optimizer_id,
+            )
+        ).all()
+    ) & set(by_id)
+    frozen |= order_rows & set(by_id)
+    supplied = [row.id for row in rows if row.id is not None]
+    if len(supplied) != len(set(supplied)) or any(
+        row_id not in by_id for row_id in supplied
+    ):
+        raise DomainError("ai_daily_plan_row_invalid", "排期行不属于当前剧单或重复")
+    if not frozen.issubset(supplied):
+        raise DomainError("ai_daily_plan_row_frozen", "已进入执行的排期行不能移除")
+    for incoming in rows:
+        if incoming.id in frozen:
+            saved = by_id[incoming.id]
+            if any(
+                getattr(saved, name) != value
+                for name, value in incoming.model_dump(exclude={"id"}).items()
+            ):
+                raise DomainError(
+                    "ai_daily_plan_row_frozen", "已进入执行的排期行不能修改"
+                )
+    optimizer = _optimizer(
+        session,
+        TenantContext(tenant_id=plan.tenant_id, actor_id=plan.updated_by, role=""),
+        plan.optimizer_id,
+    )
+    version = session.exec(
+        select(AIOptimizerVersion).where(
+            AIOptimizerVersion.tenant_id == plan.tenant_id,
+            AIOptimizerVersion.optimizer_id == plan.optimizer_id,
+            AIOptimizerVersion.number == optimizer.latest_version,
+        )
+    ).one()
+    # 先释放位置唯一约束，允许用户对尚未执行的行重新排序。
+    for saved in existing:
+        saved.position += 1001
+        session.add(saved)
+    session.flush()
+    for saved in existing:
+        if saved.id not in supplied:
+            session.delete(saved)
+    session.flush()
+    for position, incoming in enumerate(rows):
+        saved = by_id.get(incoming.id)
+        if saved is None:
+            saved = AIDailyPlanRow(
                 tenant_id=plan.tenant_id,
                 plan_id=plan.id,
-                optimizer_id=plan.optimizer_id,
-                business_date=plan.business_date,
-                scheduled_time=row.scheduled_time,
-                title=row.title,
-                provider_connection_id=row.provider_connection_id,
-                application_id=row.application_id,
-                promotion_url=row.promotion_url,
-                external_drama_id=row.external_drama_id,
-                order_materials=row.order_materials,
+                **incoming.model_dump(exclude={"id"}),
                 position=position,
+                timezone=version.timezone,
             )
-        )
+        else:
+            if saved.id not in frozen:
+                for name, value in incoming.model_dump(exclude={"id"}).items():
+                    setattr(saved, name, value)
+                saved.timezone = version.timezone
+                saved.next_dispatch_at = datetime(1970, 1, 1, tzinfo=UTC)
+                saved.last_dispatch_error = None
+            saved.position = position
+        session.add(saved)

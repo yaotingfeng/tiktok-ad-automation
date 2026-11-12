@@ -82,6 +82,13 @@ class AIDailyPlanRow(SQLModel, table=True):
             name="fk_ai_daily_plan_row_provider_application",
         ),
         Index(
+            "ix_ai_plan_retry_dispatch",
+            "next_dispatch_at",
+            "business_date",
+            "scheduled_time",
+            "id",
+        ),
+        Index(
             "ix_ai_daily_plan_row_day",
             "tenant_id",
             "optimizer_id",
@@ -103,4 +110,10 @@ class AIDailyPlanRow(SQLModel, table=True):
     # Keep this as text: converting Excel values to integers would erase 0012.
     external_drama_id: str | None = Field(default=None, max_length=255)
     order_materials: bool = False
+    timezone: str = Field(default="Asia/Shanghai", max_length=64)
+    next_dispatch_at: datetime = Field(
+        default_factory=lambda: datetime(1970, 1, 1, tzinfo=UTC),
+        sa_type=DateTime(timezone=True),
+    )
+    last_dispatch_error: str | None = Field(default=None, max_length=128)
     position: int = Field(default=0, ge=0)

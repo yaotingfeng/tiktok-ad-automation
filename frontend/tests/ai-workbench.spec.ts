@@ -106,3 +106,18 @@ test("策略编辑上下文同时保留优化师、记录、版本和返回地�
 test("自动规则切换标签合并而不是覆盖 AI 搜索上下文", () => {
   expect(mergeAutomationSearch({ ai_optimizer_id: "optimizer-b", record_id: "record-c", return_to: "/ai" }, { tab: "runs" })).toEqual({ ai_optimizer_id: "optimizer-b", record_id: "record-c", return_to: "/ai", tab: "runs" })
 })
+
+test("冻结排期行不能通过 TSV 覆盖", () => {
+  const rows = [
+    {
+      ...emptyPlanRow("2026-11-12", "optimizer-a"),
+      id: "stable-row",
+      read_only: true,
+      title: "已提交剧目",
+    },
+  ]
+  expect(() =>
+    applyPlanPaste(rows, 0, 0, "09:00\t覆盖", "2026-11-12", "optimizer-a"),
+  ).toThrow("只读行")
+  expect(rows[0].title).toBe("已提交剧目")
+})

@@ -10,6 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field, HttpUrl, model_validator
 class DailyPlanRowInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    id: UUID | None = None
     business_date: date
     scheduled_time: time
     title: str = Field(min_length=1, max_length=1000)
@@ -62,6 +63,8 @@ class DailyPlanRowPublic(DailyPlanRowInput):
     id: UUID
     plan_id: UUID
     position: int
+    read_only: bool = False
+    last_dispatch_error: str | None = None
 
 
 class DailyPlanPublic(BaseModel):

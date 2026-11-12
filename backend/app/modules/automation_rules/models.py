@@ -112,7 +112,7 @@ class AutomationRuleRun(SQLModel, table=True):
         default_factory=dict, sa_column=Column(JSONB, nullable=False)
     )
     evidence_id: UUID | None = Field(
-        default=None, foreign_key="automation_rule_evidence.id"
+        default=None, foreign_key="automation_rule_evidence.id", ondelete="SET NULL"
     )
 
 

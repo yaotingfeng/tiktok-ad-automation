@@ -4,6 +4,7 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Literal
 from uuid import UUID
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -22,12 +23,23 @@ class OptimizerFields(BaseModel):
     bc_id: str = Field(min_length=1, max_length=128)
     advertiser_ids: tuple[str, ...] = Field(min_length=1, max_length=1000)
     optimization_mode: OptimizationMode = "MANUAL"
+    timezone: str = "Asia/Shanghai"
+    review_time: str = Field(default="13:00", pattern=r"^(?:[01]\d|2[0-3]):[0-5]\d$")
+    material_config: dict[str, object] = Field(default_factory=dict)
     authorization_limits: dict[str, object] = Field(default_factory=dict)
     strategy_version_id: UUID
     rule_ids: tuple[UUID, ...] = Field(default=(), max_length=1000)
 
     @model_validator(mode="after")
     def validate_scope(self) -> OptimizerFields:
+        try:
+            ZoneInfo(self.timezone)
+        except ZoneInfoNotFoundError, ValueError:
+            raise ValueError("timezone must be an IANA timezone") from None
+        if self.material_config:
+            from app.modules.ai_workbench.orders import validate_config
+
+            validate_config(self.material_config)
         if len(set(self.advertiser_ids)) != len(self.advertiser_ids):
             raise ValueError("advertiser_ids must be unique")
         if self.priority == "ROAS" and self.target_roas is None:
@@ -57,6 +69,11 @@ class OptimizerUpdate(BaseModel):
         default=None, min_length=1, max_length=1000
     )
     optimization_mode: OptimizationMode | None = None
+    timezone: str | None = None
+    review_time: str | None = Field(
+        default=None, pattern=r"^(?:[01]\d|2[0-3]):[0-5]\d$"
+    )
+    material_config: dict[str, object] | None = None
     authorization_limits: dict[str, object] | None = None
     strategy_version_id: UUID | None = None
     rule_ids: tuple[UUID, ...] | None = Field(default=None, max_length=1000)

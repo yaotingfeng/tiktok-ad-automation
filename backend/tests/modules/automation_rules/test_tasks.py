@@ -142,3 +142,36 @@ def test_execute_task_payload_validation():
         {"run_id", "mode"},
         optional={"selected_keys"},
     )["selected_keys"] == ["a"]
+
+
+def test_removed_ai_binding_does_not_silence_ordinary_rule(
+    session, sync_seed, monkeypatch
+):
+    from app.modules.ai_workbench.models import AIOptimizer, AIOptimizerRuleBinding
+
+    monkeypatch.setattr(settings, "AUTOMATED_RULES_ENABLED", True)
+    rule = make_rule(session, sync_seed)
+    rule.next_run_at = NOW - timedelta(minutes=1)
+    optimizer = AIOptimizer(
+        tenant_id=sync_seed.tenant_id, name="历史优化师", created_by=sync_seed.actor_id
+    )
+    session.add(optimizer)
+    session.flush()
+    session.add(
+        AIOptimizerRuleBinding(
+            tenant_id=sync_seed.tenant_id,
+            optimizer_id=optimizer.id,
+            rule_id=rule.id,
+            created_by=sync_seed.actor_id,
+            active=False,
+        )
+    )
+    session.flush()
+    scan_due_rules(session, now=NOW)
+    queued = session.exec(
+        select(PendingDispatch).where(
+            PendingDispatch.task_name == "automation.run_rule"
+        )
+    ).all()
+    assert len(queued) == 1
+    assert "optimizer_id" not in queued[0].payload

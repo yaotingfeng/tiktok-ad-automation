@@ -174,11 +174,19 @@ def seed_optimizer_dependencies(session: Session, context, *, account="acc-1"):
             permission_state="VERIFIED",
         )
     )
-    pool = CopyPoolVersion(name="AI test pool", sealed=True)
-    strategy = Strategy(tenant_id=context.tenant_id, name="AI test strategy")
+    pool = CopyPoolVersion(name="AI test pool", sealed=False)
+    strategy = Strategy(
+        tenant_id=context.tenant_id, name="AI test strategy", latest_version=1
+    )
     session.add(pool)
     session.add(strategy)
     session.flush()
+    from app.modules.strategies.models import CopyEntry
+
+    session.add(CopyEntry(pool_version_id=pool.id, position=1, text="测试广告文案"))
+    session.flush()
+    pool.sealed = True
+    session.add(pool)
     version = StrategyVersion(
         tenant_id=context.tenant_id,
         strategy_id=strategy.id,

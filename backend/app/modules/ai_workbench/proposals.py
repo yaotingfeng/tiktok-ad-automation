@@ -10,13 +10,14 @@ from uuid import UUID, uuid4
 
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import (
-    JSON,
     CheckConstraint,
     Column,
     DateTime,
     ForeignKeyConstraint,
+    Index,
     UniqueConstraint,
 )
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlmodel import Field as SQLField
 from sqlmodel import Session, SQLModel, col, select
 
@@ -68,6 +69,13 @@ class DecisionRequest(BaseModel):
 class AIProposal(SQLModel, table=True):
     __tablename__ = "ai_optimizer_proposal"
     __table_args__ = (
+        Index(
+            "ix_ai_proposal_optimizer_status",
+            "tenant_id",
+            "optimizer_id",
+            "status",
+            "created_at",
+        ),
         UniqueConstraint("tenant_id", "request_id", name="uq_ai_proposal_request"),
         ForeignKeyConstraint(
             ["tenant_id", "optimizer_id"],
@@ -88,23 +96,23 @@ class AIProposal(SQLModel, table=True):
     target_id: UUID | None = None
     status: str = SQLField(default="PENDING", max_length=16)
     before: dict[str, Any] = SQLField(
-        default_factory=dict, sa_column=Column(JSON, nullable=False)
+        default_factory=dict, sa_column=Column(JSONB, nullable=False)
     )
     after: dict[str, Any] = SQLField(
-        default_factory=dict, sa_column=Column(JSON, nullable=False)
+        default_factory=dict, sa_column=Column(JSONB, nullable=False)
     )
     evidence: dict[str, Any] = SQLField(
-        default_factory=dict, sa_column=Column(JSON, nullable=False)
+        default_factory=dict, sa_column=Column(JSONB, nullable=False)
     )
     authorization: dict[str, Any] = SQLField(
-        default_factory=dict, sa_column=Column(JSON, nullable=False)
+        default_factory=dict, sa_column=Column(JSONB, nullable=False)
     )
     base_optimizer_version: int
     base_strategy_version_id: UUID | None = None
     base_rule_version: int | None = None
     base_rule_id: UUID | None = None
     published_version_id: UUID | None = None
-    decision_by: UUID | None = None
+    decision_by: UUID | None = SQLField(default=None, foreign_key="user.id")
     decision_reason: str | None = SQLField(default=None, max_length=1000)
     decision_request_id: UUID | None = None
     decision_request_digest: str | None = SQLField(default=None, max_length=64)
@@ -208,8 +216,33 @@ def _within_authorization(
         nested = (
             limits.get("strategy") if isinstance(limits.get("strategy"), dict) else {}
         )
-        for field in ("budget", "daily_spend", "spend"):
-            if field in after_cfg and field in before_cfg:
+        changed = {
+            key for key, value in after_cfg.items() if before_cfg.get(key) != value
+        }
+        explicit = nested.get(
+            "allowed_fields", limits.get("strategy_allowed_fields", [])
+        )
+        if not isinstance(explicit, list) or any(
+            not isinstance(value, str) for value in explicit
+        ):
+            raise DomainError(
+                "ai_proposal_invalid", "allowed_fields must be a string list"
+            )
+        bounded = {
+            field
+            for field in ("budget", "daily_spend", "spend", "target_roas")
+            if _limit_value(nested, f"max_{field}_delta") is not None
+            or _limit_value(limits, f"max_{field}_delta") is not None
+        }
+        if version.optimization_mode == "AUTO" and changed - set(explicit) - bounded:
+            return False, "strategy_field_not_authorized"
+        for field in ("budget", "daily_spend", "spend", "target_roas"):
+            if (
+                version.optimization_mode == "AUTO"
+                and field in after_cfg
+                and field in before_cfg
+                and after_cfg[field] != before_cfg[field]
+            ):
                 maximum = _limit_value(limits, f"max_{field}_delta", f"{field}_delta")
                 maximum = (
                     maximum
@@ -227,7 +260,12 @@ def _within_authorization(
                     raise DomainError(
                         "ai_proposal_invalid", f"{field} delta must be numeric"
                     ) from exc
-                if delta > maximum_decimal:
+                if (
+                    not maximum_decimal.is_finite()
+                    or maximum_decimal < 0
+                    or not delta.is_finite()
+                    or delta > maximum_decimal
+                ):
                     return False, f"{field}_delta_out_of_scope"
     else:
         if not _authorized(limits, "rule", version.optimization_mode):
@@ -326,6 +364,22 @@ def _within_authorization(
             )
         if definition.get("bc_id") is not None and definition["bc_id"] != version.bc_id:
             return False, "bc_scope_out_of_scope"
+        before_definition = before.get("definition", before)
+        nested = limits.get("rule") if isinstance(limits.get("rule"), dict) else {}
+        explicit = nested.get("allowed_fields", limits.get("rule_allowed_fields", []))
+        if not isinstance(explicit, list) or any(
+            not isinstance(value, str) for value in explicit
+        ):
+            raise DomainError(
+                "ai_proposal_invalid", "allowed_fields must be a string list"
+            )
+        changed = {
+            key
+            for key, value in definition.items()
+            if key != "accounts" and before_definition.get(key) != value
+        }
+        if version.optimization_mode == "AUTO" and changed - set(explicit):
+            return False, "rule_field_not_authorized"
     return True, None
 
 
@@ -467,6 +521,7 @@ def create_proposal(
             "evidence_ids": [str(item) for item in change.evidence_ids],
             "review_task_id": str(review_task.id),
             "captured_optimizer_version": version.number,
+            "rationale": change.rationale,
         },
         authorization={
             "allowed": allowed,
@@ -623,6 +678,7 @@ def accept_proposal(
     optimizer_id: UUID,
     proposal_id: UUID,
     request_id: UUID | None = None,
+    automatic: bool = False,
 ) -> AIProposal:
     authorize(session, context, write=True)
     row = session.exec(
@@ -655,11 +711,26 @@ def accept_proposal(
             status="STALE",
             reason="optimizer_base_version_changed",
         )
-    if row.authorization.get("allowed") is not True:
-        raise DomainError(
-            "ai_publication_not_authorized",
-            row.authorization.get("reason", "publication is outside authorization"),
+    # 自动执行受预授权约束；人工采纳本身是这一条具体变更的授权，仍重验账户与能力边界。
+    if automatic:
+        if (
+            current.optimization_mode != "AUTO"
+            or row.authorization.get("allowed") is not True
+        ):
+            raise DomainError("ai_publication_not_authorized", "自动发布超出授权")
+    else:
+        manual = current.model_copy(
+            update={
+                "optimization_mode": "MANUAL",
+                "authorization_limits": {"strategy": True, "rule": True},
+            }
         )
+        allowed, reason = _within_authorization(
+            version=manual, kind=row.kind, before=row.before, after=row.after
+        )
+        if not allowed:
+            raise DomainError("ai_publication_not_authorized", reason or "采纳范围无效")
+        row.authorization = {**row.authorization, "explicit_human_approval": True}
     try:
         published = (
             _publish_strategy(session, context=context, proposal=row)
@@ -675,7 +746,30 @@ def accept_proposal(
             return _mark(row, context=context, status="STALE", reason=exc.code)
         raise
     row.published_version_id = published
+    row.authorization = {
+        **row.authorization,
+        "decision_mode": "AUTO" if automatic else "MANUAL",
+        "executor": "DSH_SERVICE" if automatic else "USER",
+        "authorization_actor_id": str(context.actor_id),
+    }
     _mark(row, context=context, status="ACCEPTED")
+    from app.modules.tenants.models import AuditEvent
+
+    session.add(
+        AuditEvent(
+            tenant_id=context.tenant_id,
+            actor_id=context.actor_id,
+            action="ai_proposal.accept",
+            target_id=str(row.id),
+            details={
+                "optimizer_id": str(optimizer_id),
+                "review_task_id": str(row.review_task_id),
+                "kind": row.kind,
+                "mode": "AUTO" if automatic else "MANUAL",
+                "executor": "DSH_SERVICE" if automatic else "USER",
+            },
+        )
+    )
     session.flush()
     return row
 
@@ -713,6 +807,20 @@ def reject_proposal(
     row.decision_request_id = request_id
     row.decision_request_digest = digest
     _mark(row, context=context, status="REJECTED", reason=reason)
+    from app.modules.tenants.models import AuditEvent
+
+    session.add(
+        AuditEvent(
+            tenant_id=context.tenant_id,
+            actor_id=context.actor_id,
+            action="ai_proposal.reject",
+            target_id=str(row.id),
+            details={
+                "optimizer_id": str(optimizer_id),
+                "review_task_id": str(row.review_task_id),
+            },
+        )
+    )
     session.flush()
     return row
 
@@ -735,7 +843,7 @@ def publish_auto_proposals(
             AIProposal.review_task_id == review_task_id,
             AIProposal.status == "PENDING",
         )
-        .order_by(col(AIProposal.created_at))
+        .order_by(col(AIProposal.kind), col(AIProposal.created_at))
     ).all()
     return [
         accept_proposal(
@@ -744,6 +852,7 @@ def publish_auto_proposals(
             optimizer_id=optimizer_id,
             proposal_id=row.id,
             request_id=row.request_id,
+            automatic=True,
         )
         for row in rows
         if row.authorization.get("allowed") is True

@@ -12,6 +12,7 @@ import json
 from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID, uuid5
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import or_, text
 from sqlalchemy.orm import Session as SQLAlchemySession
@@ -45,6 +46,7 @@ MATERIAL_WAIT_ERRORS = frozenset(
         "draft_inputs_empty",
         "preview_not_ready",
         "preview_incomplete",
+        "draft_not_ready",
         "copy_material_unavailable",
     }
 )
@@ -63,9 +65,10 @@ def _digest(payload: dict[str, Any]) -> str:
 
 
 def _scheduled_at(row: AIDailyPlanRow) -> datetime:
-    # The plan contract has no optimizer timezone yet.  Store a timezone-aware
-    # value at the boundary so ordering/uniqueness are deterministic in UTC.
-    return datetime.combine(row.business_date, row.scheduled_time).replace(tzinfo=UTC)
+    # 将用户输入的当地时间转为 UTC；不能把北京时间直接标记为 UTC。
+    return datetime.combine(
+        row.business_date, row.scheduled_time, tzinfo=ZoneInfo(row.timezone)
+    ).astimezone(UTC)
 
 
 class BuildHandoff:
@@ -302,6 +305,31 @@ class BuildHandoff:
             # UNKNOWN is deliberately terminal until an explicit reconciliation
             # changes evidence; a retry must never create a second submission.
             return occurrence
+        row = self.session.get(AIDailyPlanRow, occurrence.plan_row_id)
+        now = datetime.now(UTC)
+        if row is not None and (
+            occurrence.scheduled_at > now
+            or now.astimezone(ZoneInfo(row.timezone)).date() > row.business_date
+        ):
+            # 消息可能提前投递或排队跨日：执行边界也必须检查到期与截止。
+            future = occurrence.scheduled_at > now
+            occurrence.status = "WAITING_MATERIAL" if future else "FAILED"
+            occurrence.error_code = (
+                "ai_schedule_not_due" if future else "schedule_expired"
+            )
+            self.session.add(occurrence)
+            self.session.flush()
+            return occurrence
+        optimizer = self.session.get(
+            AIOptimizer, occurrence.optimizer_id, populate_existing=True
+        )
+        if optimizer is None or not optimizer.active:
+            # 已投递的任务也必须遵守暂停，恢复后沿用同一发生记录续接。
+            occurrence.status = "WAITING_MATERIAL"
+            occurrence.error_code = "ai_optimizer_inactive"
+            self.session.add(occurrence)
+            self.session.flush()
+            return occurrence
         try:
             if occurrence.draft_id is None:
                 draft_request = uuid5(OCCURRENCE_NAMESPACE, f"draft:{occurrence.id}")
@@ -338,11 +366,22 @@ class BuildHandoff:
                 draft_id=occurrence.draft_id,
                 request_id=draft_request,
             )
+            draft = drafts.get_draft(
+                self.session, context=self.context, draft_id=occurrence.draft_id
+            )
+            # 准备任务通过 outbox 异步执行，先提交本事务，再由后续调度恢复。
+            if draft.status != "READY":
+                occurrence.status = "WAITING_MATERIAL"
+                occurrence.evidence = {
+                    **occurrence.evidence,
+                    "preparation_status": draft.status,
+                }
+                occurrence.updated_at = datetime.now(UTC)
+                self.session.add(occurrence)
+                self.session.flush()
+                return occurrence
             preview_id = occurrence.preview_id
             if preview_id is None:
-                draft = drafts.get_draft(
-                    self.session, context=self.context, draft_id=occurrence.draft_id
-                )
                 preview_id = previews.generate_preview(
                     self.session,
                     context=self.context,
@@ -357,6 +396,13 @@ class BuildHandoff:
                     preview, "status", "BUILDING"
                 )
             else:
+                self.session.refresh(optimizer)
+                if not optimizer.active:
+                    occurrence.status = "WAITING_MATERIAL"
+                    occurrence.error_code = "ai_optimizer_inactive"
+                    self.session.add(occurrence)
+                    self.session.flush()
+                    return occurrence
                 receipt = submissions.submit_preview(
                     self.session,
                     context=self.context,

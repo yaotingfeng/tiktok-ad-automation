@@ -2,8 +2,11 @@ import { useMemo, useRef, useState } from "react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
+import { errorMessage } from "./api"
 
 export type DramaPlanRow = {
+  id?: string
+  read_only?: boolean
   business_date: string
   scheduled_time: string
   title: string
@@ -15,7 +18,17 @@ export type DramaPlanRow = {
   optimizer_id: string
 }
 
-export const planColumns: Array<{ key: keyof DramaPlanRow; label: string }> = [
+export const planColumns: Array<{
+  key:
+    | "scheduled_time"
+    | "title"
+    | "provider_connection_id"
+    | "application_id"
+    | "promotion_url"
+    | "external_drama_id"
+    | "order_materials"
+  label: string
+}> = [
   { key: "scheduled_time", label: "时间" },
   { key: "title", label: "剧目名称" },
   { key: "provider_connection_id", label: "版权方连接" },
@@ -77,6 +90,12 @@ export function applyPlanPaste(
   const incoming = parseTsv(value)
   if (incoming.some((line) => line.length + startColumn > planColumns.length))
     throw new Error("粘贴区域超出计划列")
+  if (
+    rows
+      .slice(startRow, startRow + incoming.length)
+      .some((row) => row.read_only)
+  )
+    throw new Error("粘贴区域包含已执行的只读行")
   const result = rows.map((row) => ({ ...row }))
   while (result.length < startRow + incoming.length)
     result.push(emptyPlanRow(date, optimizerId))
@@ -95,6 +114,7 @@ export function applyPlanPaste(
 
 type Props = {
   businessDate: string
+  disabled?: boolean
   optimizerId: string
   rows?: DramaPlanRow[]
   onChange?: (rows: DramaPlanRow[]) => void
@@ -104,6 +124,7 @@ type Props = {
 
 export function DramaPlanGrid({
   businessDate,
+  disabled = false,
   optimizerId,
   rows: initialRows,
   onChange,
@@ -123,6 +144,7 @@ export function DramaPlanGrid({
     key: string
     items: DramaPlanRow[][]
   }>({ key: "", items: [] })
+  const [error, setError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
   const refs = useRef<Record<string, HTMLInputElement | null>>({})
   const resetKey = `${businessDate}:${optimizerId}`
@@ -140,9 +162,9 @@ export function DramaPlanGrid({
   }
   return (
     <Card data-testid="drama-plan-grid">
-      <CardHeader className="flex-row items-center justify-between">
+      <CardHeader className="flex-row flex-wrap items-center justify-between gap-3">
         <CardTitle>每日剧单</CardTitle>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <label className="text-sm text-muted-foreground" htmlFor="plan-date">
             日期
           </label>
@@ -150,6 +172,8 @@ export function DramaPlanGrid({
             id="plan-date"
             data-testid="plan-date"
             type="date"
+            disabled={disabled || saving}
+            className="w-auto"
             value={businessDate}
             onChange={(event) => onDateChange?.(event.target.value)}
           />
@@ -157,7 +181,7 @@ export function DramaPlanGrid({
             type="button"
             variant="outline"
             onClick={undo}
-            disabled={!history.length}
+            disabled={disabled || saving || !history.length}
           >
             撤销
           </Button>
@@ -166,20 +190,29 @@ export function DramaPlanGrid({
               type="button"
               onClick={async () => {
                 setSaving(true)
+                setError(null)
                 try {
                   await onSave(rows)
+                  setHistoryState({ key: resetKey, items: [] })
+                } catch (reason) {
+                  setError(errorMessage(reason))
                 } finally {
                   setSaving(false)
                 }
               }}
-              disabled={saving}
+              disabled={disabled || saving}
             >
               {saving ? "保存中…" : "保存剧单"}
             </Button>
           )}
         </div>
       </CardHeader>
-      <CardContent className="overflow-x-auto">
+      <CardContent className="min-w-0 overflow-x-auto">
+        {error && (
+          <p role="alert" className="mb-3 text-sm text-destructive">
+            {error}
+          </p>
+        )}
         <table className="w-full text-sm" data-testid="drama-plan-table">
           <thead>
             <tr>
@@ -193,8 +226,11 @@ export function DramaPlanGrid({
           </thead>
           <tbody>
             {rows.map((row, rowIndex) => (
-              <tr key={`${rowIndex}-${row.title}`}>
-                <td className="p-2 text-muted-foreground">{rowIndex + 1}</td>
+              <tr key={row.id ?? rowIndex}>
+                <td className="p-2 text-muted-foreground">
+                  {rowIndex + 1}
+                  {row.read_only ? "（只读）" : ""}
+                </td>
                 {planColumns.map((column, columnIndex) => {
                   const key = column.key
                   const refKey = `${rowIndex}:${columnIndex}`
@@ -204,6 +240,8 @@ export function DramaPlanGrid({
                         ref={(element) => {
                           refs.current[refKey] = element
                         }}
+                        disabled={disabled || saving || row.read_only}
+                        aria-label={`${rowIndex + 1} 行 ${column.label}`}
                         data-testid={`plan-cell-${rowIndex}-${columnIndex}`}
                         value={
                           key === "order_materials"
@@ -228,28 +266,42 @@ export function DramaPlanGrid({
                           if (!text.includes("\t") && !text.includes("\n"))
                             return
                           event.preventDefault()
-                          update(
-                            applyPlanPaste(
-                              rows,
-                              rowIndex,
-                              columnIndex,
-                              text,
-                              businessDate,
-                              optimizerId,
-                            ),
-                          )
+                          try {
+                            update(
+                              applyPlanPaste(
+                                rows,
+                                rowIndex,
+                                columnIndex,
+                                text,
+                                businessDate,
+                                optimizerId,
+                              ),
+                            )
+                            setError(null)
+                          } catch (reason) {
+                            setError(
+                              reason instanceof Error
+                                ? reason.message
+                                : "粘贴失败",
+                            )
+                          }
                         }}
                         onKeyDown={(event) => {
                           if (event.key !== "Tab" && event.key !== "Enter")
                             return
                           event.preventDefault()
-                          const nextColumn =
+                          const direction = event.shiftKey ? -1 : 1
+                          const flatIndex =
                             event.key === "Enter"
-                              ? columnIndex
-                              : columnIndex + 1
-                          const nextRow =
-                            event.key === "Enter" ? rowIndex + 1 : rowIndex
-                          refs.current[`${nextRow}:${nextColumn}`]?.focus()
+                              ? (rowIndex + direction) * planColumns.length +
+                                columnIndex
+                              : rowIndex * planColumns.length +
+                                columnIndex +
+                                direction
+                          if (flatIndex < 0) return
+                          refs.current[
+                            `${Math.floor(flatIndex / planColumns.length)}:${flatIndex % planColumns.length}`
+                          ]?.focus()
                         }}
                       />
                     </td>

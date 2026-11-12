@@ -283,6 +283,9 @@ def _public(
         bc_id=version.bc_id,
         advertiser_ids=tuple(version.advertiser_ids),
         optimization_mode=version.optimization_mode,
+        timezone=version.timezone,
+        review_time=version.review_time,
+        material_config=version.material_config,
         authorization_limits=version.authorization_limits,
         strategy_version_id=(
             session.get(
@@ -368,6 +371,9 @@ def create_optimizer(
         bc_id=fields.bc_id,
         advertiser_ids=list(fields.advertiser_ids),
         optimization_mode=fields.optimization_mode,
+        timezone=fields.timezone,
+        review_time=fields.review_time,
+        material_config=fields.material_config,
         authorization_limits=fields.authorization_limits,
         strategy_binding_id=binding.id,
         request_id=request_id,
@@ -458,6 +464,11 @@ def update_optimizer(
         if body.advertiser_ids is not None
         else tuple(current.advertiser_ids),
         "optimization_mode": body.optimization_mode or current.optimization_mode,
+        "timezone": body.timezone or current.timezone,
+        "review_time": body.review_time or current.review_time,
+        "material_config": body.material_config
+        if body.material_config is not None
+        else current.material_config,
         "authorization_limits": body.authorization_limits
         if body.authorization_limits is not None
         else current.authorization_limits,
@@ -526,6 +537,9 @@ def update_optimizer(
         bc_id=fields.bc_id,
         advertiser_ids=list(fields.advertiser_ids),
         optimization_mode=fields.optimization_mode,
+        timezone=fields.timezone,
+        review_time=fields.review_time,
+        material_config=fields.material_config,
         authorization_limits=fields.authorization_limits,
         strategy_binding_id=binding.id,
         request_id=request_id,

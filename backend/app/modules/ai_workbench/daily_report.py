@@ -53,6 +53,7 @@ def _next_trigger(
     occurrences: list[BuildOccurrence],
     rules: list[AutomationRule],
     now: datetime,
+    plans: list[AIDailyPlanRow] | None = None,
 ) -> dict[str, Any] | None:
     candidates: list[tuple[datetime, dict[str, Any]]] = []
     for row in occurrences:
@@ -64,6 +65,13 @@ def _next_trigger(
                 {"kind": "build", "id": str(row.id), "at": row.scheduled_at},
             )
         )
+    from app.modules.ai_workbench.build_handoff import _scheduled_at
+
+    occurred = {getattr(row, "plan_row_id", None) for row in occurrences}
+    for plan in plans or []:
+        at = _scheduled_at(plan)
+        if plan.id not in occurred and at >= now:
+            candidates.append((at, {"kind": "build", "id": str(plan.id), "at": at}))
     for rule in rules:
         if rule.enabled and rule.next_run_at and rule.next_run_at >= now:
             candidates.append(
@@ -182,7 +190,19 @@ def build_daily_report(
         "failed": 0,
         "unknown": 0,
     }
+    from app.modules.ai_workbench.orders import MaterialOrder
+
+    orders = session.exec(
+        select(MaterialOrder).where(
+            MaterialOrder.tenant_id == context.tenant_id,
+            MaterialOrder.optimizer_id == optimizer_id,
+        )
+    ).all()
+    orders_by_row = {item.plan_row_id: item for item in orders}
     material = {
+        "intent": 0,
+        "failed": 0,
+        "blocked": 0,
         "requested": 0,
         "not_requested": 0,
         "pending": 0,
@@ -192,7 +212,13 @@ def build_daily_report(
     build_outcomes: list[dict[str, Any]] = []
     for row in rows:
         occurrence = occurrence_by_plan.get(row.id)
-        status = occurrence.status if occurrence else "NOT_DISPATCHED"
+        status = (
+            occurrence.status
+            if occurrence
+            else "BLOCKED"
+            if row.last_dispatch_error
+            else "NOT_DISPATCHED"
+        )
         if status == "COMPLETE":
             target_counts["completed"] += 1
         elif status == "PARTIAL":
@@ -204,18 +230,23 @@ def build_daily_report(
             target_counts["failed"] += 1
         else:
             target_counts["pending"] += 1
+        order = orders_by_row.get(row.id)
         if row.order_materials:
-            material["requested"] += 1
-            if status == "WAITING_MATERIAL":
+            material["intent"] += 1
+            if (not order and not version.material_config) or (
+                order and order.error_code == "material_production_not_ready"
+            ):
+                material["blocked"] += 1
+            if order and order.job_id:
+                material["requested"] += 1
+            if order and order.status == "UNKNOWN":
+                material["unknown"] += 1
+            elif order and order.status == "FAILED":
+                material["failed"] += 1
+            elif not order or order.status != "COMPLETE":
                 material["pending"] += 1
-            elif occurrence and occurrence.evidence.get("readback"):
+            if occurrence and occurrence.evidence.get("readback"):
                 material["matched"] += 1
-            elif status in {"PARTIAL", "UNKNOWN"}:
-                # 部分成功仍保留平台回读/缺口证据，不能回退成“等待素材”。
-                if occurrence and occurrence.evidence.get("readback"):
-                    material["matched"] += 1
-                else:
-                    material["unknown"] += 1
         else:
             material["not_requested"] += 1
         plan_public.append(
@@ -225,6 +256,21 @@ def build_daily_report(
                 "position": row.position,
                 "scheduled_time": row.scheduled_time,
                 "order_materials": row.order_materials,
+                "order_blocked_reason": "缺少素材下单配置"
+                if row.order_materials and not order and not version.material_config
+                else None,
+                "error_code": occurrence.error_code
+                if occurrence
+                else row.last_dispatch_error,
+                "material_order": {
+                    "id": str(order.id),
+                    "status": order.status,
+                    "job_id": order.job_id,
+                    "evidence": order.evidence,
+                    "error_code": order.error_code,
+                }
+                if order
+                else None,
                 "external_drama_id": row.external_drama_id,
                 "occurrence_id": str(occurrence.id) if occurrence else None,
                 "status": status,
@@ -296,8 +342,10 @@ def build_daily_report(
         "pending_proposals": pending,
         "frozen_evidence_ids": sorted(frozen_ids),
         "next_trigger": _next_trigger(
-            occurrences=occurrences, rules=rules, now=current
-        ),
+            occurrences=occurrences, rules=rules, now=current, plans=rows
+        )
+        if optimizer.active
+        else None,
         "generated_at": current,
     }
     return report

@@ -1,7 +1,8 @@
-import { useEffect, useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import { Badge } from "@/components/ui/badge"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Label } from "@/components/ui/label"
+import { allItems, errorMessage } from "./api"
 
 export type AIOptimizer = {
   id: string
@@ -16,6 +17,10 @@ export type AIOptimizer = {
   target_roas?: string | number | null
   priority?: "SPEND" | "ROAS" | "BALANCED"
   rule_ids?: string[]
+  material_config?: { strategy_ids?: string[]; feishu_token?: string }
+  authorization_limits?: Record<string, unknown>
+  timezone?: string
+  review_time?: string
   strategy_binding_id?: string
 }
 
@@ -37,29 +42,32 @@ export function AIOptimizerList({
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
+  const selection = useRef(selectedId)
+  selection.current = selectedId
   useEffect(() => {
     const controller = new AbortController()
     setLoading(true)
     setError(null)
     setItems([])
-    fetch(`/api/tenants/${tenantId}/ai-optimizers`, { signal: controller.signal })
-      .then(async (response) => {
-        if (!response.ok) throw new Error("无法读取 AI 优化师")
-        return (await response.json()) as { items?: AIOptimizer[] }
-      })
-      .then((payload) => {
-        const active = (payload.items ?? []).filter((item) => item.active)
-        setItems(active)
-        onLoaded?.(active)
-        if (!selectedId && active[0]) onSelect(active[0].id)
+    allItems<AIOptimizer>(
+      `/api/tenants/${tenantId}/ai-optimizers`,
+      controller.signal,
+    )
+      .then((items) => {
+        if (controller.signal.aborted) return
+        setItems(items)
+        onLoaded?.(items)
+        if (!items.some((item) => item.id === selection.current) && items[0])
+          onSelect(items[0].id)
       })
       .catch((reason: unknown) => {
-        if ((reason as { name?: string }).name !== "AbortError")
-          setError(reason instanceof Error ? reason.message : "无法读取 AI 优化师")
+        if (!controller.signal.aborted) setError(errorMessage(reason))
       })
-      .finally(() => setLoading(false))
+      .finally(() => {
+        if (!controller.signal.aborted) setLoading(false)
+      })
     return () => controller.abort()
-  }, [onLoaded, onSelect, selectedId, tenantId])
+  }, [onLoaded, onSelect, tenantId])
 
   return (
     <Card className="border-border/70" data-testid="ai-optimizer-list">
@@ -77,16 +85,21 @@ export function AIOptimizerList({
           disabled={loading || !items.length}
         >
           {!items.length && (
-            <option value="">{loading ? "载入中…" : "暂无启用中的优化师"}</option>
+            <option value="">{loading ? "载入中…" : "暂无优化师"}</option>
           )}
           {items.map((item) => (
             <option key={item.id} value={item.id}>
               {item.name}
+              {!item.active ? "（已暂停）" : ""}
             </option>
           ))}
         </select>
-        {error && <p className="text-xs text-destructive" role="alert">{error}</p>}
-        <div className="space-y-2" aria-label="优化师列表">
+        {error && (
+          <p className="text-xs text-destructive" role="alert">
+            {error}
+          </p>
+        )}
+        <fieldset className="space-y-2" aria-label="优化师列表">
           {items.map((item) => (
             <button
               type="button"
@@ -96,12 +109,16 @@ export function AIOptimizerList({
               data-testid={`optimizer-option-${item.id}`}
             >
               <span className="min-w-0 truncate">{item.name}</span>
-              <Badge variant={item.optimization_mode === "AUTO" ? "default" : "secondary"}>
-                {item.optimization_mode}
+              <Badge
+                variant={
+                  item.optimization_mode === "AUTO" ? "default" : "secondary"
+                }
+              >
+                {item.active ? item.optimization_mode : "已暂停"}
               </Badge>
             </button>
           ))}
-        </div>
+        </fieldset>
       </CardContent>
     </Card>
   )

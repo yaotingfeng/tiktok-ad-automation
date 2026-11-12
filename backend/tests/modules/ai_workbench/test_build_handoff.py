@@ -35,7 +35,7 @@ def _row(**values: object) -> AIDailyPlanRow:
 
 def test_scheduled_occurrence_is_timezone_aware_and_preserves_leading_zero_id() -> None:
     row = _row()
-    assert _scheduled_at(row) == datetime(2026, 11, 12, 9, 30, tzinfo=UTC)
+    assert _scheduled_at(row) == datetime(2026, 11, 12, 1, 30, tzinfo=UTC)
     assert row.external_drama_id == "0012"
 
 

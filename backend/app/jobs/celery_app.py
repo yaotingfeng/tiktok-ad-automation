@@ -321,6 +321,16 @@ celery_app.conf.update(
             "schedule": 30.0,
             "options": {"queue": "control"},
         },
+        "scan-ai-material-orders": {
+            "task": "ai_workbench.scan_material_orders",
+            "schedule": 30.0,
+            "options": {"queue": "control"},
+        },
+        "schedule-ai-reviews": {
+            "task": "ai_workbench.schedule_reviews",
+            "schedule": 60.0,
+            "options": {"queue": "control"},
+        },
         "cleanup-automation-runs": {
             "task": "automation.cleanup",
             "schedule": 3600.0,

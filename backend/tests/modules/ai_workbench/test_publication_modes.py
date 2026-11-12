@@ -69,3 +69,35 @@ def test_nested_strategy_budget_delta_is_checked():
     )
     assert allowed is False
     assert reason == "budget_delta_out_of_scope"
+
+
+def test_auto_unlisted_strategy_fields_and_unbounded_roas_stay_pending():
+    version = optimizer_version(
+        mode="AUTO", limits={"strategy": True, "max_budget_delta": 5}
+    )
+    allowed, _ = _within_authorization(
+        version=version,
+        kind="strategy",
+        before={"config": {"budget": 10, "target_roas": 1}},
+        after={"config": {"budget": 10, "target_roas": 2}},
+    )
+    assert not allowed
+    version.authorization_limits = {
+        "strategy": {
+            "allowed": True,
+            "allowed_fields": ["target_roas"],
+            "max_target_roas_delta": 0.2,
+        }
+    }
+    assert _within_authorization(
+        version=version,
+        kind="strategy",
+        before={"config": {"target_roas": 1}},
+        after={"config": {"target_roas": 1.1}},
+    ) == (True, None)
+    assert not _within_authorization(
+        version=version,
+        kind="strategy",
+        before={"config": {"target_roas": 1}},
+        after={"config": {"target_roas": 2}},
+    )[0]

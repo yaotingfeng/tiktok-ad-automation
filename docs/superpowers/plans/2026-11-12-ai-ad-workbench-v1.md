@@ -1,6 +1,6 @@
 # TK-ADA AI 投放工作台 v1 Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** 在 TK-ADA 内交付多租户 AI 投放工作台 v1：每个租户可创建多个独立 AI 优化师，每位优化师绑定一条投放策略和多条自动规则，按每日剧单定时调用现有广告搭建，复盘按自动优化或人工确认模式更新配置。
 
@@ -9,6 +9,14 @@
 **Tech Stack:** FastAPI、SQLModel/PostgreSQL、Celery/Redis/Beat、现有官方 TikTok SDK/MCP 通道、React/TypeScript、TanStack Router、shadcn/ui、DSH 受控任务服务。
 
 **Spec:** `docs/superpowers/specs/2026-11-11-ai-ad-workbench-v2-design.md`
+
+## 2026-11-12 交付状态
+
+Task 1–7 的代码与本地验收已完成，当前迁移 head 为 `0126_ai_plan_retry_fairness`。本轮在 `612d0b43` 基础上补齐真实登录请求、优化师配置界面、稳定行和异步搭建、素材订单持久化/幂等提交/查询、DSH 原生运行接入，以及提案证据和受控发布。独立复审提出的扫描公平性、暂停订单和经营证据账户隔离问题均已修正并复审通过。
+
+清单勾选表示相应交付产物及行为验收已完成；最初的 RED/提交步骤属于实施过程记录，不代表本轮逐字重跑所有历史示例命令。实际执行的 Python、Node、TypeScript、Vite、Playwright 命令和边界见[验收记录](../../validation/2026-11-12-ai-workbench-v1.md)。本机 Bun 不可用，使用同一依赖树的 Node 工具验证，不宣称运行过 Bun。
+
+真实外部素材订单、真实 TikTok 写入、真实模型复盘与生产部署仍不属于本地验收；接入配置和上线迁移要求见[运行手册](../../runbooks/ai-ad-workbench.md)。
 
 ## Global Constraints
 
@@ -48,12 +56,12 @@
 - Produces `AIOptimizer`, one active `AIOptimizerStrategyBinding` per optimizer, `AIOptimizerVersion`, `AIOptimizerRuleBinding` and API operations `GET/POST/PATCH /tenants/{tenant_id}/ai-optimizers`.
 - `AIOptimizerVersion` stores `daily_spend`, `target_roas`, `priority`, `bc_id`, advertiser scope, `optimization_mode`, authorization limits and the binding reference; the binding has a database uniqueness constraint on `(tenant_id, optimizer_id, active)` and points to exactly one tenant-owned `StrategyVersion`.
 
-- [ ] **Step 1: Write failing isolation tests** for tenant mismatch, optimizer mismatch, viewer write rejection, invalid BC/account scope, missing strategy binding and invalid optimization mode.
-- [ ] **Step 2: Run the focused tests** with `uv run pytest backend/tests/modules/ai_workbench/test_optimizer.py backend/tests/modules/ai_workbench/test_optimizer_permissions.py -q`; expect missing module/schema failures.
-- [ ] **Step 3: Implement models, migration, schemas and service** using `TenantContext` and existing tenant permission helpers. Enforce exactly one active strategy binding per optimizer, immutable optimizer versions, and a shared-reference guard: if a strategy is used by another optimizer, AI publication must reject it unless an explicit optimizer-owned strategy version is created through the existing strategy append service. Create/update must record actor, request id, digest and audit event.
-- [ ] **Step 4: Register the router** in `backend/app/api/main.py` and add OpenAPI response contracts for list/detail/create/update.
-- [ ] **Step 5: Re-run focused tests** and the relevant tenant permission suite; expect all pass.
-- [ ] **Step 6: Commit** `feat: add tenant-scoped AI optimizer model`.
+- [x] **Step 1: Write failing isolation tests** for tenant mismatch, optimizer mismatch, viewer write rejection, invalid BC/account scope, missing strategy binding and invalid optimization mode.
+- [x] **Step 2: Run the focused tests** with `uv run pytest backend/tests/modules/ai_workbench/test_optimizer.py backend/tests/modules/ai_workbench/test_optimizer_permissions.py -q`; expect missing module/schema failures.
+- [x] **Step 3: Implement models, migration, schemas and service** using `TenantContext` and existing tenant permission helpers. Enforce exactly one active strategy binding per optimizer, immutable optimizer versions, and a shared-reference guard: if a strategy is used by another optimizer, AI publication must reject it unless an explicit optimizer-owned strategy version is created through the existing strategy append service. Create/update must record actor, request id, digest and audit event.
+- [x] **Step 4: Register the router** in `backend/app/api/main.py` and add OpenAPI response contracts for list/detail/create/update.
+- [x] **Step 5: Re-run focused tests** and the relevant tenant permission suite; expect all pass.
+- [x] **Step 6: Commit** `feat: add tenant-scoped AI optimizer model`.
 
 ### Task 2: Daily drama plan and manual Excel-style input contract
 
@@ -72,12 +80,12 @@
 - `POST/PATCH/GET /tenants/{tenant_id}/ai-optimizers/{optimizer_id}/daily-plans`.
 - Plan row fields: `business_date`, `scheduled_time`, `title`, `provider_connection_id/application_id`, optional `promotion_url`, optional string `external_drama_id`, `order_materials`, `optimizer_id`; no material selection fields and no row-level advertiser override.
 
-- [ ] **Step 1: Write failing backend plan tests** for TSV payload validation, duplicate title rejection within a day, leading-zero drama IDs, tenant/optimizer ownership, and saving order intent without selecting materials.
-- [ ] **Step 2: Add frontend behavior tests** for ten blank rows, direct multi-cell TSV paste, Tab/Enter navigation, undo, date switching, and no material picker/selected-count before execution.
-- [ ] **Step 3: Implement plan models and API** with revisioned rows and optimistic concurrency; copy the parsing/validation semantics from `dramaGrid.ts` without binding uploads to dramas.
-- [ ] **Step 4: Implement `DramaPlanGrid`** with existing shadcn table/input patterns and route it under the AI workbench side rail. Show inherited optimizer BC/accounts/strategy context as read-only.
-- [ ] **Step 5: Run focused backend and Playwright tests**; expect plan rows to persist and remain isolated.
-- [ ] **Step 6: Commit** `feat: add AI optimizer daily drama plans`.
+- [x] **Step 1: Write failing backend plan tests** for TSV payload validation, duplicate title rejection within a day, leading-zero drama IDs, tenant/optimizer ownership, and saving order intent without selecting materials.
+- [x] **Step 2: Add frontend behavior tests** for ten blank rows, direct multi-cell TSV paste, Tab/Enter navigation, undo, date switching, and no material picker/selected-count before execution.
+- [x] **Step 3: Implement plan models and API** with revisioned rows and optimistic concurrency; copy the parsing/validation semantics from `dramaGrid.ts` without binding uploads to dramas.
+- [x] **Step 4: Implement `DramaPlanGrid`** with existing shadcn table/input patterns and route it under the AI workbench side rail. Show inherited optimizer BC/accounts/strategy context as read-only.
+- [x] **Step 5: Run focused backend and Playwright tests**; expect plan rows to persist and remain isolated.
+- [x] **Step 6: Commit** `feat: add AI optimizer daily drama plans`.
 
 ### Task 3: Scheduled build handoff to existing TKADA builds
 
@@ -95,12 +103,12 @@
 - `POST /tenants/{tenant_id}/ai-optimizers/{optimizer_id}/plans/{plan_id}/run` for manual dry dispatch and an internal Beat task `ai_workbench.dispatch_due_plans`.
 - `BuildHandoff.create_occurrence(plan_row_id, request_id) -> BuildOccurrence`; the service resolves the optimizer's active strategy binding and freezes its current `StrategyVersion`.
 
-- [ ] **Step 1: Write failing tests** for inherited advertiser scope, rejection of a caller-supplied cross-optimizer/expired strategy, exact strategy version freeze from the optimizer binding, provider/link resolution, execution-time material matching, idempotency on `(optimizer, plan_row, resolved_strategy_version, scheduled occurrence)`, and unknown-result reconciliation.
-- [ ] **Step 2: Implement occurrence and outbox records** with a stable request digest, frozen optimizer/BC/account/strategy snapshot resolved only from the active binding, and explicit statuses `PENDING`, `WAITING_MATERIAL`, `DISPATCHED`, `PARTIAL`, `UNKNOWN`, `COMPLETE`, `FAILED`.
-- [ ] **Step 3: Implement the handoff** by creating an existing `BuildDraft`, passing the plan drama input without material selection, invoking existing preparation/matching, freezing preview, submitting through existing builds service, and importing readback/created object evidence.
-- [ ] **Step 4: Add Beat/Celery dispatch** that claims due plan rows with tenant-safe locks, never re-submits an unknown occurrence, and records skipped/blocked reasons.
-- [ ] **Step 5: Run builds recovery, concurrency, and focused handoff tests**; expect duplicate dispatch and cross-scope tests to pass.
-- [ ] **Step 6: Commit** `feat: schedule AI optimizer builds through TKADA`.
+- [x] **Step 1: Write failing tests** for inherited advertiser scope, rejection of a caller-supplied cross-optimizer/expired strategy, exact strategy version freeze from the optimizer binding, provider/link resolution, execution-time material matching, idempotency on `(optimizer, plan_row, resolved_strategy_version, scheduled occurrence)`, and unknown-result reconciliation.
+- [x] **Step 2: Implement occurrence and outbox records** with a stable request digest, frozen optimizer/BC/account/strategy snapshot resolved only from the active binding, and explicit statuses `PENDING`, `WAITING_MATERIAL`, `DISPATCHED`, `PARTIAL`, `UNKNOWN`, `COMPLETE`, `FAILED`.
+- [x] **Step 3: Implement the handoff** by creating an existing `BuildDraft`, passing the plan drama input without material selection, invoking existing preparation/matching, freezing preview, submitting through existing builds service, and importing readback/created object evidence.
+- [x] **Step 4: Add Beat/Celery dispatch** that claims due plan rows with tenant-safe locks, never re-submits an unknown occurrence, and records skipped/blocked reasons.
+- [x] **Step 5: Run builds recovery, concurrency, and focused handoff tests**; expect duplicate dispatch and cross-scope tests to pass.
+- [x] **Step 6: Commit** `feat: schedule AI optimizer builds through TKADA`.
 
 ### Task 4: Optimizer-scoped automatic-rule binding and evidence
 
@@ -119,12 +127,12 @@
 - `RuleBindingScope(tenant_id, optimizer_id, rule_id, bc_id, advertiser_ids, authorization_revision)`.
 - `RuleEvidenceSnapshot` stores rule version/definition, optimizer scope, checked metrics, skipped accounts, hits and action ledger references.
 
-- [ ] **Step 1: Write failing tests** for effective scope intersection, inclusion of existing/manual ads in assigned accounts, overlap with other optimizers, version fence and retention beyond the current 30-day run cleanup for referenced evidence.
-- [ ] **Step 2: Implement binding and immutable rule-version references** without duplicating rule definitions; reuse existing rule evaluator and conflict/频控 logic.
-- [ ] **Step 3: Update rule input expansion/execution** to accept an optimizer scope and revalidate tenant/BC/account authorization immediately before action submission.
-- [ ] **Step 4: Persist decision-time evidence** including data freshness/publication version, rule definition, checked/hit/skipped objects, before/after values, management task and readback status; preserve referenced evidence when a rule is edited or removed.
-- [ ] **Step 5: Run automation-rule regression suites and focused evidence tests**; no existing non-AI rule behavior may change.
-- [ ] **Step 6: Commit** `feat: scope automatic rules to AI optimizer accounts`.
+- [x] **Step 1: Write failing tests** for effective scope intersection, inclusion of existing/manual ads in assigned accounts, overlap with other optimizers, version fence and retention beyond the current 30-day run cleanup for referenced evidence.
+- [x] **Step 2: Implement binding and immutable rule-version references** without duplicating rule definitions; reuse existing rule evaluator and conflict/频控 logic.
+- [x] **Step 3: Update rule input expansion/execution** to accept an optimizer scope and revalidate tenant/BC/account authorization immediately before action submission.
+- [x] **Step 4: Persist decision-time evidence** including data freshness/publication version, rule definition, checked/hit/skipped objects, before/after values, management task and readback status; preserve referenced evidence when a rule is edited or removed.
+- [x] **Step 5: Run automation-rule regression suites and focused evidence tests**; no existing non-AI rule behavior may change.
+- [x] **Step 6: Commit** `feat: scope automatic rules to AI optimizer accounts`.
 
 ### Task 5: DSH review tasks, optimization mode, proposals and publication
 
@@ -143,12 +151,12 @@
 - `GET /.../proposals` returns `PENDING`, `ACCEPTED`, `REJECTED`, `STALE` proposals with before/after, evidence, authorization and base versions.
 - `POST /.../proposals/{proposal_id}/accept` and `/reject` are idempotent and require the current optimizer scope.
 
-- [ ] **Step 1: Write failing tests** for automatic-mode in-scope publication, automatic-mode out-of-scope blocking, manual-mode forced confirmation, reject preserving current versions, stale-base rejection, and no strategy/rule cross-optimizer publication.
-- [ ] **Step 2: Implement evidence assembly** from optimizer target versions, plan/occurrence/build records, rule evidence, reporting/business snapshots, operation logs and versioned knowledge references; do not expose credentials or model chain-of-thought.
-- [ ] **Step 3: Implement the DSH task contract** with tenant/optimizer task identity, short-lived authorization, cancellation/restart fencing, and structured result/proposal output only.
-- [ ] **Step 4: Implement publication**: strategy proposal updates an optimizer-owned strategy version through its append-version service; a shared strategy reference is rejected until explicitly copied/owned, never silently changed. Rule proposal uses rule version service; automatic mode checks authorization; manual mode always creates a pending proposal; reject only records the decision.
-- [ ] **Step 5: Run focused publication/review tests and existing business/reporting suites**; verify historical evidence remains readable after source version changes.
-- [ ] **Step 6: Commit** `feat: add DSH review and optimizer proposal modes`.
+- [x] **Step 1: Write failing tests** for automatic-mode in-scope publication, automatic-mode out-of-scope blocking, manual-mode forced confirmation, reject preserving current versions, stale-base rejection, and no strategy/rule cross-optimizer publication.
+- [x] **Step 2: Implement evidence assembly** from optimizer target versions, plan/occurrence/build records, rule evidence, reporting/business snapshots, operation logs and versioned knowledge references; do not expose credentials or model chain-of-thought.
+- [x] **Step 3: Implement the DSH task contract** with tenant/optimizer task identity, short-lived authorization, cancellation/restart fencing, and structured result/proposal output only.
+- [x] **Step 4: Implement publication**: strategy proposal updates an optimizer-owned strategy version through its append-version service; a shared strategy reference is rejected until explicitly copied/owned, never silently changed. Rule proposal uses rule version service; automatic mode checks authorization; manual mode always creates a pending proposal; reject only records the decision.
+- [x] **Step 5: Run focused publication/review tests and existing business/reporting suites**; verify historical evidence remains readable after source version changes.
+- [x] **Step 6: Commit** `feat: add DSH review and optimizer proposal modes`.
 
 ### Task 6: TKADA frontend shell, menu and reused configuration entry points
 
@@ -169,13 +177,13 @@
 - AI sidebar routes: `overview`, `schedule`, `execution`, `review`, `pending`, plus optimizer selector.
 - Existing strategy/rule pages receive `tenantId`, `optimizerId`, `recordId`, `versionId`, and a return context; saving returns to the optimizer record without creating a second editor.
 
-- [ ] **Step 1: Add failing Playwright tests** for AI menu placement immediately above “打开体验版”, second AI sidebar, optimizer switching isolation, single strategy binding, schedule grid, pending accept/reject and return-context preservation.
-- [ ] **Step 2: Add the standalone AI route and two-column shell** while leaving existing TKADA groups unchanged; do not add AI to the “广告投放” group.
-- [ ] **Step 3: Implement optimizer list/config/overview** with one strategy selector, rule binding, BC/accounts, goals, optimization mode and schedule controls.
-- [ ] **Step 4: Reuse existing strategy/rule screens** through contextual navigation or extracted content components; show bound-only vs tenant-all scope explicitly and block silent shared edits.
-- [ ] **Step 5: Connect schedule, execution, review and pending views** to the Task 2–5 APIs; keep material selection out of schedule and show material matching only in execution evidence.
-- [ ] **Step 6: Run focused Playwright tests at 390/1024/1440 widths and build checks**; verify no horizontal overflow or stale optimizer state.
-- [ ] **Step 7: Commit** `feat: add AI optimizer workbench UI`.
+- [x] **Step 1: Add failing Playwright tests** for AI menu placement immediately above “打开体验版”, second AI sidebar, optimizer switching isolation, single strategy binding, schedule grid, pending accept/reject and return-context preservation.
+- [x] **Step 2: Add the standalone AI route and two-column shell** while leaving existing TKADA groups unchanged; do not add AI to the “广告投放” group.
+- [x] **Step 3: Implement optimizer list/config/overview** with one strategy selector, rule binding, BC/accounts, goals, optimization mode and schedule controls.
+- [x] **Step 4: Reuse existing strategy/rule screens** through contextual navigation or extracted content components; show bound-only vs tenant-all scope explicitly and block silent shared edits.
+- [x] **Step 5: Connect schedule, execution, review and pending views** to the Task 2–5 APIs; keep material selection out of schedule and show material matching only in execution evidence.
+- [x] **Step 6: Run focused Playwright tests at 390/1024/1440 widths and build checks**; verify no horizontal overflow or stale optimizer state.
+- [x] **Step 7: Commit** `feat: add AI optimizer workbench UI`.
 
 ### Task 7: Retention, daily report and end-to-end acceptance
 
@@ -191,12 +199,12 @@
 **Interfaces:**
 - Daily report aggregates the same frozen evidence IDs used by execution and review; it does not recompute a second reporting metric source.
 
-- [ ] **Step 1: Write acceptance tests** for two tenants, two optimizers in one tenant, manual and automatic modes, one scheduled drama, order/no-order paths, existing builds readback, account-scoped rules, review proposal and next-version usage.
-- [ ] **Step 2: Implement evidence retention/cleanup** so referenced decision snapshots survive rule deletion, reporting refresh and normal short-term cleanup; unreferenced data follows configured retention.
-- [ ] **Step 3: Implement daily report** with target progress, schedule rows, material/order state, build/readback outcomes, rule actions, pending proposals and next trigger.
-- [ ] **Step 4: Run backend acceptance against isolated PostgreSQL/Redis and frontend E2E using transport doubles**; keep real external credentials and writes disabled.
-- [ ] **Step 5: Record limitations**: no automatic selection, no automatic copy scaling, no real provider/material order proof, no production deployment until authorized integrations are separately validated.
-- [ ] **Step 6: Commit** `test: accept AI optimizer workbench v1`.
+- [x] **Step 1: Write acceptance tests** for two tenants, two optimizers in one tenant, manual and automatic modes, one scheduled drama, order/no-order paths, existing builds readback, account-scoped rules, review proposal and next-version usage.
+- [x] **Step 2: Implement evidence retention/cleanup** so referenced decision snapshots survive rule deletion, reporting refresh and normal short-term cleanup; unreferenced data follows configured retention.
+- [x] **Step 3: Implement daily report** with target progress, schedule rows, material/order state, build/readback outcomes, rule actions, pending proposals and next trigger.
+- [x] **Step 4: Run backend acceptance against isolated PostgreSQL/Redis and frontend E2E using transport doubles**; keep real external credentials and writes disabled.
+- [x] **Step 5: Record limitations**: no automatic selection, no automatic copy scaling, no real provider/material order proof, no production deployment until authorized integrations are separately validated.
+- [x] **Step 6: Commit** `test: accept AI optimizer workbench v1`.
 
 ## Verification Commands
 

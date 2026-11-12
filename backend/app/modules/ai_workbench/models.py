@@ -133,6 +133,11 @@ class AIOptimizerVersion(SQLModel, table=True):
     bc_id: str = Field(max_length=128)
     advertiser_ids: list[str] = Field(sa_column=Column(JSONB, nullable=False))
     optimization_mode: str = Field(default="MANUAL", max_length=16)
+    timezone: str = Field(default="Asia/Shanghai", max_length=64)
+    review_time: str = Field(default="13:00", max_length=5)
+    material_config: dict[str, Any] = Field(
+        default_factory=dict, sa_column=Column(JSONB, nullable=False)
+    )
     authorization_limits: dict[str, Any] = Field(
         default_factory=dict, sa_column=Column(JSONB, nullable=False)
     )

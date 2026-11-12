@@ -1,7 +1,8 @@
 """HTTP contracts for tenant AI optimizer configuration."""
 
-from datetime import date
+from datetime import date, datetime
 from uuid import UUID
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Query
 from pydantic import BaseModel, ConfigDict
@@ -233,11 +234,16 @@ def get_daily_report(
     business_date: date | None = Query(default=None),
 ) -> dict:
     """Return the read-only daily summary built from frozen workbench evidence."""
+    if business_date is None:
+        optimizer = service.get_optimizer(
+            session, context=_context(user, tenant_id), optimizer_id=optimizer_id
+        )
+        business_date = datetime.now(ZoneInfo(optimizer.timezone)).date()
     return daily_report.build_daily_report(
         session,
         context=_context(user, tenant_id),
         optimizer_id=optimizer_id,
-        business_date=business_date or date.today(),
+        business_date=business_date,
     )
 
 
@@ -366,3 +372,136 @@ def reject_proposal(
     )
     session.commit()
     return proposals._public(row)
+
+
+@router.get("/ai-optimizers/{optimizer_id}/reviews")
+def list_reviews(
+    tenant_id: UUID, optimizer_id: UUID, session: SessionDep, user: CurrentUser
+) -> dict:
+    from app.core.config import settings
+
+    service.get_optimizer(
+        session, context=_context(user, tenant_id), optimizer_id=optimizer_id
+    )
+    tasks = session.exec(
+        select(reviews.DSHReviewTask)
+        .where(
+            reviews.DSHReviewTask.tenant_id == tenant_id,
+            reviews.DSHReviewTask.optimizer_id == optimizer_id,
+        )
+        .order_by(reviews.DSHReviewTask.created_at.desc())
+        .limit(50)
+    ).all()
+    return {
+        "runtime_ready": bool(settings.AI_DSH_SERVICE_TOKEN),
+        "items": [
+            {
+                "id": task.id,
+                "status": task.status,
+                "created_at": task.created_at,
+                "finished_at": task.finished_at,
+                "optimizer_version": task.optimizer_version,
+                "result": task.result,
+            }
+            for task in tasks
+        ],
+    }
+
+
+class ReviewControlRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+
+@router.post("/ai-optimizers/{optimizer_id}/reviews/{task_id}/cancel")
+def cancel_review(
+    tenant_id: UUID,
+    optimizer_id: UUID,
+    task_id: UUID,
+    _body: ReviewControlRequest,
+    session: SessionDep,
+    user: CurrentUser,
+) -> dict:
+    from app.modules.ai_workbench import ai_tasks
+
+    context = _context(user, tenant_id)
+    task = reviews.get_review_task(
+        session, context=context, optimizer_id=optimizer_id, task_id=task_id
+    )
+    task = ai_tasks.cancel_task(
+        session,
+        context=context,
+        optimizer_id=optimizer_id,
+        task_id=task_id,
+        fence=task.fence,
+    )
+    session.commit()
+    return {"id": task.id, "status": task.status}
+
+
+@router.post("/ai-optimizers/{optimizer_id}/reviews/{task_id}/retry")
+def retry_review(
+    tenant_id: UUID,
+    optimizer_id: UUID,
+    task_id: UUID,
+    _body: ReviewControlRequest,
+    session: SessionDep,
+    user: CurrentUser,
+) -> dict:
+    from app.modules.ai_workbench import ai_tasks
+
+    context = _context(user, tenant_id)
+    task = ai_tasks.restart_task(
+        session, context=context, optimizer_id=optimizer_id, task_id=task_id
+    )
+    session.commit()
+    return {"id": task.id, "status": task.status}
+
+
+@router.get("/ai-optimizers/{optimizer_id}/reviews/{task_id}")
+def get_review(
+    tenant_id: UUID,
+    optimizer_id: UUID,
+    task_id: UUID,
+    session: SessionDep,
+    user: CurrentUser,
+) -> dict:
+    task = reviews.get_review_task(
+        session,
+        context=_context(user, tenant_id),
+        optimizer_id=optimizer_id,
+        task_id=task_id,
+    )
+    return {
+        "id": task.id,
+        "status": task.status,
+        "result": task.result,
+        "error_message": task.result.get("summary")
+        if task.status == "FAILED"
+        else None,
+    }
+
+
+@router.get("/ai-material-options")
+def material_options(tenant_id: UUID, session: SessionDep, user: CurrentUser) -> dict:
+    from app.core.errors import DomainError
+    from app.modules.ai_workbench.orders import company_client
+
+    try:
+        client = company_client(session, context=_context(user, tenant_id))
+    except DomainError as error:
+        if error.code == "material_production_not_ready":
+            return {"ready": False, "strategies": []}
+        raise
+    catalog = client.request("GET", "/api/strategy-catalog")
+    return {
+        "ready": True,
+        "strategies": [
+            {
+                "id": item.get("id"),
+                "name": item.get("name"),
+                "enabled": item.get("enabled") is True,
+            }
+            for item in catalog.get("strategies", [])
+            if isinstance(item, dict)
+        ],
+    }

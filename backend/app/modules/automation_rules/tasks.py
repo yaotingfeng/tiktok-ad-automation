@@ -87,6 +87,7 @@ def scan_due_rules(session: Session, *, now: datetime) -> int:
             select(AIOptimizerRuleBinding).where(
                 AIOptimizerRuleBinding.tenant_id == rule.tenant_id,
                 AIOptimizerRuleBinding.rule_id == rule.id,
+                AIOptimizerRuleBinding.active.is_(True),
             )
         ).all()
         bindings = session.exec(
