@@ -5158,3 +5158,15 @@ c34b生产快速切换约3分28秒完成、锁释放/CI恢复；五分钟仍4.88
 - Added history feedback assembly for proposals and reviews, execution/readback/observation maturity states, deterministic observational comparisons, candidate experience contract, and AUTO/MANUAL-safe capability prevalidation.
 - DSH completion tool now accepts bounded recommendations and evidence-backed experience candidates while retaining a single structured tool and no shell/platform mutation.
 - Verification: focused AI workbench tests 25 passed; Node runtime syntax check passed; ruff checks passed. Full AI suite has unrelated date-sensitive completion expectations when run on 2026-11-13; no build-handoff behavior was changed.
+
+
+## 2026-11-13 DSH / 插件 / TK-ADA 方法边界调整
+
+- 用户确认后，将主 Skill 和五个专项的唯一源移至 DSH 插件；业务任务创建只冻结业务证据，首次领取校验并绑定方法清单，重试不改变旧正文。为方法归档预留容量，绑定时不再截断业务事实。
+- 插件在每任务 scope 使用 DSH `0.2.2-rc.1` 原生 SkillRegistry，受限 `skill` 工具按需加载；初始上下文仅展示目录，完成必须先加载主方法，并归档实际 `method_usage`。禁止访问宿主个人方法；未修改 DSH 核心。
+- 修复独立 review 的三项问题：允许引用冻结历史/按账户筛选的经营来源；经验适用条件与人工验证分开保存避免合法文本超长；同一候选确认采用 PostgreSQL 事务锁防止并发重复建资产。
+- 修正知识库 UI 的冻结状态表述与租户 effect 依赖。为两个使用固定历史日期的准备/暂停用例冻结执行时钟，不改变搭建到期行为。
+- 已创建并回读开发复用指南：[从业务工具到 AI 工作台](https://gz-junbo.feishu.cn/docx/BWDudD226o6A5cxEjvscVVOZnSh)，包含边界、旧 Skill 提炼、开发阶段、数据资格、经验闭环、验收和可复制 Skill 指令模板。
+- 验证：AI workbench PostgreSQL 回归 92 passed（含方法版本绑定/重试、历史证据引用、最大长度及真实跨连接并发确认）；Playwright 工作台 22 passed；DSH 插件 4 passed（含宿主原生 SkillRegistry、两任务 scope 隔离和实际按需加载）；TypeScript、Vite 正式构建、Ruff、Skill 格式检查及差异检查通过。
+- 前后端各有使用固定历史日期的回归例受真实日历推进影响，本轮只固定测试时钟以核验目标分支，不改变生产搭建到期行为。数据库元数据检查仍有既有 rule/run 双向外键的排序提示，检查结果通过。
+- 未部署、未执行真实广告写入或真实模型效果验收。API 与插件 1.1.0 需配套更新；发布前取消旧格式待处理复盘并重新发起，已完成历史保留。

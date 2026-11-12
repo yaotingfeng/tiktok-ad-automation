@@ -651,6 +651,13 @@ def confirm_ai_experience(
     candidate = candidates[index]
     # 稳定标识使重复点击幂等；只进入原租户/原 BC，不能借确认升级成公共经验。
     key = f"review-{task_id}-{index}"
+    # 同一候选确认串行，防止并发请求各自创建随机 asset_id 的重复知识。
+    from sqlalchemy import text
+
+    session.execute(
+        text("SELECT pg_advisory_xact_lock(hashtextextended(:key,0))"),
+        {"key": f"ai-experience:{tenant_id}:{key}"},
+    )
     existing = session.exec(
         latest_query().where(
             KnowledgeVersion.tenant_id == tenant_id, KnowledgeVersion.key == key
@@ -670,12 +677,10 @@ def confirm_ai_experience(
             scope="BC",
             bc_id=task.evidence["optimizer"]["bc_id"],
             title=candidate["title"],
-            body=candidate["body"],
+            body=candidate["body"] + "\n人工验证：" + body.validation_result,
             source=f"review:{task_id}",
             source_verified=True,
-            applicability=candidate["applicability"]
-            + "\n人工验证："
-            + body.validation_result,
+            applicability=candidate["applicability"],
             evidence_ids=candidate["evidence_ids"],
         ),
     )

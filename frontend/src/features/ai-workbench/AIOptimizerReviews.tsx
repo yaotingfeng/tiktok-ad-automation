@@ -53,7 +53,16 @@ export function AIOptimizerReviews({
   const [busy, setBusy] = useState<string | null>(null)
   const [history, setHistory] = useState<ReviewTask[]>([])
   const [runtimeReady, setRuntimeReady] = useState<boolean | undefined>()
-  const [knowledge, setKnowledge] = useState<Array<{ id: string; title: string; scope: string; version: number; body: string; eligibility?: string }>>([])
+  const [knowledge, setKnowledge] = useState<
+    Array<{
+      id: string
+      title: string
+      scope: string
+      version: number
+      body: string
+      eligibility?: string
+    }>
+  >([])
   const [task, setTask] = useState<ReviewTask | null>(null)
   const decisionIdentity = useRef(createRequestIdentity())
   const reviewIdentity = useRef(createRequestIdentity())
@@ -89,10 +98,19 @@ export function AIOptimizerReviews({
       if (!controller.signal.aborted) setError(errorMessage(reason))
     })
     if (!pendingOnly && optimizerId) {
-      void aiRequest<Array<{ id: string; title: string; scope: string; version: number; body: string; eligibility?: string }>>(
-        `/api/tenants/${tenantId}/ai-knowledge`,
-        { signal: controller.signal },
-      ).then((result) => { if (!controller.signal.aborted) setKnowledge(result) })
+      void aiRequest<
+        Array<{
+          id: string
+          title: string
+          scope: string
+          version: number
+          body: string
+          eligibility?: string
+        }>
+      >(`/api/tenants/${tenantId}/ai-knowledge`, { signal: controller.signal })
+        .then((result) => {
+          if (!controller.signal.aborted) setKnowledge(result)
+        })
         .catch(() => {})
       void aiRequest<{ runtime_ready?: boolean; items: ReviewTask[] }>(
         `${base}/reviews`,
@@ -112,7 +130,7 @@ export function AIOptimizerReviews({
         })
     }
     return () => controller.abort()
-  }, [load, pendingOnly, optimizerId, base])
+  }, [load, pendingOnly, optimizerId, base, tenantId])
 
   useEffect(() => {
     if (
@@ -329,13 +347,26 @@ export function AIOptimizerReviews({
         )}
         {!pendingOnly && knowledge.length > 0 && (
           <div className="rounded-md border p-4">
-            <h3 className="text-sm font-medium">复盘知识（已冻结范围）</h3>
+            <h3 className="text-sm font-medium">
+              知识库（本轮使用内容以任务冻结记录为准）
+            </h3>
             <div className="mt-3 grid gap-3 md:grid-cols-2">
               {knowledge.map((item) => (
                 <div key={item.id} className="rounded bg-muted p-3 text-xs">
-                  <div className="flex justify-between gap-2 font-medium"><span>{item.title}</span><span>{item.scope} · v{item.version}</span></div>
-                  <p className="mt-2 whitespace-pre-wrap text-muted-foreground">{item.body}</p>
-                  {item.eligibility && <p className="mt-2 text-muted-foreground">状态：{item.eligibility}</p>}
+                  <div className="flex justify-between gap-2 font-medium">
+                    <span>{item.title}</span>
+                    <span>
+                      {item.scope} · v{item.version}
+                    </span>
+                  </div>
+                  <p className="mt-2 whitespace-pre-wrap text-muted-foreground">
+                    {item.body}
+                  </p>
+                  {item.eligibility && (
+                    <p className="mt-2 text-muted-foreground">
+                      状态：{item.eligibility}
+                    </p>
+                  )}
                 </div>
               ))}
             </div>

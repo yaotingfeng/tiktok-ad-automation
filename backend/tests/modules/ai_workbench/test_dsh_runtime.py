@@ -5,6 +5,7 @@ from uuid import uuid4
 from app.core.config import settings
 
 from .test_optimizer import api_headers, create_body, seed_optimizer_dependencies
+from .test_review_methods import plugin_methods
 
 
 def test_runtime_claim_complete_and_reject_old_fence(
@@ -31,14 +32,18 @@ def test_runtime_claim_complete_and_reject_old_fence(
         client.post("/api/integrations/ai-workbench/reviews/claim").status_code == 401
     )
     claim = client.post(
-        "/api/integrations/ai-workbench/reviews/claim", headers=machine
+        "/api/integrations/ai-workbench/reviews/claim",
+        headers=machine,
+        json=plugin_methods(),
     ).json()
     assert claim["task"]["id"] == task.json()["task"]["id"]
     token = {"Authorization": "Bearer " + claim["task_token"]}
     # 任务 token 不能作为服务 token 领取其他租户任务。
     assert (
         client.post(
-            "/api/integrations/ai-workbench/reviews/claim", headers=token
+            "/api/integrations/ai-workbench/reviews/claim",
+            headers=token,
+            json=plugin_methods(),
         ).status_code
         == 403
     )
@@ -85,6 +90,7 @@ def test_runtime_recovery_changes_fence_and_cancel_revokes_token(
     claim = client.post(
         "/api/integrations/ai-workbench/reviews/claim",
         headers={"Authorization": "Bearer " + settings.AI_DSH_SERVICE_TOKEN},
+        json=plugin_methods(),
     ).json()
     cancelled = client.post(
         base + "/reviews/" + claim["task"]["id"] + "/cancel",

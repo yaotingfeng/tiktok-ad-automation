@@ -1,6 +1,6 @@
 """交付回归：真实持久化边界与异步执行阶段，不调用外部平台。"""
 
-from datetime import UTC, date, datetime, time
+from datetime import UTC, date, datetime, time, timedelta
 from uuid import UUID, uuid4
 
 import pytest
@@ -126,6 +126,19 @@ def test_schedule_uses_shanghai_local_time():
     assert _scheduled_at(row) == datetime(2026, 11, 12, 1, 30, tzinfo=UTC)
 
 
+def freeze_dispatch_clock(monkeypatch, occurrence):
+    # 此两例验证准备/暂停而非过期；固定在排期当日，避免日历推进触发另一业务分支。
+    class DispatchClock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            instant = occurrence.scheduled_at + timedelta(minutes=1)
+            return instant.astimezone(tz) if tz else instant.replace(tzinfo=None)
+
+    monkeypatch.setattr(
+        "app.modules.ai_workbench.build_handoff.datetime", DispatchClock
+    )
+
+
 def test_async_preparation_waits_before_generating_preview(
     client, session, context, monkeypatch
 ):
@@ -133,6 +146,7 @@ def test_async_preparation_waits_before_generating_preview(
     occurrence = BuildHandoff(session, context=context).create_occurrence(
         plan.rows[0].id, uuid4(), enqueue=False
     )
+    freeze_dispatch_clock(monkeypatch, occurrence)
     draft_id = uuid4()
     monkeypatch.setattr(
         "app.modules.ai_workbench.build_handoff.drafts.create_draft",
@@ -192,6 +206,7 @@ def test_pausing_optimizer_stops_already_queued_occurrence(
     occurrence = BuildHandoff(session, context=context).create_occurrence(
         plan.rows[0].id, uuid4(), enqueue=False
     )
+    freeze_dispatch_clock(monkeypatch, occurrence)
     saved = session.get(AIOptimizer, UUID(optimizer["id"]))
     saved.active = False
     session.add(saved)

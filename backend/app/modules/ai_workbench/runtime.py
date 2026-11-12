@@ -1,6 +1,7 @@
 """DSH 独立进程接入：服务身份领取、任务级短令牌、结构化完成及版本发布。"""
 
 import hmac
+import json
 from datetime import UTC, datetime
 from uuid import UUID, uuid5
 from zoneinfo import ZoneInfo
@@ -20,6 +21,7 @@ from app.core.context import TenantContext
 from app.core.errors import DomainError
 from app.modules.ai_workbench import ai_tasks, proposals, reviews
 from app.modules.ai_workbench.knowledge_refs import sanitize_public
+from app.modules.ai_workbench.methods import MethodBundle
 from app.modules.ai_workbench.models import AIOptimizer, AIOptimizerVersion
 from app.modules.ai_workbench.proposals import ProposalInput
 
@@ -56,6 +58,7 @@ class ReviewResult(BaseModel):
     experience_candidates: list[ExperienceCandidate] = Field(
         default_factory=list, max_length=10
     )
+    method_usage: list[str] = Field(default_factory=list, max_length=6)
     failed: bool = False
 
 
@@ -133,7 +136,7 @@ def task_identity(
 
 
 @router.post("/claim", dependencies=[Depends(service_identity)])
-def claim(session: SessionDep) -> dict:
+def claim(session: SessionDep, methods: MethodBundle) -> dict:
     now = datetime.now(UTC)
     # 跨进程只允许同一优化师一个复盘会话；迟到结果由新 fence 拒绝。
     candidates = session.exec(
@@ -198,6 +201,29 @@ def claim(session: SessionDep) -> dict:
             task.cancellation_requested = True
             session.add(task)
             continue
+        if "methods" not in task.evidence:
+            # 首次领取时绑定插件实际发布的方法；重试/升级沿用已归档正文，
+            # 不覆盖创建时冻结的业务数据，也不让新方法改变旧轮结论。
+            from app.modules.ai_workbench.input_budget import MAX_INPUT_BYTES
+
+            bound_evidence = {
+                **task.evidence,
+                "methods": methods.model_dump(mode="json"),
+            }
+            if (
+                len(
+                    json.dumps(
+                        bound_evidence, ensure_ascii=False, separators=(",", ":")
+                    ).encode()
+                )
+                > MAX_INPUT_BYTES
+            ):
+                raise DomainError(
+                    "ai_review_input_too_large",
+                    "绑定方法后输入超过容量，请创建较小范围的新任务",
+                )
+            task.evidence = bound_evidence
+            session.add(task)
         payload = {
             "task": {
                 "id": str(task.id),
@@ -232,6 +258,15 @@ def complete(
         return {"id": str(task.id), "status": task.status}
     if task.status != "RUNNING":
         raise DomainError("ai_task_fence_conflict", "复盘任务未领取")
+    if body.method_usage:
+        bound = task.evidence.get("methods", {})
+        method_keys = {
+            r["key"]
+            for r in [bound.get("main", {}), *bound.get("references", [])]
+            if r.get("key")
+        }
+        if not set(body.method_usage).issubset(method_keys):
+            raise DomainError("ai_method_not_bound", "方法不属于此任务绑定清单")
     cited = {
         str(e)
         for item in [*body.recommendations, *body.experience_candidates]

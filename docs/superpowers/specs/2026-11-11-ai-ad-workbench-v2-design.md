@@ -215,3 +215,8 @@ DSH 接入只暴露有限领域工具，例如获取复盘数据、检索本租�
 - [自动规则条件与动作](../../../backend/app/modules/automation_rules/schemas.py)、[规则版本及台账现状](../../../backend/app/modules/automation_rules/models.py)、[运行/保留现状](../../../backend/app/modules/automation_rules/tasks.py)、[规则动作执行](../../../backend/app/modules/automation_rules/executor.py)、[复制能力](../../../backend/app/modules/campaign_copies/api.py)。
 - [查询快照生命周期](../../../backend/app/modules/reporting/query_models.py)、[报表发布](../../../backend/app/modules/reporting/publish.py)、[经营计算与证据](../../../backend/app/modules/business/models.py)、[经营数据清理](../../../backend/app/modules/business/maintenance.py)。
 - [现有 DSH 雏形](../../../../deepseek-ads-workspace/README.md)、[业务知识目录](../../../../../docs/README.md)、[员工复盘方法](../../../../../.codex/skills/ads-employee-review/SKILL.md)。
+
+
+## 2026-11-13 方法加载边界补充（用户已确认）
+
+DSH 是通用运行时；投放插件负责 Agent 的任务会话、主 Skill/专项方法包、工具注册和领域 API 连接；TK-ADA 保留全部正式业务事实、数据计算、知识经验、历史、授权与发布。方法资源位于 `integrations/dsh-ai-workbench/skills/`，通过任务 scope 的 DSH 原生 SkillRegistry 注册和受限 `skill` 入口按需读取。后端不再作为方法作者或读取方法文件；首次领取时归档插件提供的正文、版本及哈希，重试使用已归档方法，完成记录实际加载集合。公共知识和私有经验仍由领域系统按范围检索，不随插件方法包分发。归档不是第二份可编辑方法源。

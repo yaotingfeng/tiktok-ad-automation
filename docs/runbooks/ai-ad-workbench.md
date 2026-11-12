@@ -26,7 +26,7 @@ v1 使用文档约定的素材库工作流：`GET /api/strategy-catalog`、`GET 
 
 部署方在 TK-ADA API/Worker/Beat 共用运行 Secret 中增加 `AI_DSH_SERVICE_TOKEN`，为空时不接受机器领取、不启动自动复盘，前端显示未配置。此项是服务凭据，不是业务功能开关。普通已有四开关保持原值；首次配置须核对目标、范围和实际加载值，不能将本地模板当作服务器已启用。
 
-凭据至少 32 字节随机值，与浏览器登录、TikTok OAuth 和素材推送 Key 分离。不要在日志、命令行参数或源码中填写值。在 DSH 侧将相同凭据放入仅服务用户可读的 `0600` 文件，并注册本仓库 `integrations/dsh-ai-workbench` 原生插件。插件使用 DSH `0.2.2-rc.1` 的 agent、llm、session、tools 接口；依赖由 DSH 宿主提供，不修改 DSH 核心，也不直接复用旧本机投手服务。
+凭据至少 32 字节随机值，与浏览器登录、TikTok OAuth 和素材推送 Key 分离。不要在日志、命令行参数或源码中填写值。在 DSH 侧将相同凭据放入仅服务用户可读的 `0600` 文件，并注册本仓库 `integrations/dsh-ai-workbench` 原生插件。插件使用 DSH `0.2.2-rc.1` 的 agent、llm、session、tools、skill、scope 接口；依赖由 DSH 宿主提供，不修改 DSH 核心，也不直接复用旧本机投手服务。
 
 插件配置对象（按宿主现有插件注册机制加载）：
 
@@ -40,7 +40,19 @@ v1 使用文档约定的素材库工作流：`GET /api/strategy-catalog`、`GET 
 
 必须配置 DSH 默认模型；也可通过插件 `modelSelection` 显式选择已配置的模型。`url` 只允许 HTTPS 纯 origin；本机隔离验收可用 `http://127.0.0.1:<端口>`。生产域名、token 文件和状态目录由部署方明确提供，不能推断或复制测试凭据。
 
-运行链路为：用户手动发起或 Beat 创建复盘 → 冻结优化师、策略、规则、计划、搭建、报表和证据 → DSH 服务领取 → 返回五分钟任务级 JWT → 原生 DSH 独立会话完成结构化提案 → TK-ADA 校验及发布。领取服务凭据不进入模型提示；会话只开放 `tkada_complete_review`，不能执行 shell、读取凭据或调用平台。每任务目录按租户/优化师/任务/fence 分隔。
+运行链路为：用户手动发起或 Beat 创建复盘 → TK-ADA 冻结优化师、策略、规则、计划、搭建、报表、知识和历史 → 插件领取并首次绑定方法包 → 返回五分钟任务级 JWT → 原生 DSH 独立会话通过 `skill` 读取主方法及相关专项 → `tkada_complete_review` 提交结构化结果 → TK-ADA 校验及发布。领取服务凭据不进入模型提示；会话仅开放受限 `skill` 和 `tkada_complete_review`，不能执行 shell、读取凭据或调用平台。每任务目录按租户/优化师/任务/fence 分隔。
+
+### 方法、插件与领域系统边界（2026-11-13）
+
+- DSH 宿主负责模型、Agent 会话和原生 SkillRegistry。无需修改或嵌入 DSH 核心。
+- 插件 `integrations/dsh-ai-workbench/skills/ai-delivery-review/` 是主 Skill 和五个专项方法的唯一源。插件按任务 scope 注册方法，通过受限的同名 `skill` 工具调用原生 registry，隔离宿主个人 Skill 和其他任务的方法。初始提示仅提供方法目录；主方法必须加载后才能正常完成，专项按需加载，结果记录 `method_usage`。
+- TK-ADA 负责数据、知识/经验、历史反馈、授权、参数 Schema、提案校验和正式发布。业务后端不再读取或维护方法文件；任务中保存的正文/版本/哈希是插件首次绑定的归档副本，重试不随插件升级改变。
+- 创建时业务输入上限 416,000 字节，为方法归档预留 96,000 字节，总上限 512,000 字节。领取时只绑定方法，不能再次截断已冻结业务输入。`input_budget` 描述业务输入部分；方法归档有独立容量校验。
+- `/claim` 请求体现在必须是 `{main, references}` 方法清单，每项为 `{key, description, version, sha256, body}`。`main.key=ai-delivery-review`，references 固定 builds/rules/materials/business/scale，正文 UTF-8 哈希经服务端校验。插件不复制策略、规则执行器或知识数据库。
+
+升级时 API 与插件 `1.1.0` 必须配套更新；旧版空请求体领取不再支持。切换前取消仍在运行或已冻结旧格式方法的待处理复盘，再重新发起新任务；历史已完成结果保留。这个边界调整无新增迁移，但首次交付知识库仍需此前的 `0127_ai_knowledge` 迁移。这里是发布准备说明，本轮未部署。
+
+开发方法复用指南：[从业务工具到 AI 工作台](https://gz-junbo.feishu.cn/docx/BWDudD226o6A5cxEjvscVVOZnSh)。
 
 机器端点为 `POST /api/integrations/ai-workbench/reviews/claim`，及任务级 `/{task_id}/heartbeat`、`/{task_id}/complete`。服务身份不能直接发布配置；任务 JWT 固定租户、优化师、任务、fence、audience 和有效期。每次完成/心跳重新核验成员权限与优化师状态。取消/重启立即使旧任务无法回传生效；原生插件心跳失败后中止模型会话。超期 RUNNING 可由新 fence 恢复，同一优化师复盘串行，等待模型不持有数据库事务或业务 Worker。
 

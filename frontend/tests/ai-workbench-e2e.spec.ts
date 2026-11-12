@@ -637,6 +637,8 @@ test("切换优化师丢弃旧提案和编辑草稿，已暂停优化师仍可�
 test("排期保存保留行 ID、冻结行只读，输入不中断，TSV 和日期切换可用", async ({
   page,
 }) => {
+  // 此场景在次日切到空排期；固定起始日，避免真实日期变化直接命中空数据分支。
+  await page.clock.setFixedTime(new Date("2026-11-12T04:00:00Z"))
   const value = configuredOptimizer()
   await page.route(`**/api/tenants/${tenant}/ai-optimizers?**`, (route) =>
     route.fulfill({ json: { items: [value] } }),

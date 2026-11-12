@@ -182,6 +182,23 @@ def frozen_evidence_ids(evidence: Mapping[str, Any] | None) -> set[str]:
                 item = row.get(field)
                 if item is not None:
                     result.add(str(item))
+    # 只接纳已冻结类别中的来源标识，不递归接受任意 UUID/对象标识。
+    history = evidence.get("history", {})
+    if isinstance(history, Mapping):
+        for category in ("reviews", "proposals"):
+            for row in history.get(category, []):
+                if isinstance(row, Mapping) and row.get("id"):
+                    result.add(str(row["id"]))
+    pack = evidence.get("data_pack", {})
+    if isinstance(pack, Mapping):
+        for category, id_field in (
+            ("business", "run_id"),
+            ("operation_events", "export_id"),
+        ):
+            for group in pack.get(category, []):
+                for row in group.get("rows", []):
+                    if row.get(id_field):
+                        result.add(str(row[id_field]))
     return result
 
 
@@ -457,16 +474,13 @@ def frozen_evidence(
             "captured_at": _now(),
         }
     )
-    from app.modules.ai_workbench.methods import freeze_methods
-
-    frozen["methods"] = freeze_methods(frozen)
     from app.modules.ai_workbench.knowledge import select_knowledge
 
     frozen["knowledge"] = select_knowledge(
         session,
         context=context,
         bc_id=version.bc_id,
-        tags={item["key"] for item in freeze_methods(frozen)["references"]},
+        tags={"builds", "rules", "materials", "business", "scale"},
     )
     frozen["knowledge_selection"] = {
         "max_entries": 20,
@@ -490,9 +504,14 @@ def frozen_evidence(
         raise DomainError(
             "ai_evidence_not_found", "requested evidence is outside optimizer scope"
         )
-    from app.modules.ai_workbench.input_budget import enforce_input_budget
+    from app.modules.ai_workbench.input_budget import (
+        MAX_INPUT_BYTES,
+        enforce_input_budget,
+    )
+    from app.modules.ai_workbench.methods import METHOD_ARCHIVE_BYTES
 
-    return enforce_input_budget(frozen)
+    # 先为插件方法归档预留容量，领取时不能再次截断已经冻结的业务证据。
+    return enforce_input_budget(frozen, limit=MAX_INPUT_BYTES - METHOD_ARCHIVE_BYTES)
 
 
 def create_review_task(
