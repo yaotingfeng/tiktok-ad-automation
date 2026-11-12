@@ -339,7 +339,7 @@ def _run(
             rows = _read_campaign_batches(
                 reader, advertisers, s, e, kind="creative_day"
             )
-        count = publish.publish_creative_day(
+        return publish.publish_creative_day(
             session,
             tenant_id=t,
             job_id=j,
@@ -350,8 +350,6 @@ def _run(
             campaign_ids=tuple(job.campaign_ids),
             requested_at=observed_at,
         )
-        refresh_report_creative_directory(session, job)
-        return count
     if job.kind == "campaign_hour":
         rows = _read_all(
             lambda p: reader.campaign_hour(advertiser_ids=advertisers, day=s, page=p)
