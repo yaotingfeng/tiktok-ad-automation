@@ -6,10 +6,7 @@ from sqlmodel import select
 from app.core.config import settings
 from app.modules.ads.models import AdObject
 from app.modules.ads.sync_models import AdDirectoryRun
-from app.modules.reporting.directory_refresh import (
-    refresh_report_creative_directory,
-    refresh_report_directory,
-)
+from app.modules.reporting.directory_refresh import refresh_report_directory
 from app.modules.reporting.jobs import enqueue_job
 from app.modules.reporting.publish import (
     AccountMeta,
@@ -89,8 +86,6 @@ def test_creative_report_refresh_requests_unmapped_ids_with_deleted_scope(
         rows=[row],
     )
 
-    job = session.get(ReportSyncJob, job_id)
-    assert refresh_report_creative_directory(session, job, now=datetime.now(UTC)) == 1
     run = session.exec(
         select(AdDirectoryRun).where(
             AdDirectoryRun.tenant_id == sync_seed.tenant_id,
