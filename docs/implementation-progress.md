@@ -5132,3 +5132,14 @@ c34b生产快速切换约3分28秒完成、锁释放/CI恢复；五分钟仍4.88
 定位到创意报表已完成但素材身份仍未收敛的原因：`creative_day` 发布后没有触发创意 ID 目录补读，健康修复只覆盖广告/广告组/系列；同时报表驱动的定向目录请求没有带删除对象范围。新增独立 identity 目录队列：按账户和平台广告类型分组，每批最多100个未解析且有金额的创意，带 `include_deleted` 与 identity service，使用 background workload，不阻塞报表 SLO；手动/旧 Smart+ 创意按广告 ID回读，Upgraded Smart+按 creative ID 回读。普通报表驱动目录补读也统一包含删除对象范围。
 
 真实 PostgreSQL18/Redis8 隔离回归：目录刷新与创意日报相关 70 项通过；新增用例验证创意 ID、删除范围、identity service、background workload 及租户隔离。Ruff、格式检查、compileall、`git diff --check` 通过；ty 仅保留 jobs.py 原有两项存量诊断。尚未发布生产，待提交并按发布流程上线后观察未映射创意和目录缺口。
+
+## 2026-11-12 — JB-3 经营报表完整性与安全续跑（本地候选）
+
+- 在用户授权的已有 fix/jb2-business-integrity 集成树实现，基线 9ebdeae0；唯一写者。
+- Calculation derive_metrics 统一查询/CSV，保留赔付小计，冻结 issues 屏蔽不完整情景。
+- 新快照内部约定版本；旧冻结任务在任何文件改动前失败；旧未冻结任务正常冻结。
+- 真实 red/green/近似错误探针、PG/Redis、CSV HTTP 下载回读及有限模型已运行。
+  针对性套件 93 passed，新增两条降权续跑检查及代表用例 4 passed；模型 5000 输入/27 状态。
+- 浏览器实际登录成功，但隔离 fixture 的 BC 选择未保留，网页查询下载 **Unknown**。
+  ty 基线 tuple 错误仍存在；未推送/部署/生产验证/Linear 写入，交 root 独立集成与两轴审查。
+- 详细命令、范围、失败、模型假设及下一步：[JB-3 验证记录](validation/2026-11-12-jb3-business-export.md)。
