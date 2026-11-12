@@ -1,6 +1,6 @@
 import { useNavigate } from "@tanstack/react-router"
 import { BarChart3, ClipboardCheck, Cog, Eye, Play, Settings2 } from "lucide-react"
-import { useCallback, useMemo, useState } from "react"
+import { useCallback, useEffect, useMemo, useState } from "react"
 import { Button } from "@/components/ui/button"
 import { Separator } from "@/components/ui/separator"
 import { cn } from "@/lib/utils"
@@ -28,6 +28,23 @@ export const aiWorkbenchMenu: Array<{ id: View; label: string; icon: typeof Eye 
   { id: "review", label: "复盘", icon: ClipboardCheck },
   { id: "pending", label: "待确认", icon: Settings2 },
 ]
+
+export function buildAIWorkbenchSwitchSearch<T extends object>(
+  previous: T,
+  optimizerId: string,
+): T & { optimizer_id: string; record_id: undefined; version_id: undefined; return_to: undefined } {
+  return {
+    ...previous,
+    optimizer_id: optimizerId,
+    record_id: undefined,
+    version_id: undefined,
+    return_to: undefined,
+  }
+}
+
+export function aiOccurrenceEndpoint(tenantId: string, optimizerId: string) {
+  return `/api/tenants/${tenantId}/ai-optimizers/${optimizerId}/occurrences`
+}
 
 export function buildAIWorkbenchHref(
   tenantId: string,
@@ -58,7 +75,7 @@ export function AIWorkbenchShell({
   const onLoaded = useCallback((items: AIOptimizer[]) => setOptimizers(items), [])
   const selectOptimizer = useCallback((next: string) => {
     // 先在 URL 清空旧记录标识，再由 key 强制丢弃表格、提案和执行详情状态。
-    void navigate({ search: (previous) => ({ ...previous, optimizer_id: next, record_id: undefined, version_id: undefined }) })
+    void navigate({ search: (previous) => buildAIWorkbenchSwitchSearch(previous, next) })
   }, [navigate])
   const hrefFor = useMemo(
     () => (next: View) => buildAIWorkbenchHref(tenantId, optimizerId, next, context),
@@ -95,5 +112,23 @@ export function AIWorkbenchShell({
 }
 
 function ExecutionView({ tenantId, optimizerId, recordId }: { tenantId: string; optimizerId: string; recordId?: string }) {
-  return <div className="grid gap-4 lg:grid-cols-2" data-testid="ai-execution-view"><div className="rounded-lg border bg-background p-5"><h2 className="font-semibold">执行记录</h2><p className="mt-2 text-sm text-muted-foreground">执行时才匹配素材；排期表只保留剧目、推广链路和下单意图。</p>{recordId && <p className="mt-3 text-xs text-muted-foreground">当前记录：{recordId}</p>}</div><div className="rounded-lg border bg-background p-5"><h2 className="font-semibold">素材匹配证据</h2><p className="mt-2 text-sm text-muted-foreground">等待优化师 {optimizerId || "—"} 的执行回读证据。</p><p className="mt-2 text-xs text-muted-foreground">租户 {tenantId} 范围内展示。</p></div></div>
+  const [rows, setRows] = useState<Array<Record<string, unknown>>>([])
+  const [error, setError] = useState<string | null>(null)
+  useEffect(() => {
+    if (!optimizerId) return
+    const controller = new AbortController()
+    setRows([])
+    setError(null)
+    fetch(aiOccurrenceEndpoint(tenantId, optimizerId), { signal: controller.signal })
+      .then(async (response) => {
+        if (!response.ok) throw new Error("无法读取执行回读")
+        return (await response.json()) as Array<Record<string, unknown>>
+      })
+      .then(setRows)
+      .catch((reason: unknown) => {
+        if ((reason as { name?: string }).name !== "AbortError") setError(reason instanceof Error ? reason.message : "无法读取执行回读")
+      })
+    return () => controller.abort()
+  }, [tenantId, optimizerId])
+  return <div className="grid gap-4 lg:grid-cols-2" data-testid="ai-execution-view"><div className="rounded-lg border bg-background p-5"><h2 className="font-semibold">执行记录</h2><p className="mt-2 text-sm text-muted-foreground">执行时才匹配素材；排期表只保留剧目、推广链路和下单意图。</p>{recordId && <p className="mt-3 text-xs text-muted-foreground">当前记录：{recordId}</p>}{error && <p className="mt-3 text-sm text-destructive" role="alert">{error}</p>}{!error && !rows.length && <p className="mt-3 text-sm text-muted-foreground">暂无执行记录。</p>}{rows.map((row) => <div className="mt-3 rounded-md border p-3 text-sm" key={String(row.id)}><div className="flex justify-between gap-2"><strong>{String(row.title ?? "未命名剧目")}</strong><span className="rounded-full bg-muted px-2 py-0.5 text-xs">{String(row.status ?? "PENDING")}</span></div><p className="mt-1 text-xs text-muted-foreground">计划时间：{String(row.scheduled_at ?? "—")}</p><p className="mt-1 text-xs text-muted-foreground">Submission：{String(row.submission_id ?? "—")}</p></div>)}</div><div className="rounded-lg border bg-background p-5"><h2 className="font-semibold">素材匹配与回读证据</h2>{rows.length ? rows.map((row) => <pre className="mt-3 max-h-64 overflow-auto rounded bg-muted p-3 text-xs" key={`${String(row.id)}-evidence`}>{JSON.stringify({ evidence: row.evidence, error_code: row.error_code, preview_id: row.preview_id }, null, 2)}</pre>) : <p className="mt-2 text-sm text-muted-foreground">等待优化师 {optimizerId || "—"} 的执行回读证据。</p>}<p className="mt-2 text-xs text-muted-foreground">租户 {tenantId} 范围内展示。</p></div></div>
 }

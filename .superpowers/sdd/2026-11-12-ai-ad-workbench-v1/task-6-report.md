@@ -20,3 +20,13 @@ Implemented the TK-ADA AI optimizer workbench shell and reused configuration ent
 ## Commit
 
 `feat: add AI optimizer workbench UI`
+
+## Fix round 1
+
+- Added tenant/optimizer scoped occurrence read API and connected execution view to display status, submission, preview and readback evidence.
+- Optimizer switch now clears `return_to` in addition to record/version IDs; helper and endpoint tests cover this isolation.
+- Existing strategy and rule routes now consume optimizer/record/version/return context, enforce read-only bound context, filter bound rules, and preserve return context through strategy save navigation.
+- Schedule frequency/time controls are explicitly disabled because the current daily-plan contract does not persist those fields; the UI directs users to the persisted daily-plan schedule instead of implying a local save.
+- Added static route/menu/scope regression assertions.
+
+Verification: `python3 -m compileall -q backend/app/modules/ai_workbench/api.py` and `git diff --check` passed. Frontend Bun/Playwright build remains unavailable because this environment has no Bun or installed frontend dependencies.

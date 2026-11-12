@@ -109,11 +109,13 @@ export function StrategyForm({
   version,
   copy = false,
   forceReadonly = false,
+  returnContext,
 }: {
   strategy?: StrategyPublic
   version?: VersionPublic
   copy?: boolean
   forceReadonly?: boolean
+  returnContext?: string
 }) {
   const { tenantId: currentTenantId, scope } = useTenantScope(),
     client = useQueryClient(),
@@ -410,10 +412,10 @@ export function StrategyForm({
       void navigate({
         to: "/tenants/$tenantId/strategies/$strategyId",
         params: { tenantId: tenantId!, strategyId: completed.strategy_id },
-        search: { bc_id: scope?.bcId || undefined, version_id: completed.id },
+        search: { bc_id: scope?.bcId || undefined, version_id: completed.id, return_to: returnContext },
         replace: true,
       })
-  }, [completed, navigate, tenantId, scope?.bcId])
+  }, [completed, navigate, tenantId, scope?.bcId, returnContext])
   const save = async () => {
     if (
       inFlight.current ||
@@ -1257,7 +1259,7 @@ export function StrategyForm({
               void navigate({
                 to: "/tenants/$tenantId/strategies",
                 params: { tenantId: tenantId! },
-                search: { bc_id: scope?.bcId || undefined },
+                search: { bc_id: scope?.bcId || undefined, return_to: returnContext },
               })
             }
           >

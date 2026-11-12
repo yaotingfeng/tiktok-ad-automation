@@ -165,10 +165,12 @@ export function RuleList({
   tenantId,
   write,
   admin,
+  boundRuleIds = [],
 }: {
   tenantId: string
   write: boolean
   admin: boolean
+  boundRuleIds?: string[]
 }) {
   const client = useQueryClient()
   const rules = useQuery(rulesQuery(tenantId))
@@ -226,6 +228,7 @@ export function RuleList({
   })
   const rows = (rules.data?.items ?? []).filter(
     (rule) =>
+      (!boundRuleIds.length || boundRuleIds.includes(rule.id)) &&
       rule.name.includes(search.trim()) && matchesFilters(rule, filters),
   )
   const toggleSelected = useCallback(

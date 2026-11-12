@@ -16,6 +16,8 @@ export function AutomationRulesPage() {
   const write = !!scope && scope.role !== "viewer"
   // 平台管理员与租户管理员都能保存自动执行规则（与后端 manage 权限一致）。
   const admin = canManage(scope?.role)
+  const boundContext = !!search.ai_optimizer_id && search.scope === "bound"
+  const boundRuleIds = search.rule_ids?.split(",").filter(Boolean) ?? []
   const tab = search.tab ?? "rules"
   return (
     <section
@@ -29,6 +31,11 @@ export function AutomationRulesPage() {
           的投放数据，可仅发飞书预警、确认后执行或自动执行。
         </p>
       </div>
+      {boundContext && (
+        <p className="text-xs text-amber-700" data-testid="rule-bound-context">
+          当前仅查看优化师 {search.ai_optimizer_id} 已绑定的规则；租户其他规则不会被修改。保存返回将回到 {search.return_to ?? "AI 工作台"}。
+        </p>
+      )}
       <Tabs
         value={tab}
         onValueChange={(value) =>
@@ -49,7 +56,7 @@ export function AutomationRulesPage() {
           <TabsTrigger value="runs">执行记录</TabsTrigger>
         </TabsList>
         <TabsContent value="rules">
-          <RuleList tenantId={tenantId!} write={write} admin={admin} />
+          <RuleList tenantId={tenantId!} write={write && !boundContext} admin={admin} boundRuleIds={boundRuleIds} />
         </TabsContent>
         <TabsContent value="confirmations">
           <Confirmations

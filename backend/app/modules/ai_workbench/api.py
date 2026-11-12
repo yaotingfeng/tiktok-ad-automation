@@ -192,6 +192,29 @@ def run_daily_plan_row(
     return occurrence
 
 
+
+
+@router.get("/ai-optimizers/{optimizer_id}/occurrences", response_model=list[dict])
+def list_occurrences(
+    tenant_id: UUID,
+    optimizer_id: UUID,
+    session: SessionDep,
+    user: CurrentUser,
+    status: str | None = Query(default=None),
+    limit: int = Query(default=100, ge=1, le=500),
+) -> list[dict]:
+    """Return tenant/optimizer-scoped handoff and readback evidence for the workbench."""
+    context = _context(user, tenant_id)
+    service.get_optimizer(session, context=context, optimizer_id=optimizer_id)
+    statement = select(BuildOccurrence).where(
+        BuildOccurrence.tenant_id == tenant_id,
+        BuildOccurrence.optimizer_id == optimizer_id,
+    ).order_by(BuildOccurrence.scheduled_at.desc(), BuildOccurrence.id.desc()).limit(limit)
+    if status:
+        statement = statement.where(BuildOccurrence.status == status)
+    rows = session.exec(statement).all()
+    return [row.model_dump(mode="json") for row in rows]
+
 @router.post("/ai-optimizers/{optimizer_id}/reviews", response_model=ReviewResponse, status_code=201)
 def create_review(
     tenant_id: UUID, optimizer_id: UUID, body: proposals.ReviewRequest,

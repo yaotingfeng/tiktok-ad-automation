@@ -2,7 +2,9 @@ import { expect, test } from "@playwright/test"
 import { workspaceNavigation } from "../src/components/Sidebar/navigation"
 import {
   aiWorkbenchMenu,
+  aiOccurrenceEndpoint,
   buildAIWorkbenchHref,
+  buildAIWorkbenchSwitchSearch,
 } from "../src/features/ai-workbench/AIWorkbenchShell"
 
 import {
@@ -68,4 +70,13 @@ test("AI 二级菜单链接保留租户、优化师和返回上下文", () => {
   expect(href).toContain("optimizer_id=optimizer-b")
   expect(href).toContain("view=review")
   expect(href).toContain("return_to=")
+})
+
+
+test("切换优化师会清掉旧的记录、版本和返回上下文", () => {
+  expect(buildAIWorkbenchSwitchSearch({ optimizer_id: "old", record_id: "r", version_id: "v", return_to: "/old" }, "new")).toEqual({ optimizer_id: "new", record_id: undefined, version_id: undefined, return_to: undefined })
+})
+
+test("执行视图使用租户和优化师作用域的 occurrence API", () => {
+  expect(aiOccurrenceEndpoint("tenant-a", "optimizer-b")).toBe("/api/tenants/tenant-a/ai-optimizers/optimizer-b/occurrences")
 })
