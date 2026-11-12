@@ -149,6 +149,14 @@ def test_platform_group_defaults_preserve_target_roas_without_group_budget():
     assert "age_groups" not in result["targeting_spec"]
 
 
+def test_suggestion_audience_setting_is_preserved_for_copy():
+    value = {**group(), "suggestion_audience_enabled": False}
+
+    result = observed_body("ADGROUP", value)
+
+    assert result["suggestion_audience_enabled"] is False
+
+
 def test_unknown_setting_reports_layer_and_field_without_exposing_value():
     with pytest.raises(DomainError) as error:
         observed_body("CAMPAIGN", {**campaign(), "new_delivery_rule": "private-value"})
