@@ -111,6 +111,7 @@ export function StrategyForm({
   forceReadonly = false,
   returnContext,
   aiOptimizerId,
+  recordId: contextRecordId,
 }: {
   strategy?: StrategyPublic
   version?: VersionPublic
@@ -118,6 +119,7 @@ export function StrategyForm({
   forceReadonly?: boolean
   returnContext?: string
   aiOptimizerId?: string
+  recordId?: string
 }) {
   const { tenantId: currentTenantId, scope } = useTenantScope(),
     client = useQueryClient(),
@@ -414,7 +416,7 @@ export function StrategyForm({
       void navigate({
         to: "/tenants/$tenantId/strategies/$strategyId",
         params: { tenantId: tenantId!, strategyId: completed.strategy_id },
-        search: { bc_id: scope?.bcId || undefined, ai_optimizer_id: aiOptimizerId, version_id: completed.id, return_to: returnContext, readonly: aiOptimizerId ? true : undefined, scope: aiOptimizerId ? "bound" : undefined },
+        search: { bc_id: scope?.bcId || undefined, ai_optimizer_id: aiOptimizerId, record_id: contextRecordId, version_id: completed.id, return_to: returnContext, readonly: aiOptimizerId ? true : undefined, scope: aiOptimizerId ? "bound" : undefined },
         replace: true,
       })
   }, [completed, navigate, tenantId, scope?.bcId, returnContext, aiOptimizerId])
@@ -1261,7 +1263,7 @@ export function StrategyForm({
               void navigate({
                 to: "/tenants/$tenantId/strategies",
                 params: { tenantId: tenantId! },
-                search: { bc_id: scope?.bcId || undefined, ai_optimizer_id: aiOptimizerId, return_to: returnContext, readonly: aiOptimizerId ? true : undefined, scope: aiOptimizerId ? "bound" : undefined },
+                search: { bc_id: scope?.bcId || undefined, ai_optimizer_id: aiOptimizerId, record_id: contextRecordId, version_id: version?.id, return_to: returnContext, readonly: aiOptimizerId ? true : undefined, scope: aiOptimizerId ? "bound" : undefined },
               })
             }
           >

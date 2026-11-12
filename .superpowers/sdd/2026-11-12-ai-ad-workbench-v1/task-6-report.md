@@ -38,3 +38,12 @@ Verification: `python3 -m compileall -q backend/app/modules/ai_workbench/api.py`
 - Added static regression coverage for zero-rule isolation and switch/occurrence scope helpers.
 
 Verification: `python3 -m compileall -q backend/app/modules/ai_workbench/api.py` and `git diff --check` passed. Frontend build remains unavailable without Bun/dependencies.
+
+## Fix round 3
+
+- Bound AI contexts now disable confirmation/dismiss actions as well as rule editing.
+- Strategy editor save, cancel/back, detail and version-history navigation preserve optimizer, record, version, return, scope and read-only parameters.
+- Automation-rule tab and detail navigation now merges search state instead of dropping AI scope parameters.
+- Added read-only confirmation and context propagation regression assertions.
+
+Verification: `git diff --check` and backend compile check passed. Frontend Bun/Playwright build remains unavailable without Bun/dependencies.

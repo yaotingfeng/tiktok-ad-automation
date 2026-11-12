@@ -9,6 +9,10 @@ import { RunHistory } from "./RunHistory"
 
 const route = getRouteApi("/_layout/tenants/$tenantId/automation-rules")
 
+export function canWriteAutomationContext(write: boolean, boundContext: boolean) {
+  return write && !boundContext
+}
+
 export function AutomationRulesPage() {
   const { tenantId, scope } = useTenantScope()
   const search = route.useSearch()
@@ -40,12 +44,13 @@ export function AutomationRulesPage() {
         value={tab}
         onValueChange={(value) =>
           void navigate({
-            search: {
+            search: (previous) => ({
+              ...previous,
               tab:
                 value === "runs" || value === "confirmations"
                   ? value
                   : undefined,
-            },
+            }),
           })
         }
         className="gap-4"
@@ -56,15 +61,15 @@ export function AutomationRulesPage() {
           <TabsTrigger value="runs">执行记录</TabsTrigger>
         </TabsList>
         <TabsContent value="rules">
-          <RuleList tenantId={tenantId!} write={write && !boundContext} admin={admin} boundOnly={boundContext} boundRuleIds={boundRuleIds} />
+          <RuleList tenantId={tenantId!} write={canWriteAutomationContext(write, boundContext)} admin={admin} boundOnly={boundContext} boundRuleIds={boundRuleIds} />
         </TabsContent>
         <TabsContent value="confirmations">
           <Confirmations
             tenantId={tenantId!}
-            write={write}
+            write={canWriteAutomationContext(write, boundContext)}
             openConfirmation={search.confirmation}
             onOpenConfirmation={(confirmation) =>
-              void navigate({ search: { tab: "confirmations", confirmation } })
+              void navigate({ search: (previous) => ({ ...previous, tab: "confirmations", confirmation }) })
             }
           />
         </TabsContent>
@@ -72,7 +77,7 @@ export function AutomationRulesPage() {
           <RunHistory
             tenantId={tenantId!}
             openRun={search.run}
-            onOpenRun={(run) => void navigate({ search: { tab: "runs", run } })}
+            onOpenRun={(run) => void navigate({ search: (previous) => ({ ...previous, tab: "runs", run }) })}
           />
         </TabsContent>
       </Tabs>
