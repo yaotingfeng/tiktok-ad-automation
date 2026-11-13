@@ -24,6 +24,8 @@ v1 使用文档约定的素材库工作流：`GET /api/strategy-catalog`、`GET 
 
 ## 独立 DSH 接入
 
+当前灰度只对平台管理员（`is_superuser`）开放导航、页面及全部工作台/知识 API；租户管理员不在开放范围。机器领取接口使用独立服务凭据，不使用浏览器管理员身份。
+
 部署方在 TK-ADA API/Worker/Beat 共用运行 Secret 中增加 `AI_DSH_SERVICE_TOKEN`，为空时不接受机器领取、不启动自动复盘，前端显示未配置。此项是服务凭据，不是业务功能开关。普通已有四开关保持原值；首次配置须核对目标、范围和实际加载值，不能将本地模板当作服务器已启用。
 
 凭据至少 32 字节随机值，与浏览器登录、TikTok OAuth 和素材推送 Key 分离。不要在日志、命令行参数或源码中填写值。在 DSH 侧将相同凭据放入仅服务用户可读的 `0600` 文件，并注册本仓库 `integrations/dsh-ai-workbench` 原生插件。插件使用 DSH `0.2.2-rc.1` 的 agent、llm、session、tools、skill、scope 接口；依赖由 DSH 宿主提供，不修改 DSH 核心，也不直接复用旧本机投手服务。
@@ -39,6 +41,25 @@ v1 使用文档约定的素材库工作流：`GET /api/strategy-catalog`、`GET 
 ```
 
 必须配置 DSH 默认模型；也可通过插件 `modelSelection` 显式选择已配置的模型。`url` 只允许 HTTPS 纯 origin；本机隔离验收可用 `http://127.0.0.1:<端口>`。生产域名、token 文件和状态目录由部署方明确提供，不能推断或复制测试凭据。
+
+### 独立生产容器
+
+`integrations/dsh-ai-workbench/deployment/` 提供锁定依赖和原生入口，使用 Node `24.22.2`、DSH `0.2.2-rc.1` 和插件 `1.3.0`。Dockerfile 在带编译工具的阶段安装依赖，再复制到 slim 运行镜像。必须构建目标集群的 `linux/amd64` 镜像；本机 ARM 启动成功不能替代目标架构容器检查。
+
+从已推送公司 main 的干净提交构建配套镜像 `test/tiktok-ad-automation-dsh:<完整提交 SHA>`，Dockerfile 为 `integrations/dsh-ai-workbench/deployment/Dockerfile`，`VCS_REF` 使用同一 SHA。`NODE_IMAGE` / `NODE_BUILD_IMAGE` 可以指定已核验的官方镜像副本；2026-11-13 实际构建使用 `docker.m.daocloud.io/library/node:24.22.2-bookworm-slim` / `24.22.2-bookworm`。
+
+启动配置如下，全部凭据由私有文件或 Secret 注入，不放进镜像：
+
+- `TKADA_API_URL`：本环境 HTTPS 纯 origin。
+- `/run/secrets/provider.json`：`{provider, model, config}`；`config` 按所选 DSH provider 配置，模型 Key 只填写 `apiKeyEnv` 引用。对应环境变量从独立模型 Secret 注入。
+- `/run/secrets/tkada-ai-review-token`：与 TK-ADA 运行 Secret 的 `AI_DSH_SERVICE_TOKEN` 相同；Kubernetes 使用 `0440`、服务组读取，普通文件使用 `0600`。
+- 持久化 `/var/lib/dsh`：`home/` 保存独立 profile，`workspace/` 为工作区，`reviews/<租户>/<优化师>/<任务>/<fence>/` 保存任务状态。不复制个人 DSH 会话和完整个人凭据库。
+
+原生入口自动注册插件、preset registry 和空 standard preset，禁用个人插件管理、热更新及会话遥测。部署清单为 `deploy/k8s/ai-dsh.yaml`，渲染 `__DSH_IMAGE__` 后应用；模型 Secret 名为 `tiktok-ad-automation-dsh-model`。独立 app 标签保持原十一角色发布清单不变，20Gi PVC 满足当前云盘最低容量。没有公网管理入口，`9080` 仅供集群健康探针：`/health` 表示进程在线，`/ready` 必须成功领取接口后才返回200。
+
+镜像验收须在只读根文件系统、非 root 用户下运行原生测试。DSH 原生模块会将随包的库复制到临时目录加载；Docker 验收的 `/tmp` 若使用 tmpfs，需显式 `rw,exec`，默认 `noexec` 会出现 `failed to map segment`。生产清单使用可加载原生库的磁盘 emptyDir，保持根文件系统只读。
+
+现有 Jenkins 仍发布 TK-ADA 十一角色，DSH 为单独配套组件。修改插件协议或方法时须同步构建/切换 DSH 镜像并核验配套版本；普通业务修复无需重启未变更的 DSH。模型配置变更后须重建 DSH Pod，不能把 Secret 文件更新等同于进程已加载新模型。生产实际版本与验收见 [2026-11-13 发布记录](../validation/2026-11-13-ai-workbench-production.md)，以下“未部署”描述保留其对应开发阶段的验收边界。
 
 运行链路为：用户手动发起或 Beat 创建复盘 → TK-ADA 冻结优化师、策略、规则、计划、搭建、报表、知识和历史 → 插件领取并首次绑定方法包 → 返回五分钟任务级 JWT → 原生 DSH 独立会话通过 `skill` 读取主方法及相关专项 → `tkada_complete_review` 提交结构化结果 → TK-ADA 校验及发布。领取服务凭据不进入模型提示；会话仅开放受限 `skill`、`tkada_search_knowledge`、`tkada_read_knowledge`、`tkada_backtest_rule` 和 `tkada_complete_review`，不能执行 shell、读取凭据或调用平台。每任务目录按租户/优化师/任务/fence 分隔。
 

@@ -475,4 +475,4 @@ T3 必须在持有素材/原件锁、重新核验权限与冻结路线后，从�
 
 ## AI 工作台 v1 接入
 
-迁移 head `0126_ai_plan_retry_fairness`、现有 Worker/Beat 队列、`AI_DSH_SERVICE_TOKEN` 服务凭据及独立 DSH 原生插件的配置与验收见 [AI 投放工作台运行手册](ai-ad-workbench.md)。该服务凭据为空时前端显示未接入，不能宣称 AI 复盘可用；首次启用仍按本手册核对目标环境、实际 Secret、模型、租户和素材绑定。此版本包含数据库及任务合同变化，不能按无迁移快修发布。
+迁移 head `0128_material_production_origin`、现有 Worker/Beat 队列、`AI_DSH_SERVICE_TOKEN` 服务凭据及独立 DSH 原生插件的配置与验收见 [AI 投放工作台运行手册](ai-ad-workbench.md)。该服务凭据为空时前端显示未接入，不能宣称 AI 复盘可用；首次启用仍按本手册核对目标环境、实际 Secret、模型、租户和素材绑定。此版本包含数据库及任务合同变化，不能按无迁移快修发布。

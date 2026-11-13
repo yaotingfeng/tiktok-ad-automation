@@ -2,6 +2,10 @@
 
 当前应用 `f10dff9706c1dcf91e9d1cc55c33afb964ac172d` / schema `0118_sync_schedule_service_age`。修复筛查轻量计划缺少报表 `kind` 导致的 `screen_hot` 异常；滞后计划已恢复并完成 hot/material/live 规划。11角色、九Worker、唯一Beat、精确镜像/配置/额度/并发/四开关/数据库池及HTTPS通过，发布锁释放、CI恢复。阶段端点修复与本次兼容修复都不含DDL；旧素材三表/分区/六函数仍已物理删除，旧creative_ids关系仍保留，身份保全未完成。全局历史 stale 计数受切换窗口和身份缺口影响，尚未以此宣称20分钟SLO全部达标。详见[生产证据和剩余问题](../validation/2026-11-11-material-physical-retirement.md)。
 
+## 2026-11-13 AI 工作台平台管理员灰度与 DSH 已上线
+
+当前应用及独立DSH镜像均为 `a1a78e91ba045194c854a0df49080461abf027fa`，schema `0128_material_production_origin`。原十一角色、九Worker、唯一Beat、精确镜像摘要、有效配置/四开关/数据库池及HTTPS验收通过。工作台仅平台管理员可用，普通用户优化师/知识API403。DSH使用独立20Gi持久化工作区与模型Secret，Ready且0重启，实际Pod内 `com / claude-opus-5-5` 模型连接检查成功；两份公共知识预置包已导入。未进行真实经营复盘、广告创建或素材订单；无新全库备份或恢复演练。详见[生产发布记录](../validation/2026-11-13-ai-workbench-production.md)。以下“当前”均为历史。
+
 ## 2026-11-11 旧素材三表已物理删除，及时性仍在修复
 
 当前应用`aa0242cf5b5d8be34d3a25f8cb765df68075ed20`/schema`0118_sync_schedule_service_age`。三张旧素材表、全部分区及六个函数已删除，专项归档在原备份PVC完成隔离恢复验证；历史creative_ids旧值仍保留，新行默认[]，完整身份保全及删列尚未完成。目录状态查询和调度队头索引两项修复已上线；11角色、九Worker、唯一Beat、精确镜像、原配置/额度/并发/四开关/数据库池及HTTPS通过。自然同步仍存在超过20分钟的周期，正在修复操作日志CREATE/CHECK/DOWNLOAD端点错位；不能称及时性或全部历史积压已解决。无新全库备份、扩盘、新PVC或广告/规则启用。详见[生产证据和剩余问题](../validation/2026-11-11-material-physical-retirement.md)。以下“当前”均为历史。
