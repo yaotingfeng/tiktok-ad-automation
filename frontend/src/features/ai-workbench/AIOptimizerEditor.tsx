@@ -109,6 +109,8 @@ export function AIOptimizerEditor({
   const [mode, setMode] = useState(optimizer?.optimization_mode ?? "MANUAL")
   const [timezone, setTimezone] = useState(optimizer?.timezone ?? "Asia/Shanghai")
   const [reviewTime, setReviewTime] = useState((optimizer?.review_time ?? "13:00").slice(0, 5))
+  const [accountPickerOpen, setAccountPickerOpen] = useState(false)
+  const [rulePickerOpen, setRulePickerOpen] = useState(false)
   const [bcs, setBcs] = useState<BC[]>([])
   const [accounts, setAccounts] = useState<Account[]>([])
   const [strategies, setStrategies] = useState<Strategy[]>([])
@@ -345,66 +347,41 @@ export function AIOptimizerEditor({
           </fieldset>
           <FieldSet disabled={saving}>
             <FieldLegend>广告账户（仅当前 BC）</FieldLegend>
-            <FieldGroup className="max-h-48 overflow-y-auto">
-              {accountsLoading ? (
-                <p>读取账户中…</p>
-              ) : (
-                accounts.map((account) => (
-                  <Field key={account.advertiser_id} orientation="horizontal">
-                    <Checkbox
-                      id={`account-${account.advertiser_id}`}
-                      checked={accountIds.includes(account.advertiser_id)}
-                      disabled={
-                        !account.can_build || account.ownership_conflict
-                      }
-                      onCheckedChange={(checked) =>
-                        setAccountIds(
-                          toggle(
-                            accountIds,
-                            account.advertiser_id,
-                            checked === true,
-                          ),
-                        )
-                      }
-                    />
-                    <FieldLabel htmlFor={`account-${account.advertiser_id}`}>
-                      {account.name} · {account.advertiser_id}
-                      {!account.can_build ? "（不可搭建）" : ""}
-                    </FieldLabel>
-                  </Field>
-                ))
-              )}
-              {!accountsLoading && !accounts.length && (
-                <p className="text-sm text-muted-foreground">
-                  请先选择已有授权 BC；该目录为空时在“账户与授权”完成同步。
-                </p>
-              )}
-            </FieldGroup>
+            <Button type="button" variant="outline" className="justify-between" onClick={() => setAccountPickerOpen(true)} disabled={!bcId || accountsLoading}>
+              <span>{accountsLoading ? "读取账户中…" : accountIds.length ? `已选择 ${accountIds.length} 个账户` : "选择管理账户"}</span>
+              <span className="text-xs text-muted-foreground">打开选择器</span>
+            </Button>
+            <p className="text-xs text-muted-foreground">仅显示当前 BC 下可管理的账户；AI 新建规则也只能作用于这些账户。</p>
           </FieldSet>
           <FieldSet disabled={saving}>
             <FieldLegend>绑定已有自动规则</FieldLegend>
-            <FieldGroup className="max-h-48 overflow-y-auto">
-              {rules.map((rule) => (
-                <Field orientation="horizontal" key={rule.id}>
-                  <Checkbox
-                    id={`rule-${rule.id}`}
-                    checked={ruleIds.includes(rule.id)}
-                    onCheckedChange={(checked) =>
-                      setRuleIds(toggle(ruleIds, rule.id, checked === true))
-                    }
-                  />
-                  <FieldLabel htmlFor={`rule-${rule.id}`}>
-                    {rule.name}
-                  </FieldLabel>
-                </Field>
-              ))}
-              {!rules.length && (
-                <p className="text-sm text-muted-foreground">
-                  暂无规则，可稍后在“自动规则”创建并绑定。
-                </p>
-              )}
-            </FieldGroup>
+            <Button type="button" variant="outline" className="justify-between" onClick={() => setRulePickerOpen(true)}>
+              <span>{ruleIds.length ? `已绑定 ${ruleIds.length} 条规则` : "选择自动规则"}</span>
+              <span className="text-xs text-muted-foreground">打开选择器</span>
+            </Button>
+            <p className="text-xs text-muted-foreground">规则由自动规则引擎执行，作用范围仍受投手的 BC 和账户边界约束。</p>
           </FieldSet>
+
+          <Dialog open={accountPickerOpen} onOpenChange={setAccountPickerOpen}>
+            <DialogContent className="max-h-[80dvh] overflow-y-auto">
+              <DialogHeader><DialogTitle>选择管理账户</DialogTitle><DialogDescription>勾选后仅将账户绑定到当前 AI 投手。</DialogDescription></DialogHeader>
+              <FieldGroup className="max-h-[50dvh] overflow-y-auto">
+                {accounts.map((account) => <Field key={account.advertiser_id} orientation="horizontal"><Checkbox id={`account-${account.advertiser_id}`} checked={accountIds.includes(account.advertiser_id)} disabled={!account.can_build || account.ownership_conflict} onCheckedChange={(checked) => setAccountIds(toggle(accountIds, account.advertiser_id, checked === true))} /><FieldLabel htmlFor={`account-${account.advertiser_id}`}>{account.name} · {account.advertiser_id}{!account.can_build ? "（不可搭建）" : ""}</FieldLabel></Field>)}
+                {!accounts.length && <p className="text-sm text-muted-foreground">请先选择 BC 并完成账户同步。</p>}
+              </FieldGroup>
+              <DialogFooter><Button type="button" onClick={() => setAccountPickerOpen(false)}>完成</Button></DialogFooter>
+            </DialogContent>
+          </Dialog>
+          <Dialog open={rulePickerOpen} onOpenChange={setRulePickerOpen}>
+            <DialogContent className="max-h-[80dvh] overflow-y-auto">
+              <DialogHeader><DialogTitle>选择绑定规则</DialogTitle><DialogDescription>只绑定已有自动规则；AI 新建规则会在复盘后按投手账户范围校验。</DialogDescription></DialogHeader>
+              <FieldGroup className="max-h-[50dvh] overflow-y-auto">
+                {rules.map((rule) => <Field orientation="horizontal" key={rule.id}><Checkbox id={`rule-${rule.id}`} checked={ruleIds.includes(rule.id)} onCheckedChange={(checked) => setRuleIds(toggle(ruleIds, rule.id, checked === true))} /><FieldLabel htmlFor={`rule-${rule.id}`}>{rule.name}</FieldLabel></Field>)}
+                {!rules.length && <p className="text-sm text-muted-foreground">暂无规则，可稍后在自动规则模块创建。</p>}
+              </FieldGroup>
+              <DialogFooter><Button type="button" onClick={() => setRulePickerOpen(false)}>完成</Button></DialogFooter>
+            </DialogContent>
+          </Dialog>
 
 
           {error && (
