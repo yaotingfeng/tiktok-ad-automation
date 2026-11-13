@@ -39,7 +39,7 @@ export const aiWorkbenchMenu: Array<{
   icon: typeof Eye
 }> = [
   { id: "overview", label: "概览", icon: Eye },
-  { id: "schedule", label: "排期", icon: BarChart3 },
+  { id: "schedule", label: "剧单排", icon: BarChart3 },
   { id: "execution", label: "执行", icon: Play },
   { id: "review", label: "复盘", icon: ClipboardCheck },
   { id: "pending", label: "待确认", icon: Settings2 },
@@ -307,12 +307,14 @@ function ExecutionView({
 }) {
   const [rows, setRows] = useState<Array<Record<string, unknown>>>([])
   const [report, setReport] = useState<Record<string, unknown> | null>(null)
+  const [reportError, setReportError] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   useEffect(() => {
     if (!optimizerId) return
     const controller = new AbortController()
     setRows([])
     setReport(null)
+    setReportError(null)
     setError(null)
     aiRequest<Array<Record<string, unknown>>>(
       aiOccurrenceEndpoint(tenantId, optimizerId),
@@ -331,15 +333,18 @@ function ExecutionView({
       .then((value) => {
         if (!controller.signal.aborted) setReport(value)
       })
-      .catch(() => {})
+      .catch((reason: unknown) => {
+        if (!controller.signal.aborted) setReportError(errorMessage(reason))
+      })
     return () => controller.abort()
   }, [tenantId, optimizerId])
   return (
     <div className="grid gap-4 lg:grid-cols-2" data-testid="ai-execution-view">
       <div className="rounded-lg border bg-background p-5">
-        <h2 className="font-semibold">执行记录</h2>
+        <h2 className="font-semibold">剧单搭建执行记录</h2>
         <p className="mt-2 text-sm text-muted-foreground">
-          执行时才匹配素材；排期表只保留剧目、推广链路和下单意图。
+          展示当前投手最近 100
+          条由剧单触发的素材匹配、广告搭建与回读结果；自动规则记录见下方独立区域。
         </p>
         {recordId && (
           <p className="mt-3 text-xs text-muted-foreground">
@@ -352,7 +357,9 @@ function ExecutionView({
           </p>
         )}
         {!error && !rows.length && (
-          <p className="mt-3 text-sm text-muted-foreground">暂无执行记录。</p>
+          <p className="mt-3 text-sm text-muted-foreground">
+            暂无剧单搭建执行记录。
+          </p>
         )}
         {rows.map((row) => (
           <div
@@ -403,13 +410,27 @@ function ExecutionView({
         </p>
       </div>
       <div className="rounded-lg border bg-background p-5 lg:col-span-2">
-        <h2 className="font-semibold">自动规则动作</h2>
+        <h2 className="font-semibold">本投手自动规则运行证据</h2>
         <p className="mt-2 text-sm text-muted-foreground">
-          这里展示已绑定自动规则的触发、命中和动作回执；广告搭建记录与规则执行记录分开统计。
+          展示归属于当前投手的当日规则运行证据，包括命中、动作任务与平台回读。未命中或未执行也可能有证据；绑定前的历史及其他投手记录不在此处。
         </p>
-        <pre className="mt-3 max-h-72 overflow-auto rounded bg-muted p-3 text-xs">
-          {JSON.stringify(report?.rule_actions ?? [], null, 2)}
-        </pre>
+        {reportError ? (
+          <p role="alert" className="mt-3 text-sm text-destructive">
+            规则证据读取失败：{reportError}
+          </p>
+        ) : !report ? (
+          <p role="status" className="mt-3 text-sm text-muted-foreground">
+            正在读取规则运行证据…
+          </p>
+        ) : Array.isArray(report.rule_actions) && report.rule_actions.length ? (
+          <pre className="mt-3 max-h-72 overflow-auto rounded bg-muted p-3 text-xs">
+            {JSON.stringify(report.rule_actions, null, 2)}
+          </pre>
+        ) : (
+          <p className="mt-3 text-sm text-muted-foreground">
+            当日暂无归属于当前投手的规则运行证据。
+          </p>
+        )}
       </div>
     </div>
   )

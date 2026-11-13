@@ -1,3 +1,4 @@
+import { optimizationModeLabel } from "./presentation"
 import { useEffect, useRef, useState } from "react"
 import { Badge } from "@/components/ui/badge"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -114,7 +115,9 @@ export function AIOptimizerList({
                   item.optimization_mode === "AUTO" ? "default" : "secondary"
                 }
               >
-                {item.active ? item.optimization_mode : "已暂停"}
+                {item.active
+                  ? optimizationModeLabel(item.optimization_mode)
+                  : "已暂停"}
               </Badge>
             </button>
           ))}

@@ -1,3 +1,8 @@
+import {
+  optimizationModeLabel,
+  priorityLabel,
+  workbenchNumber,
+} from "./presentation"
 import { ArrowUpRight, LockKeyhole } from "lucide-react"
 import { useState } from "react"
 import { Badge } from "@/components/ui/badge"
@@ -112,35 +117,27 @@ export function AIOptimizerConfig({
           </div>
           <div className="flex items-center justify-between gap-4">
             <span className="text-muted-foreground">优化模式</span>
-            <Badge>
-              {optimizer.optimization_mode === "AUTO" ? "自动优化" : "人工确认"}
-            </Badge>
+            <Badge>{optimizationModeLabel(optimizer.optimization_mode)}</Badge>
           </div>
           <div className="flex items-center justify-between gap-4">
             <span className="text-muted-foreground">目标优先级</span>
-            <span>
-              {optimizer.priority === "SPEND"
-                ? "消耗优先"
-                : optimizer.priority === "ROAS"
-                  ? "ROAS 优先"
-                  : "平衡"}
-            </span>
+            <span>{priorityLabel(optimizer.priority)}</span>
           </div>
           <div className="flex items-center justify-between gap-4">
-            <span className="text-muted-foreground">日预算</span>
-            <span>{optimizer.daily_spend ?? "—"}</span>
+            <span className="text-muted-foreground">日消耗目标</span>
+            <span>{workbenchNumber(optimizer.daily_spend)}</span>
           </div>
           <div className="flex items-center justify-between gap-4">
             <span className="text-muted-foreground">目标 ROAS</span>
-            <span>{optimizer.target_roas ?? "—"}</span>
+            <span>{workbenchNumber(optimizer.target_roas)}</span>
           </div>
         </CardContent>
       </Card>
       <Card>
         <CardHeader>
-          <CardTitle>唯一绑定与排期</CardTitle>
+          <CardTitle>唯一绑定与剧单排</CardTitle>
           <CardDescription>
-            一个投手只绑定一个策略版本；排期不选择素材。
+            一个投手只绑定一个策略版本；剧单排不选择素材。
           </CardDescription>
         </CardHeader>
         <CardContent className="grid gap-3 text-sm">

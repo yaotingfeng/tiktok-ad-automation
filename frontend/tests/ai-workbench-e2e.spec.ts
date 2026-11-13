@@ -318,13 +318,13 @@ test("双租户双投手切换保留 AUTO/MANUAL、下单路径和回读边界",
   )
 
   await page.goto(`/tenants/${tenantA}/ai-workbench?optimizer_id=${optimizerA}`)
-  await expect(page.getByTestId("ai-daily-report")).toContainText("AUTO")
+  await expect(page.getByTestId("ai-daily-report")).toContainText("自动优化")
   await expect(page.getByTestId("ai-daily-report")).toContainText("部分完成")
   await expect(page.getByTestId("ai-daily-report")).toContainText("需下单剧")
   await page.goto(
     `/tenants/${tenantA}/ai-workbench?optimizer_id=${optimizerAManual}`,
   )
-  await expect(page.getByTestId("ai-daily-report")).toContainText("MANUAL")
+  await expect(page.getByTestId("ai-daily-report")).toContainText("人工确认")
   await expect(page.getByTestId("ai-daily-report")).toContainText("部分完成")
   await page.goto(
     `/tenants/${tenantA}/ai-workbench?optimizer_id=${optimizerAManual}&view=pending`,
@@ -341,7 +341,7 @@ test("双租户双投手切换保留 AUTO/MANUAL、下单路径和回读边界",
   await expect(page.getByTestId("ai-workbench-shell")).toContainText(
     "手动投手 B",
   )
-  await expect(page.getByTestId("ai-daily-report")).toContainText("MANUAL")
+  await expect(page.getByTestId("ai-daily-report")).toContainText("人工确认")
   await expect.poll(() => reportRequests.length).toBeGreaterThanOrEqual(3)
   expect(
     reportRequests.every(
@@ -1072,3 +1072,56 @@ for (const width of [390, 1440]) {
     expect(writes[1]).toMatchObject({ bc_id: "bc-b", advertiser_ids: ["b-1"] })
   })
 }
+
+test("工作台业务用语和数值易读，搭建与规则证据范围明确", async ({ page }) => {
+  await page.route(
+    `**/api/tenants/${tenant}/ai-optimizers/${optimizer}/occurrences`,
+    (route) => route.fulfill({ json: [] }),
+  )
+  await page.route(`**/api/tenants/${tenant}/ai-optimizers?**`, (route) =>
+    route.fulfill({
+      json: {
+        items: [
+          {
+            ...configuredOptimizer(),
+            daily_spend: "1000.000000000000",
+            target_roas: "1.000000000000",
+          },
+        ],
+      },
+    }),
+  )
+  await page.goto(`/tenants/${tenant}/ai-workbench?optimizer_id=${optimizer}`)
+  const overview = page.getByTestId("ai-optimizer-overview")
+  await expect(overview).toContainText("人工确认")
+  await expect(overview).toContainText("平衡")
+  await expect(overview).toContainText("1,000")
+  await expect(overview).not.toContainText(".000000")
+  await expect(page.getByTestId("ai-optimizer-config")).not.toContainText(
+    ".000000",
+  )
+  await expect(page.getByTestId("ai-optimizer-list")).not.toContainText(
+    "MANUAL",
+  )
+  await expect(page.getByTestId("ai-nav-schedule")).toHaveText("剧单排")
+  await page.getByTestId("ai-nav-execution").click()
+  await expect(
+    page.getByRole("heading", { name: "剧单搭建执行记录" }),
+  ).toBeVisible()
+  await expect(
+    page.getByRole("heading", { name: "本投手自动规则运行证据" }),
+  ).toBeVisible()
+  await expect(
+    page.getByText("当日暂无归属于当前投手的规则运行证据。"),
+  ).toBeVisible()
+  await page.route(
+    `**/api/tenants/${tenant}/ai-optimizers/${optimizer}/daily-report`,
+    (route) =>
+      route.fulfill({ status: 503, json: { message: "证据服务暂不可用" } }),
+  )
+  await page.reload()
+  await expect(page.getByRole("alert")).toContainText("规则证据读取失败")
+  await expect(
+    page.getByText("当日暂无归属于当前投手的规则运行证据。"),
+  ).toHaveCount(0)
+})
