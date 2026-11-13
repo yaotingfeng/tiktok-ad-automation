@@ -492,7 +492,18 @@ def frozen_evidence(
                 "account_ids": list(version.advertiser_ids),
                 "optimizer_version": version.number,
                 "snapshots": [
-                    {key: value for key, value in row.items() if key != "rows"}
+                    # 正文只保存在 data_pack，索引不重复复制汇总/覆盖证据。
+                    {
+                        key: row[key]
+                        for key in (
+                            "id",
+                            "status",
+                            "dimension",
+                            "advertiser_id",
+                            "maturity_horizon",
+                        )
+                        if key in row
+                    }
                     for row in reporting_snapshots
                 ],
             },

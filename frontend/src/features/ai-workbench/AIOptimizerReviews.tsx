@@ -190,7 +190,7 @@ export function AIOptimizerReviews({ tenantId, optimizerId }: Props) {
         await load(signal)
       }
     } catch (reason) {
-      if (!signal.aborted) setError(errorMessage(reason))
+      if (!signal.aborted) setError(`发起复盘失败：${errorMessage(reason)}`)
     } finally {
       if (!signal.aborted) setBusy(null)
     }
@@ -243,10 +243,15 @@ export function AIOptimizerReviews({ tenantId, optimizerId }: Props) {
           }
           onClick={() => void review()}
         >
-          发起复盘
+          {busy === "review" ? "正在准备复盘证据…" : "发起复盘"}
         </Button>
       </CardHeader>
       <CardContent className="flex flex-col gap-4">
+        {busy === "review" && (
+          <p role="status" className="text-sm text-muted-foreground">
+            正在读取账户数据、规则执行与历史证据，创建复盘任务，请稍候。
+          </p>
+        )}
         {runtimeReady === false && (
           <p className="text-sm text-muted-foreground">
             复盘服务尚未配置，暂不能发起复盘。

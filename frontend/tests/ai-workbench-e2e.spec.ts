@@ -1169,3 +1169,29 @@ test("知识库独立导航、搜索与详情，待确认合并到复盘并更�
   await expect(reviews).toContainText("已处理调整")
   await expect(reviews).toContainText("待确认调整")
 })
+
+test("发起复盘等待时给出反馈，失败可见且重试后显示任务", async ({ page }) => {
+  await page.route(`**/api/tenants/${tenant}/ai-optimizers**`, (route) => route.fulfill({ json: { items: [], next_cursor: null, total: 0 } }))
+  await page.route(`**/api/tenants/${tenant}/ai-optimizers/${optimizer}/proposals`, (route) => route.fulfill({ json: [] }))
+  let release = () => {}
+  const gate = new Promise<void>((resolve) => { release = resolve })
+  let attempts = 0
+  await page.route(`**/api/tenants/${tenant}/ai-optimizers/${optimizer}/reviews`, async (route) => {
+    if (route.request().method() === "GET") return route.fulfill({ json: { runtime_ready: true, items: [] } })
+    attempts += 1
+    if (attempts === 1) {
+      await gate
+      return route.fulfill({ status: 422, json: { code: "ai_review_input_too_large", message: "复盘证据超过单轮容量，暂未创建任务。" } })
+    }
+    return route.fulfill({ json: { task: { id: "review-created", status: "PENDING" }, proposals: [] } })
+  })
+  await page.goto(`/tenants/${tenant}/ai-workbench?optimizer_id=${optimizer}&view=review`)
+  await page.getByRole("button", { name: "发起复盘", exact: true }).click()
+  await expect(page.getByRole("button", { name: "正在准备复盘证据…" })).toBeDisabled()
+  await expect(page.getByTestId("ai-review-view")).toContainText("创建复盘任务，请稍候")
+  release()
+  await expect(page.getByRole("alert")).toContainText("发起复盘失败：复盘证据超过单轮容量")
+  await page.getByRole("button", { name: "发起复盘", exact: true }).click()
+  await expect(page.getByTestId("ai-review-view")).toContainText("review-created")
+  await expect(page.getByRole("alert")).toHaveCount(0)
+})

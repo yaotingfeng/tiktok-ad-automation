@@ -348,6 +348,7 @@ ERROR_HTTP_STATUS: dict[str, int] = {
     "ai_build_occurrence_state_invalid": 422,
     "ai_build_occurrence_retry_required": 409,
     "ai_evidence_not_found": 404,
+    "ai_review_input_too_large": 422,
     "ai_review_not_found": 404,
     "ai_review_scope_mismatch": 409,
     "ai_dsh_authorization_invalid": 422,
@@ -447,6 +448,7 @@ ERROR_HTTP_STATUS: dict[str, int] = {
 # Public messages are application-owned. DomainError.message may contain raw
 # integration details, so it must never become an HTTP response or log field.
 ERROR_PUBLIC_MESSAGES: dict[str, str] = {
+    "ai_review_input_too_large": "复盘证据超过单轮容量，暂未创建任务。请缩小本轮账户范围后重试。",
     "targeting_minis_unsupported": "小程序自动定向仅支持18岁以上或25岁以上、不限性别，请重新选择受众条件。",
     "preview_scope_already_submitted": "本草稿已有提交记录，请刷新续建预览，确认本次复用和新建的对象后继续。",
     "continuation_pending": "原任务仍有进行中或结果待核实的步骤。请先在原任务核实，确认结果后刷新续建预览。",
