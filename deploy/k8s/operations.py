@@ -161,10 +161,13 @@ class Deployment:
         for rule in rules:
             if rule.get("host") == self.host:
                 paths = rule.get("http", {}).get("paths", [])
+                # DSH 与 TK-ADA 共用一个 host：DSH 使用更具体的 /dsh 路径，
+                # TK-ADA 仍必须独占根路径。只校验根路径，保留同 host 下的
+                # 其他受管路径，避免 DSH 挂载后发布被误判为跨服务占用。
+                root_paths = [path for path in paths if path.get("path") == "/"]
                 own = (
-                    len(paths) == 1
-                    and paths[0].get("path") == "/"
-                    and paths[0].get("backend", {}).get("service")
+                    len(root_paths) == 1
+                    and root_paths[0].get("backend", {}).get("service")
                     == {"name": PROJECT, "port": {"number": 80}}
                 )
                 require(
