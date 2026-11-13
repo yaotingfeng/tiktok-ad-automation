@@ -293,11 +293,13 @@ function ExecutionView({
   recordId?: string
 }) {
   const [rows, setRows] = useState<Array<Record<string, unknown>>>([])
+  const [report, setReport] = useState<Record<string, unknown> | null>(null)
   const [error, setError] = useState<string | null>(null)
   useEffect(() => {
     if (!optimizerId) return
     const controller = new AbortController()
     setRows([])
+    setReport(null)
     setError(null)
     aiRequest<Array<Record<string, unknown>>>(
       aiOccurrenceEndpoint(tenantId, optimizerId),
@@ -309,6 +311,14 @@ function ExecutionView({
       .catch((reason: unknown) => {
         if (!controller.signal.aborted) setError(errorMessage(reason))
       })
+    aiRequest<Record<string, unknown>>(
+      `/api/tenants/${tenantId}/ai-optimizers/${optimizerId}/daily-report`,
+      { signal: controller.signal },
+    )
+      .then((value) => {
+        if (!controller.signal.aborted) setReport(value)
+      })
+      .catch(() => {})
     return () => controller.abort()
   }, [tenantId, optimizerId])
   return (
@@ -378,6 +388,15 @@ function ExecutionView({
         <p className="mt-2 text-xs text-muted-foreground">
           租户 {tenantId} 范围内展示。
         </p>
+      </div>
+      <div className="rounded-lg border bg-background p-5 lg:col-span-2">
+        <h2 className="font-semibold">自动规则动作</h2>
+        <p className="mt-2 text-sm text-muted-foreground">
+          这里展示已绑定自动规则的触发、命中和动作回执；广告搭建记录与规则执行记录分开统计。
+        </p>
+        <pre className="mt-3 max-h-72 overflow-auto rounded bg-muted p-3 text-xs">
+          {JSON.stringify(report?.rule_actions ?? [], null, 2)}
+        </pre>
       </div>
     </div>
   )

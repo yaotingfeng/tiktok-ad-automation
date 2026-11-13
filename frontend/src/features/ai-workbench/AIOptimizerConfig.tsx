@@ -185,26 +185,26 @@ export function AIOptimizerConfig({
       </Card>
       <Card>
         <CardHeader>
-          <CardTitle>复用现有配置</CardTitle>
+          <CardTitle>已绑定配置</CardTitle>
           <CardDescription>
-            策略和规则各只有一个编辑来源；这里不会创建第二份编辑器。
+            这里打开的是当前投手实际绑定的策略版本和自动规则，编辑仍在原配置模块完成。
           </CardDescription>
         </CardHeader>
         <CardContent className="flex flex-wrap gap-3">
           <Button asChild variant="outline">
             <a href={strategyHref}>
               <LockKeyhole />
-              策略版本 <ArrowUpRight />
+              打开当前绑定策略 <ArrowUpRight />
             </a>
           </Button>
           <Button asChild variant="outline">
             <a href={rulesHref}>
               <LockKeyhole />
-              已绑定规则 <ArrowUpRight />
+              打开当前绑定规则 <ArrowUpRight />
             </a>
           </Button>
           <p className="basis-full text-xs text-muted-foreground">
-            策略范围：当前绑定版本。规则范围：仅当前投手已绑定规则；租户其他规则不会被静默修改。
+            策略：{optimizer.strategy_version_id}。规则：{ruleIds.length} 条已绑定规则。这里不会跳到租户其他未绑定配置。
           </p>
         </CardContent>
       </Card>
