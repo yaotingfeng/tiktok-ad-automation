@@ -89,3 +89,57 @@ def test_sdk_size_guard_preserves_log_split_signal(monkeypatch):
             reader.change_log_download(advertiser_id="test", task_id="test")
         assert caught.value.code == "operation_log_export_too_large"
         assert reader.request_count == 1
+
+
+@pytest.mark.parametrize("operation", ["changelog.check", "changelog.download"])
+def test_missing_export_is_recoverable_before_sdk_discards_provider_code(operation):
+    from contextlib import contextmanager
+    from datetime import timedelta
+    from types import SimpleNamespace
+
+    from business_api_client import ApiClient
+
+    from app.integrations.tiktok.official.accounts import OfficialReadRequests
+
+    @contextmanager
+    def scope(*_args):
+        yield
+
+    client = ApiClient()
+    requests = OfficialReadRequests(
+        client, request_scope=scope, deadline=datetime.now(UTC) + timedelta(seconds=30)
+    )
+    response = SimpleNamespace(
+        data=b'{"code":40007,"message":"Resource not exist.","data":{}}'
+    )
+    with pytest.raises(DomainError) as caught:
+        requests.invoke(
+            operation, "test", lambda _timeout: client.deserialize(response, "object")
+        )
+    assert caught.value.code == "operation_log_task_unavailable"
+
+
+def test_other_provider_errors_are_not_misclassified_as_missing_export():
+    from types import SimpleNamespace
+
+    from app.integrations.tiktok.official.accounts import _strict_sdk_envelope
+
+    def original(_response, _type):
+        raise DomainError("original", "synthetic")
+
+    for operation, code, message in [
+        ("ads.get_ads", 40007, "Resource not exist."),
+        ("changelog.create", 40007, "Resource not exist."),
+        ("changelog.check", 40007, "Permission denied"),
+        ("changelog.check", 40002, "Resource not exist."),
+    ]:
+        import json
+
+        client = SimpleNamespace(deserialize=original)
+        response = SimpleNamespace(
+            data=json.dumps({"code": code, "message": message, "data": {}}).encode()
+        )
+        with _strict_sdk_envelope(client, operation=operation):
+            with pytest.raises(DomainError) as caught:
+                client.deserialize(response, "object")
+        assert caught.value.code == "original"

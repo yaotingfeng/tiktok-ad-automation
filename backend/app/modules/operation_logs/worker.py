@@ -77,14 +77,26 @@ def run_step(
                 if error.code != "operation_log_task_unavailable":
                     raise
                 state.update(phase="CREATE")
+                # 新导出有独立的读取重试预算；重建总次数仍由create_attempts限制。
+                job.attempts = 0
             else:
                 state.update(
                     phase="DOWNLOAD" if status == "SUCCESS" else "CHECK", polls=polls
                 )
     elif phase == "DOWNLOAD":
-        content = reader.change_log_download(
-            advertiser_id=advertiser, task_id=state["task_id"]
-        )
+        try:
+            content = reader.change_log_download(
+                advertiser_id=advertiser, task_id=state["task_id"]
+            )
+        except DomainError as error:
+            if error.code != "operation_log_task_unavailable":
+                raise
+            # 查询成功后也可能因排队过久失去文件；保留原窗口/审计，走有界重建。
+            state.update(phase="CREATE")
+            job.attempts = 0
+            job.progress = job.progress | {"operation_log": dict(state)}
+            job.due_at = now + timedelta(seconds=1)
+            return None
         events = parse_export(content)
         payload = json.dumps({"changelog": content}, ensure_ascii=False).encode()
         content_digest = hashlib.sha256(payload).hexdigest()

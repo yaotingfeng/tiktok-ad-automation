@@ -230,3 +230,74 @@ def test_large_export_split_remains_split_under_new_demand(log_seed):
         ).all()
         assert len(active) == 2
         assert max((c.end_date - c.start_date).days for c in active) <= 14
+
+
+@pytest.mark.parametrize("phase", ["CHECK", "DOWNLOAD"])
+def test_missing_export_rebuilds_original_window_with_finite_budget(log_seed, phase):
+    from types import SimpleNamespace
+
+    from app.core.errors import DomainError
+    from app.modules.operation_logs.worker import run_step
+
+    seed, factory = log_seed
+
+    def unavailable(**_kwargs):
+        raise DomainError("operation_log_task_unavailable", "synthetic")
+
+    creates = []
+
+    def create(**kwargs):
+        creates.append(kwargs)
+        return "replacement-export"
+
+    reader = SimpleNamespace(
+        change_log_check=unavailable,
+        change_log_download=unavailable,
+        change_log_create=create,
+    )
+    with factory() as session:
+        job_id = enqueue_job(
+            session,
+            tenant_id=seed.tenant_id,
+            bc_id="bc-a",
+            kind="operation_log",
+            tier="history",
+            advertiser_ids=["acc-1"],
+            start=date(2026, 10, 5),
+            end=date(2026, 10, 5),
+            frozen_route=_route(seed),
+            actor_id=seed.actor_id,
+        )
+        job = session.get(ReportSyncJob, job_id)
+        job.attempts = 5
+        job.progress = job.progress | {
+            "operation_log": {
+                "phase": phase,
+                "task_id": "expired-export",
+                "create_attempts": 2,
+                "task_ids": ["expired-export"],
+            }
+        }
+        kwargs = {
+            "session": session,
+            "job": job,
+            "reader": reader,
+            "accounts": {"acc-1": SimpleNamespace(timezone="Asia/Hong_Kong")},
+            "external": lambda _call: pytest.fail(
+                "Unfinished export must not be archived"
+            ),
+        }
+        assert run_step(**kwargs) is None
+        assert job.progress["operation_log"]["phase"] == "CREATE"
+        assert job.attempts == 0
+        assert run_step(**kwargs) is None
+        state = job.progress["operation_log"]
+        assert state["phase"] == "CHECK"
+        assert state["task_ids"] == ["expired-export", "replacement-export"]
+        assert creates[0]["start"].date() == date(2026, 10, 4)  # 香港当地5日的UTC起点
+        assert job.start_date == job.end_date == date(2026, 10, 5)
+        assert run_step(**kwargs) is None
+        with pytest.raises(DomainError) as caught:
+            run_step(**kwargs)
+        assert caught.value.code == "operation_log_create_exhausted"
+        assert len(creates) == 1
