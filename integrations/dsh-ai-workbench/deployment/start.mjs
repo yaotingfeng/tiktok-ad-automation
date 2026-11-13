@@ -1,4 +1,4 @@
-import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { chmod, mkdir, readFile, writeFile } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { spawn } from 'node:child_process'
@@ -14,6 +14,9 @@ export async function prepareRuntime({ home, workspace, providerFile, tokenFile,
   const profile = join(home, 'profiles', 'tkada')
   await mkdir(profile, { recursive: true, mode: 0o700 })
   await mkdir(workspace, { recursive: true, mode: 0o700 })
+  // Kubernetes fsGroup 重新挂载可能将官方凭据文件改为0660；
+  // 仅收紧宿主自身凭据文件，保留原内容，满足DSH的owner-only约束。
+  try { await chmod(join(home, '.credentials.yaml'), 0o600) } catch (error) { if (error.code !== 'ENOENT') throw error }
   const patch = [
     { id: 'plugin-manager', disabled: true }, { id: 'hmr', disabled: true },
     { id: 'session-title-llm', disabled: true }, { id: 'session-telemetry-otel', disabled: true },

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
 import { once } from 'node:events'
-import { cp, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises'
+import { cp, mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises'
 import { createServer, request as httpRequest } from 'node:http'
 import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
@@ -32,10 +32,14 @@ test('migrates old base preset inserts before loading the official web profile',
   try {
     process.env.DSH_MIGRATION_MODEL_KEY = 'test-only-model-key'
     await mkdir(profile, { recursive: true })
+    const credentials = join(root, 'home', '.credentials.yaml')
+    await writeFile(credentials, 'test-only-credential-content', { mode: 0o660 })
     await writeFile(providerFile, JSON.stringify({ provider: 'openai', model: 'gpt-4o-mini', config: { apiKeyEnv: 'DSH_MIGRATION_MODEL_KEY' } }))
     await writeFile(tokenFile, 'migration-token-' + 'x'.repeat(40))
     await writeFile(join(profile, 'cordis.patch.yml'), `- insert:\n    - id: agent-preset-registry\n      name: '@deepseek-ai/dsh-agent-preset-registry'\n    - id: preset-standard\n      name: '@deepseek-ai/dsh-agent-preset'\n    - id: keep-admin-setting\n      config:\n        enabled: true\n`)
     await prepareRuntime({ home: join(root, 'home'), workspace: join(root, 'workspace'), providerFile, tokenFile, apiUrl: 'http://127.0.0.1:39999' })
+    assert.equal((await stat(credentials)).mode & 0o777, 0o600)
+    assert.equal(await readFile(credentials, 'utf8'), 'test-only-credential-content')
     const patch = await readFile(join(profile, 'cordis.patch.yml'), 'utf8')
     assert.doesNotMatch(patch, /agent-preset-registry|preset-standard/)
     assert.match(patch, /keep-admin-setting/)

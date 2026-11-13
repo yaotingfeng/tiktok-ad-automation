@@ -5277,3 +5277,5 @@ c34b生产快速切换约3分28秒完成、锁释放/CI恢复；五分钟仍4.88
 - 2026-11-13 生产发布预检发现独立DSH资源共享项目前缀被误判归属冲突，修复为精确识别本命名空间的DSH Deployment/Service/PVC和专属SHA镜像，不计入十一角色；25项部署合同测试通过（含跨命名空间、外部归属及错误镜像拒绝）。预检失败时未停服、未迁移；保留同一发布锁接续。
 
 - 2026-11-13 DSH WebUI公网检查发现Linux容器无系统Documents导致默认工作区失败；显式指定workspace-controller.documentsDirectory为持久化工作目录。原生测试实际调用initializeDefault，确认创建落在持久卷目录且无模型调用，5项通过。本修复仅更新独立DSH镜像，不重启已验收的TK-ADA十一角色。
+
+- 2026-11-13 DSH真实重启检查发现Kubernetes fsGroup将既有.credentials.yaml改为0660，官方凭据插件按owner-only拒绝启动；启动前仅将本宿主凭据文件收紧至0600（内容保持），DSH卷改用OnRootMismatch。回归覆盖权限和内容保全，实际默认工作区初始化及WebUI连接。TK-ADA十一角色不受此独立服务问题影响。
