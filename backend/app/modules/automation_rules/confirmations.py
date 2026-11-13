@@ -46,15 +46,19 @@ def open_batch(
     return batch
 
 
-def expire_open(session: Session, *, rule_id: UUID, now: datetime) -> int:
+def expire_open(
+    session: Session, *, rule_id: UUID, now: datetime, optimizer_id: UUID | None = None
+) -> int:
     """规则开始新一轮运行时，上一轮没处理的批次失效，避免按过期的结论执行。"""
     batches = session.exec(
         select(AutomationConfirmation)
+        .join(AutomationRuleRun, AutomationRuleRun.id == AutomationConfirmation.run_id)
         .where(
             AutomationConfirmation.rule_id == rule_id,
             AutomationConfirmation.status == "PENDING",
+            AutomationRuleRun.optimizer_id == optimizer_id,
         )
-        .with_for_update()
+        .with_for_update(of=AutomationConfirmation)
     ).all()
     for batch in batches:
         batch.status, batch.decided_at = "EXPIRED", now
@@ -142,6 +146,31 @@ def confirmation_detail(
     rule = session.get(AutomationRule, batch.rule_id)
     assert run is not None and rule is not None
     definition = RuleDefinition.model_validate(run.definition)
+    from app.modules.ai_workbench.rule_binding import (
+        RuleBindingScope,
+        validate_rule_binding,
+    )
+
+    # 确认预览复用执行器的范围/绑定代数核验，聚合数据不能包含其他优化师账户。
+    optimizer_scope = None
+    if run.optimizer_id is not None:
+        optimizer_scope = validate_rule_binding(
+            session,
+            RuleBindingScope(
+                tenant_id=run.tenant_id,
+                optimizer_id=run.optimizer_id,
+                rule_id=run.rule_id,
+                bc_id="",
+                advertiser_ids=(),
+                authorization_revision=run.authorization_revision or 0,
+                authorization_revisions=tuple(
+                    sorted(run.authorization_revisions.items())
+                ),
+                optimizer_version=run.optimizer_version or 0,
+                rule_version=run.rule_version,
+                binding_id=run.binding_id,
+            ),
+        )
     inputs = load_inputs(
         session,
         tenant_id=context.tenant_id,
@@ -149,6 +178,7 @@ def confirmation_detail(
         now=now or datetime.now(UTC),
         # 与原运行判断同一批账户：按账户时区运行时只比较该槽位的账户。
         slot_at=run.slot_at,
+        optimizer_scope=optimizer_scope,
     )
     current = {hit.subject_key: hit for hit in evaluate(definition, inputs).hits}
     # 未命中的对象也给出现在的指标，便于判断差异。

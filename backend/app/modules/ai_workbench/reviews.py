@@ -359,6 +359,7 @@ def frozen_evidence(
                     "version": row.version,
                     "definition": row.definition,
                     "name": row.name,
+                    "enabled": row.enabled,
                 }
                 for row in bound_rules
             ],

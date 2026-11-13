@@ -524,7 +524,11 @@ from app.modules.tenants.permissions import require_tenant  # noqa: E402
 
 @router.get("/ai-knowledge")
 def list_ai_knowledge(
-    tenant_id: UUID, session: SessionDep, user: CurrentUser, bc_id: str | None = None
+    tenant_id: UUID,
+    session: SessionDep,
+    user: CurrentUser,
+    bc_id: str | None = None,
+    key: str | None = Query(default=None, min_length=1, max_length=100),
 ) -> list[dict]:
     require_tenant(session, actor_id=user.id, tenant_id=tenant_id, action="read")
     query = latest_query().where(
@@ -534,6 +538,8 @@ def list_ai_knowledge(
         query = query.where(
             or_(KnowledgeVersion.bc_id.is_(None), KnowledgeVersion.bc_id == bc_id)
         )
+    if key is not None:
+        query = query.where(KnowledgeVersion.key == key)
     rows = session.exec(
         query.order_by(col(KnowledgeVersion.created_at).desc()).limit(100)
     ).all()

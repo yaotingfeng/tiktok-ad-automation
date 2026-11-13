@@ -33,3 +33,43 @@ test('real DSH registry scopes task methods and renders on-demand skill content'
   })
   await consumer.dispose(); await registry.dispose()
 })
+
+// 必须使用真实 ToolsService 走 runClaim setup，不能再用 Map 替身掩盖 restrict 合同。
+test('real DSH tool registry accepts task session setup and hides inherited tools', { skip: !root }, async () => {
+  const require = createRequire(`${root}/package.json`)
+  const { Context } = await import(require.resolve('@deepseek-ai/cordis'))
+  const { default: SystemPrompt } = await import(require.resolve('@deepseek-ai/dsh-system-prompt'))
+  const { default: Tools } = await import(require.resolve('@deepseek-ai/dsh-tools'))
+  const { default: Skills, renderSkillContent } = await import(require.resolve('@deepseek-ai/dsh-skill'))
+  const { createScope, scopeOf } = await import(require.resolve('@deepseek-ai/dsh-scope'))
+  const { runClaim } = await import('./runtime.mjs')
+  const { mkdtemp, rm } = await import('node:fs/promises')
+  const { tmpdir } = await import('node:os')
+  const host = new Context()
+  const prompt = await host.plugin(SystemPrompt), tools = await host.plugin(Tools), registry = await host.plugin(Skills)
+  const directory = await mkdtemp(`${tmpdir()}/aiwb-native-session-`)
+  try {
+    const consumer = await host.inject(['tools', 'skills'], async ctx => {
+      ctx.tools.register({ name: 'exec', parameters: { type: 'object' }, output: { schema: { type: 'object' }, render: () => [] }, execute: async () => ({}) })
+      const scope = createScope(ctx, {})
+      let completed = 0
+      const runtime = { complete: async () => { completed++; return { status: 'COMPLETE' } } }
+      const native = { agentPresets: { mount: async () => {} }, agents: { create: async options => {
+        await options.setup(scope.ctx, {})
+        const key = scopeOf(scope.ctx)
+        assert.equal(scope.ctx.tools.get('exec', key), undefined)
+        return { agent: { followup() {}, whenIdle: async () => {
+          await scope.ctx.tools.get('skill', key).execute({ name: 'ai-delivery-review' })
+          await scope.ctx.tools.get('tkada_complete_review', key).execute({ summary: 'native setup works', proposals: [] })
+        } }, dispose: () => scope.dispose() }
+      } } }
+      try {
+        await runClaim(native, { stateRoot: directory, modelSelection: { provider: 'fixture', model: 'fixture' } },
+          { task: { id: 'task', tenant_id: 'tenant', optimizer_id: 'optimizer', fence: 'fence', expires_at: new Date(Date.now()+60000).toISOString(), evidence: { methods: await loadMethods() } } },
+          runtime, { SessionId: x=>x, createUserMessage: x=>x, scopeOf, renderSkillContent })
+        assert.equal(completed, 1)
+      } finally { await scope.dispose() }
+    })
+    await consumer.dispose()
+  } finally { await registry.dispose(); await tools.dispose(); await prompt.dispose(); await rm(directory, { recursive: true, force: true }) }
+})

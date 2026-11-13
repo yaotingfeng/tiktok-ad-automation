@@ -146,6 +146,30 @@ def create_version(
             raise DomainError("ai_knowledge_scope", "BC 不属于当前租户")
     tenant_id = None if body.scope == "PUBLIC" else context.tenant_id
     number = 1
+    if asset_id is None:
+        # 初次导入按逻辑 key 串行并幂等；重复运行不能产生第二个公共知识资产。
+        session.execute(
+            text("SELECT pg_advisory_xact_lock(hashtextextended(:key,0))"),
+            {
+                "key": f"ai-knowledge-key:{body.scope}:{tenant_id}:{body.bc_id}:{body.key}"
+            },
+        )
+        existing = session.exec(
+            latest_query().where(
+                KnowledgeVersion.scope == body.scope,
+                KnowledgeVersion.tenant_id == tenant_id,
+                KnowledgeVersion.bc_id == body.bc_id,
+                KnowledgeVersion.key == body.key,
+            )
+        ).all()
+        if existing:
+            supplied = body.model_dump(mode="json")
+            stored = {key: existing[0].model_dump(mode="json")[key] for key in supplied}
+            if len(existing) == 1 and stored == supplied:
+                return existing[0]
+            raise DomainError(
+                "ai_knowledge_key_exists", "已有同标识知识，请显式追加版本"
+            )
     if asset_id:
         # 同一资产版本发布串行，避免并发覆盖；不允许借更新移动私有范围到公共库。
         session.execute(

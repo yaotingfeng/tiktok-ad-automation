@@ -160,7 +160,7 @@ def execute_run(
         assert found is not None
         return found
     # 新一轮运行开始，上一轮仍未确认的批次失效。
-    expire_open(session, rule_id=rule.id, now=now)
+    expire_open(session, rule_id=rule.id, now=now, optimizer_id=run.optimizer_id)
     try:
         # 后台运行以规则最后修改人的身份重建权限；此人已离开租户时规则不再运行。
         require_tenant(

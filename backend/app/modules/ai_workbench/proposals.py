@@ -216,6 +216,18 @@ def _within_authorization(
         after_cfg = after.get("config", after) if isinstance(after, Mapping) else {}
         if not isinstance(before_cfg, Mapping) or not isinstance(after_cfg, Mapping):
             raise DomainError("ai_proposal_invalid", "strategy scope must be an object")
+        # 发布服务会补齐 Schema 默认值。授权比较必须使用实际将生效的完整配置，
+        # 否则省略字段会偷偷把原有结构/出价还原为默认值。
+        if {"budget", "currency", "copy_pool_version"}.issubset(after_cfg):
+            try:
+                after_cfg = StrategyConfig.model_validate(after_cfg).model_dump(
+                    mode="json"
+                )
+                before_cfg = StrategyConfig.model_validate(before_cfg).model_dump(
+                    mode="json"
+                )
+            except ValueError as exc:
+                raise DomainError("ai_proposal_invalid", "策略配置无效") from exc
         nested = (
             limits.get("strategy") if isinstance(limits.get("strategy"), dict) else {}
         )
@@ -368,6 +380,16 @@ def _within_authorization(
         if definition.get("bc_id") is not None and definition["bc_id"] != version.bc_id:
             return False, "bc_scope_out_of_scope"
         before_definition = before.get("definition", before)
+        if "apply_to" in definition:
+            try:
+                definition = RuleDefinition.model_validate(definition).model_dump(
+                    mode="json"
+                )
+                before_definition = RuleDefinition.model_validate(
+                    before_definition
+                ).model_dump(mode="json")
+            except ValueError as exc:
+                raise DomainError("ai_proposal_invalid", "规则配置无效") from exc
         nested = limits.get("rule") if isinstance(limits.get("rule"), dict) else {}
         explicit = nested.get("allowed_fields", limits.get("rule_allowed_fields", []))
         if not isinstance(explicit, list) or any(
@@ -380,6 +402,12 @@ def _within_authorization(
             key
             for key, value in definition.items()
             if key != "accounts" and before_definition.get(key) != value
+        }
+        # name/enabled 不属于 definition，却同样会由发布服务写入，必须单独授权。
+        changed |= {
+            key
+            for key in ("name", "enabled")
+            if "definition" in after and key in after and after[key] != before.get(key)
         }
         if version.optimization_mode == "AUTO" and changed - set(explicit):
             return False, "rule_field_not_authorized"
@@ -496,12 +524,29 @@ def create_proposal(
             raise DomainError(
                 "ai_rule_not_bound", "rule is not assigned to this optimizer"
             )
+        frozen_rule = next(
+            (
+                r
+                for r in review_task.evidence.get("rules", [])
+                if r.get("id") == str(rule.id)
+            ),
+            None,
+        )
+        if (
+            frozen_rule is None
+            or frozen_rule.get("version") != rule.version
+            or any(
+                frozen_rule.get(key) != getattr(rule, key)
+                for key in ("definition", "name", "enabled")
+            )
+        ):
+            raise DomainError("ai_proposal_stale", "规则冻结基线已改变，请重新复盘")
         before = {
             "rule_id": str(rule.id),
-            "version": rule.version,
-            "name": rule.name,
-            "enabled": rule.enabled,
-            "definition": rule.definition,
+            "version": frozen_rule["version"],
+            "name": frozen_rule["name"],
+            "enabled": frozen_rule["enabled"],
+            "definition": frozen_rule["definition"],
         }
         base_strategy_version_id, base_rule_id, base_rule_version = (
             None,
