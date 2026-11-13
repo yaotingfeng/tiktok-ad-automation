@@ -58,7 +58,11 @@ def build_data_pack(
     version: AIOptimizerVersion,
     cutoff: datetime | None = None,
 ) -> dict:
-    from app.modules.business.models import BusinessDay, BusinessPublication
+    from app.modules.business.models import (
+        BusinessDay,
+        BusinessPublication,
+        BusinessRun,
+    )
     from app.modules.operation_logs.models import OperationExport, OperationLogEvent
     from app.modules.reporting.queries import freeze_review_page
 
@@ -102,6 +106,8 @@ def build_data_pack(
                             bc_id=version.bc_id,
                             filters=filters,
                             limit=MAX_ROWS,
+                            freeze_limit=5000,
+                            cutoff=cutoff,
                         )
                 except HTTPException as error:
                     if error.status_code != 409:
@@ -138,7 +144,13 @@ def build_data_pack(
                 & (BusinessDay.bc_id == BusinessPublication.bc_id)
                 & (BusinessDay.run_id == BusinessPublication.run_id),
             )
+            .join(
+                BusinessRun,
+                (BusinessRun.tenant_id == BusinessDay.tenant_id)
+                & (BusinessRun.id == BusinessDay.run_id),
+            )
             .where(
+                BusinessRun.finished_at <= cutoff,
                 BusinessDay.tenant_id == context.tenant_id,
                 BusinessDay.bc_id == version.bc_id,
                 BusinessDay.advertiser_id == advertiser_id,
@@ -203,7 +215,7 @@ def build_data_pack(
             ],
             "limits": {
                 "accounts": MAX_ACCOUNTS,
-                "rows_per_dimension_per_horizon": MAX_ROWS,
+                "rows_per_dimension_per_horizon": 5000,
                 "maturity_horizons": 3,
                 "days_per_horizon": WINDOW_DAYS,
             },

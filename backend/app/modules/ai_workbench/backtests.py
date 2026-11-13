@@ -22,12 +22,18 @@ def backtest_for_task(
     candidate = RuleDefinition.model_validate(candidate_definition).model_dump(
         mode="json"
     )
+    from app.modules.ai_workbench.reviews import frozen_evidence_ids
+
+    if str(evidence_id) not in frozen_evidence_ids(task.evidence):
+        raise HTTPException(404, "Read frozen rule evidence before backtesting")
+    rule_sources = [
+        row
+        for source in task.evidence_store.values()
+        if source["category"] == "rule_evidence"
+        for row in source["payload"]
+    ]
     frozen = next(
-        (
-            row
-            for row in task.evidence.get("rule_evidence", [])
-            if row["id"] == str(evidence_id)
-        ),
+        (row for row in rule_sources if row["id"] == str(evidence_id)),
         None,
     )
     if frozen is None:

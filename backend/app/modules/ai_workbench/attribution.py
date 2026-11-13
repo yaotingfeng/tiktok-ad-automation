@@ -210,6 +210,7 @@ def build_attribution_pack(
                         bc_id=version.bc_id,
                         filters=filters,
                         limit=50,
+                        cutoff=cutoff,
                     )
             except HTTPException as error:
                 if error.status_code != 409:

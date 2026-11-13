@@ -510,6 +510,8 @@ def freeze_review_page(
     bc_id: str,
     filters: ReportingFilter,
     limit: int = 50,
+    freeze_limit: int | None = None,
+    cutoff: datetime | None = None,
 ) -> dict:
     """领域消费者复用相同报表构建/物化口径，并复制正文到长寿命冻结任务。
 
@@ -525,6 +527,25 @@ def freeze_review_page(
         cursor=None,
         limit=min(limit, 100),
     )
+    if cutoff and page.metrics_observed_at and page.metrics_observed_at > cutoff:
+        return {
+            "status": "UNAVAILABLE",
+            "reason": "publication_after_cutoff",
+            "rows": [],
+        }
+    frozen_rows = [row.model_dump(mode="json") for row in page.items]
+    # 复盘私有存储可有界保存更多页，仍复用同一快照和游标，禁止重查当前版本。
+    while freeze_limit and page.next_cursor and len(frozen_rows) < freeze_limit:
+        page = _read_page(
+            session,
+            context=context,
+            bc_id=bc_id,
+            filters=filters,
+            snapshot=snapshot,
+            cursor=page.next_cursor,
+            limit=min(100, freeze_limit - len(frozen_rows)),
+        )
+        frozen_rows.extend(row.model_dump(mode="json") for row in page.items)
     return {
         "id": str(snapshot.id),
         "status": snapshot.coverage["status"],
@@ -535,7 +556,7 @@ def freeze_review_page(
         "metrics_observed_at": page.metrics_observed_at.isoformat()
         if page.metrics_observed_at
         else None,
-        "rows": [row.model_dump(mode="json") for row in page.items],
-        "rows_truncated": snapshot.total > len(page.items),
+        "rows": frozen_rows,
+        "rows_truncated": snapshot.total > len(frozen_rows),
         "total": snapshot.total,
     }

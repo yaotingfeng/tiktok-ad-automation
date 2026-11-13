@@ -168,7 +168,7 @@ def test_periodic_review_uses_optimizer_local_time_and_deduplicates(
 def test_business_review_evidence_excludes_other_optimizer_account_inputs(
     client, session, context
 ):
-    from datetime import date
+    from datetime import UTC, date, datetime
     from uuid import UUID
 
     from app.modules.ai_workbench.reviews import frozen_evidence, load_optimizer
@@ -192,6 +192,7 @@ def test_business_review_evidence_excludes_other_optimizer_account_inputs(
             cursor=date(2026, month, 1),
             scope_revision=1,
             status="COMPLETE",
+            finished_at=datetime.now(UTC),
             inputs={"accounts": accounts},
         )
         session.add(run)

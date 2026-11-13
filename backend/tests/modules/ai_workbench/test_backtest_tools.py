@@ -80,9 +80,11 @@ def test_agent_can_replay_frozen_nonhits_cite_result_and_cannot_read_foreign_his
         session, context=context, optimizer_id=optimizer.id, request_id=uuid4()
     )
     assert (
-        task.evidence["rule_evidence"][0]["historical_replay"]["replay"]["current"][
-            "nonhit_count"
-        ]
+        next(
+            r["payload"]
+            for r in task.evidence_store.values()
+            if r["category"] == "rule_evidence"
+        )[0]["historical_replay"]["replay"]["current"]["nonhit_count"]
         == 1
     )
     monkeypatch.setattr(settings, "AI_DSH_SERVICE_TOKEN", "local-test-" + "x" * 40)
@@ -96,6 +98,22 @@ def test_agent_can_replay_frozen_nonhits_cite_result_and_cannot_read_foreign_his
     candidate = definition.model_dump(mode="json")
     candidate["conditions"][0]["values"] = ["3"]
     payload = {"evidence_id": str(evidence.id), "candidate_definition": candidate}
+    assert (
+        client.post(path + "/rules/backtest", headers=headers, json=payload).status_code
+        == 404
+    )
+    from app.modules.ai_workbench.evidence import referenced_evidence_ids
+
+    assert evidence.id in referenced_evidence_ids(session, tenant_id=context.tenant_id)
+    source = next(
+        r for r in task.evidence["evidence_index"] if r["category"] == "rule_evidence"
+    )
+    assert (
+        client.post(
+            path + "/evidence/read", headers=headers, json={"evidence_id": source["id"]}
+        ).status_code
+        == 200
+    )
     response = client.post(path + "/rules/backtest", headers=headers, json=payload)
     assert response.status_code == 200, response.text
     result = response.json()

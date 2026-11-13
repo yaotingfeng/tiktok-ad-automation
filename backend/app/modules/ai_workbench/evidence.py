@@ -274,7 +274,12 @@ def referenced_evidence_ids(
         review_query = review_query.where(DSHReviewTask.tenant_id == tenant_id)
         proposal_query = proposal_query.where(AIProposal.tenant_id == tenant_id)
     for task in session.exec(review_query).all():
-        for value in frozen_evidence_ids(task.evidence):
+        for value in frozen_evidence_ids(task.evidence) | {
+            str(row["id"])
+            for source in task.evidence_store.values()
+            if source["category"] == "rule_evidence"
+            for row in source["payload"]
+        }:
             try:
                 result.add(UUID(value))
             except TypeError, ValueError:

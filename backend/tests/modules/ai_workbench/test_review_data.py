@@ -32,12 +32,13 @@ def test_review_actively_builds_local_data_without_user_query(session, context):
     assert pack["accounts"][0]["advertiser_id"] == "acc-1"
     assert pack["accounts"][0]["timezone"]
     assert pack["accounts"][0]["local_today"] > pack["accounts"][0]["complete_through"]
-    assert {r["dimension"] for r in pack["reporting"]} == {
-        "account",
-        "campaign",
-        "drama",
-        "material",
-    }
+    assert {r["dimension"] for r in pack["reporting"]} == {"account"}
+    assert not any("rows" in row for row in pack["reporting"])
+    assert {
+        r["dimension"]
+        for r in task.evidence["evidence_index"]
+        if r["category"] == "reporting"
+    } == {"account", "campaign", "drama", "material"}
     assert pack["causal_incremental_profit"] is None
     assert pack["missing_is_zero"] is False
     frozen = task.evidence.copy()
@@ -84,6 +85,7 @@ def test_pack_uses_published_metrics_and_preserves_old_values(session, context):
             accounts={"acc-1": AccountMeta("USD", "UTC")},
             start=day,
             end=day,
+            requested_at=datetime(2026, 11, 13, 11, tzinfo=UTC),
             rows=[
                 ad_row(
                     "ad-one",

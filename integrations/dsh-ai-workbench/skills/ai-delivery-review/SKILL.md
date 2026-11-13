@@ -5,7 +5,7 @@ description: Review a TK-ADA optimizer's frozen delivery evidence and previous r
 
 # 投放优化师统一复盘
 
-版本：1.3.0。方法来源：ads-employee-review 的经营目标/环节交接，控损复盘的规则效果及执行核对，测新复盘的成熟队列与分母，放量复盘的完整日及承载能力。方法不继承本机执行权限、账户或案例阈值。
+版本：1.4.0。方法来源：ads-employee-review 的经营目标/环节交接，控损复盘的规则效果及执行核对，测新复盘的成熟队列与分母，放量复盘的完整日及承载能力。方法不继承本机执行权限、账户或案例阈值。
 
 先核对冻结截止时刻、租户/优化师/BC/账户、数据覆盖与新鲜度、币种、当地完整日和 D0/D3/D7 归因成熟资格。缺失不等于零；不合币种求和。截断样本只能解释样本，不能声称全体比例。汇总覆盖未成熟日期时，不能报告成熟 D3/D7 结论。报表金额/成本/分母使用后端口径，模型不重新编造计算或费率。
 
@@ -25,6 +25,8 @@ Agent 可用 skill 读取本轮注册方法，使用 tkada_search_knowledge 搜�
 - `ai-delivery-review-materials`（素材）：素材报表及映射可用时。
 - `ai-delivery-review-business`（经营）：已发布经营明细存在时。
 - `ai-delivery-review-scale`（放量与扩量）：完整日投放、承载和素材证据存在时；本期复制/新增扩量只提供分析建议。
+
+证据按需读取：初始输入仅含任务范围、账户 D0/D3/D7 汇总、策略/规则版本及 evidence_index。先用 tkada_query_evidence 按 reporting、attribution、rule_evidence、history 等分类分页查目录，再用 tkada_read_evidence 读取正文，按 next_offset 继续。目录不是证据正文；只能引用初始账户汇总 ID、成功读取返回的页 ID 或回测结果 ID。规则回测前必须先读取对应规则证据。不得将未读取的索引当作已核实事实。
 
 证据读取约定：`data_pack.reporting` 按 `maturity_horizon` 分成 d0/d3/d7 独立成熟窗口；只有 `maturity_evidence.status=AVAILABLE` 且对应字段可用，才可称为成熟表现。平台素材 D3 不支持时明确不可用。`attribution.rows` 是按实际 Campaign 或生产谱系关联的报表，不能把账户整体归给某策略；`material_orders` 是订单兑现，不能当作已使用素材证明。
 

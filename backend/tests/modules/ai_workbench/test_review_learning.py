@@ -55,7 +55,11 @@ def test_second_round_tracks_decision_and_does_not_call_unexecuted_strategy_fail
     second = create_review_task(
         session, context=context, optimizer_id=optimizer.id, request_id=uuid4()
     )
-    history = second.evidence["history"]
+    history = next(
+        r["payload"]
+        for r in second.evidence_store.values()
+        if r["category"] == "history"
+    )
     assert history["reviews"][0]["summary"] == "先观察起量"
     feedback = history["proposals"][0]
     assert feedback["status"] == "ACCEPTED"

@@ -40,8 +40,8 @@ def test_agent_search_read_frozen_policy_and_scoped_citation(
         session, context=context, optimizer_id=optimizer.id, request_id=uuid4()
     )
     assert not task.evidence["knowledge"]
-    assert task.evidence["knowledge_catalog"][0]["title"] == "新剧补贴"
-    assert "body" not in task.evidence["knowledge_catalog"][0]
+    assert "knowledge_catalog" not in task.evidence
+    assert task.evidence["knowledge"] == []
     monkeypatch.setattr(settings, "AI_DSH_SERVICE_TOKEN", "test-" + "x" * 40)
     claim = client.post(
         "/api/integrations/ai-workbench/reviews/claim",
@@ -182,7 +182,7 @@ def test_search_beyond_initial_catalog_and_read_budget(session, context):
     task = create_review_task(
         session, context=context, optimizer_id=optimizer.id, request_id=uuid4()
     )
-    assert str(target.id) not in {r["id"] for r in task.evidence["knowledge_catalog"]}
+    assert "knowledge_catalog" not in task.evidence
     found = search_for_task(session, task=task, query="赔付")
     assert found["items"][0]["eligibility"] == "EXPIRED"
     frozen = read_for_task(session, task=task, knowledge_id=target.id)

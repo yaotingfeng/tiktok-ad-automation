@@ -268,6 +268,7 @@ def complete(
         return {"id": str(task.id), "status": task.status}
     if task.status != "RUNNING":
         raise DomainError("ai_task_fence_conflict", "复盘任务未领取")
+    _read_task_scope(task, session)
     if body.method_usage:
         bound = task.evidence.get("methods", {})
         method_keys = {
@@ -384,10 +385,10 @@ class KnowledgeRead(BaseModel):
     knowledge_id: UUID
 
 
-def _knowledge_task(task, session):
+def _read_task_scope(task, session):
     if task.status != "RUNNING":
-        raise DomainError("ai_task_fence_conflict", "只有运行中的任务可检索知识")
-    # 继续工作时重验账户范围；不能用旧任务读取被撤销范围的私有知识。
+        raise DomainError("ai_task_fence_conflict", "只有运行中的任务可读取证据")
+    # 继续工作时重验账户范围；不能用旧任务读取被撤销范围的证据。
     from app.modules.reporting.filters import authorized_grants
 
     _, current = reviews.load_optimizer(session, _context(task), task.optimizer_id)
@@ -398,7 +399,7 @@ def _knowledge_task(task, session):
         session, context=_context(task), bc_id=current.bc_id, advertiser_ids=tuple(ids)
     )
     if {g.advertiser_id for g in grants} != set(ids):
-        raise DomainError("ai_knowledge_scope_revoked", "账户授权已变更")
+        raise DomainError("ai_evidence_scope_revoked", "账户授权已变更")
 
 
 @router.post("/{task_id}/knowledge/search")
@@ -412,7 +413,7 @@ def search_knowledge(
 
     if task.id != task_id:
         raise HTTPException(403, "Task scope mismatch")
-    _knowledge_task(task, session)
+    _read_task_scope(task, session)
     result = search_for_task(session, task=task, query=body.query, offset=body.offset)
     session.commit()
     return result
@@ -429,7 +430,7 @@ def read_knowledge(
 
     if task.id != task_id:
         raise HTTPException(403, "Task scope mismatch")
-    _knowledge_task(task, session)
+    _read_task_scope(task, session)
     result = read_for_task(session, task=task, knowledge_id=body.knowledge_id)
     session.commit()
     return result
@@ -452,12 +453,59 @@ def backtest_rule(
 
     if task.id != task_id:
         raise HTTPException(403, "Task scope mismatch")
-    _knowledge_task(task, session)
+    _read_task_scope(task, session)
     result = backtest_for_task(
         session,
         task=task,
         evidence_id=body.evidence_id,
         candidate_definition=body.candidate_definition.model_dump(mode="json"),
     )
+    session.commit()
+    return result
+
+
+class EvidenceQuery(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    category: str = Field(
+        pattern=r"^(reporting|plans|build_occurrences|rule_evidence|attribution|material_orders|history|business|operation_logs|data_pack_business|data_pack_operation_events|knowledge_refs)$"
+    )
+    offset: int = Field(default=0, ge=0, le=10000)
+
+
+class EvidenceRead(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    evidence_id: UUID
+    offset: int = Field(default=0, ge=0, le=100000)
+    limit: int = Field(default=1, ge=1, le=10)
+
+
+@router.post("/{task_id}/evidence/query")
+def query_evidence(
+    task_id: UUID,
+    body: EvidenceQuery,
+    session: SessionDep,
+    task: reviews.DSHReviewTask = Depends(task_identity),
+) -> dict:
+    from app.modules.ai_workbench.review_reading import query_for_task
+
+    if task.id != task_id:
+        raise HTTPException(403, "Task scope mismatch")
+    _read_task_scope(task, session)
+    return query_for_task(task=task, category=body.category, offset=body.offset)
+
+
+@router.post("/{task_id}/evidence/read")
+def read_evidence(
+    task_id: UUID,
+    body: EvidenceRead,
+    session: SessionDep,
+    task: reviews.DSHReviewTask = Depends(task_identity),
+) -> dict:
+    from app.modules.ai_workbench.review_reading import read_for_task
+
+    if task.id != task_id:
+        raise HTTPException(403, "Task scope mismatch")
+    _read_task_scope(task, session)
+    result = read_for_task(session, task=task, **body.model_dump())
     session.commit()
     return result

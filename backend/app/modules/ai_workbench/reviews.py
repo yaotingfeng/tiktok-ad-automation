@@ -66,6 +66,10 @@ class DSHReviewTask(SQLModel, table=True):
     evidence: dict[str, Any] = Field(
         default_factory=dict, sa_column=Column(JSONB, nullable=False)
     )
+    # 私有冻结正文不进入领取响应；初始 evidence 仅含摘要和目录。
+    evidence_store: dict[str, Any] = Field(
+        default_factory=dict, sa_column=Column(JSONB, nullable=False)
+    )
     result: dict[str, Any] = Field(
         default_factory=dict, sa_column=Column(JSONB, nullable=False)
     )
@@ -130,7 +134,7 @@ def _is_uuid(value: str) -> bool:
 
 
 def frozen_evidence_ids(evidence: Mapping[str, Any] | None) -> set[str]:
-    """Collect identifiers for every frozen evidence category.
+    """Return citable IDs; on-demand tasks grant IDs only after successful delivery.
 
     Review proposals may cite report snapshots, business runs, operation
     exports, build occurrences, plans, or rule evidence.  Keeping this list
@@ -138,6 +142,13 @@ def frozen_evidence_ids(evidence: Mapping[str, Any] | None) -> set[str]:
     """
     if not isinstance(evidence, Mapping):
         return set()
+
+    if evidence.get("reading_contract") == "on-demand-v1":
+        return {
+            *evidence.get("read_evidence_ids", []),
+            *(str(row["id"]) for row in evidence.get("knowledge", [])),
+            *(str(row["id"]) for row in evidence.get("rule_backtests", [])),
+        }
 
     fields_by_category: dict[str, tuple[str, ...]] = {
         "knowledge": ("id",),
@@ -315,6 +326,8 @@ def frozen_evidence(
         .where(
             BusinessRun.tenant_id == context.tenant_id,
             BusinessRun.bc_id == version.bc_id,
+            BusinessRun.created_at <= cutoff,
+            BusinessRun.finished_at <= cutoff,
         )
         .order_by(col(BusinessRun.created_at).desc())
         .limit(50)
@@ -348,6 +361,7 @@ def frozen_evidence(
             OperationCoverage.tenant_id == context.tenant_id,
             col(OperationCoverage.advertiser_id).in_(version.advertiser_ids),
             OperationExport.bc_id == version.bc_id,
+            OperationExport.observed_at <= cutoff,
         )
     ).all()
     operation_exports = session.exec(
@@ -356,6 +370,7 @@ def frozen_evidence(
             OperationExport.tenant_id == context.tenant_id,
             OperationExport.bc_id == version.bc_id,
             col(OperationExport.advertiser_id).in_(version.advertiser_ids),
+            OperationExport.observed_at <= cutoff,
         )
         .order_by(col(OperationExport.observed_at).desc())
         .limit(50)
@@ -556,19 +571,7 @@ def frozen_evidence(
             "captured_at": cutoff,
         }
     )
-    from app.modules.ai_workbench.knowledge import select_knowledge
-
-    # 初始只预载目录，不将整批知识正文挤入上下文；Agent 通过任务工具按需查阅。
-    frozen["knowledge_catalog"] = [
-        {
-            key: value
-            for key, value in row.items()
-            if key not in {"body", "evidence_ids"}
-        }
-        for row in select_knowledge(
-            session, context=context, bc_id=version.bc_id, tags=set()
-        )
-    ]
+    # 知识与外部参考同样按需读取，不在初始输入复制候选目录。
     frozen["knowledge"] = []
     frozen["knowledge_selection"] = {
         "mode": "TASK_SCOPED_SEARCH_AND_READ",
@@ -593,16 +596,8 @@ def frozen_evidence(
         raise DomainError(
             "ai_evidence_not_found", "requested evidence is outside optimizer scope"
         )
-    from app.modules.ai_workbench.input_budget import (
-        MAX_INPUT_BYTES,
-        enforce_input_budget,
-    )
-    from app.modules.ai_workbench.methods import METHOD_ARCHIVE_BYTES
-
-    # 先为插件方法归档预留容量，领取时不能再次截断已经冻结的业务证据。
-    return enforce_input_budget(
-        frozen, limit=MAX_INPUT_BYTES - METHOD_ARCHIVE_BYTES - 200000
-    )
+    # 正文在创建任务时拆到私有存储；不能先按模型输入预算截断冻结源。
+    return frozen
 
 
 def create_review_task(
@@ -680,6 +675,9 @@ def create_review_task(
         for row in evidence_rows:
             if row.retention_until < retention_until:
                 row.retention_until = retention_until
+    from app.modules.ai_workbench.review_reading import split_evidence
+
+    initial, store = split_evidence(frozen)
     task = DSHReviewTask(
         tenant_id=context.tenant_id,
         optimizer_id=optimizer.id,
@@ -689,7 +687,8 @@ def create_review_task(
         authorization_expires_at=_now() + timedelta(seconds=authorization_ttl_seconds),
         fence=uuid4().hex,
         optimizer_version=version.number,
-        evidence=frozen,
+        evidence=initial,
+        evidence_store=store,
         created_by=context.actor_id,
     )
     session.add(task)

@@ -53,13 +53,17 @@ test('real DSH tool registry accepts task session setup and hides inherited tool
       ctx.tools.register({ name: 'exec', parameters: { type: 'object' }, output: { schema: { type: 'object' }, render: () => [] }, execute: async () => ({}) })
       const scope = createScope(ctx, {})
       let completed = 0
-      const runtime = { complete: async () => { completed++; return { status: 'COMPLETE' } } }
+      const runtime = { queryEvidence: async (_claim, args) => ({ items: [{ id: 'frozen', category: args.category }] }), readEvidence: async (_claim, args) => ({ id: 'page', source_id: args.evidence_id, rows: [] }), complete: async () => { completed++; return { status: 'COMPLETE' } } }
       const native = { agentPresets: { mount: async () => {} }, agents: { create: async options => {
         await options.setup(scope.ctx, {})
         const key = scopeOf(scope.ctx)
         assert.equal(scope.ctx.tools.get('exec', key), undefined)
         return { agent: { followup() {}, whenIdle: async () => {
           await scope.ctx.tools.get('skill', key).execute({ name: 'ai-delivery-review' })
+          const index = await scope.ctx.tools.get('tkada_query_evidence', key).execute({ category: 'reporting' })
+          assert.equal(index.items[0].id, 'frozen')
+          const page = await scope.ctx.tools.get('tkada_read_evidence', key).execute({ evidence_id: index.items[0].id })
+          assert.equal(page.id, 'page')
           await scope.ctx.tools.get('tkada_complete_review', key).execute({ summary: 'native setup works', proposals: [] })
         } }, dispose: () => scope.dispose() }
       } } }

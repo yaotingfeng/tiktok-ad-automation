@@ -162,8 +162,22 @@ def test_material_origin_mapping_is_exact_and_ambiguous_producer_excluded(
     task = create_review_task(
         session, context=context, optimizer_id=optimizer.id, request_id=uuid4()
     )
-    assert task.evidence["material_orders"]["rows"][0]["job_id"] == "job-one"
-    assert task.evidence["attribution"]["rows"][0]["version_id"] == "creative-one"
+    assert (
+        next(
+            r["payload"]
+            for r in task.evidence_store.values()
+            if r["category"] == "material_orders"
+        )["rows"][0]["job_id"]
+        == "job-one"
+    )
+    assert (
+        next(
+            r["payload"]
+            for r in task.evidence_store.values()
+            if r["category"] == "attribution"
+        )["rows"][0]["version_id"]
+        == "creative-one"
+    )
     session.add(
         MaterialPushItem(
             tenant_id=context.tenant_id,
@@ -188,7 +202,14 @@ def test_material_origin_mapping_is_exact_and_ambiguous_producer_excluded(
     assert conflict["rows"] == []
     assert conflict["conflicts"][0]["reason"] == "multiple_origin_versions"
     # 旧任务正文仍保留当时唯一的关联，后续冲突不悄悄改写历史。
-    assert task.evidence["attribution"]["rows"][0]["version_id"] == "creative-one"
+    assert (
+        next(
+            r["payload"]
+            for r in task.evidence_store.values()
+            if r["category"] == "attribution"
+        )["rows"][0]["version_id"]
+        == "creative-one"
+    )
 
 
 def test_nested_producer_origin_is_discoverable_in_push_openapi():
