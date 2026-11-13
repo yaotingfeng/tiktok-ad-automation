@@ -40,7 +40,7 @@ test('native DSH session has only structured result tool and a tenant/task direc
     const ctx = { get: () => ({ currentSelection: () => ({ provider: 'test', model: 'test' }) }), agentPresets: { mount: async () => {} }, agents: { create: async input => {
       options = input
       const agent = { followup: message => { prompt = message }, whenIdle: async () => { await assert.rejects(registered.execute({ summary: 'premature', proposals: [] }), /Load the main/); await tools.get('skill').execute({ name: skillName('ai-delivery-review') }); await tools.get('skill').execute({ name: skillName('scale') }); assert.equal((await tools.get('tkada_search_knowledge').execute({ query: '补贴' })).items[0].id, 'knowledge-1'); assert.equal((await tools.get('tkada_read_knowledge').execute({ knowledge_id: 'knowledge-1' })).body, 'policy text'); await registered.execute({ summary: 'insufficient evidence', proposals: [] }) } }
-      await input.setup({ skills: { register: s => skills.set(s.name, s), get: async name => skills.get(name) }, tools: { restrict: value => { allowed = value.allow }, guard: value => { guard = value }, register: value => { tools.set(value.name, value); if (value.name === COMPLETE_TOOL) registered = value } } }, agent)
+      await input.setup({ inject: async (names, callback) => { assert.deepEqual(names, ['tools', 'skills']); return callback({ skills: { register: s => skills.set(s.name, s), get: async name => skills.get(name) }, tools: { restrict: value => { allowed = value.allow }, guard: value => { guard = value }, register: value => { tools.set(value.name, value); if (value.name === COMPLETE_TOOL) registered = value } } }) } }, agent)
       return { agent, dispose: async () => { disposed = true } }
     } } }
     const completions = []
@@ -55,5 +55,20 @@ test('native DSH session has only structured result tool and a tenant/task direc
     assert.ok(!JSON.stringify(prompt).includes('必需：完整当地日'))
     assert.equal(skills.size, 6)
     assert.equal(disposed, true)
+  } finally { await rm(directory, { recursive: true, force: true }) }
+})
+
+test('session setup failure reports a terminal failed review instead of waiting for repeated expiry', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'tkada-dsh-failure-'))
+  const results = []
+  try {
+    const claim = { task: { id: 'task', tenant_id: 'tenant', optimizer_id: 'optimizer', fence: 'fence', expires_at: new Date(Date.now() + 60000).toISOString(), evidence: { methods: await loadMethods() } } }
+    const ctx = { agents: { create: async () => { throw new Error('fixture setup failure') } } }
+    await assert.rejects(runClaim(ctx, { stateRoot: directory, modelSelection: { provider: 'fixture', model: 'fixture' } }, claim,
+      { complete: async (_claim, result) => { results.push(result) } }, { SessionId: x => x }), /fixture setup failure/)
+    assert.equal(results.length, 1)
+    assert.equal(results[0].failed, true)
+    assert.deepEqual(results[0].proposals, [])
+    assert.ok(!results[0].summary.includes('fixture setup failure'))
   } finally { await rm(directory, { recursive: true, force: true }) }
 })

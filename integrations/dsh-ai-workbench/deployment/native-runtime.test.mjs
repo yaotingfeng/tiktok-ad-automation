@@ -166,3 +166,70 @@ test('production entrypoint boots real DSH, polls TK-ADA and serves readiness wi
     await rm(root, { recursive: true, force: true })
   }
 })
+
+// 必须经过真实 Agent 工厂与 standard 预设；服务级 scope 替身无法发现会话缺少 inject。
+test('claimed review mounts task skills in a real Agent and completes through model transport', { skip: !packageRoot, timeout: 45000 }, async () => {
+  const root = await mkdtemp(join(tmpdir(), 'tkada-dsh-claimed-'))
+  const { loadMethods } = await import('../methods.mjs')
+  const methods = await loadMethods()
+  let claimed = false, modelCalls = 0, completion, child, output = ''
+  const api = createServer(async (request, response) => {
+    let raw = ''
+    for await (const chunk of request) raw += chunk
+    if (request.url.startsWith('/model/')) {
+      modelCalls++
+      // 只替换模型 HTTP 运输层，真实宿主解析流、执行 Skill 和结果工具。
+      const call = modelCalls === 1
+        ? { name: 'skill', arguments: JSON.stringify({ name: 'ai-delivery-review' }) }
+        : modelCalls === 2 ? { name: 'tkada_complete_review', arguments: JSON.stringify({ summary: 'fixture review complete', proposals: [] }) } : null
+      response.writeHead(200, { 'content-type': 'text/event-stream' })
+      const delta = call ? { role: 'assistant', tool_calls: [{ index: 0, id: `call-${modelCalls}`, type: 'function', function: call }] } : { role: 'assistant', content: 'Complete.' }
+      const chunk = (delta, finish_reason) => ({ id: `fixture-${modelCalls}`, object: 'chat.completion.chunk', created: 1, model: 'deepseek-chat', choices: [{ index: 0, delta, finish_reason }] })
+      response.write(`data: ${JSON.stringify(chunk(delta, null))}\n\n`)
+      response.write(`data: ${JSON.stringify(chunk({}, call ? 'tool_calls' : 'stop'))}\n\n`)
+      response.end('data: [DONE]\n\n')
+      return
+    }
+    response.writeHead(200, { 'content-type': 'application/json' })
+    if (request.url.endsWith('/claim')) {
+      if (claimed) return response.end('{"task":null}')
+      claimed = true
+      return response.end(JSON.stringify({ task_token: 'test-task-token', task: { id: 'task', tenant_id: 'tenant', optimizer_id: 'optimizer', fence: 'fence', expires_at: new Date(Date.now() + 30000).toISOString(), evidence: { methods } } }))
+    }
+    if (request.url.endsWith('/complete')) completion = JSON.parse(raw)
+    response.end('{"status":"COMPLETE"}')
+  })
+  try {
+    api.listen(0, '127.0.0.1')
+    await once(api, 'listening')
+    const health = createServer().listen(0, '127.0.0.1')
+    await once(health, 'listening')
+    const port = health.address().port
+    await new Promise(resolve => health.close(resolve))
+    await cp(dirname(dirname(fileURLToPath(import.meta.url))), join(root, 'plugin'), { recursive: true })
+    await symlink(join(resolve(packageRoot), 'node_modules'), join(root, 'node_modules'), 'dir')
+    await writeFile(join(root, 'token'), 'test-private-service-token-' + 'x'.repeat(40))
+    await writeFile(join(root, 'provider.json'), JSON.stringify({ provider: 'fixture', model: 'fixture', config: { api: 'openai-completions', models: [{ id: 'fixture', reasoningEfforts: false }], apiKeyEnv: 'DSH_CLAIM_TEST_KEY', baseURL: `http://127.0.0.1:${api.address().port}/model` } }))
+    const require = createRequire(join(resolve(packageRoot), 'package.json'))
+    child = spawn(process.execPath, [join(root, 'plugin/deployment/start.mjs')], { cwd: root, detached: true, stdio: ['ignore', 'pipe', 'pipe'], env: {
+      PATH: process.env.PATH, HOME: root, DSH_HOME: join(root, 'home'), DSH_WORKSPACE: join(root, 'workspace'),
+      DSH_PROVIDER_FILE: join(root, 'provider.json'), AI_DSH_TOKEN_FILE: join(root, 'token'), TKADA_API_URL: `http://127.0.0.1:${api.address().port}`, PORT: String(port),
+      DSH_CLI: require.resolve('@deepseek-ai/dsh/lib/bin.js'), DSH_CLAIM_TEST_KEY: 'fixture', DSH_TELEMETRY_DISABLED: '1',
+    } })
+    child.stdout.on('data', chunk => { output += chunk })
+    child.stderr.on('data', chunk => { output += chunk })
+    for (let attempt = 0; attempt < 250 && !completion && child.exitCode === null; attempt++) await delay(100)
+    await delay(100)
+    assert.ok(modelCalls >= 2, `Claimed task did not reach real model/tools (claimed=${claimed}, calls=${modelCalls}, exit=${child.exitCode}): ${output}`)
+    assert.equal(completion?.summary, 'fixture review complete', output)
+    assert.deepEqual(completion.method_usage, ['ai-delivery-review'])
+    assert.notEqual(completion.failed, true)
+  } finally {
+    if (child?.exitCode === null) { try { process.kill(-child.pid, 'SIGTERM') } catch {} }
+    await delay(500)
+    if (child?.exitCode === null) { try { process.kill(-child.pid, 'SIGKILL') } catch {} }
+    api.closeAllConnections()
+    await new Promise(resolve => api.close(resolve))
+    await rm(root, { recursive: true, force: true })
+  }
+})
