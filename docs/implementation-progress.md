@@ -5279,3 +5279,5 @@ c34b生产快速切换约3分28秒完成、锁释放/CI恢复；五分钟仍4.88
 - 2026-11-13 DSH WebUI公网检查发现Linux容器无系统Documents导致默认工作区失败；显式指定workspace-controller.documentsDirectory为持久化工作目录。原生测试实际调用initializeDefault，确认创建落在持久卷目录且无模型调用，5项通过。本修复仅更新独立DSH镜像，不重启已验收的TK-ADA十一角色。
 
 - 2026-11-13 DSH真实重启检查发现Kubernetes fsGroup将既有.credentials.yaml改为0660，官方凭据插件按owner-only拒绝启动；启动前仅将本宿主凭据文件收紧至0600（内容保持），DSH卷改用OnRootMismatch。回归覆盖权限和内容保全，实际默认工作区初始化及WebUI连接。TK-ADA十一角色不受此独立服务问题影响。
+
+- 2026-11-13 AI投手与DSH WebUI已生产发布：应用00f7d1cd/schema0129，DSH3ca20a3f；11角色+DSH Ready/0重启、配置/四开关/池/HTTPS、管理员访问与普通用户拒绝、WebSocket101、持久工作区与模型页实测通过。精确证据见 `docs/validation/2026-11-13-ai-shooter-webui-release.md`；无广告或素材订单写入、无新备份/恢复演练。

@@ -1,3 +1,7 @@
+## 2026-11-13 AI投手与DSH官方WebUI已上线
+
+当前TK-ADA应用 `00f7d1cd0986065cb880d469111f41b454542646` / schema `0129_ai_proposal_operation`，独立DSH镜像 `3ca20a3f6017730fc8a6d04301137abc51ece91e`。十一应用角色与DSH Ready/0重启，实际配置/数据库池/四开关与HTTPS通过；仅平台管理员访问官方WebUI，实际资源、WebSocket、持久默认工作区、模型设置页面通过。默认模型保留com/claude-opus-5-5，凭据0600；无广告或素材业务写入、无新备份或恢复演练。详见[发布与验证](../validation/2026-11-13-ai-shooter-webui-release.md)。后续文档提交不改变运行镜像，以下“当前”均为历史。
+
 ## 2026-11-12 筛查规划阻断修复已上线，及时性继续观察
 
 当前应用 `f10dff9706c1dcf91e9d1cc55c33afb964ac172d` / schema `0118_sync_schedule_service_age`。修复筛查轻量计划缺少报表 `kind` 导致的 `screen_hot` 异常；滞后计划已恢复并完成 hot/material/live 规划。11角色、九Worker、唯一Beat、精确镜像/配置/额度/并发/四开关/数据库池及HTTPS通过，发布锁释放、CI恢复。阶段端点修复与本次兼容修复都不含DDL；旧素材三表/分区/六函数仍已物理删除，旧creative_ids关系仍保留，身份保全未完成。全局历史 stale 计数受切换窗口和身份缺口影响，尚未以此宣称20分钟SLO全部达标。详见[生产证据和剩余问题](../validation/2026-11-11-material-physical-retirement.md)。
