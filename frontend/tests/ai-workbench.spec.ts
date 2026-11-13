@@ -63,7 +63,7 @@ test("AI 二级菜单链接保留租户、投手和返回上下文", () => {
     "schedule",
     "execution",
     "review",
-    "pending",
+    "knowledge",
   ])
   const href = buildAIWorkbenchHref(
     "tenant-a",

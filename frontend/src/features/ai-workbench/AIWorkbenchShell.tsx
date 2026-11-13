@@ -5,7 +5,7 @@ import {
   Cog,
   Eye,
   Play,
-  Settings2,
+  BookOpen,
 } from "lucide-react"
 import { useCallback, useEffect, useMemo, useState } from "react"
 import { Button } from "@/components/ui/button"
@@ -17,12 +17,13 @@ import { AIOptimizerConfig } from "./AIOptimizerConfig"
 import { AIOptimizerEditor } from "./AIOptimizerEditor"
 import { type AIOptimizer, AIOptimizerList } from "./AIOptimizerList"
 import { AIOptimizerOverview } from "./AIOptimizerOverview"
+import { AIKnowledgeLibrary } from "./AIKnowledgeLibrary"
 import { AIOptimizerReviews } from "./AIOptimizerReviews"
 import { AIWorkbenchPage } from "./AIWorkbenchPage"
 import { aiRequest, businessToday, errorMessage } from "./api"
 import { DailyReport } from "./DailyReport"
 
-type View = "overview" | "schedule" | "execution" | "review" | "pending"
+type View = "overview" | "schedule" | "execution" | "review" | "knowledge"
 
 type Props = {
   tenantId: string
@@ -41,8 +42,8 @@ export const aiWorkbenchMenu: Array<{
   { id: "overview", label: "概览", icon: Eye },
   { id: "schedule", label: "剧单排", icon: BarChart3 },
   { id: "execution", label: "执行", icon: Play },
-  { id: "review", label: "复盘", icon: ClipboardCheck },
-  { id: "pending", label: "待确认", icon: Settings2 },
+  { id: "review", label: "复盘与建议", icon: ClipboardCheck },
+  { id: "knowledge", label: "知识库", icon: BookOpen },
 ]
 
 export function buildAIWorkbenchSwitchSearch<T extends object>(
@@ -189,32 +190,34 @@ function TenantWorkbenchShell({
           </nav>
         </aside>
         <main key={`${tenantId}:${optimizerId}`} className="min-w-0 space-y-4">
-          <div
-            className="flex flex-wrap items-center gap-2 rounded-lg border bg-background px-4 py-3 text-sm"
-            data-testid="ai-inherited-context"
-          >
-            <strong className="min-w-0 truncate">
-              {selected?.name ?? "请选择投手"}
-            </strong>
-            {selected && (
-              <>
-                <Badge variant="secondary">
-                  {selected.advertiser_ids.length} 个管理账户
-                </Badge>
-                <Badge variant="secondary">
-                  {selected.rule_ids?.length ?? 0} 条绑定规则
-                </Badge>
-                <Badge variant="outline">
-                  {selected.strategy_version_id ? "已绑定策略" : "未绑定策略"}
-                </Badge>
-                <Badge variant="outline" className="ml-auto">
-                  {selected.optimization_mode === "AUTO"
-                    ? "自动优化"
-                    : "人工确认"}
-                </Badge>
-              </>
-            )}
-          </div>
+          {view !== "knowledge" && (
+            <div
+              className="flex flex-wrap items-center gap-2 rounded-lg border bg-background px-4 py-3 text-sm"
+              data-testid="ai-inherited-context"
+            >
+              <strong className="min-w-0 truncate">
+                {selected?.name ?? "请选择投手"}
+              </strong>
+              {selected && (
+                <>
+                  <Badge variant="secondary">
+                    {selected.advertiser_ids.length} 个管理账户
+                  </Badge>
+                  <Badge variant="secondary">
+                    {selected.rule_ids?.length ?? 0} 条绑定规则
+                  </Badge>
+                  <Badge variant="outline">
+                    {selected.strategy_version_id ? "已绑定策略" : "未绑定策略"}
+                  </Badge>
+                  <Badge variant="outline" className="ml-auto">
+                    {selected.optimization_mode === "AUTO"
+                      ? "自动优化"
+                      : "人工确认"}
+                  </Badge>
+                </>
+              )}
+            </div>
+          )}
           {view === "overview" && (
             <>
               <AIOptimizerOverview optimizer={selected} />
@@ -260,13 +263,7 @@ function TenantWorkbenchShell({
           {view === "review" && (
             <AIOptimizerReviews tenantId={tenantId} optimizerId={optimizerId} />
           )}
-          {view === "pending" && (
-            <AIOptimizerReviews
-              tenantId={tenantId}
-              optimizerId={optimizerId}
-              pendingOnly
-            />
-          )}
+          {view === "knowledge" && <AIKnowledgeLibrary tenantId={tenantId} />}
           {versionId && (
             <p className="text-xs text-muted-foreground">
               策略版本上下文：{versionId}

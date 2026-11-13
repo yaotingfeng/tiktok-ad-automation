@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState } from "react"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { aiRequest, createRequestIdentity, errorMessage } from "./api"
 
 type Proposal = {
@@ -29,7 +30,7 @@ type ReviewTask = {
   error_message?: string
   result?: { summary?: string; [key: string]: unknown }
 }
-type Props = { tenantId: string; optimizerId: string; pendingOnly?: boolean }
+type Props = { tenantId: string; optimizerId: string }
 
 function Evidence({ label, value }: { label: string; value: unknown }) {
   return (
@@ -43,26 +44,13 @@ function Evidence({ label, value }: { label: string; value: unknown }) {
 }
 
 /** 每个视图请求都随投手卸载取消，迟到的复盘/决定不得覆盖新投手状态。 */
-export function AIOptimizerReviews({
-  tenantId,
-  optimizerId,
-  pendingOnly = false,
-}: Props) {
+export function AIOptimizerReviews({ tenantId, optimizerId }: Props) {
   const [items, setItems] = useState<Proposal[]>([])
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState<string | null>(null)
   const [history, setHistory] = useState<ReviewTask[]>([])
   const [runtimeReady, setRuntimeReady] = useState<boolean | undefined>()
-  const [knowledge, setKnowledge] = useState<
-    Array<{
-      id: string
-      title: string
-      scope: string
-      version: number
-      body: string
-      eligibility?: string
-    }>
-  >([])
+  const [filter, setFilter] = useState("all")
   const [task, setTask] = useState<ReviewTask | null>(null)
   const decisionIdentity = useRef(createRequestIdentity())
   const reviewIdentity = useRef(createRequestIdentity())
@@ -71,18 +59,12 @@ export function AIOptimizerReviews({
   const load = useCallback(
     async (signal: AbortSignal) => {
       if (!optimizerId) return
-      const result = await aiRequest<Proposal[]>(
-        `${base}/proposals${pendingOnly ? "?status=PENDING" : ""}`,
-        { signal },
-      )
-      if (!signal.aborted)
-        setItems(
-          pendingOnly
-            ? result.filter((item) => item.status === "PENDING")
-            : result,
-        )
+      const result = await aiRequest<Proposal[]>(`${base}/proposals`, {
+        signal,
+      })
+      if (!signal.aborted) setItems(result)
     },
-    [base, pendingOnly, optimizerId],
+    [base, optimizerId],
   )
   useEffect(() => {
     const controller = new AbortController()
@@ -92,26 +74,11 @@ export function AIOptimizerReviews({
     setTask(null)
     setHistory([])
     setRuntimeReady(undefined)
-    setKnowledge([])
     setBusy(null)
     void load(controller.signal).catch((reason) => {
       if (!controller.signal.aborted) setError(errorMessage(reason))
     })
-    if (!pendingOnly && optimizerId) {
-      void aiRequest<
-        Array<{
-          id: string
-          title: string
-          scope: string
-          version: number
-          body: string
-          eligibility?: string
-        }>
-      >(`/api/tenants/${tenantId}/ai-knowledge`, { signal: controller.signal })
-        .then((result) => {
-          if (!controller.signal.aborted) setKnowledge(result)
-        })
-        .catch(() => {})
+    if (optimizerId) {
       void aiRequest<{ runtime_ready?: boolean; items: ReviewTask[] }>(
         `${base}/reviews`,
         { signal: controller.signal },
@@ -130,7 +97,7 @@ export function AIOptimizerReviews({
         })
     }
     return () => controller.abort()
-  }, [load, pendingOnly, optimizerId, base, tenantId])
+  }, [load, optimizerId, base])
 
   useEffect(() => {
     if (
@@ -186,9 +153,7 @@ export function AIOptimizerReviews({
       )
       if (signal.aborted) return
       setItems((previous) =>
-        pendingOnly
-          ? previous.filter((entry) => entry.id !== item.id)
-          : previous.map((entry) => (entry.id === item.id ? updated : entry)),
+        previous.map((entry) => (entry.id === item.id ? updated : entry)),
       )
     } catch (reason) {
       if (!signal.aborted) setError(errorMessage(reason))
@@ -256,26 +221,30 @@ export function AIOptimizerReviews({
       if (!signal.aborted) setBusy(null)
     }
   }
+  const pendingCount = items.filter((item) => item.status === "PENDING").length
+  const visibleItems = items.filter((item) =>
+    filter === "pending"
+      ? item.status === "PENDING"
+      : filter === "history"
+        ? item.status !== "PENDING"
+        : true,
+  )
   return (
-    <Card data-testid={pendingOnly ? "ai-pending-view" : "ai-review-view"}>
+    <Card data-testid="ai-review-view">
       <CardHeader className="flex flex-wrap items-start justify-between gap-3">
-        <CardTitle>{pendingOnly ? "待确认" : "复盘与建议"}</CardTitle>
-        {!pendingOnly && (
-          <Button
-            disabled={
-              !optimizerId ||
-              runtimeReady === false ||
-              !!busy ||
-              (!!task &&
-                ["PENDING", "QUEUED", "RUNNING", "CREATED"].includes(
-                  task.status,
-                ))
-            }
-            onClick={() => void review()}
-          >
-            发起复盘
-          </Button>
-        )}
+        <CardTitle>复盘与建议</CardTitle>
+        <Button
+          disabled={
+            !optimizerId ||
+            runtimeReady === false ||
+            !!busy ||
+            (!!task &&
+              ["PENDING", "QUEUED", "RUNNING", "CREATED"].includes(task.status))
+          }
+          onClick={() => void review()}
+        >
+          发起复盘
+        </Button>
       </CardHeader>
       <CardContent className="flex flex-col gap-4">
         {runtimeReady === false && (
@@ -340,91 +309,80 @@ export function AIOptimizerReviews({
             {error}
           </p>
         )}
-        {!items.length && !error && (
-          <p className="text-sm text-muted-foreground">
-            暂无{pendingOnly ? "待确认建议" : "复盘建议"}。
-          </p>
-        )}
-        {!pendingOnly && knowledge.length > 0 && (
-          <div className="rounded-md border p-4">
-            <h3 className="text-sm font-medium">
-              知识库（本轮使用内容以任务冻结记录为准）
-            </h3>
-            <div className="mt-3 grid gap-3 md:grid-cols-2">
-              {knowledge.map((item) => (
-                <div key={item.id} className="rounded bg-muted p-3 text-xs">
-                  <div className="flex justify-between gap-2 font-medium">
-                    <span>{item.title}</span>
-                    <span>
-                      {item.scope} · v{item.version}
-                    </span>
-                  </div>
-                  <p className="mt-2 whitespace-pre-wrap text-muted-foreground">
-                    {item.body}
-                  </p>
-                  {item.eligibility && (
-                    <p className="mt-2 text-muted-foreground">
-                      状态：{item.eligibility}
-                    </p>
-                  )}
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
-        {items.map((item) => (
-          <Card key={item.id}>
-            <CardHeader>
-              <CardTitle className="flex flex-wrap justify-between gap-2">
-                {item.title ??
-                  (item.kind === "rule"
-                    ? "自动规则调整"
-                    : item.kind === "strategy"
-                      ? "投放策略调整"
-                      : item.id)}
-                <Badge variant="outline">{item.status}</Badge>
-              </CardTitle>
+        <Tabs value={filter} onValueChange={setFilter} aria-label="建议筛选">
+          <TabsList>
+            <TabsTrigger value="all">全部建议</TabsTrigger>
+            <TabsTrigger value="pending">待确认（{pendingCount}）</TabsTrigger>
+            <TabsTrigger value="history">已处理</TabsTrigger>
+          </TabsList>
+          <TabsContent value={filter} className="flex flex-col gap-4">
+            {!visibleItems.length && !error && (
               <p className="text-sm text-muted-foreground">
-                {item.summary ?? item.decision_reason ?? ""}
+                {filter === "pending"
+                  ? "暂无待确认建议。"
+                  : filter === "history"
+                    ? "暂无已处理建议。"
+                    : "暂无复盘建议。"}
               </p>
-            </CardHeader>
-            <CardContent className="flex flex-col gap-4">
-              <p className="break-all text-xs text-muted-foreground">
-                投手基准 v{item.base_optimizer_version ?? "—"} · 目标{" "}
-                {item.target_id ?? "—"} · 策略版本{" "}
-                {item.base_strategy_version_id ?? "—"} · 规则版本{" "}
-                {item.base_rule_version ?? "—"}
-              </p>
-              <div className="grid min-w-0 gap-4 lg:grid-cols-2">
-                <Evidence label="调整前" value={item.before} />
-                <Evidence label="调整后" value={item.after} />
-                <Evidence label="决策证据" value={item.evidence} />
-                <Evidence label="授权与影响范围" value={item.authorization} />
-              </div>
-              {item.status === "PENDING" && (
-                <div className="flex gap-2">
-                  <Button
-                    size="sm"
-                    disabled={!!busy}
-                    onClick={() => void decide(item, "accept")}
-                  >
-                    <Check />
-                    接受
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    disabled={!!busy}
-                    onClick={() => void decide(item, "reject")}
-                  >
-                    <X />
-                    拒绝
-                  </Button>
-                </div>
-              )}
-            </CardContent>
-          </Card>
-        ))}
+            )}
+            {visibleItems.map((item) => (
+              <Card key={item.id}>
+                <CardHeader>
+                  <CardTitle className="flex flex-wrap justify-between gap-2">
+                    {item.title ??
+                      (item.kind === "rule"
+                        ? "自动规则调整"
+                        : item.kind === "strategy"
+                          ? "投放策略调整"
+                          : item.id)}
+                    <Badge variant="outline">{item.status}</Badge>
+                  </CardTitle>
+                  <p className="text-sm text-muted-foreground">
+                    {item.summary ?? item.decision_reason ?? ""}
+                  </p>
+                </CardHeader>
+                <CardContent className="flex flex-col gap-4">
+                  <p className="break-all text-xs text-muted-foreground">
+                    投手基准 v{item.base_optimizer_version ?? "—"} · 目标{" "}
+                    {item.target_id ?? "—"} · 策略版本{" "}
+                    {item.base_strategy_version_id ?? "—"} · 规则版本{" "}
+                    {item.base_rule_version ?? "—"}
+                  </p>
+                  <div className="grid min-w-0 gap-4 lg:grid-cols-2">
+                    <Evidence label="调整前" value={item.before} />
+                    <Evidence label="调整后" value={item.after} />
+                    <Evidence label="决策证据" value={item.evidence} />
+                    <Evidence
+                      label="授权与影响范围"
+                      value={item.authorization}
+                    />
+                  </div>
+                  {item.status === "PENDING" && (
+                    <div className="flex gap-2">
+                      <Button
+                        size="sm"
+                        disabled={!!busy}
+                        onClick={() => void decide(item, "accept")}
+                      >
+                        <Check />
+                        接受
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        disabled={!!busy}
+                        onClick={() => void decide(item, "reject")}
+                      >
+                        <X />
+                        拒绝
+                      </Button>
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+            ))}
+          </TabsContent>
+        </Tabs>
       </CardContent>
     </Card>
   )

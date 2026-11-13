@@ -327,9 +327,9 @@ test("双租户双投手切换保留 AUTO/MANUAL、下单路径和回读边界",
   await expect(page.getByTestId("ai-daily-report")).toContainText("人工确认")
   await expect(page.getByTestId("ai-daily-report")).toContainText("部分完成")
   await page.goto(
-    `/tenants/${tenantA}/ai-workbench?optimizer_id=${optimizerAManual}&view=pending`,
+    `/tenants/${tenantA}/ai-workbench?optimizer_id=${optimizerAManual}&view=review`,
   )
-  await expect(page.getByTestId("ai-pending-view")).toContainText("复盘建议")
+  await expect(page.getByTestId("ai-review-view")).toContainText("复盘建议")
   await page.getByRole("button", { name: "接受" }).click()
   await expect.poll(() => proposalRequests.length).toBe(1)
   expect(proposalRequests[0]).toContain(
@@ -1124,4 +1124,48 @@ test("工作台业务用语和数值易读，搭建与规则证据范围明确",
   await expect(
     page.getByText("当日暂无归属于当前投手的规则运行证据。"),
   ).toHaveCount(0)
+})
+
+test("知识库独立导航、搜索与详情，待确认合并到复盘并更新数量", async ({ page }) => {
+  await page.route(`**/api/tenants/${tenant}/ai-optimizers`, (route) => route.fulfill({ json: [] }))
+  const body = "这是政策正文，仅详情展示。"
+  await page.route(`**/api/tenants/${tenant}/ai-knowledge`, (route) => route.fulfill({ json: [
+    { id: "knowledge-1", title: "新剧补贴", body, scope: "PUBLIC", version: 1, status: "CONFIRMED", source: "政策原文", source_verified: false },
+    { id: "knowledge-2", title: "短剧变现", body: "变现链路正文", scope: "PUBLIC", version: 2, status: "CONFIRMED" },
+  ] }))
+  // 知识库无需先创建或选择投手。
+  await page.goto(`/tenants/${tenant}/ai-workbench?view=knowledge`)
+  const library = page.getByTestId("ai-knowledge-view")
+  await expect(library).toContainText("新剧补贴")
+  await expect(library).not.toContainText(body)
+  await expect(page.getByTestId("ai-nav-pending")).toHaveCount(0)
+  await expect(page.getByTestId("ai-inherited-context")).toHaveCount(0)
+  await page.getByLabel("搜索知识").fill("新剧")
+  await expect(library).not.toContainText("短剧变现")
+  await page.getByRole("button", { name: "查看详情：新剧补贴" }).click()
+  await expect(page.getByRole("dialog")).toContainText(body)
+  await expect(page.getByRole("dialog")).toContainText("政策原文")
+  await expect(page.getByRole("dialog")).toContainText("来源待核实")
+  await page.keyboard.press("Escape")
+  await page.getByLabel("搜索知识").fill("不存在")
+  await expect(library).toContainText("没有匹配的知识")
+
+  await page.route(`**/api/tenants/${tenant}/ai-optimizers/${optimizer}/reviews`, (route) => route.fulfill({ json: { runtime_ready: false, items: [] } }))
+  await page.route(`**/api/tenants/${tenant}/ai-optimizers/${optimizer}/proposals`, (route) => route.fulfill({ json: [
+    { id: "proposal-1", title: "待确认调整", status: "PENDING" },
+    { id: "proposal-2", title: "已处理调整", status: "ACCEPTED" },
+  ] }))
+  await page.route(`**/api/tenants/${tenant}/ai-optimizers/${optimizer}/proposals/proposal-1/accept`, (route) => route.fulfill({ json: { id: "proposal-1", title: "待确认调整", status: "ACCEPTED" } }))
+  await page.goto(`/tenants/${tenant}/ai-workbench?optimizer_id=${optimizer}&view=review`)
+  const reviews = page.getByTestId("ai-review-view")
+  await expect(reviews).not.toContainText("新剧补贴")
+  await page.getByRole("tab", { name: "待确认（1）" }).click()
+  await expect(reviews).toContainText("待确认调整")
+  await expect(reviews).not.toContainText("已处理调整")
+  await page.getByRole("button", { name: "接受", exact: true }).click()
+  await expect(page.getByRole("tab", { name: "待确认（0）" })).toBeVisible()
+  await expect(reviews).toContainText("暂无待确认建议")
+  await page.getByRole("tab", { name: "已处理", exact: true }).click()
+  await expect(reviews).toContainText("已处理调整")
+  await expect(reviews).toContainText("待确认调整")
 })
