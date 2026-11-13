@@ -1,4 +1,4 @@
-import { FlaskConical, LayoutGrid } from "lucide-react"
+import { BrainCircuit, FlaskConical, LayoutGrid } from "lucide-react"
 import type { UserPublic } from "@/client"
 import { WorkspaceBrand } from "@/components/Common/WorkspaceBrand"
 import { Separator } from "@/components/ui/separator"
@@ -45,7 +45,11 @@ export function AppSidebar({
           <SidebarGroupContent>
             <SidebarMenu>
               <SidebarMenuItem>
-                <SidebarMenuButton tooltip="打开体验版" data-testid="experience-entry" asChild>
+                <SidebarMenuButton
+                  tooltip="打开体验版"
+                  data-testid="experience-entry"
+                  asChild
+                >
                   <a href="/demo/" target="_blank" rel="noopener noreferrer">
                     <FlaskConical />
                     <span>打开体验版</span>
@@ -56,15 +60,32 @@ export function AppSidebar({
           </SidebarGroupContent>
         </SidebarGroup>
         {user?.is_superuser && (
-          <Main
-            items={[
-              {
-                icon: LayoutGrid,
-                title: "平台管理",
-                path: "/platform/tenants",
-              },
-            ]}
-          />
+          <>
+            <Main
+              items={[
+                {
+                  icon: LayoutGrid,
+                  title: "平台管理",
+                  path: "/platform/tenants",
+                },
+              ]}
+            />
+            {/* DSH 是独立运行面；入口只对平台管理员展示，避免普通用户看到管理台。 */}
+            <SidebarGroup data-testid="dsh-admin-entry-group">
+              <SidebarGroupContent>
+                <SidebarMenu>
+                  <SidebarMenuItem>
+                    <SidebarMenuButton tooltip="DSH 管理台" asChild>
+                      <a href="/api/admin/dsh/entry">
+                        <BrainCircuit />
+                        <span>DSH 管理台</span>
+                      </a>
+                    </SidebarMenuButton>
+                  </SidebarMenuItem>
+                </SidebarMenu>
+              </SidebarGroupContent>
+            </SidebarGroup>
+          </>
         )}
         <Separator />
         <User user={user} />
