@@ -584,9 +584,7 @@ test("提案展示前后值与授权证据，决定错误可见，复盘可触�
   expect(reviews).toBe(1)
 })
 
-test("切换投手丢弃旧提案和编辑草稿，已暂停投手仍可管理", async ({
-  page,
-}) => {
+test("切换投手丢弃旧提案和编辑草稿，已暂停投手仍可管理", async ({ page }) => {
   const second = "33333333-3333-4333-8333-333333333333"
   let releaseOld: (() => void) | undefined
   await page.route(`**/api/tenants/${tenant}/ai-optimizers?**`, (route) =>
@@ -798,13 +796,95 @@ test("复盘历史支持失败重试、取消排队任务和服务未配置提�
   ).toBeDisabled()
 })
 
-
-test("租户管理员看不到 AI 入口且直接地址不能加载工作台数据", async ({ page }) => {
+test("租户管理员看不到 AI 入口且直接地址不能加载工作台数据", async ({
+  page,
+}) => {
   let aiRequests = 0
-  await page.route("**/api/users/me", route => route.fulfill({ json: { id: "44444444-4444-4444-8444-444444444444", username: "tenant-admin", is_active: true, is_superuser: false } }))
-  await page.route("**/api/tenants/*/ai-optimizers**", route => { aiRequests++; return route.fulfill({ json: { items: [] } }) })
+  await page.route("**/api/users/me", (route) =>
+    route.fulfill({
+      json: {
+        id: "44444444-4444-4444-8444-444444444444",
+        username: "tenant-admin",
+        is_active: true,
+        is_superuser: false,
+      },
+    }),
+  )
+  await page.route("**/api/tenants/*/ai-optimizers**", (route) => {
+    aiRequests++
+    return route.fulfill({ json: { items: [] } })
+  })
   await page.goto(`/tenants/${tenant}/ai-workbench`)
-  await expect(page.getByText("AI 投放工作台目前仅对平台管理员开放。")).toBeVisible()
-  await expect(page.locator(`a[href="/tenants/${tenant}/ai-workbench"]`)).toHaveCount(0)
+  await expect(
+    page.getByText("AI 投放工作台目前仅对平台管理员开放。"),
+  ).toBeVisible()
+  await expect(
+    page.locator(`a[href="/tenants/${tenant}/ai-workbench"]`),
+  ).toHaveCount(0)
   expect(aiRequests).toBe(0)
+})
+
+test("绑定策略入口读取实际绑定版本，不加载租户策略列表", async ({ page }) => {
+  const listRequests: string[] = []
+  await page.route(`**/api/tenants/${tenant}/**`, async (route) => {
+    const path = new URL(route.request().url()).pathname
+    if (path.endsWith(`/ai-optimizers/${optimizer}`))
+      return route.fulfill({
+        json: { strategy_version_id: "bound-v2", rule_ids: [] },
+      })
+    if (path.endsWith("/strategy-versions/bound-v2"))
+      return route.fulfill({
+        json: { id: "bound-v2", strategy_id: "bound-strategy", number: 2 },
+      })
+    if (path.endsWith("/strategies/bound-strategy"))
+      return route.fulfill({
+        json: { id: "bound-strategy", name: "实际绑定策略", latest_version: 5 },
+      })
+    if (path.endsWith("/strategies")) listRequests.push(path)
+    return route.fulfill({
+      json: { items: [{ id: "unbound", name: "其他策略" }], total: 1 },
+    })
+  })
+  await page.goto(
+    `/tenants/${tenant}/strategies?ai_optimizer_id=${optimizer}&scope=bound&version_id=stale-version`,
+  )
+  await expect(
+    page.getByRole("heading", { name: "实际绑定策略" }),
+  ).toBeVisible()
+  await expect(page.getByTestId("strategy-bound-context")).toContainText("v2")
+  await expect(page.getByText("其他策略", { exact: true })).toHaveCount(0)
+  await expect(
+    page.getByRole("link", { name: "查看绑定版本" }),
+  ).toHaveAttribute("href", /version_id=bound-v2/)
+  expect(listRequests).toEqual([])
+})
+
+test("绑定规则入口使用实际绑定，隐藏租户统计和其他规则", async ({ page }) => {
+  const { automationBoundary } = await import("./utils/automationBoundary")
+  await automationBoundary(page)
+  await page.route(
+    `**/api/tenants/${tenant}/ai-optimizers/${optimizer}`,
+    (route) => route.fulfill({ json: { rule_ids: ["rule-1"] } }),
+  )
+  await page.goto(
+    `/tenants/${tenant}/automation-rules?ai_optimizer_id=${optimizer}&scope=bound&rule_ids=rule-2&tab=runs`,
+  )
+  await expect(page.getByRole("row", { name: /剧级止损/ })).toBeVisible()
+  await expect(page.getByRole("row", { name: /跑量加预算/ })).toHaveCount(0)
+  await expect(page.getByRole("region", { name: "近 7 天概览" })).toHaveCount(0)
+  await expect(page.getByRole("tab", { name: "执行记录" })).toHaveCount(0)
+})
+
+test("无绑定规则时不回退到租户规则", async ({ page }) => {
+  const { automationBoundary } = await import("./utils/automationBoundary")
+  await automationBoundary(page)
+  await page.route(
+    `**/api/tenants/${tenant}/ai-optimizers/${optimizer}`,
+    (route) => route.fulfill({ json: { rule_ids: [] } }),
+  )
+  await page.goto(
+    `/tenants/${tenant}/automation-rules?ai_optimizer_id=${optimizer}&scope=bound&rule_ids=rule-1`,
+  )
+  await expect(page.getByRole("textbox", { name: "规则名称" })).toBeVisible()
+  await expect(page.getByRole("row", { name: /剧级止损/ })).toHaveCount(0)
 })

@@ -5259,3 +5259,9 @@ c34b生产快速切换约3分28秒完成、锁释放/CI恢复；五分钟仍4.88
 - DSH profile 改用官方 WebUI 和 Models 设置面；启动脚本保留管理员写入的 provider/model 配置，避免重启覆盖 `cordis.patch.yml`。Ingress 补丁脚本默认只读输出并做 resourceVersion test，未执行 apply。
 - 验证：DSH 原生部署测试 **4 passed**（含真实 `0.2.2-rc.1` 启动/领取、官方包名和 9082→9081 端口边界）；Python AST/Node syntax/`git diff --check` 通过；只读 Ingress 生成成功，资源版本 `109629158`。管理员 API 测试因隔离 PostgreSQL 容器持续 `the database system is in recovery mode` 未能执行，不将权限回归宣称通过。
 - 阻塞：尚未构建 AMD64 镜像、应用 Service/Ingress 或线上验证；必须在目标环境重新构建并确认 DSH WebUI 静态包、模型 Secret、`/dsh/` 管理员200/普通用户403、WebSocket和模型设置持久化后，才能交付为可部署。
+
+### 2026-11-13 修正 AI 投手绑定配置入口
+
+- 确认原策略入口只是只读上下文，仍查询租户全部策略；改为读取当前投手实际绑定版本，再获取该版本对应策略，只展示这一项及精确版本查看入口。跳转不再沿用可能过期的 `version_id`。
+- 规则入口以投手接口返回的当前绑定为准，忽略 URL 的 `rule_ids`；读取失败和空绑定均不回退到全量规则。隐藏绑定入口下租户全量统计、待确认/执行记录标签，避免混淆绑定与租户范围。
+- 验证：新增三个 Playwright 浏览器回归通过（实际绑定策略、实际绑定规则、空绑定），TypeScript/Vite production build 通过。仅本地完成，未发布生产。

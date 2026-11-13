@@ -29,7 +29,6 @@ export function AIOptimizerConfig({
   tenantId,
   optimizer,
   recordId,
-  versionId,
   returnContext,
   onEdit,
   onSaved,
@@ -67,7 +66,7 @@ export function AIOptimizerConfig({
         </CardContent>
       </Card>
     )
-  const scopeParams = `ai_optimizer_id=${encodeURIComponent(optimizer.id)}&record_id=${encodeURIComponent(recordId ?? "")}&version_id=${encodeURIComponent(versionId ?? optimizer.strategy_version_id)}&return_to=${encodeURIComponent(returnContext)}`
+  const scopeParams = `ai_optimizer_id=${encodeURIComponent(optimizer.id)}&record_id=${encodeURIComponent(recordId ?? "")}&version_id=${encodeURIComponent(optimizer.strategy_version_id)}&return_to=${encodeURIComponent(returnContext)}`
   const strategyHref = `/tenants/${tenantId}/strategies?${scopeParams}&scope=bound&readonly=true`
   const ruleIds = optimizer.rule_ids ?? []
   const rulesHref = `/tenants/${tenantId}/automation-rules?${scopeParams}&scope=bound&rule_ids=${encodeURIComponent(ruleIds.join(","))}`
@@ -93,11 +92,7 @@ export function AIOptimizerConfig({
               disabled={busy}
               onClick={() => void toggleActive()}
             >
-              {busy
-                ? "处理中…"
-                : optimizer.active
-                  ? "暂停投手"
-                  : "恢复投手"}
+              {busy ? "处理中…" : optimizer.active ? "暂停投手" : "恢复投手"}
             </Button>
           </div>
           {error && (
@@ -204,7 +199,8 @@ export function AIOptimizerConfig({
             </a>
           </Button>
           <p className="basis-full text-xs text-muted-foreground">
-            策略：{optimizer.strategy_version_id}。规则：{ruleIds.length} 条已绑定规则。这里不会跳到租户其他未绑定配置。
+            策略：{optimizer.strategy_version_id}。规则：{ruleIds.length}{" "}
+            条已绑定规则。这里不会跳到租户其他未绑定配置。
           </p>
         </CardContent>
       </Card>
