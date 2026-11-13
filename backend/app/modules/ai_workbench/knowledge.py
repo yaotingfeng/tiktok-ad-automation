@@ -83,9 +83,11 @@ class KnowledgeInput(BaseModel):
     source: str = PydanticField(min_length=1, max_length=500)
     source_verified: bool = False
     applicability: str = PydanticField(default="", max_length=2000)
-    tags: list[Literal["builds", "rules", "materials", "business", "scale"]] = (
-        PydanticField(default_factory=list, max_length=5)
-    )
+    tags: list[
+        Literal[
+            "builds", "rules", "materials", "business", "scale", "policy", "experience"
+        ]
+    ] = PydanticField(default_factory=list, max_length=7)
     evidence_ids: list[UUID] = PydanticField(default_factory=list, max_length=30)
     conflict_key: str | None = PydanticField(default=None, max_length=100)
     status: Literal["CONFIRMED", "CANDIDATE", "RETIRED"] = "CONFIRMED"

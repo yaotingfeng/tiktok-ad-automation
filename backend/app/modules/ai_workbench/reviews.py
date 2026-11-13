@@ -476,17 +476,24 @@ def frozen_evidence(
     )
     from app.modules.ai_workbench.knowledge import select_knowledge
 
-    frozen["knowledge"] = select_knowledge(
-        session,
-        context=context,
-        bc_id=version.bc_id,
-        tags={"builds", "rules", "materials", "business", "scale"},
-    )
+    # 初始只预载目录，不将整批知识正文挤入上下文；Agent 通过任务工具按需查阅。
+    frozen["knowledge_catalog"] = [
+        {
+            key: value
+            for key, value in row.items()
+            if key not in {"body", "evidence_ids"}
+        }
+        for row in select_knowledge(
+            session, context=context, bc_id=version.bc_id, tags=set()
+        )
+    ]
+    frozen["knowledge"] = []
     frozen["knowledge_selection"] = {
+        "mode": "TASK_SCOPED_SEARCH_AND_READ",
         "max_entries": 20,
         "max_body_chars": 32000,
-        "policy": "latest confirmed scoped versions; expired/unverified are context only",
-        "exhaustive": False,
+        "catalog_exhaustive": False,
+        "policy": "search latest confirmed versions at captured_at; expired/unverified are context only",
     }
     from app.modules.ai_workbench.capabilities import catalog
     from app.modules.ai_workbench.learning import freeze_history
@@ -511,7 +518,9 @@ def frozen_evidence(
     from app.modules.ai_workbench.methods import METHOD_ARCHIVE_BYTES
 
     # 先为插件方法归档预留容量，领取时不能再次截断已经冻结的业务证据。
-    return enforce_input_budget(frozen, limit=MAX_INPUT_BYTES - METHOD_ARCHIVE_BYTES)
+    return enforce_input_budget(
+        frozen, limit=MAX_INPUT_BYTES - METHOD_ARCHIVE_BYTES - 200000
+    )
 
 
 def create_review_task(

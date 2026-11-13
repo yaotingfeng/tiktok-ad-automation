@@ -361,3 +361,65 @@ def heartbeat(
     if task.id != task_id or task.status != "RUNNING":
         raise DomainError("ai_task_fence_conflict", "复盘任务已停止")
     return {"active": True, "expires_at": task.authorization_expires_at}
+
+
+class KnowledgeSearch(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    query: str = Field(min_length=1, max_length=200)
+    offset: int = Field(default=0, ge=0, le=10000)
+
+
+class KnowledgeRead(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    knowledge_id: UUID
+
+
+def _knowledge_task(task, session):
+    if task.status != "RUNNING":
+        raise DomainError("ai_task_fence_conflict", "只有运行中的任务可检索知识")
+    # 继续工作时重验账户范围；不能用旧任务读取被撤销范围的私有知识。
+    from app.modules.reporting.filters import authorized_grants
+
+    _, current = reviews.load_optimizer(session, _context(task), task.optimizer_id)
+    if current.number != task.optimizer_version:
+        raise DomainError("ai_proposal_stale", "优化师范围或配置已改变，请重新发起复盘")
+    ids = task.evidence["optimizer"]["advertiser_ids"]
+    grants = authorized_grants(
+        session, context=_context(task), bc_id=current.bc_id, advertiser_ids=tuple(ids)
+    )
+    if {g.advertiser_id for g in grants} != set(ids):
+        raise DomainError("ai_knowledge_scope_revoked", "账户授权已变更")
+
+
+@router.post("/{task_id}/knowledge/search")
+def search_knowledge(
+    task_id: UUID,
+    body: KnowledgeSearch,
+    session: SessionDep,
+    task: reviews.DSHReviewTask = Depends(task_identity),
+) -> dict:
+    from app.modules.ai_workbench.knowledge_search import search_for_task
+
+    if task.id != task_id:
+        raise HTTPException(403, "Task scope mismatch")
+    _knowledge_task(task, session)
+    result = search_for_task(session, task=task, query=body.query, offset=body.offset)
+    session.commit()
+    return result
+
+
+@router.post("/{task_id}/knowledge/read")
+def read_knowledge(
+    task_id: UUID,
+    body: KnowledgeRead,
+    session: SessionDep,
+    task: reviews.DSHReviewTask = Depends(task_identity),
+) -> dict:
+    from app.modules.ai_workbench.knowledge_search import read_for_task
+
+    if task.id != task_id:
+        raise HTTPException(403, "Task scope mismatch")
+    _knowledge_task(task, session)
+    result = read_for_task(session, task=task, knowledge_id=body.knowledge_id)
+    session.commit()
+    return result
