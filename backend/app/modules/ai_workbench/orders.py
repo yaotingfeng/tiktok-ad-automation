@@ -106,9 +106,13 @@ def validate_config(config: dict) -> None:
 def resolve_builtin_config(remote: ProductionClient) -> dict:
     """按语义名称从当前租户目录解析内置方案，避免跨租户复制 UUID。"""
     catalogue = remote.request("GET", "/api/strategy-catalog").get("strategies", [])
-    names = {str(item.get("name", "")).strip(): item.get("id") for item in catalogue if isinstance(item, dict) and item.get("enabled") is True}
+    names = {
+        str(item.get("name", "")).strip(): item.get("id")
+        for item in catalogue
+        if isinstance(item, dict) and item.get("enabled") is True
+    }
     selected = [names[name] for name in BUILTIN_STRATEGIES if names.get(name)]
-    if not selected:
+    if len(selected) != len(BUILTIN_STRATEGIES):
         raise DomainError("ai_material_order_failed", "当前租户未启用内置素材方案")
     return {"strategy_ids": selected}
 
@@ -136,7 +140,7 @@ def create_order(
     ).first()
     if prior:
         return prior
-        validate_config(config)
+    validate_config(config)
     # 提交时间及请求体只生成一次；超时重试绝不重算 startTime。
     now = datetime.now(UTC)
     order = MaterialOrder(
@@ -195,9 +199,18 @@ def process_order(
     try:
         remote = remote or company_client(session, context=context)
         if not order.job_id:
-            catalog = remote.request("GET", "/api/strategy-catalog").get("strategies", [])
+            catalog = remote.request("GET", "/api/strategy-catalog").get(
+                "strategies", []
+            )
             if not order.request_body["payload"]["selectedStrategyIds"]:
-                order.request_body["payload"].update(resolve_builtin_config(remote))
+                resolved = resolve_builtin_config(remote)
+                order.request_body = {
+                    **order.request_body,
+                    "payload": {
+                        **order.request_body["payload"],
+                        "selectedStrategyIds": resolved["strategy_ids"],
+                    },
+                }
             enabled = {
                 item["id"]
                 for item in catalog

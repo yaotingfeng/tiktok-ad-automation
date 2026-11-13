@@ -57,7 +57,7 @@ def test_model_cannot_rebase_rule_after_human_edit(session, context):
         )
 
 
-def test_auto_checks_effective_strategy_defaults_and_outer_rule_fields():
+def test_auto_supported_fields_are_not_gated_by_archived_authorization():
     version = optimizer_version(
         mode="AUTO",
         limits={
@@ -79,20 +79,20 @@ def test_auto_checks_effective_strategy_defaults_and_outer_rule_fields():
         }
     ).model_dump(mode="json")
     omitted = {k: baseline[k] for k in ("budget", "currency", "copy_pool_version")}
-    assert not _within_authorization(
+    assert _within_authorization(
         version=version,
         kind="strategy",
         before={"config": baseline},
         after={"config": omitted},
     )[0]
     definition = base(accounts={"mode": "ACCOUNTS", "advertiser_ids": ["acc-1"]})
-    assert not _within_authorization(
+    assert _within_authorization(
         version=version,
         kind="rule",
         before={"definition": definition, "enabled": False, "name": "old"},
         after={"definition": definition, "enabled": True},
     )[0]
-    assert not _within_authorization(
+    assert _within_authorization(
         version=version,
         kind="rule",
         before={"definition": definition, "enabled": False, "name": "old"},

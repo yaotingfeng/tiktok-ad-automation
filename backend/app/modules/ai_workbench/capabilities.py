@@ -17,19 +17,26 @@ def catalog(version) -> dict:
 
     return sanitize_public(
         {
-            "version": "1.0.0",
+            "version": "1.1.0",
             "strategy": {
+                "operations": ["create", "update"],
+                "creation": {"name": "required", "config": "complete StrategyConfig"},
                 "schema": StrategyConfig.model_json_schema(),
                 "effect": "FUTURE_UNFROZEN_BUILDS",
             },
             "rule": {
+                "operations": ["create", "update"],
+                "creation": {
+                    "name": "required",
+                    "definition": "complete RuleDefinition; accounts.mode=ACCOUNTS within managed accounts",
+                },
                 "schema": RuleDefinition.model_json_schema(),
                 "metrics": {k: asdict(v) for k, v in RULE_METRICS.items()},
                 "effect": "EXISTING_RULE_EXECUTOR",
             },
             "scope": {"bc_id": version.bc_id, "advertiser_ids": version.advertiser_ids},
             "mode": version.optimization_mode,
-            "authorization_limits": version.authorization_limits,
+            "publication": "MANUAL requires explicit human acceptance; AUTO publishes supported domain changes within managed scope.",
             "unsupported": [
                 "scale_copy",
                 "automatic_drama_selection",

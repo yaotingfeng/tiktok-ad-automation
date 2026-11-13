@@ -148,3 +148,49 @@ def test_paused_order_is_excluded_before_bounded_scan(client, session, context):
         == 0
     )
     assert order.dispatch_generation == 0
+
+
+def test_builtin_plan_is_resolved_and_frozen_before_retry(client, session, context):
+    optimizer, plan, _ = setup_plan(client, session, context)
+    order = orders.create_order(
+        session, context=context, row_id=plan.rows[0].id, config={}
+    )
+    sent = []
+
+    def transport(request):
+        if request.url.path == "/api/strategy-catalog":
+            return httpx.Response(
+                200,
+                json={
+                    "strategies": [
+                        {"id": f"builtin-{i}", "name": name, "enabled": True}
+                        for i, name in enumerate(orders.BUILTIN_STRATEGIES)
+                    ]
+                },
+            )
+        if request.url.path.endswith("/capabilities"):
+            return httpx.Response(200, json={"executionMode": "full_series_v2"})
+        import json
+
+        body = json.loads(request.content)
+        assert body["payload"]["selectedStrategyIds"] == [
+            "builtin-0",
+            "builtin-1",
+            "builtin-2",
+        ]
+        assert "titleFeishuToken" not in body["payload"]
+        sent.append(request.content)
+        raise httpx.ReadTimeout("unknown")
+
+    remote = orders.ProductionClient(
+        "fixture", transport=httpx.MockTransport(transport)
+    )
+    for _ in range(2):
+        orders.process_order(session, context=context, order_id=order.id, remote=remote)
+    assert len(sent) == 2 and sent[0] == sent[1]
+    session.expire(order)
+    assert order.request_body["payload"]["selectedStrategyIds"] == [
+        "builtin-0",
+        "builtin-1",
+        "builtin-2",
+    ]

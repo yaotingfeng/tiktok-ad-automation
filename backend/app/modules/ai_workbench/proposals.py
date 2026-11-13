@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from datetime import UTC, datetime
-from decimal import Decimal, InvalidOperation
 from typing import Any, Literal
 from uuid import UUID, uuid4
 
@@ -87,6 +86,7 @@ class AIProposal(SQLModel, table=True):
             name="fk_ai_proposal_optimizer",
         ),
         CheckConstraint("kind IN ('strategy','rule')", name="ck_ai_proposal_kind"),
+        CheckConstraint("operation IN ('create','update')", name="ck_ai_proposal_operation"),
         CheckConstraint(
             "status IN ('PENDING','ACCEPTED','REJECTED','STALE')",
             name="ck_ai_proposal_status",
@@ -180,104 +180,17 @@ def list_proposals(
     return [_public(row) for row in session.exec(query).all()]
 
 
-def _limit_value(limits: Mapping[str, Any], *keys: str) -> Any:
-    for key in keys:
-        if key in limits:
-            return limits[key]
-    return None
-
-
-def _authorized(limits: Mapping[str, Any], kind: str, mode: str) -> bool:
-    # 优化模式是唯一的发布控制：MANUAL 由人工采纳，AUTO 在领域边界内自动采纳。
-    # 历史 authorization_limits 仅作为归档数据保留，不再参与新的权限判断。
-    return mode in {"MANUAL", "AUTO"}
-
-
 def _within_authorization(
     *,
     version: AIOptimizerVersion,
     kind: str,
-    before: dict[str, Any],
+    before: dict[str, Any],  # noqa: ARG001 — 保留发布预检调用合同
     after: dict[str, Any],
 ) -> tuple[bool, str | None]:
-    limits = version.authorization_limits or {}
-    if not isinstance(limits, Mapping):
-        raise DomainError(
-            "ai_proposal_invalid", "authorization limits must be an object"
-        )
+    # 优化模式控制是否需要人工确认；历史细粒度授权不再参与判定。
     if kind == "strategy":
-        if not _authorized(limits, "strategy", version.optimization_mode):
-            return False, "strategy_publication_not_authorized"
-        before_cfg = before.get("config", before) if isinstance(before, Mapping) else {}
-        after_cfg = after.get("config", after) if isinstance(after, Mapping) else {}
-        if not isinstance(before_cfg, Mapping) or not isinstance(after_cfg, Mapping):
-            raise DomainError("ai_proposal_invalid", "strategy scope must be an object")
-        # 发布服务会补齐 Schema 默认值。授权比较必须使用实际将生效的完整配置，
-        # 否则省略字段会偷偷把原有结构/出价还原为默认值。
-        if {"budget", "currency", "copy_pool_version"}.issubset(after_cfg):
-            try:
-                after_cfg = StrategyConfig.model_validate(after_cfg).model_dump(
-                    mode="json"
-                )
-                before_cfg = StrategyConfig.model_validate(before_cfg).model_dump(
-                    mode="json"
-                )
-            except ValueError as exc:
-                raise DomainError("ai_proposal_invalid", "策略配置无效") from exc
-        nested = {}
-        changed = {
-            key for key, value in after_cfg.items() if before_cfg.get(key) != value
-        }
-        explicit = nested.get(
-            "allowed_fields", limits.get("strategy_allowed_fields", [])
-        )
-        if not isinstance(explicit, list) or any(
-            not isinstance(value, str) for value in explicit
-        ):
-            raise DomainError(
-                "ai_proposal_invalid", "allowed_fields must be a string list"
-            )
-        bounded = {
-            field
-            for field in ("budget", "daily_spend", "spend", "target_roas")
-            if _limit_value(nested, f"max_{field}_delta") is not None
-            or _limit_value(limits, f"max_{field}_delta") is not None
-        }
-        # 支持的策略字段由 StrategyConfig 决定，用户无需逐字段二次授权。
-        for field in ("budget", "daily_spend", "spend", "target_roas"):
-            if (
-                version.optimization_mode == "AUTO"
-                and field in after_cfg
-                and field in before_cfg
-                and after_cfg[field] != before_cfg[field]
-            ):
-                maximum = _limit_value(limits, f"max_{field}_delta", f"{field}_delta")
-                maximum = (
-                    maximum
-                    if maximum is not None
-                    else _limit_value(nested, f"max_{field}_delta", f"{field}_delta")
-                )
-                if maximum is None:
-                    continue
-                try:
-                    delta = abs(
-                        Decimal(str(after_cfg[field])) - Decimal(str(before_cfg[field]))
-                    )
-                    maximum_decimal = Decimal(str(maximum))
-                except (InvalidOperation, TypeError, ValueError) as exc:
-                    raise DomainError(
-                        "ai_proposal_invalid", f"{field} delta must be numeric"
-                    ) from exc
-                if (
-                    not maximum_decimal.is_finite()
-                    or maximum_decimal < 0
-                    or not delta.is_finite()
-                    or delta > maximum_decimal
-                ):
-                    return False, f"{field}_delta_out_of_scope"
+        return True, None
     else:
-        if not _authorized(limits, "rule", version.optimization_mode):
-            return False, "rule_publication_not_authorized"
         if not isinstance(version.bc_id, str) or not isinstance(
             version.advertiser_ids, (list, tuple, set)
         ):
@@ -372,37 +285,6 @@ def _within_authorization(
             )
         if definition.get("bc_id") is not None and definition["bc_id"] != version.bc_id:
             return False, "bc_scope_out_of_scope"
-        before_definition = before.get("definition", before)
-        if "apply_to" in definition:
-            try:
-                definition = RuleDefinition.model_validate(definition).model_dump(
-                    mode="json"
-                )
-                before_definition = RuleDefinition.model_validate(
-                    before_definition
-                ).model_dump(mode="json")
-            except ValueError as exc:
-                raise DomainError("ai_proposal_invalid", "规则配置无效") from exc
-        nested = {}
-        explicit = nested.get("allowed_fields", limits.get("rule_allowed_fields", []))
-        if not isinstance(explicit, list) or any(
-            not isinstance(value, str) for value in explicit
-        ):
-            raise DomainError(
-                "ai_proposal_invalid", "allowed_fields must be a string list"
-            )
-        changed = {
-            key
-            for key, value in definition.items()
-            if key != "accounts" and before_definition.get(key) != value
-        }
-        # name/enabled 不属于 definition，却同样会由发布服务写入，必须单独授权。
-        changed |= {
-            key
-            for key in ("name", "enabled")
-            if "definition" in after and key in after and after[key] != before.get(key)
-        }
-        # 规则字段由 RuleDefinition 与租户账户范围约束。
     return True, None
 
 
@@ -478,13 +360,31 @@ def create_proposal(
                 "request is already used by another optimizer",
             )
         return existing
+    try:
+        if change.operation == "create" and change.target_id is not None:
+            raise DomainError("ai_proposal_invalid", "新增提案不能指定已有目标")
+        if change.kind == "strategy":
+            StrategyConfig.model_validate(change.after.get("config", change.after))
+        else:
+            RuleDefinition.model_validate(change.after.get("definition", change.after))
+    except ValueError as exc:
+        raise DomainError("ai_proposal_invalid", "提案配置不满足领域 Schema") from exc
     if change.kind == "strategy":
         if change.operation == "create":
             before = {}
             baseline = None
         else:
-            baseline = _strategy_baseline(session, tenant_id=context.tenant_id, optimizer_id=optimizer_id, version=version)
-            before = {"version_id": str(baseline.id), "version": baseline.number, "config": baseline.config}
+            baseline = _strategy_baseline(
+                session,
+                tenant_id=context.tenant_id,
+                optimizer_id=optimizer_id,
+                version=version,
+            )
+            before = {
+                "version_id": str(baseline.id),
+                "version": baseline.number,
+                "config": baseline.config,
+            }
         base_strategy_version_id, base_rule_id, base_rule_version = (
             baseline.id if baseline else None,
             None,
@@ -492,12 +392,47 @@ def create_proposal(
         )
     else:
         if change.operation == "create":
+            accounts = change.after.get("definition", change.after).get("accounts", {})
+            if accounts.get("mode") != "ACCOUNTS":
+                raise DomainError(
+                    "ai_invalid_rule_scope", "AI 新建规则必须显式限定管理账户"
+                )
             before = {}
-            base_strategy_version_id, base_rule_id, base_rule_version = (None, None, None)
-            allowed, reason = _within_authorization(version=version, kind=change.kind, before=before, after=change.after)
+            base_strategy_version_id, base_rule_id, base_rule_version = (
+                None,
+                None,
+                None,
+            )
+            allowed, reason = _within_authorization(
+                version=version, kind=change.kind, before=before, after=change.after
+            )
             # 新规则的账户范围仍在 RuleDefinition 中强制校验，发布时绑定到当前投手。
-            row = AIProposal(tenant_id=context.tenant_id, optimizer_id=optimizer.id, review_task_id=review_task.id, kind=change.kind, operation=change.operation, target_id=None, status="PENDING", before={}, after=sanitize_public(change.after), evidence={"evidence_ids":[str(item) for item in change.evidence_ids], "review_task_id":str(review_task.id)}, authorization={"allowed":allowed,"reason":reason,"mode":version.optimization_mode}, base_optimizer_version=version.number, request_id=request_id, created_by=context.actor_id)
-            session.add(row); session.flush(); return row
+            row = AIProposal(
+                tenant_id=context.tenant_id,
+                optimizer_id=optimizer.id,
+                review_task_id=review_task.id,
+                kind=change.kind,
+                operation=change.operation,
+                target_id=None,
+                status="PENDING",
+                before={},
+                after=sanitize_public(change.after),
+                evidence={
+                    "evidence_ids": [str(item) for item in change.evidence_ids],
+                    "review_task_id": str(review_task.id),
+                },
+                authorization={
+                    "allowed": allowed,
+                    "reason": reason,
+                    "mode": version.optimization_mode,
+                },
+                base_optimizer_version=version.number,
+                request_id=request_id,
+                created_by=context.actor_id,
+            )
+            session.add(row)
+            session.flush()
+            return row
         if change.target_id is None:
             raise DomainError("ai_proposal_target_required", "rule target is required")
         binding = session.exec(
@@ -603,20 +538,42 @@ def _publish_strategy(
     session: Session, *, context: TenantContext, proposal: AIProposal
 ) -> UUID:
     from app.modules.ai_workbench import service as optimizer_service
-    from app.modules.strategies import service as strategy_service
     from app.modules.ai_workbench.schemas import OptimizerUpdate
+    from app.modules.strategies import service as strategy_service
 
     optimizer, current = load_optimizer(session, context, proposal.optimizer_id)
     if proposal.operation == "create":
         try:
-            config = StrategyConfig.model_validate(proposal.after.get("config", proposal.after))
+            config = StrategyConfig.model_validate(
+                proposal.after.get("config", proposal.after)
+            )
         except Exception as exc:
-            raise DomainError("ai_proposal_invalid", "strategy proposal is invalid") from exc
-        created = strategy_service.create_strategy(session, context=context, name=proposal.after.get("name", "AI 投手策略"), config=config, request_id=uuid4())
-        latest = session.exec(select(StrategyVersion).where(StrategyVersion.tenant_id == context.tenant_id, StrategyVersion.strategy_id == created).order_by(col(StrategyVersion.number).desc())).first()
+            raise DomainError(
+                "ai_proposal_invalid", "strategy proposal is invalid"
+            ) from exc
+        created = strategy_service.create_strategy(
+            session,
+            context=context,
+            name=proposal.after.get("name", "AI 投手策略"),
+            config=config,
+            request_id=uuid4(),
+        )
+        latest = session.exec(
+            select(StrategyVersion)
+            .where(
+                StrategyVersion.tenant_id == context.tenant_id,
+                StrategyVersion.strategy_id == created,
+            )
+            .order_by(col(StrategyVersion.number).desc())
+        ).first()
         if latest is None:
             raise DomainError("ai_proposal_invalid", "新策略版本创建失败")
-        result = optimizer_service.update_optimizer(session, context=context, optimizer_id=optimizer.id, body=OptimizerUpdate(strategy_version_id=latest.id, request_id=uuid4()))
+        result = optimizer_service.update_optimizer(
+            session,
+            context=context,
+            optimizer_id=optimizer.id,
+            body=OptimizerUpdate(strategy_version_id=latest.id, request_id=uuid4()),
+        )
         return result.strategy_version_id
     baseline = _strategy_baseline(
         session, tenant_id=context.tenant_id, optimizer_id=optimizer.id, version=current
@@ -674,19 +631,43 @@ def _publish_strategy(
 def _publish_rule(
     session: Session, *, context: TenantContext, proposal: AIProposal
 ) -> UUID:
+    from app.modules.ai_workbench import service as optimizer_service
     from app.modules.automation_rules import service as rule_service
 
     _, _ = load_optimizer(session, context, proposal.optimizer_id)
     if proposal.operation == "create":
         from app.modules.automation_rules.schemas import RuleCreate
+
         try:
-            body = RuleCreate(name=proposal.after.get("name", "AI 投手规则"), enabled=proposal.after.get("enabled", True), definition=RuleDefinition.model_validate(proposal.after.get("definition", proposal.after)))
+            body = RuleCreate(
+                name=proposal.after.get("name", "AI 投手规则"),
+                enabled=proposal.after.get("enabled", True),
+                definition=RuleDefinition.model_validate(
+                    proposal.after.get("definition", proposal.after)
+                ),
+            )
         except Exception as exc:
-            raise DomainError("ai_proposal_invalid", "rule proposal is invalid") from exc
+            raise DomainError(
+                "ai_proposal_invalid", "rule proposal is invalid"
+            ) from exc
         created = rule_service.create_rule(session, context=context, body=body)
         from app.modules.ai_workbench.schemas import OptimizerUpdate
-        ids = tuple(session.exec(select(AIOptimizerRuleBinding.rule_id).where(AIOptimizerRuleBinding.tenant_id == context.tenant_id, AIOptimizerRuleBinding.optimizer_id == proposal.optimizer_id, AIOptimizerRuleBinding.active.is_(True))).all())
-        result = optimizer_service.update_optimizer(session, context=context, optimizer_id=proposal.optimizer_id, body=OptimizerUpdate(rule_ids=ids + (created.id,), request_id=uuid4()))
+
+        ids = tuple(
+            session.exec(
+                select(AIOptimizerRuleBinding.rule_id).where(
+                    AIOptimizerRuleBinding.tenant_id == context.tenant_id,
+                    AIOptimizerRuleBinding.optimizer_id == proposal.optimizer_id,
+                    AIOptimizerRuleBinding.active.is_(True),
+                )
+            ).all()
+        )
+        optimizer_service.update_optimizer(
+            session,
+            context=context,
+            optimizer_id=proposal.optimizer_id,
+            body=OptimizerUpdate(rule_ids=ids + (created.id,), request_id=uuid4()),
+        )
         return created.id
     rule_id = proposal.base_rule_id or proposal.target_id
     if rule_id is None:

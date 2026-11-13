@@ -106,16 +106,14 @@ def test_runtime_recovery_changes_fence_and_cancel_revokes_token(
     assert response.status_code == 409
 
 
-def test_outside_auto_budget_proposal_can_be_explicitly_approved(
-    client, session, context
-):
+def test_manual_budget_proposal_requires_explicit_approval(client, session, context):
     strategy = seed_optimizer_dependencies(session, context)
     optimizer = client.post(
         f"/api/tenants/{context.tenant_id}/ai-optimizers",
         headers=api_headers(context, session=session),
         json=create_body(
             strategy.id,
-            optimization_mode="AUTO",
+            optimization_mode="MANUAL",
             authorization_limits={"strategy": True, "max_budget_delta": 1},
         ),
     ).json()

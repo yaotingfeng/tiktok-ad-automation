@@ -24,7 +24,7 @@ def optimizer_version(*, mode: str, limits: dict) -> AIOptimizerVersion:
     )
 
 
-def test_auto_publication_is_in_scope_only_when_explicitly_authorized():
+def test_auto_mode_ignores_archived_numeric_limits():
     version = optimizer_version(
         mode="AUTO", limits={"strategy": True, "max_budget_delta": 5}
     )
@@ -34,8 +34,8 @@ def test_auto_publication_is_in_scope_only_when_explicitly_authorized():
     allowed, reason = _within_authorization(
         version=version, kind="strategy", before={"budget": 10}, after={"budget": 20}
     )
-    assert allowed is False
-    assert reason == "budget_delta_out_of_scope"
+    assert allowed is True
+    assert reason is None
 
 
 def test_manual_mode_does_not_change_authorization_scope():
@@ -57,7 +57,7 @@ def test_rule_scope_rejects_another_bc_or_account():
     assert reason == "bc_scope_out_of_scope"
 
 
-def test_nested_strategy_budget_delta_is_checked():
+def test_archived_nested_limits_no_longer_gate_auto_mode():
     version = optimizer_version(
         mode="AUTO", limits={"strategy": {"allowed": True, "max_budget_delta": 2}}
     )
@@ -67,11 +67,11 @@ def test_nested_strategy_budget_delta_is_checked():
         before={"config": {"budget": 10}},
         after={"config": {"budget": 20}},
     )
-    assert allowed is False
-    assert reason == "budget_delta_out_of_scope"
+    assert allowed is True
+    assert reason is None
 
 
-def test_auto_unlisted_strategy_fields_and_unbounded_roas_stay_pending():
+def test_supported_strategy_fields_do_not_need_secondary_authorization():
     version = optimizer_version(
         mode="AUTO", limits={"strategy": True, "max_budget_delta": 5}
     )
@@ -81,7 +81,7 @@ def test_auto_unlisted_strategy_fields_and_unbounded_roas_stay_pending():
         before={"config": {"budget": 10, "target_roas": 1}},
         after={"config": {"budget": 10, "target_roas": 2}},
     )
-    assert not allowed
+    assert allowed
     version.authorization_limits = {
         "strategy": {
             "allowed": True,
@@ -95,7 +95,7 @@ def test_auto_unlisted_strategy_fields_and_unbounded_roas_stay_pending():
         before={"config": {"target_roas": 1}},
         after={"config": {"target_roas": 1.1}},
     ) == (True, None)
-    assert not _within_authorization(
+    assert _within_authorization(
         version=version,
         kind="strategy",
         before={"config": {"target_roas": 1}},
