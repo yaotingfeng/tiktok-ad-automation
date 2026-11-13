@@ -88,8 +88,8 @@ export function applyRuntime(ctx, config, dependencies) {
   async function pump() {
     if (stopped || busy) return
     busy = true
-    try { const claim = await runtime.claim(); if (claim.task && !stopped) await runClaim(ctx, config, claim, runtime, dependencies) }
-    catch { if (!stopped) console.error('TK-ADA DSH review unavailable; durable task retained for fenced recovery') }
+    try { const claim = await runtime.claim(); config.onConnection?.(true); if (claim.task && !stopped) await runClaim(ctx, config, claim, runtime, dependencies) }
+    catch { config.onConnection?.(false); if (!stopped) console.error('TK-ADA DSH review unavailable; durable task retained for fenced recovery') }
     finally { busy = false }
   }
   const tick = () => { work = pump() }

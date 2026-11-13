@@ -1,0 +1,87 @@
+# 独立 DSH 执行面；app 标签与原十一角色分开，保持既有发布器的精确角色清单。
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: tiktok-ad-automation-dsh-state
+  namespace: test
+  labels: {app: tiktok-ad-automation-dsh}
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: alicloud-disk-topology-alltype
+  resources:
+    requests: {storage: 20Gi}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: tiktok-ad-automation-dsh
+  namespace: test
+  labels: {app: tiktok-ad-automation-dsh, role: ai-review}
+spec:
+  replicas: 1
+  strategy: {type: Recreate}
+  revisionHistoryLimit: 2
+  selector:
+    matchLabels: {app: tiktok-ad-automation-dsh}
+  template:
+    metadata:
+      labels: {app: tiktok-ad-automation-dsh, role: ai-review}
+    spec:
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 60
+      securityContext: {runAsUser: 1000, runAsGroup: 1000, fsGroup: 1000, runAsNonRoot: true}
+      imagePullSecrets:
+        - name: tiktok-ad-automation-registry
+      containers:
+        - name: dsh
+          image: __DSH_IMAGE__
+          imagePullPolicy: IfNotPresent
+          resources:
+            requests: {cpu: 100m, memory: 256Mi}
+            limits: {cpu: '1', memory: 1Gi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          env:
+            - {name: TKADA_API_URL, value: 'https://tkada.shortclipflix.com'}
+            - name: COM_API_KEY
+              valueFrom:
+                secretKeyRef: {name: tiktok-ad-automation-dsh-model, key: COM_API_KEY}
+          ports:
+            - {name: health, containerPort: 9080}
+          startupProbe:
+            httpGet: {path: /health, port: health}
+            periodSeconds: 5
+            failureThreshold: 36
+          readinessProbe:
+            httpGet: {path: /ready, port: health}
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: {path: /health, port: health}
+            periodSeconds: 15
+          volumeMounts:
+            - {name: state, mountPath: /var/lib/dsh}
+            - {name: tmp, mountPath: /tmp}
+            - {name: model, mountPath: /run/secrets/provider.json, subPath: provider.json, readOnly: true}
+            - {name: token, mountPath: /run/secrets/tkada-ai-review-token, subPath: AI_DSH_SERVICE_TOKEN, readOnly: true}
+      volumes:
+        - name: state
+          persistentVolumeClaim: {claimName: tiktok-ad-automation-dsh-state}
+        - name: tmp
+          emptyDir: {sizeLimit: 256Mi}
+        - name: model
+          secret: {secretName: tiktok-ad-automation-dsh-model, defaultMode: 0440}
+        - name: token
+          secret: {secretName: tiktok-ad-automation-runtime, defaultMode: 0440}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: tiktok-ad-automation-dsh
+  namespace: test
+  labels: {app: tiktok-ad-automation-dsh}
+spec:
+  selector: {app: tiktok-ad-automation-dsh}
+  ports:
+    - {name: health, port: 9080, targetPort: health}
