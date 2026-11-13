@@ -43,10 +43,7 @@ def run_step(
                 "operation_log_create_exhausted", "日志导出重建次数已达上限"
             )
         lower, upper = utc_window(job.start_date, job.end_date, timezone)
-        # 最新窗口连同今日已发生的操作读取，连接最新实际配置锚点；
-        # 今日不发布完整日覆盖，不能假称已取得尚未发生的操作。
-        if (now - upper).total_seconds() < 86400 and upper <= now:
-            upper = min(now.replace(microsecond=0), lower + timedelta(days=30))
+        # 只读取冻结窗口的完整日，不延伸到今天产生重复读取。
         state.update(
             phase="CREATE",
             create_attempts=attempts,

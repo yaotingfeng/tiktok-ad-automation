@@ -38,7 +38,11 @@ from app.modules.sync_control.models import (
 )
 from app.modules.sync_control.occupancy import release_dispatch, reserve_dispatch
 from app.modules.sync_control.requirements import execution_owner_current
-from app.modules.sync_control.schedule import pending_execution_dues, report_endpoint
+from app.modules.sync_control.schedule import (
+    operation_log_order,
+    pending_execution_dues,
+    report_endpoint,
+)
 from app.modules.sync_control.worker_pool import (
     background_lease_count,
     report_background_category,
@@ -378,6 +382,7 @@ def _dispatch_due(
                             ),
                             else_=1,
                         ),
+                        *operation_log_order(),
                         col(ReportSyncJob.created_at),
                         col(ReportSyncJob.id),
                     )

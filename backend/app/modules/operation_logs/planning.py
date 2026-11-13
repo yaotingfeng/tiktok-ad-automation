@@ -1,9 +1,10 @@
-"""每日近期回刷与历史游标独立推进，复用账户归属和持久需求公平调度。"""
+"""昨日增量与历史缺口独立推进，复用账户归属和持久需求公平调度。"""
 
 from collections import defaultdict
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, time, timedelta
+from zoneinfo import ZoneInfo
 
-from sqlalchemy import func
+from sqlalchemy import or_
 from sqlalchemy.dialects.postgresql import insert
 from sqlmodel import Session, col, select
 
@@ -15,8 +16,14 @@ from app.modules.reporting.planner import (
     local_today,
     owned_accounts,
 )
-from app.modules.reporting.store_models import AdSyncBc
-from app.modules.sync_control.models import SyncRequirement, SyncScope
+from app.modules.reporting.store_models import AdSyncBc, ReportSyncJob
+from app.modules.sync_control.models import (
+    SyncExecutionScope,
+    SyncRequirement,
+    SyncScope,
+)
+from app.modules.sync_control.requirements import execution_owner_current
+from app.modules.sync_control.scopes import scope_key
 
 
 def plan_logs(
@@ -60,47 +67,77 @@ def plan_logs(
         advertiser = cursor.advertiser_id
         today = local_today(zones[advertiser], now)
         end = today - timedelta(days=1)
-        if cursor.recent_day != today:
-            windows["daily", end - timedelta(days=6), end].append([advertiser])
-            cursor.recent_day = today
-        if history_start is not None and history_start < end - timedelta(days=6):
-            if cursor.history_cursor is not None:
-                earliest = session.exec(
-                    select(func.min(col(SyncRequirement.bucket_key)))
-                    .join(SyncScope, col(SyncScope.id) == col(SyncRequirement.scope_id))
-                    .where(
-                        SyncScope.tenant_id == plan.tenant_id,
-                        SyncScope.advertiser_id == advertiser,
-                        SyncScope.resource == "operation_log",
-                    )
-                ).one()
-                if earliest is not None and history_start.isoformat() < earliest:
-                    # 用户向更早日期扩展经营范围，不等待次日游标轮转。
-                    cursor.history_cursor, cursor.history_sweep_day = (
-                        history_start,
-                        None,
-                    )
-            start = max(history_start, cursor.history_cursor or history_start)
-            history_end = end - timedelta(days=7)
-            if start > history_end and cursor.history_sweep_day != today:
-                start = history_start
-                cursor.history_sweep_day = today
-            if start <= history_end:
-                # 每轮一片历史；扫描完后最多每天重试一轮失败缺口，避免无限重建。
-                last = min(history_end, start + timedelta(days=28))
-                known = set(
-                    session.exec(
-                        select(col(OperationCoverage.stat_date)).where(
-                            OperationCoverage.tenant_id == plan.tenant_id,
-                            OperationCoverage.advertiser_id == advertiser,
-                            OperationCoverage.stat_date >= start,
-                            OperationCoverage.stat_date <= last,
-                        )
-                    ).all()
+        first = min(history_start or end, end)
+        known = set(
+            session.exec(
+                select(OperationCoverage.stat_date).where(
+                    OperationCoverage.tenant_id == plan.tenant_id,
+                    OperationCoverage.advertiser_id == advertiser,
+                    OperationCoverage.stat_date >= first,
+                    OperationCoverage.stat_date <= end,
                 )
-                if len(known) < (last - start).days + 1:
-                    windows["history", start, last].append([advertiser])
-                cursor.history_cursor = last + timedelta(days=1)
+            ).all()
+        )
+        # 只检查当前冻结授权与时区的需求；其他BC/旧授权不能替代本轮执行。
+        key = scope_key(
+            plan.frozen_route,
+            plan.actor_id,
+            advertiser,
+            "operation_log",
+            {"campaign_ids": []},
+            "report-v2",
+            timezone=zones[advertiser],
+        )
+        active = (
+            select(SyncExecutionScope.id)
+            .join(ReportSyncJob, ReportSyncJob.id == SyncExecutionScope.report_job_id)
+            .where(
+                SyncExecutionScope.requirement_id == SyncRequirement.id,
+                SyncExecutionScope.owner_epoch == SyncScope.owner_epoch,
+                SyncExecutionScope.status == "PENDING",
+                col(ReportSyncJob.status).in_(["QUEUED", "WAITING", "RUNNING"]),
+                execution_owner_current(ReportSyncJob, "report_job_id"),
+            )
+            .correlate(SyncRequirement, SyncScope)
+            .exists()
+        )
+        for requirement in session.exec(
+            select(SyncRequirement)
+            .join(SyncScope, SyncScope.id == SyncRequirement.scope_id)
+            .where(
+                SyncScope.identity_digest == key.digest,
+                SyncRequirement.bucket_key >= first.isoformat(),
+                SyncRequirement.bucket_key <= end.isoformat(),
+                or_(
+                    active,
+                    SyncRequirement.requested_after
+                    >= datetime.combine(today, time.min, ZoneInfo(zones[advertiser])),
+                ),
+            )
+        ).all():
+            # 已承接的缺口不升级revision；终态失败最多次日重新规划一次。
+            known.add(date.fromisoformat(requirement.bucket_key))
+        if end not in known:
+            windows["daily", end, end].append([advertiser])
+        cursor.recent_day = today
+        if history_start is not None:
+            last = end - timedelta(days=1)
+            while last >= history_start and last in known:
+                last -= timedelta(days=1)
+            if last >= history_start:
+                start = last
+                # 从最近缺口向前取连续片，不跨成功/在途日期，每片最多29个完整日。
+                while (
+                    start > history_start
+                    and (last - start).days < 28
+                    and start - timedelta(days=1) not in known
+                ):
+                    start -= timedelta(days=1)
+                windows["history", start, last].append([advertiser])
+                cursor.history_cursor = start - timedelta(days=1)
+            else:
+                cursor.history_cursor = history_start - timedelta(days=1)
+            cursor.history_sweep_day = today
         session.add(cursor)
     created = 0
     for (tier, start, end), groups in windows.items():

@@ -299,3 +299,35 @@ def test_missing_export_rebuilds_original_window_with_finite_budget(log_seed, ph
             run_step(**kwargs)
         assert caught.value.code == "operation_log_create_exhausted"
         assert len(creates) == 1
+
+
+def test_yesterday_create_stops_at_local_midnight(session, monkeypatch):
+    from types import SimpleNamespace
+
+    from app.modules.operation_logs.worker import run_step
+
+    now = datetime(2026, 11, 10, 12, tzinfo=UTC)
+    monkeypatch.setattr(
+        "app.modules.operation_logs.worker._database_now", lambda _: now
+    )
+    calls = []
+
+    def create(**kwargs):
+        calls.append(kwargs)
+        return "export"
+
+    job = SimpleNamespace(
+        advertiser_ids=["acc-1"],
+        start_date=date(2026, 11, 9),
+        end_date=date(2026, 11, 9),
+        progress={},
+    )
+    run_step(
+        session,
+        job,
+        SimpleNamespace(change_log_create=create),
+        {"acc-1": SimpleNamespace(timezone="Asia/Hong_Kong")},
+        external=lambda fn: fn(),
+    )
+    assert calls[0]["start"] == datetime(2026, 11, 8, 16, tzinfo=UTC)
+    assert calls[0]["end"] == datetime(2026, 11, 9, 16, tzinfo=UTC)
