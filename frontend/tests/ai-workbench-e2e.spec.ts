@@ -474,15 +474,17 @@ test("空租户可创建、编辑、暂停和恢复投手，所有业务请求�
   const dialog = page.getByRole("dialog")
   await dialog.getByLabel("投手名称").fill("第一位投手")
   await choose(page, "BC", "星屿 · bc-a")
-  await dialog.getByLabel("账户一 · acc-1").check()
+  await dialog.getByRole("button", { name: "选择管理账户" }).click()
+  const accounts = page.getByRole("dialog", { name: "选择管理账户", exact: true })
+  await accounts.getByLabel("账户一 · acc-1").check()
+  await accounts.getByRole("button", { name: "完成", exact: true }).click()
   await dialog.getByLabel("日消耗目标").fill("150")
   await dialog.getByLabel("目标 ROAS").fill("1.3")
   await choose(page, "绑定策略版本", "初始策略 · v1")
-  await dialog.getByLabel("控损规则").check()
-  await dialog.getByLabel("允许调整绑定策略").check()
-  await dialog.getByLabel("单次预算调整绝对上限").fill("20")
-  await dialog.getByLabel("素材制作策略 ID").fill("cstrategy-1,cstrategy-2")
-  await dialog.getByLabel("素材回写表格").fill("sheet-1")
+  await dialog.getByRole("button", { name: "选择自动规则" }).click()
+  const rules = page.getByRole("dialog", { name: "选择绑定规则", exact: true })
+  await rules.getByLabel("控损规则").check()
+  await rules.getByRole("button", { name: "完成", exact: true }).click()
   await dialog.getByRole("button", { name: "创建投手", exact: true }).click()
   await expect(dialog).not.toBeVisible()
   expect(writes[0]).toMatchObject({
@@ -492,12 +494,9 @@ test("空租户可创建、编辑、暂停和恢复投手，所有业务请求�
     rule_ids: ["rule-1"],
     timezone: "Asia/Shanghai",
     review_time: "13:00",
-    authorization_limits: { strategy: true, max_budget_delta: 20 },
-    material_config: {
-      strategy_ids: ["cstrategy-1", "cstrategy-2"],
-      feishu_token: "sheet-1",
-    },
   })
+  expect(writes[0]).not.toHaveProperty("authorization_limits")
+  expect(writes[0]).not.toHaveProperty("material_config")
   await page.getByRole("button", { name: "编辑投手" }).click()
   await dialog.getByLabel("投手名称").fill("已编辑投手")
   await choose(page, "绑定策略版本", "新策略 · v2")
