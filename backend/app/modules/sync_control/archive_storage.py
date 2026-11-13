@@ -47,6 +47,12 @@ class S3RunArchive:
             raise ArchiveStorageError("archive_storage_not_configured")
         self.client, self.bucket = client, bucket
 
+    def prefix(self, tenant_id: UUID, kind: str, run_id: UUID) -> str:
+        return archive_prefix(tenant_id, kind, run_id)
+
+    def key(self, tenant_id: UUID, kind: str, run_id: UUID, digest: str) -> str:
+        return archive_key(tenant_id, kind, run_id, digest)
+
     @classmethod
     def configured(cls, config: Settings | None = None) -> S3RunArchive:
         config = config or settings
@@ -122,7 +128,7 @@ class S3RunArchive:
     ) -> ArchiveReceipt:
         if not 0 < size <= MAX_ARCHIVE_BYTES:
             raise ArchiveStorageError("archive_too_large")
-        key = archive_key(tenant_id, kind, run_id, sha256_digest)
+        key = self.key(tenant_id, kind, run_id, sha256_digest)
         payload.seek(0)
         self._put(
             key,
@@ -137,10 +143,10 @@ class S3RunArchive:
     def finalize(
         self, *, tenant_id: UUID, kind: str, run_id: UUID, receipt: ArchiveReceipt
     ) -> None:
-        if receipt.key != archive_key(tenant_id, kind, run_id, receipt.sha256):
+        if receipt.key != self.key(tenant_id, kind, run_id, receipt.sha256):
             raise ArchiveStorageError("archive_identity_mismatch")
         key = (
-            archive_prefix(tenant_id, kind, run_id) + f"committed/{receipt.sha256}.json"
+            self.prefix(tenant_id, kind, run_id) + f"committed/{receipt.sha256}.json"
         )
         marker = json.dumps(
             {
@@ -177,7 +183,7 @@ class S3RunArchive:
         """只列正式提交marker；raw候选blob不能冒充审计完成版本。"""
         if not 1 <= limit <= 100:
             raise ValueError("invalid archive resolution limit")
-        prefix = archive_prefix(tenant_id, kind, run_id) + "committed/"
+        prefix = self.prefix(tenant_id, kind, run_id) + "committed/"
         params = {"Bucket": self.bucket, "Prefix": prefix, "MaxKeys": limit}
         if cursor:
             params["ContinuationToken"] = cursor
@@ -198,7 +204,7 @@ class S3RunArchive:
                 document = json.loads(marker)
             finally:
                 body.close()
-            expected = archive_key(tenant_id, kind, run_id, document["digest"])
+            expected = self.key(tenant_id, kind, run_id, document["digest"])
             if (
                 document.get("schema_version") != 1
                 or document.get("tenant_id") != str(tenant_id)

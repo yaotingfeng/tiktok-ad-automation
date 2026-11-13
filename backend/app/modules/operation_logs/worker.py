@@ -10,6 +10,7 @@ from sqlmodel import Session
 
 from app.core.errors import DomainError
 from app.integrations.tiktok.contracts.change_log_reader import ChangeLogReader
+from app.modules.operation_logs.archive import OperationLogArchive
 from app.modules.operation_logs.parser import parse_export, utc_window
 from app.modules.operation_logs.store import publish_export
 from app.modules.reporting.publish import AccountMeta, _database_now
@@ -17,7 +18,6 @@ from app.modules.reporting.store_models import ReportSyncJob
 from app.modules.sync_control.archive_storage import (
     ArchiveReceipt,
     ArchiveStorageError,
-    S3RunArchive,
 )
 
 
@@ -101,7 +101,7 @@ def run_step(
         payload = json.dumps({"changelog": content}, ensure_ascii=False).encode()
         content_digest = hashlib.sha256(payload).hexdigest()
 
-        # 原始内容先进入既有私有审计桶；存储失败不可发布“完整覆盖”。
+        # 原始内容先认证加密并进入既有素材桶独立日志目录；存储失败不可发布“完整覆盖”。
         def archive_content() -> ArchiveReceipt:
             from botocore.exceptions import (  # type: ignore[import-untyped]
                 BotoCoreError,
@@ -109,7 +109,7 @@ def run_step(
             )
 
             try:
-                archive = S3RunArchive.configured()
+                archive = OperationLogArchive.configured()
                 receipt = archive.persist(
                     tenant_id=job.tenant_id,
                     kind="report",

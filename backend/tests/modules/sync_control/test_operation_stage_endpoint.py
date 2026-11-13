@@ -162,7 +162,6 @@ def _gateway(monkeypatch, seed, redis, responses, *, opening_error=None):
     from app.integrations.tiktok.platform_quotas import sdk_endpoint
     from app.integrations.tiktok.sdk import AccountAdmissionDeferred, official_client
     from app.jobs.admission import admission_policy, admitted_scope
-    from app.modules.sync_control.archive_storage import S3RunArchive
     from tests.modules.sync_control.test_archive import ObjectTransport
 
     calls = []
@@ -191,10 +190,9 @@ def _gateway(monkeypatch, seed, redis, responses, *, opening_error=None):
     monkeypatch.setattr("urllib3.PoolManager.request", wire)
     objects = ObjectTransport()
     monkeypatch.setattr(
-        S3RunArchive,
-        "configured",
-        classmethod(lambda cls: cls(objects, "private-test")),
+        "app.modules.operation_logs.archive.make_s3", lambda _config: objects
     )
+    monkeypatch.setattr("app.core.config.settings.S3_BUCKET", "existing-material-test")
 
     @contextmanager
     def gateway(**kwargs):

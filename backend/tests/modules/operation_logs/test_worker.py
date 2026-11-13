@@ -16,7 +16,6 @@ from app.modules.operation_logs.models import (
 )
 from app.modules.reporting.jobs import enqueue_job, execute_job
 from app.modules.reporting.store_models import ReportSyncJob, ReportSyncState
-from app.modules.sync_control.archive_storage import S3RunArchive
 from tests.modules.operation_logs.test_parser import export
 from tests.modules.reporting.claiming import claim_jobs
 from tests.modules.reporting.sync_conftest import (
@@ -91,10 +90,9 @@ def test_export_restarts_each_stage_and_publishes_only_after_archive(
     object_wire = ObjectTransport()
     object_wire.fail_put = interruption == "archive"
     monkeypatch.setattr(
-        S3RunArchive,
-        "configured",
-        classmethod(lambda cls: cls(object_wire, "private-test")),
+        "app.modules.operation_logs.archive.make_s3", lambda _config: object_wire
     )
+    monkeypatch.setattr("app.core.config.settings.S3_BUCKET", "existing-material-test")
 
     @contextmanager
     def scope(*_args):
