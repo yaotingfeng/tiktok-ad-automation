@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react"
 import { Button } from "@/components/ui/button"
-import { Checkbox } from "@/components/ui/checkbox"
+import { AccountPicker } from "@/features/accounts/AccountPicker"
+import { RuleSelectionDialog } from "./RuleSelectionDialog"
 import {
   Dialog,
   DialogContent,
@@ -29,13 +30,6 @@ import type { AIOptimizer } from "./AIOptimizerList"
 import { aiRequest, allItems, createRequestIdentity, errorMessage } from "./api"
 
 type BC = { bc_id: string; name: string; ownership_conflict?: boolean }
-type Account = {
-  advertiser_id: string
-  bc_id: string
-  name: string
-  can_build: boolean
-  ownership_conflict?: boolean
-}
 type Strategy = {
   id: string
   version_id: string
@@ -101,22 +95,25 @@ export function AIOptimizerEditor({
   const [name, setName] = useState(optimizer?.name ?? "")
   const [bcId, setBcId] = useState(optimizer?.bc_id ?? "")
   const [accountIds, setAccountIds] = useState(optimizer?.advertiser_ids ?? [])
-  const [strategyId, setStrategyId] = useState(optimizer?.strategy_version_id ?? "")
+  const [strategyId, setStrategyId] = useState(
+    optimizer?.strategy_version_id ?? "",
+  )
   const [ruleIds, setRuleIds] = useState(optimizer?.rule_ids ?? [])
   const [spend, setSpend] = useState(String(optimizer?.daily_spend ?? ""))
   const [roas, setRoas] = useState(String(optimizer?.target_roas ?? ""))
   const [priority, setPriority] = useState(optimizer?.priority ?? "BALANCED")
   const [mode, setMode] = useState(optimizer?.optimization_mode ?? "MANUAL")
-  const [timezone, setTimezone] = useState(optimizer?.timezone ?? "Asia/Shanghai")
-  const [reviewTime, setReviewTime] = useState((optimizer?.review_time ?? "13:00").slice(0, 5))
-  const [accountPickerOpen, setAccountPickerOpen] = useState(false)
+  const [timezone, setTimezone] = useState(
+    optimizer?.timezone ?? "Asia/Shanghai",
+  )
+  const [reviewTime, setReviewTime] = useState(
+    (optimizer?.review_time ?? "13:00").slice(0, 5),
+  )
   const [rulePickerOpen, setRulePickerOpen] = useState(false)
   const [bcs, setBcs] = useState<BC[]>([])
-  const [accounts, setAccounts] = useState<Account[]>([])
   const [strategies, setStrategies] = useState<Strategy[]>([])
   const [rules, setRules] = useState<Rule[]>([])
   const [loading, setLoading] = useState(true)
-  const [accountsLoading, setAccountsLoading] = useState(false)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -143,33 +140,6 @@ export function AIOptimizerEditor({
     return () => controller.abort()
   }, [tenantId])
 
-  useEffect(() => {
-    setAccounts([])
-    if (!bcId) return
-    const controller = new AbortController()
-    setAccountsLoading(true)
-    allItems<Account>(
-      `/api/tenants/${tenantId}/accounts?bc_id=${encodeURIComponent(bcId)}`,
-      controller.signal,
-    )
-      .then((items) => {
-        if (!controller.signal.aborted)
-          setAccounts(items.filter((item) => item.bc_id === bcId))
-      })
-      .catch((reason: unknown) => {
-        if (!controller.signal.aborted) setError(errorMessage(reason))
-      })
-      .finally(() => {
-        if (!controller.signal.aborted) setAccountsLoading(false)
-      })
-    return () => controller.abort()
-  }, [tenantId, bcId])
-
-  function toggle(ids: string[], id: string, checked: boolean) {
-    return checked
-      ? [...new Set([...ids, id])]
-      : ids.filter((item) => item !== id)
-  }
   async function save() {
     setError(null)
     try {
@@ -257,18 +227,6 @@ export function AIOptimizerEditor({
                   maxLength={120}
                 />
               </Field>
-              <Choice
-                label="BC"
-                value={bcId}
-                options={bcs.map((bc) => [
-                  bc.bc_id,
-                  `${bc.name} · ${bc.bc_id}`,
-                ])}
-                onChange={(value) => {
-                  setBcId(value)
-                  setAccountIds([])
-                }}
-              />
               <Field>
                 <FieldLabel htmlFor="optimizer-spend">日消耗目标</FieldLabel>
                 <Input
@@ -312,7 +270,8 @@ export function AIOptimizerEditor({
                 onChange={(value) => setMode(value as typeof mode)}
               />
               <p className="text-xs text-muted-foreground sm:col-span-2">
-                人工确认会先生成提案；自动优化会在当前账户范围和领域能力内执行。素材下单使用平台内置 CL6 v4、CL8 v5、GM-精剪 v4，无需填写策略 ID 或表格。
+                人工确认会先生成提案；自动优化会在当前账户范围和领域能力内执行。素材下单使用平台内置
+                CL6 v4、CL8 v5、GM-精剪 v4，无需填写策略 ID 或表格。
               </p>
               <Choice
                 label="绑定策略版本"
@@ -345,44 +304,77 @@ export function AIOptimizerEditor({
               </Field>
             </FieldGroup>
           </fieldset>
-          <FieldSet disabled={saving}>
-            <FieldLegend>广告账户（仅当前 BC）</FieldLegend>
-            <Button type="button" variant="outline" className="justify-between" onClick={() => setAccountPickerOpen(true)} disabled={!bcId || accountsLoading}>
-              <span>{accountsLoading ? "读取账户中…" : accountIds.length ? `已选择 ${accountIds.length} 个账户` : "选择管理账户"}</span>
-              <span className="text-xs text-muted-foreground">打开选择器</span>
-            </Button>
-            <p className="text-xs text-muted-foreground">仅显示当前 BC 下可管理的账户；AI 新建规则也只能作用于这些账户。</p>
+          <FieldSet
+            disabled={saving || loading}
+            className="rounded-lg border p-4"
+          >
+            <FieldLegend>管理范围</FieldLegend>
+            <FieldGroup className="grid gap-4 sm:grid-cols-2">
+              <Choice
+                label="BC"
+                value={bcId}
+                options={bcs.map((bc) => [
+                  bc.bc_id,
+                  `${bc.name} · ${bc.bc_id}`,
+                ])}
+                onChange={(value) => {
+                  setBcId(value)
+                  setAccountIds([])
+                }}
+              />
+              <Field>
+                <FieldLabel>广告账户</FieldLabel>
+                <AccountPicker
+                  key={bcId}
+                  tenantId={tenantId}
+                  bcId={bcId}
+                  value={accountIds.join("\n")}
+                  disabled={!bcId || saving || loading}
+                  selectionMode="replace"
+                  triggerLabel={
+                    accountIds.length
+                      ? `已选择 ${accountIds.length} 个账户`
+                      : "选择管理账户"
+                  }
+                  onChange={(value) =>
+                    setAccountIds(value.split("\n").filter(Boolean))
+                  }
+                />
+              </Field>
+            </FieldGroup>
+            <p className="text-xs text-muted-foreground">
+              账户仅限所选 BC；切换 BC 会清空账户选择。AI
+              新建规则也受此管理范围约束。
+            </p>
           </FieldSet>
           <FieldSet disabled={saving}>
             <FieldLegend>绑定已有自动规则</FieldLegend>
-            <Button type="button" variant="outline" className="justify-between" onClick={() => setRulePickerOpen(true)}>
-              <span>{ruleIds.length ? `已绑定 ${ruleIds.length} 条规则` : "选择自动规则"}</span>
+            <Button
+              type="button"
+              variant="outline"
+              className="justify-between"
+              onClick={() => setRulePickerOpen(true)}
+            >
+              <span>
+                {ruleIds.length
+                  ? `已绑定 ${ruleIds.length} 条规则`
+                  : "选择自动规则"}
+              </span>
               <span className="text-xs text-muted-foreground">打开选择器</span>
             </Button>
-            <p className="text-xs text-muted-foreground">规则由自动规则引擎执行，作用范围仍受投手的 BC 和账户边界约束。</p>
+            <p className="text-xs text-muted-foreground">
+              规则由自动规则引擎执行，作用范围仍受投手的 BC 和账户边界约束。
+            </p>
           </FieldSet>
 
-          <Dialog open={accountPickerOpen} onOpenChange={setAccountPickerOpen}>
-            <DialogContent className="max-h-[80dvh] overflow-y-auto">
-              <DialogHeader><DialogTitle>选择管理账户</DialogTitle><DialogDescription>勾选后仅将账户绑定到当前 AI 投手。</DialogDescription></DialogHeader>
-              <FieldGroup className="max-h-[50dvh] overflow-y-auto">
-                {accounts.map((account) => <Field key={account.advertiser_id} orientation="horizontal"><Checkbox id={`account-${account.advertiser_id}`} checked={accountIds.includes(account.advertiser_id)} disabled={!account.can_build || account.ownership_conflict} onCheckedChange={(checked) => setAccountIds(toggle(accountIds, account.advertiser_id, checked === true))} /><FieldLabel htmlFor={`account-${account.advertiser_id}`}>{account.name} · {account.advertiser_id}{!account.can_build ? "（不可搭建）" : ""}</FieldLabel></Field>)}
-                {!accounts.length && <p className="text-sm text-muted-foreground">请先选择 BC 并完成账户同步。</p>}
-              </FieldGroup>
-              <DialogFooter><Button type="button" onClick={() => setAccountPickerOpen(false)}>完成</Button></DialogFooter>
-            </DialogContent>
-          </Dialog>
-          <Dialog open={rulePickerOpen} onOpenChange={setRulePickerOpen}>
-            <DialogContent className="max-h-[80dvh] overflow-y-auto">
-              <DialogHeader><DialogTitle>选择绑定规则</DialogTitle><DialogDescription>只绑定已有自动规则；AI 新建规则会在复盘后按投手账户范围校验。</DialogDescription></DialogHeader>
-              <FieldGroup className="max-h-[50dvh] overflow-y-auto">
-                {rules.map((rule) => <Field orientation="horizontal" key={rule.id}><Checkbox id={`rule-${rule.id}`} checked={ruleIds.includes(rule.id)} onCheckedChange={(checked) => setRuleIds(toggle(ruleIds, rule.id, checked === true))} /><FieldLabel htmlFor={`rule-${rule.id}`}>{rule.name}</FieldLabel></Field>)}
-                {!rules.length && <p className="text-sm text-muted-foreground">暂无规则，可稍后在自动规则模块创建。</p>}
-              </FieldGroup>
-              <DialogFooter><Button type="button" onClick={() => setRulePickerOpen(false)}>完成</Button></DialogFooter>
-            </DialogContent>
-          </Dialog>
-
+          <RuleSelectionDialog
+            key={rulePickerOpen ? "open" : "closed"}
+            open={rulePickerOpen}
+            onOpenChange={setRulePickerOpen}
+            rules={rules}
+            value={ruleIds}
+            onChange={setRuleIds}
+          />
 
           {error && (
             <p role="alert" className="text-sm text-destructive">
@@ -398,10 +390,7 @@ export function AIOptimizerEditor({
             >
               取消
             </Button>
-            <Button
-              type="submit"
-              disabled={loading || accountsLoading || saving}
-            >
+            <Button type="submit" disabled={loading || saving}>
               {saving ? "保存中…" : optimizer ? "保存投手" : "创建投手"}
             </Button>
           </DialogFooter>

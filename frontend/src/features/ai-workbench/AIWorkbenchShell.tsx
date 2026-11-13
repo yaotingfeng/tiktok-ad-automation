@@ -9,7 +9,7 @@ import {
 } from "lucide-react"
 import { useCallback, useEffect, useMemo, useState } from "react"
 import { Button } from "@/components/ui/button"
-import { Separator } from "@/components/ui/separator"
+import { Badge } from "@/components/ui/badge"
 import { cn } from "@/lib/utils"
 import useAuth from "@/hooks/useAuth"
 import { Alert, AlertTitle, AlertDescription } from "@/components/ui/alert"
@@ -84,7 +84,15 @@ export function buildAIWorkbenchHref(
 export function AIWorkbenchShell(props: Props) {
   const { user, isPending } = useAuth()
   if (isPending || !user) return <p role="status">正在核验工作台权限…</p>
-  if (!user.is_superuser) return <Alert variant="destructive"><AlertTitle>暂未开放</AlertTitle><AlertDescription>AI 投放工作台目前仅对平台管理员开放。</AlertDescription></Alert>
+  if (!user.is_superuser)
+    return (
+      <Alert variant="destructive">
+        <AlertTitle>暂未开放</AlertTitle>
+        <AlertDescription>
+          AI 投放工作台目前仅对平台管理员开放。
+        </AlertDescription>
+      </Alert>
+    )
   return <TenantWorkbenchShell key={props.tenantId} {...props} />
 }
 
@@ -135,7 +143,7 @@ function TenantWorkbenchShell({
         <div>
           <h1 className="workspace-title">AI 投手工作台</h1>
           <p className="text-sm text-muted-foreground">
-            租户 {tenantId} · 策略、规则与执行证据共用原有配置。
+            管理投手、安排投放与查看复盘建议。
           </p>
         </div>
         <div className="flex gap-2">
@@ -185,22 +193,27 @@ function TenantWorkbenchShell({
             className="flex flex-wrap items-center gap-2 rounded-lg border bg-background px-4 py-3 text-sm"
             data-testid="ai-inherited-context"
           >
-            <span className="text-muted-foreground">继承上下文</span>
-            <Separator orientation="vertical" className="h-4" />
-            <strong>
-              {selected?.bc_id ? `BC ${selected.bc_id}` : "BC 未读取"}
+            <strong className="min-w-0 truncate">
+              {selected?.name ?? "请选择投手"}
             </strong>
-            <span className="text-muted-foreground">·</span>
-            <span>{selected?.advertiser_ids.join("、") || "账户未读取"}</span>
-            <span className="text-muted-foreground">·</span>
-            <span>
-              {selected?.strategy_version_id
-                ? `策略 ${selected.strategy_version_id}`
-                : "策略未读取"}
-            </span>
-            <span className="ml-auto rounded-full bg-muted px-2 py-0.5 text-xs">
-              {selected?.optimization_mode ?? "—"}
-            </span>
+            {selected && (
+              <>
+                <Badge variant="secondary">
+                  {selected.advertiser_ids.length} 个管理账户
+                </Badge>
+                <Badge variant="secondary">
+                  {selected.rule_ids?.length ?? 0} 条绑定规则
+                </Badge>
+                <Badge variant="outline">
+                  {selected.strategy_version_id ? "已绑定策略" : "未绑定策略"}
+                </Badge>
+                <Badge variant="outline" className="ml-auto">
+                  {selected.optimization_mode === "AUTO"
+                    ? "自动优化"
+                    : "人工确认"}
+                </Badge>
+              </>
+            )}
           </div>
           {view === "overview" && (
             <>

@@ -107,16 +107,24 @@ export function AIOptimizerConfig({
           <div className="flex items-start justify-between gap-4">
             <span className="text-muted-foreground">广告账户</span>
             <span className="text-right font-medium">
-              {optimizer.advertiser_ids.join("、")}
+              {optimizer.advertiser_ids.length} 个账户
             </span>
           </div>
           <div className="flex items-center justify-between gap-4">
             <span className="text-muted-foreground">优化模式</span>
-            <Badge>{optimizer.optimization_mode}</Badge>
+            <Badge>
+              {optimizer.optimization_mode === "AUTO" ? "自动优化" : "人工确认"}
+            </Badge>
           </div>
           <div className="flex items-center justify-between gap-4">
             <span className="text-muted-foreground">目标优先级</span>
-            <span>{optimizer.priority ?? "BALANCED"}</span>
+            <span>
+              {optimizer.priority === "SPEND"
+                ? "消耗优先"
+                : optimizer.priority === "ROAS"
+                  ? "ROAS 优先"
+                  : "平衡"}
+            </span>
           </div>
           <div className="flex items-center justify-between gap-4">
             <span className="text-muted-foreground">日预算</span>
@@ -199,8 +207,7 @@ export function AIOptimizerConfig({
             </a>
           </Button>
           <p className="basis-full text-xs text-muted-foreground">
-            策略：{optimizer.strategy_version_id}。规则：{ruleIds.length}{" "}
-            条已绑定规则。这里不会跳到租户其他未绑定配置。
+            已绑定一个策略版本、{ruleIds.length} 条自动规则。
           </p>
         </CardContent>
       </Card>

@@ -475,16 +475,19 @@ test("空租户可创建、编辑、暂停和恢复投手，所有业务请求�
   await dialog.getByLabel("投手名称").fill("第一位投手")
   await choose(page, "BC", "星屿 · bc-a")
   await dialog.getByRole("button", { name: "选择管理账户" }).click()
-  const accounts = page.getByRole("dialog", { name: "选择管理账户", exact: true })
-  await accounts.getByLabel("账户一 · acc-1").check()
-  await accounts.getByRole("button", { name: "完成", exact: true }).click()
+  const accounts = page.getByRole("dialog", {
+    name: "选择管理账户",
+    exact: true,
+  })
+  await accounts.getByRole("checkbox", { name: /账户一/ }).check()
+  await accounts.getByRole("button", { name: "确定选择", exact: true }).click()
   await dialog.getByLabel("日消耗目标").fill("150")
   await dialog.getByLabel("目标 ROAS").fill("1.3")
   await choose(page, "绑定策略版本", "初始策略 · v1")
   await dialog.getByRole("button", { name: "选择自动规则" }).click()
   const rules = page.getByRole("dialog", { name: "选择绑定规则", exact: true })
   await rules.getByLabel("控损规则").check()
-  await rules.getByRole("button", { name: "完成", exact: true }).click()
+  await rules.getByRole("button", { name: "确定选择", exact: true }).click()
   await dialog.getByRole("button", { name: "创建投手", exact: true }).click()
   await expect(dialog).not.toBeVisible()
   expect(writes[0]).toMatchObject({
@@ -887,3 +890,185 @@ test("无绑定规则时不回退到租户规则", async ({ page }) => {
   await expect(page.getByRole("textbox", { name: "规则名称" })).toBeVisible()
   await expect(page.getByRole("row", { name: /剧级止损/ })).toHaveCount(0)
 })
+
+for (const width of [390, 1440]) {
+  test(`管理范围在 ${width}px 支持搜索批选、取消与 BC 联动，不铺账户 ID`, async ({
+    page,
+  }) => {
+    const ids = Array.from({ length: 50 }, (_, n) => `account-long-id-${n}`)
+    const writes: Array<Record<string, unknown>> = []
+    const item = {
+      ...configuredOptimizer(),
+      advertiser_ids: ids,
+      rule_ids: ["rule-1"],
+    }
+    await page.route(`**/api/tenants/${tenant}/**`, async (route) => {
+      const request = route.request()
+      const url = new URL(request.url())
+      const path = url.pathname
+      if (request.method() === "PATCH") {
+        writes.push(request.postDataJSON())
+        return route.fulfill({ json: { ...item, ...request.postDataJSON() } })
+      }
+      if (path.endsWith("/ai-optimizers"))
+        return route.fulfill({ json: { items: [item] } })
+      if (path.endsWith("/bcs"))
+        return route.fulfill({
+          json: {
+            items: [
+              { bc_id: "bc-a", name: "星屿" },
+              { bc_id: "bc-b", name: "另一个BC" },
+            ],
+          },
+        })
+      if (path.endsWith("/strategies"))
+        return route.fulfill({ json: { items: [] } })
+      if (path.endsWith("/automation-rules"))
+        return route.fulfill({
+          json: {
+            items: Array.from({ length: 55 }, (_, n) => ({
+              id: `rule-${n + 1}`,
+              name: `控损规则 ${n + 1}`,
+            })),
+          },
+        })
+      if (path.endsWith("/accounts")) {
+        const bc = url.searchParams.get("bc_id")!
+        const q = url.searchParams.get("query")
+        const tail = url.searchParams.get("cursor") === "tail"
+        const account = (id: string, name: string, extra = {}) => ({
+          advertiser_id: id,
+          bc_id: bc,
+          name,
+          can_build: true,
+          availability: "available",
+          ...extra,
+        })
+        return route.fulfill({
+          json: {
+            items:
+              bc === "bc-b"
+                ? [account("b-1", "B账户")]
+                : q
+                  ? [account("match-1", "搜索命中")]
+                  : tail
+                    ? [account("tail-1", "尾页账户")]
+                    : [
+                        account(ids[0], "原绑定账户"),
+                        account("a-2", "新增账户"),
+                        account("blocked", "冲突账户", {
+                          ownership_conflict: true,
+                        }),
+                      ],
+            total: bc === "bc-b" || q ? 1 : 4,
+            next_cursor: bc === "bc-a" && !q && !tail ? "tail" : null,
+          },
+        })
+      }
+      return route.fulfill({
+        json: {
+          items: [],
+          target_progress: {},
+          material: {},
+          schedule_rows: [],
+        },
+      })
+    })
+    await page.setViewportSize({ width, height: 900 })
+    await page.goto(`/tenants/${tenant}/ai-workbench?optimizer_id=${optimizer}`)
+    await expect(page.getByTestId("ai-inherited-context")).toContainText(
+      "50 个管理账户",
+    )
+    await expect(page.getByTestId("ai-workbench-shell")).not.toContainText(
+      ids[0],
+    )
+    await page.getByRole("button", { name: "编辑投手" }).click()
+    const editor = page.getByRole("dialog", { name: "编辑投手", exact: true })
+    const scope = editor
+      .locator("fieldset")
+      .filter({ has: page.locator("legend", { hasText: "管理范围" }) })
+    await expect(
+      scope.getByRole("combobox", { name: "BC", exact: true }),
+    ).toBeVisible()
+    await scope.getByRole("button", { name: "已选择 50 个账户" }).click()
+    const accounts = page.getByRole("dialog", {
+      name: "选择管理账户",
+      exact: true,
+    })
+    await expect(
+      accounts.getByRole("checkbox", { name: /原绑定账户/ }),
+    ).toBeChecked()
+    await accounts.getByRole("button", { name: "清空勾选" }).click()
+    await accounts.getByRole("button", { name: "取消", exact: true }).click()
+    await expect(
+      scope.getByRole("button", { name: "已选择 50 个账户" }),
+    ).toBeVisible()
+    await scope.getByRole("button", { name: "已选择 50 个账户" }).click()
+    await accounts.getByRole("button", { name: "清空勾选" }).click()
+    await expect(
+      accounts.getByRole("checkbox", { name: /冲突账户/ }),
+    ).toBeDisabled()
+    await accounts.getByRole("button", { name: "全选筛选结果" }).click()
+    await expect(accounts.getByRole("status")).toHaveText("已选 3 个账户")
+    await accounts.getByLabel("搜索账户", { exact: true }).fill("命中")
+    await accounts.getByRole("button", { name: "搜索", exact: true }).click()
+    await accounts.getByRole("checkbox", { name: "全选本页" }).check()
+    await expect(accounts.getByRole("status")).toHaveText("已选 4 个账户")
+    await expect(
+      accounts.getByRole("button", { name: "确定选择" }),
+    ).toBeInViewport()
+    expect(
+      await accounts.evaluate((el) => el.scrollWidth <= el.clientWidth),
+    ).toBe(true)
+    await accounts.getByRole("button", { name: "确定选择" }).click()
+    await editor.getByRole("button", { name: "已绑定 1 条规则" }).click()
+    const rules = page.getByRole("dialog", {
+      name: "选择绑定规则",
+      exact: true,
+    })
+    await rules.getByRole("button", { name: "清空勾选" }).click()
+    await rules.getByLabel("搜索规则").fill("控损规则 5")
+    await rules.getByRole("button", { name: "全选筛选结果" }).click()
+    await expect(rules.getByRole("status")).toHaveText("已选 11 条规则")
+    await rules.getByRole("button", { name: "取消", exact: true }).click()
+    await expect(
+      editor.getByRole("button", { name: "已绑定 1 条规则" }),
+    ).toBeVisible()
+    await editor.getByRole("button", { name: "已绑定 1 条规则" }).click()
+    await rules.getByRole("button", { name: "清空勾选" }).click()
+    await rules.getByRole("button", { name: "全选筛选结果" }).click()
+    await expect(rules.getByRole("status")).toHaveText("已选 55 条规则")
+    await rules.getByRole("button", { name: "下一页" }).click()
+    await expect(rules.getByLabel("控损规则 55", { exact: true })).toBeChecked()
+    await expect(
+      rules.getByRole("button", { name: "确定选择" }),
+    ).toBeInViewport()
+    await rules.getByRole("button", { name: "确定选择" }).click()
+    await editor.getByRole("button", { name: "保存投手" }).click()
+    await expect(editor).not.toBeVisible()
+    expect(writes[0].advertiser_ids).toEqual([
+      ids[0],
+      "a-2",
+      "tail-1",
+      "match-1",
+    ])
+    expect(writes[0].rule_ids).toHaveLength(55)
+    await page.getByRole("button", { name: "编辑投手" }).click()
+    await choose(page, "BC", "另一个BC · bc-b")
+    await expect(
+      scope.getByRole("button", { name: "选择管理账户" }),
+    ).toBeVisible()
+    await scope.getByRole("button", { name: "选择管理账户" }).click()
+    await expect(
+      accounts.getByRole("checkbox", { name: /B账户/ }),
+    ).toBeVisible()
+    await expect(
+      accounts.getByRole("checkbox", { name: /原绑定账户/ }),
+    ).toHaveCount(0)
+    await accounts.getByRole("checkbox", { name: "全选本页" }).check()
+    await accounts.getByRole("button", { name: "确定选择" }).click()
+    await editor.getByRole("button", { name: "保存投手" }).click()
+    await expect(editor).not.toBeVisible()
+    expect(writes[1]).toMatchObject({ bc_id: "bc-b", advertiser_ids: ["b-1"] })
+  })
+}
