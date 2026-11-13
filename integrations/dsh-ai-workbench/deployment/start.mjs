@@ -33,7 +33,13 @@ export async function prepareRuntime({ home, workspace, providerFile, tokenFile,
       { id: 'tkada-reviews', name: join(dirname(fileURLToPath(import.meta.url)), 'service.mjs'), config: { url: apiUrl, tokenFile, stateRoot: join(dirname(home), 'reviews'), healthPort: Number(port) } },
     ] },
   ]
-  await writeFile(join(profile, 'package.json'), JSON.stringify({ name: 'dsh-profile-tkada', private: true, dsh: { profile: { bundles: ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app'] } } }), { mode: 0o600 })
+  // 管理员安装的依赖与 bundle 同样属于持久 profile，重启不能覆盖掉。
+  const manifestFile = join(profile, 'package.json')
+  let manifest = { name: 'dsh-profile-tkada', private: true }
+  try { manifest = JSON.parse(await readFile(manifestFile, 'utf8')) } catch (error) { if (error.code !== 'ENOENT') throw error }
+  const previousProfile = manifest.dsh?.profile ?? {}
+  const bundles = [...new Set(['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app', ...(previousProfile.bundles ?? [])])]
+  await writeFile(manifestFile, JSON.stringify({ ...manifest, private: true, dsh: { ...manifest.dsh, profile: { ...previousProfile, bundles } } }), { mode: 0o600 })
   // 官方 Models 页写入 profile patch；重启必须保留管理员设置，只刷新部署拥有的安全/接入行。
   // 生产镜像从 deployment/package.json 解析依赖；本地原生验收可指向
   // 已安装官方 DSH 宿主，避免隐式读取开发者其他项目的依赖树。
