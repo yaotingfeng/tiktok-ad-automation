@@ -1096,14 +1096,18 @@ class Release:
         self.state["candidate_applied"] = True
         self.save("candidate-held")
 
-    def execute(self, action, sha, *, full_backup=False):
+    def execute(self, action, sha, *, full_backup=False, no_backup=False):
         require(
             not full_backup or action == "deploy",
             "--full-backup is only valid for deploy",
         )
+        require(
+            not no_backup or (action == "deploy" and not full_backup),
+            "--no-backup is only valid for an unbacked deploy",
+        )
         self.begin(action)
         routine = bool(sha) and not full_backup
-        if routine and (
+        if routine and not no_backup and (
             self.original_roles != set(ROLES)
             or needs_full_backup(self.state["old_sha"], sha)
         ):
@@ -1113,7 +1117,7 @@ class Release:
             raise RuntimeError(
                 "Data/deployment changes require an explicit release plan; use --full-backup only when requested"
             )
-        self.state["backup_policy"] = "none" if routine else "explicit"
+        self.state["backup_policy"] = "none" if (routine or no_backup) else "explicit"
         self.prepare_tools(sha)
         if sha:
             self.state["candidate_sha"] = sha
@@ -1143,9 +1147,9 @@ class Release:
             self.unlock()
             cleanup_completed(self.folder)
             return
-        self.state["mode"] = "routine" if routine else "full"
+        self.state["mode"] = "routine" if (routine or no_backup) else "full"
         self.save("prepared")
-        if routine:
+        if routine or no_backup:
             # 不读取旧备份、不归档生产数据；仅保留发布状态和配置核对材料。
             self.helper()
             heads = self.probe("schema")["migration_heads"]
@@ -1219,6 +1223,11 @@ def main():
         action="store_true",
         help="Explicitly request a full frozen backup and restore verification before deployment",
     )
+    parser.add_argument(
+        "--no-backup",
+        action="store_true",
+        help="Explicitly reuse the existing latest backup and skip creating a new backup",
+    )
     args = parser.parse_args()
     release = Release(args.state_dir)
     if args.action == "status":
@@ -1249,6 +1258,7 @@ def main():
             args.action,
             args.sha if args.action == "deploy" else None,
             full_backup=args.full_backup,
+            no_backup=args.no_backup,
         )
 
 
