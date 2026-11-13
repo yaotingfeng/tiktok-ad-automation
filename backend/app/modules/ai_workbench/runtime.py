@@ -190,6 +190,15 @@ def claim(session: SessionDep, methods: MethodBundle) -> dict:
                     optimizer_id=task.optimizer_id,
                     task_id=task.id,
                 )
+            # 完成原权限/版本复核后才签发会话执行窗口；排队时间不扣模型时间。
+            from app.modules.ai_workbench.review_authorization import claim_expiry
+
+            task.authorization_expires_at = claim_expiry(
+                created_at=task.created_at,
+                expires_at=task.authorization_expires_at,
+                restart_generation=task.restart_generation,
+                now=datetime.now(UTC),
+            )
             ai_tasks.start_task(
                 session,
                 context=context,
