@@ -118,7 +118,7 @@ export function AIWorkbenchPage({ tenantId, optimizerId = "" }: Props) {
     >
       <p className="text-sm text-muted-foreground">
         时间使用 {optimizer?.timezone ?? "Asia/Shanghai"}
-        。账户与唯一策略继承当前优化师；已开始执行的行只读。
+        。账户与唯一策略继承当前投手；已开始执行的行只读。
       </p>
       {error && (
         <p role="alert" className="text-sm text-destructive">
@@ -138,7 +138,7 @@ export function AIWorkbenchPage({ tenantId, optimizerId = "" }: Props) {
         />
       ) : (
         <p className="text-sm text-muted-foreground">
-          {loading ? "正在读取优化师…" : "请创建或选择一个优化师。"}
+          {loading ? "正在读取投手…" : "请创建或选择一个投手。"}
         </p>
       )}
     </div>

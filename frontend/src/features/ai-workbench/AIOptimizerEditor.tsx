@@ -79,7 +79,7 @@ function Choice({
   )
 }
 
-/** 这里只维护优化师引用和授权；策略、规则正文仍由原模块编辑。 */
+/** 这里只维护投手引用和授权；策略、规则正文仍由原模块编辑。 */
 export function AIOptimizerEditor({
   tenantId,
   optimizer,
@@ -314,7 +314,7 @@ export function AIOptimizerEditor({
     >
       <DialogContent className="max-h-[90dvh] overflow-y-auto sm:max-w-3xl">
         <DialogHeader>
-          <DialogTitle>{optimizer ? "编辑优化师" : "创建优化师"}</DialogTitle>
+          <DialogTitle>{optimizer ? "编辑投手" : "创建投手"}</DialogTitle>
           <DialogDescription>
             绑定已有策略与规则。每日剧单继承此处的 BC
             和账户；暂停后停止新的自动任务。
@@ -330,7 +330,7 @@ export function AIOptimizerEditor({
           <fieldset disabled={saving || loading} className="min-w-0">
             <FieldGroup className="grid gap-4 sm:grid-cols-2">
               <Field>
-                <FieldLabel htmlFor="optimizer-name">优化师名称</FieldLabel>
+                <FieldLabel htmlFor="optimizer-name">投手名称</FieldLabel>
                 <Input
                   id="optimizer-name"
                   value={name}
@@ -644,7 +644,7 @@ export function AIOptimizerEditor({
               type="submit"
               disabled={loading || accountsLoading || saving}
             >
-              {saving ? "保存中…" : optimizer ? "保存优化师" : "创建优化师"}
+              {saving ? "保存中…" : optimizer ? "保存投手" : "创建投手"}
             </Button>
           </DialogFooter>
         </form>

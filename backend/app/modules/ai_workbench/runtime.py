@@ -132,14 +132,14 @@ def task_identity(
     reviews.authorize(session, _context(task), write=True)
     optimizer, _ = reviews.load_optimizer(session, _context(task), task.optimizer_id)
     if not optimizer.active:
-        raise DomainError("ai_optimizer_inactive", "AI 优化师已暂停")
+        raise DomainError("ai_optimizer_inactive", "AI 投手已暂停")
     return task
 
 
 @router.post("/claim", dependencies=[Depends(service_identity)])
 def claim(session: SessionDep, methods: MethodBundle) -> dict:
     now = datetime.now(UTC)
-    # 跨进程只允许同一优化师一个复盘会话；迟到结果由新 fence 拒绝。
+    # 跨进程只允许同一投手一个复盘会话；迟到结果由新 fence 拒绝。
     candidates = session.exec(
         select(reviews.DSHReviewTask)
         .where(
@@ -383,7 +383,7 @@ def _knowledge_task(task, session):
 
     _, current = reviews.load_optimizer(session, _context(task), task.optimizer_id)
     if current.number != task.optimizer_version:
-        raise DomainError("ai_proposal_stale", "优化师范围或配置已改变，请重新发起复盘")
+        raise DomainError("ai_proposal_stale", "投手范围或配置已改变，请重新发起复盘")
     ids = task.evidence["optimizer"]["advertiser_ids"]
     grants = authorized_grants(
         session, context=_context(task), bc_id=current.bc_id, advertiser_ids=tuple(ids)

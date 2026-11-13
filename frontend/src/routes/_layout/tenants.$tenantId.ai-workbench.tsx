@@ -20,7 +20,7 @@ export const Route = createFileRoute("/_layout/tenants/$tenantId/ai-workbench")(
     return_to: typeof search.return_to === "string" ? search.return_to : undefined,
   }),
   component: Page,
-  head: () => ({ meta: [{ title: "AI 优化师工作台 · TK-ADA" }] }),
+  head: () => ({ meta: [{ title: "AI 投手工作台 · TK-ADA" }] }),
 })
 
 function Page() {

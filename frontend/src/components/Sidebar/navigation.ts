@@ -110,9 +110,9 @@ export function workspaceNavigation({
     ...(prefix && platformAdmin
       ? [
           {
-            label: "AI 优化师",
+            label: "AI 投手",
             items: [
-              { icon: SlidersHorizontal, title: "AI 优化师", path: `${prefix}/ai-workbench` },
+              { icon: SlidersHorizontal, title: "AI 投手", path: `${prefix}/ai-workbench` },
             ],
           },
         ]

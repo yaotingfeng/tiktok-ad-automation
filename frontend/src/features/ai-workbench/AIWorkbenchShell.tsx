@@ -80,7 +80,7 @@ export function buildAIWorkbenchHref(
   return `/tenants/${tenantId}/ai-workbench${params.toString() ? `?${params.toString()}` : ""}`
 }
 
-/** AI 工作台独立于广告投放分组；左侧菜单和 URL 一起切换，切换优化师时整棵视图重新挂载。 */
+/** AI 工作台独立于广告投放分组；左侧菜单和 URL 一起切换，切换投手时整棵视图重新挂载。 */
 export function AIWorkbenchShell(props: Props) {
   const { user, isPending } = useAuth()
   if (isPending || !user) return <p role="status">正在核验工作台权限…</p>
@@ -128,18 +128,18 @@ function TenantWorkbenchShell({
   return (
     <section
       className="flex min-w-0 flex-col gap-5"
-      aria-label="AI 优化师工作台"
+      aria-label="AI 投手工作台"
       data-testid="ai-workbench-shell"
     >
       <header className="flex min-w-0 flex-wrap items-start justify-between gap-3">
         <div>
-          <h1 className="workspace-title">AI 优化师工作台</h1>
+          <h1 className="workspace-title">AI 投手工作台</h1>
           <p className="text-sm text-muted-foreground">
             租户 {tenantId} · 策略、规则与执行证据共用原有配置。
           </p>
         </div>
         <div className="flex gap-2">
-          <Button onClick={() => setEditor("create")}>创建优化师</Button>
+          <Button onClick={() => setEditor("create")}>创建投手</Button>
           <Button asChild variant="outline">
             <a href={`/tenants/${tenantId}/ai-workbench`}>
               <Cog />
@@ -372,7 +372,7 @@ function ExecutionView({
           ))
         ) : (
           <p className="mt-2 text-sm text-muted-foreground">
-            等待优化师 {optimizerId || "—"} 的执行回读证据。
+            等待投手 {optimizerId || "—"} 的执行回读证据。
           </p>
         )}
         <p className="mt-2 text-xs text-muted-foreground">

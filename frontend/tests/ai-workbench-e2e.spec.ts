@@ -52,7 +52,7 @@ test("AI 每日报告使用 transport double 展示冻结证据和待确认状�
         items: [
           {
             id: optimizer,
-            name: "自动优化师",
+            name: "自动投手",
             active: true,
             version: 2,
             bc_id: "bc-a",
@@ -101,7 +101,7 @@ test("AI 每日报告使用 transport double 展示冻结证据和待确认状�
   await expect(page.getByTestId("ai-daily-report")).toContainText("待确认 1 条")
 })
 
-test("切换优化师后每日报告请求保持租户边界", async ({ page }) => {
+test("切换投手后每日报告请求保持租户边界", async ({ page }) => {
   const requested: string[] = []
   await page.route(`**/api/tenants/${tenant}/ai-optimizers?**`, (route) =>
     route.fulfill({
@@ -109,7 +109,7 @@ test("切换优化师后每日报告请求保持租户边界", async ({ page }) 
         items: [
           {
             id: optimizer,
-            name: "手动优化师",
+            name: "手动投手",
             active: true,
             version: 1,
             bc_id: "bc-a",
@@ -145,7 +145,7 @@ test("切换优化师后每日报告请求保持租户边界", async ({ page }) 
   ).toBeTruthy()
 })
 
-test("双租户双优化师切换保留 AUTO/MANUAL、下单路径和回读边界", async ({
+test("双租户双投手切换保留 AUTO/MANUAL、下单路径和回读边界", async ({
   page,
 }) => {
   const tenantA = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
@@ -177,8 +177,8 @@ test("双租户双优化师切换保留 AUTO/MANUAL、下单路径和回读边�
       await route.fulfill({
         json: {
           items: [
-            optimizerPayload(optimizerA, "AUTO", "自动优化师 A"),
-            optimizerPayload(optimizerAManual, "MANUAL", "手动优化师 A"),
+            optimizerPayload(optimizerA, "AUTO", "自动投手 A"),
+            optimizerPayload(optimizerAManual, "MANUAL", "手动投手 A"),
           ],
         },
       })
@@ -187,7 +187,7 @@ test("双租户双优化师切换保留 AUTO/MANUAL、下单路径和回读边�
     if (url.includes(`/tenants/${tenantB}/`)) {
       await route.fulfill({
         json: {
-          items: [optimizerPayload(optimizerB, "MANUAL", "手动优化师 B")],
+          items: [optimizerPayload(optimizerB, "MANUAL", "手动投手 B")],
         },
       })
       return
@@ -284,7 +284,7 @@ test("双租户双优化师切换保留 AUTO/MANUAL、下单路径和回读边�
       versionRequests.push(body)
       await route.fulfill({
         json: {
-          ...optimizerPayload(optimizerAManual, "MANUAL", "手动优化师 A"),
+          ...optimizerPayload(optimizerAManual, "MANUAL", "手动投手 A"),
           version: 4,
           request_id: body.request_id,
         },
@@ -337,9 +337,9 @@ test("双租户双优化师切换保留 AUTO/MANUAL、下单路径和回读边�
   )
 
   await page.goto(`/tenants/${tenantB}/ai-workbench?optimizer_id=${optimizerB}`)
-  // 优化师名称显示在左侧列表；报告卡片只承载模式与冻结证据。
+  // 投手名称显示在左侧列表；报告卡片只承载模式与冻结证据。
   await expect(page.getByTestId("ai-workbench-shell")).toContainText(
-    "手动优化师 B",
+    "手动投手 B",
   )
   await expect(page.getByTestId("ai-daily-report")).toContainText("MANUAL")
   await expect.poll(() => reportRequests.length).toBeGreaterThanOrEqual(3)
@@ -359,7 +359,7 @@ test("双租户双优化师切换保留 AUTO/MANUAL、下单路径和回读边�
 
 const configuredOptimizer = (
   id = optimizer,
-  name = "优化师 A",
+  name = "投手 A",
   active = true,
 ) => ({
   id,
@@ -388,7 +388,7 @@ async function choose(
   await page.getByRole("option", { name, exact: true }).click()
 }
 
-test("空租户可创建、编辑、暂停和恢复优化师，所有业务请求带 Bearer", async ({
+test("空租户可创建、编辑、暂停和恢复投手，所有业务请求带 Bearer", async ({
   page,
 }) => {
   let items: ReturnType<typeof configuredOptimizer>[] = []
@@ -470,9 +470,9 @@ test("空租户可创建、编辑、暂停和恢复优化师，所有业务请�
     return route.fulfill({ json: { items: [], total: 0 } })
   })
   await page.goto(`/tenants/${tenant}/ai-workbench`)
-  await page.getByRole("button", { name: "创建优化师", exact: true }).click()
+  await page.getByRole("button", { name: "创建投手", exact: true }).click()
   const dialog = page.getByRole("dialog")
-  await dialog.getByLabel("优化师名称").fill("第一位优化师")
+  await dialog.getByLabel("投手名称").fill("第一位投手")
   await choose(page, "BC", "星屿 · bc-a")
   await dialog.getByLabel("账户一 · acc-1").check()
   await dialog.getByLabel("日消耗目标").fill("150")
@@ -483,10 +483,10 @@ test("空租户可创建、编辑、暂停和恢复优化师，所有业务请�
   await dialog.getByLabel("单次预算调整绝对上限").fill("20")
   await dialog.getByLabel("素材制作策略 ID").fill("cstrategy-1,cstrategy-2")
   await dialog.getByLabel("素材回写表格").fill("sheet-1")
-  await dialog.getByRole("button", { name: "创建优化师", exact: true }).click()
+  await dialog.getByRole("button", { name: "创建投手", exact: true }).click()
   await expect(dialog).not.toBeVisible()
   expect(writes[0]).toMatchObject({
-    name: "第一位优化师",
+    name: "第一位投手",
     advertiser_ids: ["acc-1"],
     strategy_version_id: "version-1",
     rule_ids: ["rule-1"],
@@ -498,25 +498,25 @@ test("空租户可创建、编辑、暂停和恢复优化师，所有业务请�
       feishu_token: "sheet-1",
     },
   })
-  await page.getByRole("button", { name: "编辑优化师" }).click()
-  await dialog.getByLabel("优化师名称").fill("已编辑优化师")
+  await page.getByRole("button", { name: "编辑投手" }).click()
+  await dialog.getByLabel("投手名称").fill("已编辑投手")
   await choose(page, "绑定策略版本", "新策略 · v2")
   await choose(page, "优化模式", "自动优化")
   await dialog.getByLabel("每日复盘时间").fill("15:30")
-  await dialog.getByRole("button", { name: "保存优化师" }).click()
+  await dialog.getByRole("button", { name: "保存投手" }).click()
   await expect(dialog).not.toBeVisible()
   expect(writes[1]).toMatchObject({
-    name: "已编辑优化师",
+    name: "已编辑投手",
     strategy_version_id: "version-2",
     optimization_mode: "AUTO",
     review_time: "15:30",
   })
-  await page.getByRole("button", { name: "暂停优化师" }).click()
-  await expect(page.getByRole("button", { name: "恢复优化师" })).toBeVisible()
+  await page.getByRole("button", { name: "暂停投手" }).click()
+  await expect(page.getByRole("button", { name: "恢复投手" })).toBeVisible()
   await expect(page.getByTestId("ai-optimizer-select")).toHaveValue(optimizer)
   expect(writes[2]).toMatchObject({ active: false })
-  await page.getByRole("button", { name: "恢复优化师" }).click()
-  await expect(page.getByRole("button", { name: "暂停优化师" })).toBeVisible()
+  await page.getByRole("button", { name: "恢复投手" }).click()
+  await expect(page.getByRole("button", { name: "暂停投手" })).toBeVisible()
   expect(writes[3]).toMatchObject({ active: true })
   expect(authenticated.some((path) => path.endsWith("/accounts"))).toBeTruthy()
 })
@@ -584,7 +584,7 @@ test("提案展示前后值与授权证据，决定错误可见，复盘可触�
   expect(reviews).toBe(1)
 })
 
-test("切换优化师丢弃旧提案和编辑草稿，已暂停优化师仍可管理", async ({
+test("切换投手丢弃旧提案和编辑草稿，已暂停投手仍可管理", async ({
   page,
 }) => {
   const second = "33333333-3333-4333-8333-333333333333"
@@ -594,7 +594,7 @@ test("切换优化师丢弃旧提案和编辑草稿，已暂停优化师仍可�
       json: {
         items: [
           configuredOptimizer(),
-          configuredOptimizer(second, "暂停优化师 B", false),
+          configuredOptimizer(second, "暂停投手 B", false),
         ],
       },
     }),
@@ -607,14 +607,14 @@ test("切换优化师丢弃旧提案和编辑草稿，已暂停优化师仍可�
       })
       await route
         .fulfill({
-          json: [{ id: "old", status: "PENDING", title: "旧优化师建议" }],
+          json: [{ id: "old", status: "PENDING", title: "旧投手建议" }],
         })
         .catch(() => {})
     },
   )
   await page.route(`**/ai-optimizers/${second}/proposals**`, (route) =>
     route.fulfill({
-      json: [{ id: "new", status: "REJECTED", title: "新优化师历史" }],
+      json: [{ id: "new", status: "REJECTED", title: "新投手历史" }],
     }),
   )
   await page.goto(
@@ -622,16 +622,16 @@ test("切换优化师丢弃旧提案和编辑草稿，已暂停优化师仍可�
   )
   await expect.poll(() => !!releaseOld).toBeTruthy()
   await page.getByTestId("ai-optimizer-select").selectOption(second)
-  await expect(page.getByTestId("ai-review-view")).toContainText("新优化师历史")
+  await expect(page.getByTestId("ai-review-view")).toContainText("新投手历史")
   releaseOld?.()
   await expect(page.getByTestId("ai-review-view")).not.toContainText(
-    "旧优化师建议",
+    "旧投手建议",
   )
   await expect(
     page.getByRole("button", { name: "接受", exact: true }),
   ).toHaveCount(0)
   await page.getByTestId("ai-nav-overview").click()
-  await expect(page.getByRole("button", { name: "恢复优化师" })).toBeVisible()
+  await expect(page.getByRole("button", { name: "恢复投手" })).toBeVisible()
 })
 
 test("排期保存保留行 ID、冻结行只读，输入不中断，TSV 和日期切换可用", async ({

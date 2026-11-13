@@ -41,7 +41,7 @@ export function AutomationRulesPage() {
       </div>
       {boundContext && (
         <p className="text-xs text-amber-700" data-testid="rule-bound-context">
-          当前仅查看优化师 {search.ai_optimizer_id} 已绑定的规则；租户其他规则不会被修改。保存返回将回到 {search.return_to ?? "AI 工作台"}。
+          当前仅查看投手 {search.ai_optimizer_id} 已绑定的规则；租户其他规则不会被修改。保存返回将回到 {search.return_to ?? "AI 工作台"}。
         </p>
       )}
       <Tabs

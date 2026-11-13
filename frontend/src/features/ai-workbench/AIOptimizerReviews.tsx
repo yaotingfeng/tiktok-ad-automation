@@ -42,7 +42,7 @@ function Evidence({ label, value }: { label: string; value: unknown }) {
   )
 }
 
-/** 每个视图请求都随优化师卸载取消，迟到的复盘/决定不得覆盖新优化师状态。 */
+/** 每个视图请求都随投手卸载取消，迟到的复盘/决定不得覆盖新投手状态。 */
 export function AIOptimizerReviews({
   tenantId,
   optimizerId,
@@ -390,7 +390,7 @@ export function AIOptimizerReviews({
             </CardHeader>
             <CardContent className="flex flex-col gap-4">
               <p className="break-all text-xs text-muted-foreground">
-                优化师基准 v{item.base_optimizer_version ?? "—"} · 目标{" "}
+                投手基准 v{item.base_optimizer_version ?? "—"} · 目标{" "}
                 {item.target_id ?? "—"} · 策略版本{" "}
                 {item.base_strategy_version_id ?? "—"} · 规则版本{" "}
                 {item.base_rule_version ?? "—"}

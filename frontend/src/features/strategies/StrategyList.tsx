@@ -269,7 +269,7 @@ export function StrategyList() {
           </p>
           {boundContext && (
             <p className="text-xs text-amber-700" data-testid="strategy-bound-context">
-              当前为 AI 优化师绑定策略上下文（{contextSearch.ai_optimizer_id}），租户策略列表仅查看；保存返回将回到 {contextSearch.return_to ?? "AI 工作台"}。{" "}
+              当前为 AI 投手绑定策略上下文（{contextSearch.ai_optimizer_id}），租户策略列表仅查看；保存返回将回到 {contextSearch.return_to ?? "AI 工作台"}。{" "}
               {contextSearch.return_to && <a className="underline" href={contextSearch.return_to}>返回 AI 工作台</a>}
             </p>
           )}

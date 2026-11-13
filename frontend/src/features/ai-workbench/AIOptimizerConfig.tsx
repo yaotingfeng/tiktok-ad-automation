@@ -24,7 +24,7 @@ type Props = {
   returnContext: string
 }
 
-/** 优化师只绑定一个策略版本；编辑入口复用既有页面，并携带完整返回上下文。 */
+/** 投手只绑定一个策略版本；编辑入口复用既有页面，并携带完整返回上下文。 */
 export function AIOptimizerConfig({
   tenantId,
   optimizer,
@@ -63,7 +63,7 @@ export function AIOptimizerConfig({
     return (
       <Card>
         <CardContent className="py-10 text-sm text-muted-foreground">
-          创建或选择一个 AI 优化师。
+          创建或选择一个 AI 投手。
         </CardContent>
       </Card>
     )
@@ -79,7 +79,7 @@ export function AIOptimizerConfig({
       <Card>
         <CardHeader>
           <CardTitle>
-            优化师配置 · {optimizer.active ? "运行中" : "已暂停"}
+            投手配置 · {optimizer.active ? "运行中" : "已暂停"}
           </CardTitle>
           <CardDescription>
             当前版本保存后，执行会重新校验租户、BC 和授权范围。
@@ -87,7 +87,7 @@ export function AIOptimizerConfig({
         </CardHeader>
         <CardContent className="grid gap-3 text-sm">
           <div className="flex gap-2">
-            <Button onClick={onEdit}>编辑优化师</Button>
+            <Button onClick={onEdit}>编辑投手</Button>
             <Button
               variant="outline"
               disabled={busy}
@@ -96,8 +96,8 @@ export function AIOptimizerConfig({
               {busy
                 ? "处理中…"
                 : optimizer.active
-                  ? "暂停优化师"
-                  : "恢复优化师"}
+                  ? "暂停投手"
+                  : "恢复投手"}
             </Button>
           </div>
           {error && (
@@ -137,7 +137,7 @@ export function AIOptimizerConfig({
         <CardHeader>
           <CardTitle>唯一绑定与排期</CardTitle>
           <CardDescription>
-            一个优化师只绑定一个策略版本；排期不选择素材。
+            一个投手只绑定一个策略版本；排期不选择素材。
           </CardDescription>
         </CardHeader>
         <CardContent className="grid gap-3 text-sm">
@@ -204,7 +204,7 @@ export function AIOptimizerConfig({
             </a>
           </Button>
           <p className="basis-full text-xs text-muted-foreground">
-            策略范围：当前绑定版本。规则范围：仅当前优化师已绑定规则；租户其他规则不会被静默修改。
+            策略范围：当前绑定版本。规则范围：仅当前投手已绑定规则；租户其他规则不会被静默修改。
           </p>
         </CardContent>
       </Card>

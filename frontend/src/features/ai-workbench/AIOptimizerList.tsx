@@ -31,7 +31,7 @@ type Props = {
   onLoaded?: (optimizers: AIOptimizer[]) => void
 }
 
-/** 仅读取当前租户的优化师；切换由上层 URL 承载，避免跨租户或跨优化师残留状态。 */
+/** 仅读取当前租户的投手；切换由上层 URL 承载，避免跨租户或跨投手残留状态。 */
 export function AIOptimizerList({
   tenantId,
   selectedId,
@@ -72,10 +72,10 @@ export function AIOptimizerList({
   return (
     <Card className="border-border/70" data-testid="ai-optimizer-list">
       <CardHeader className="pb-3">
-        <CardTitle className="text-base">优化师</CardTitle>
+        <CardTitle className="text-base">投手</CardTitle>
       </CardHeader>
       <CardContent className="space-y-3">
-        <Label htmlFor="ai-optimizer-select">当前优化师</Label>
+        <Label htmlFor="ai-optimizer-select">当前投手</Label>
         <select
           id="ai-optimizer-select"
           data-testid="ai-optimizer-select"
@@ -85,7 +85,7 @@ export function AIOptimizerList({
           disabled={loading || !items.length}
         >
           {!items.length && (
-            <option value="">{loading ? "载入中…" : "暂无优化师"}</option>
+            <option value="">{loading ? "载入中…" : "暂无投手"}</option>
           )}
           {items.map((item) => (
             <option key={item.id} value={item.id}>
@@ -99,7 +99,7 @@ export function AIOptimizerList({
             {error}
           </p>
         )}
-        <fieldset className="space-y-2" aria-label="优化师列表">
+        <fieldset className="space-y-2" aria-label="投手列表">
           {items.map((item) => (
             <button
               type="button"
