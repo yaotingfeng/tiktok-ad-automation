@@ -91,8 +91,17 @@ def test_sdk_size_guard_preserves_log_split_signal(monkeypatch):
         assert reader.request_count == 1
 
 
-@pytest.mark.parametrize("operation", ["changelog.check", "changelog.download"])
-def test_missing_export_is_recoverable_before_sdk_discards_provider_code(operation):
+@pytest.mark.parametrize(
+    "operation,code,message",
+    [
+        ("changelog.check", 40007, "Resource not exist."),
+        ("changelog.download", 40007, "Resource not exist."),
+        ("changelog.download", 40000, "Service Error: Object Not Exist."),
+    ],
+)
+def test_missing_export_is_recoverable_before_sdk_discards_provider_code(
+    operation, code, message
+):
     from contextlib import contextmanager
     from datetime import timedelta
     from types import SimpleNamespace
@@ -109,8 +118,10 @@ def test_missing_export_is_recoverable_before_sdk_discards_provider_code(operati
     requests = OfficialReadRequests(
         client, request_scope=scope, deadline=datetime.now(UTC) + timedelta(seconds=30)
     )
+    import json
+
     response = SimpleNamespace(
-        data=b'{"code":40007,"message":"Resource not exist.","data":{}}'
+        data=json.dumps({"code": code, "message": message, "data": {}}).encode()
     )
     with pytest.raises(DomainError) as caught:
         requests.invoke(
@@ -132,6 +143,9 @@ def test_other_provider_errors_are_not_misclassified_as_missing_export():
         ("changelog.create", 40007, "Resource not exist."),
         ("changelog.check", 40007, "Permission denied"),
         ("changelog.check", 40002, "Resource not exist."),
+        ("changelog.check", 40000, "Service Error: Object Not Exist."),
+        ("changelog.create", 40000, "Service Error: Object Not Exist."),
+        ("changelog.download", 40000, "Invalid parameter"),
     ]:
         import json
 

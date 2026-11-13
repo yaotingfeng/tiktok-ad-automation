@@ -110,8 +110,13 @@ def _strict_sdk_envelope(
             operation in {"changelog.check", "changelog.download"}
             and raw["code"] == 40007
             and str(raw.get("message") or "").strip().lower() == "resource not exist."
+        ) or (
+            operation == "changelog.download"
+            and raw["code"] == 40000
+            and str(raw.get("message") or "").strip().lower()
+            == "service error: object not exist."
         ):
-            # 已核实的平台失效导出回执：恢复原窗口，不能反复轮询同一无效task_id。
+            # 已核实的平台失效导出/下载文件回执：按原窗口重建，不能反复读取失效文件。
             # 只识别日志读取的明确回执，不把其它接口/权限错误当作可重建导出。
             raise DomainError(
                 "operation_log_task_unavailable",
