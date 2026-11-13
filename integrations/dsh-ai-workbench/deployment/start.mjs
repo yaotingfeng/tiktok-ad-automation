@@ -18,7 +18,8 @@ export async function prepareRuntime({ home, workspace, providerFile, tokenFile,
   // 仅收紧宿主自身凭据文件，保留原内容，满足DSH的owner-only约束。
   try { await chmod(join(home, '.credentials.yaml'), 0o600) } catch (error) { if (error.code !== 'ENOENT') throw error }
   const patch = [
-    { id: 'plugin-manager', disabled: true }, { id: 'hmr', disabled: true },
+    // Web 标准预设依赖 pluginManager；关闭会同时阻断会话创建和插件管理页。
+    { id: 'plugin-manager', disabled: false }, { id: 'hmr', disabled: true },
     { id: 'session-title-llm', disabled: true }, { id: 'session-telemetry-otel', disabled: true },
     { id: 'llm-pi-ai', config: { providers: { [provider.provider]: provider.config } } },
     { id: 'agent-default-model', config: { provider: provider.provider, model: provider.model } },

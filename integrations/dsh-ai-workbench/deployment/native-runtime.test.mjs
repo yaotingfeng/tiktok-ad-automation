@@ -102,7 +102,15 @@ test('production entrypoint boots real DSH, polls TK-ADA and serves readiness wi
     assert.equal(requests[0].body.main.key, 'ai-delivery-review')
     // 真实浏览器面：publicUrl 只负责生成上下文 URL，/dsh 前缀由管理代理剥离。
     const webOrigin = `http://127.0.0.1:${api.address().port}`
-    const page = await fetch('http://127.0.0.1:9081/dsh/', { headers: { origin: webOrigin } })
+    let page
+    for (let attempt = 0; attempt < 100 && child.exitCode === null; attempt++) {
+      try {
+        page = await fetch('http://127.0.0.1:9081/dsh/', { headers: { origin: webOrigin } })
+        if (page.ok) break
+      } catch {}
+      await delay(100)
+    }
+    assert.ok(page?.ok, `WebUI did not become ready:\n${output}`)
     const html = await page.text()
     assert.equal(page.status, 200, `WebUI root response ${page.status}: ${html}`)
     assert.match(html, /<script/)
@@ -121,6 +129,15 @@ test('production entrypoint boots real DSH, polls TK-ADA and serves readiness wi
     assert.equal(initialize.status, 200)
     const initialized = await initialize.text()
     assert.ok(initialized.includes(join(root, 'workspace', 'deepseek-harness', 'default-workspace')), `default workspace did not initialize: ${initialized}`)
+    // 页面和工作区可用不代表 Agent 能创建：真实装配 standard，覆盖其插件依赖。
+    const createSession = await fetch('http://127.0.0.1:9081/dsh/api/session/create', {
+      method: 'POST', headers: { origin: webOrigin, 'content-type': 'application/json' },
+      body: JSON.stringify({ type: 'client-request', rpcId: crypto.randomUUID(), method: 'session/create', payload: { args: { request: { cwd: join(root, 'workspace'), agentPreset: 'standard' } } } }),
+    })
+    assert.equal(createSession.status, 200)
+    const created = await createSession.text()
+    assert.match(created, /"sessionId":"session-/i, `standard Agent did not create: ${created}`)
+    assert.doesNotMatch(created, /agent-preset\/invalid|waiting for pluginManager/)
     const wsRequest = httpRequest('http://127.0.0.1:9081/dsh/api/remote.mux', {
       headers: { origin: webOrigin, upgrade: 'websocket', connection: 'Upgrade', 'sec-websocket-key': 'MTIzNDU2Nzg5MGFiY2RlZg==', 'sec-websocket-version': '13' },
     })

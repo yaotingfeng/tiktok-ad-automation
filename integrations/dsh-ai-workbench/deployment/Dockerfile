@@ -7,6 +7,8 @@ RUN npm ci --omit=dev --no-audit --no-fund && npm cache clean --force
 
 FROM ${NODE_IMAGE}
 WORKDIR /opt/tkada-dsh
+# 官方插件管理器通过 pnpm 安装 profile 依赖，不能只开放按钮却缺少执行器。
+RUN npm install --global pnpm@10.34.9 --no-audit --no-fund && npm cache clean --force
 COPY --from=dependencies /opt/tkada-dsh ./
 COPY integrations/dsh-ai-workbench ./plugin
 ENV DSH_HOME=/var/lib/dsh/home DSH_WORKSPACE=/var/lib/dsh/workspace NODE_OPTIONS=--max-old-space-size=640
