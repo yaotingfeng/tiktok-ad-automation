@@ -5187,3 +5187,15 @@ c34b生产快速切换约3分28秒完成、锁释放/CI恢复；五分钟仍4.88
 - 原始来源为 Q3 政策整理与截图；Q4 同口径标记为 2026-11-13 用户业务确认，`source_verified=false`，有效期至 2026-12-31，正式结算仍需复核平台通知。
 - 新增 `scripts/import-ai-knowledge-pack.py`，必须显式提供 TK-ADA API、租户 ID 和平台管理员令牌后导入 PUBLIC 知识；本轮未写入未知环境数据库。
 - 验证：知识包 Pydantic 合同测试通过，JSON/脚本语法通过。
+
+## 2026-11-13 变现链路与模式知识包
+
+- 新增公共知识包 `docs/knowledge-packs-monetization-models.json`，覆盖 APP、TikTok Minis IAP/IAA、端原生 IAA、平台收入/结算/返点/赔付/激励分层和复盘识别框架。
+- 资料混合官方手册、会议摘要和行业整理，明确 `source_verified=false`、来源、保存日期和到期时间；行业数据不当作租户事实，历史价格/地区/回本周期不作为默认配置。
+- 验证 IAP/IAA/端原生、平台 ROAS/经营收入/实际到账拆分及公共知识合同；未写入未知运行环境数据库。
+
+## 2026-11-13 变现链路与模式知识包
+
+- 新增公共知识包 `docs/knowledge-packs-monetization-models.json`，覆盖 APP、TikTok Minis IAP/IAA、端原生 IAA、平台收入/结算/返点/赔付/激励分层和复盘识别框架。
+- 资料混合官方手册、会议摘要和行业整理，明确 `source_verified=false`、来源、保存日期和到期时间；行业数据不当作租户事实，历史价格/地区/回本周期不作为默认配置。
+- 验证 IAP/IAA/端原生、平台 ROAS/经营收入/实际到账拆分及公共知识合同；未写入未知运行环境数据库。
