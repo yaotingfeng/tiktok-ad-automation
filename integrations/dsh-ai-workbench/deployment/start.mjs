@@ -20,6 +20,8 @@ export async function prepareRuntime({ home, workspace, providerFile, tokenFile,
     { id: 'llm-pi-ai', config: { providers: { [provider.provider]: provider.config } } },
     { id: 'agent-default-model', config: { provider: provider.provider, model: provider.model } },
     // 复用官方 Web profile；禁止打印带凭据 URL，原生监听只在 Pod 回环。
+    // 容器没有系统 Documents/xdg-user-dir；默认工作区必须落在持久卷内。
+    { id: 'workspace-controller', config: { documentsDirectory: workspace } },
     { id: 'webserver', config: { host: '127.0.0.1', port: 9082 } },
     { id: 'web-runtime', config: { openBrowser: false, printUrl: false, surfaceContext: false, publicUrl: `${url.origin}/dsh/` } },
     { insert: [

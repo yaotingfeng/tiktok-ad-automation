@@ -110,6 +110,13 @@ test('production entrypoint boots real DSH, polls TK-ADA and serves readiness wi
     assert.match(asset.headers.get('content-type') || '', /javascript/)
     // DSH API_PATH=/api 是 HTTP RPC 前缀；实时 WebSocket 使用官方
     // REMOTE_STREAM_MUX_PATH=/api/remote.mux。
+    const initialize = await fetch('http://127.0.0.1:9081/dsh/api/workspace/initializeDefault', {
+      method: 'POST', headers: { origin: webOrigin, 'content-type': 'application/json' },
+      body: JSON.stringify({ type: 'client-request', rpcId: crypto.randomUUID(), method: 'workspace/initializeDefault', payload: { args: {} } }),
+    })
+    assert.equal(initialize.status, 200)
+    const initialized = await initialize.text()
+    assert.ok(initialized.includes(join(root, 'workspace', 'deepseek-harness', 'default-workspace')), `default workspace did not initialize: ${initialized}`)
     const wsRequest = httpRequest('http://127.0.0.1:9081/dsh/api/remote.mux', {
       headers: { origin: webOrigin, upgrade: 'websocket', connection: 'Upgrade', 'sec-websocket-key': 'MTIzNDU2Nzg5MGFiY2RlZg==', 'sec-websocket-version': '13' },
     })
