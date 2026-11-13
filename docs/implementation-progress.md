@@ -5220,3 +5220,13 @@ c34b生产快速切换约3分28秒完成、锁释放/CI恢复；五分钟仍4.88
 - 按用户要求，仅 is_superuser 可见 AI 入口；直接地址在组件边界阻断，不发工作台数据请求；全部租户工作台 API/知识接口使用平台管理员依赖，普通成员和租户管理员均返回403。
 - 现有成功HTTP用例显式使用平台管理员，保留普通身份拒绝覆盖。真实PG相关153项、Playwright24项、TypeScript/Vite及Ruff通过。
 - 用户已授权合并、推送和生产发布，包含独立DSH部署。尚在核对实际生产连通和准备DSH镜像/配置，不能将本地通过视为已发布。
+## 2026-11-12 筛查规划阻断修复已发布
+
+- 线上7f版本中发现筛查回放的轻量计划缺少报表`kind`，`screen_hot`进入`AttributeError`并按5分钟退避；修复由`_report_plan_kind`为缺失字段明确选择integrated报表入口。新增回归与阶段端点专项通过，旧4,859账户压力用例因本地PG `max_locks_per_transaction` 不足失败，未归因于本次代码。
+- f10dff97从7f快速发布，11角色全就绪、schema0118、配置/额度/并发/资源/四开关/HTTPS保持，发布锁删除、Jenkins恢复。补数16Gi与报表反亲和造成节点碎片，临时正常退出迁移报表Worker后恢复，最终Deployment规格/副本数回到原值；无扩容、DDL、强删任务或新备份。
+- 发布后lagging计划在18:35:58完成screen_hot、hot、material、live，hot/material各覆盖535账户；cohort四任务COMPLETE且revision gap为0。全局stale计数仍受切换窗口和身份缺口影响，必须继续以发布边界后的自然需求核对20分钟SLO。
+## 2026-11-12：创意身份目录补读逻辑已修正，待发布
+
+定位到创意报表已完成但素材身份仍未收敛的原因：`creative_day` 发布后没有触发创意 ID 目录补读，健康修复只覆盖广告/广告组/系列；同时报表驱动的定向目录请求没有带删除对象范围。新增独立 identity 目录队列：按账户和平台广告类型分组，每批最多100个未解析且有金额的创意，带 `include_deleted` 与 identity service，使用 background workload，不阻塞报表 SLO；手动/旧 Smart+ 创意按广告 ID回读，Upgraded Smart+按 creative ID 回读。普通报表驱动目录补读也统一包含删除对象范围。
+
+真实 PostgreSQL18/Redis8 隔离回归：目录刷新与创意日报相关 70 项通过；新增用例验证创意 ID、删除范围、identity service、background workload 及租户隔离。Ruff、格式检查、compileall、`git diff --check` 通过；ty 仅保留 jobs.py 原有两项存量诊断。尚未发布生产，待提交并按发布流程上线后观察未映射创意和目录缺口。
