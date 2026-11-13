@@ -7,6 +7,7 @@ from sqlmodel import Session, col, select
 
 from app.modules.ad_management.models import (
     ManagementRequestAttempt,
+    ManagementTask,
     ManagementTaskItem,
 )
 from app.modules.automation_rules.models import (
@@ -27,6 +28,29 @@ def refresh_execution_results(session: Session, task_id: UUID, tenant_id: UUID) 
         )
         .distinct()
     ).all()
+    # 受理只证明写请求被平台接受；复用真实定向读取生成带值/时间的观察回执。
+    # 仅补排规则动作，保持普通广告管理原有刷新路径与调度量不变。
+    if run_ids:
+        task = session.exec(
+            select(ManagementTask).where(
+                ManagementTask.id == task_id,
+                ManagementTask.tenant_id == tenant_id,
+            )
+        ).first()
+        pending = session.exec(
+            select(ManagementTaskItem.id).where(
+                ManagementTaskItem.task_id == task_id,
+                ManagementTaskItem.tenant_id == tenant_id,
+                ManagementTaskItem.execution_result == "ACCEPTED",
+                col(ManagementTaskItem.observation_state).in_(
+                    ["ACCEPTED", "REFRESH_PENDING"]
+                ),
+            )
+        ).all()
+        if task is not None and pending:
+            from app.modules.ad_management.reconciliation import queue_reconciliation
+
+            queue_reconciliation(session, task, tuple(pending))
     for run_id in sorted(run_ids, key=str):
         run = session.exec(
             select(AutomationRuleRun)

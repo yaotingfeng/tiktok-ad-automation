@@ -26,7 +26,7 @@ from app.modules.automation_rules.confirmations import (
 )
 from app.modules.automation_rules.data_issues import actionable_input_issues
 from app.modules.automation_rules.evaluate import Evaluation, evaluate
-from app.modules.automation_rules.inputs import in_rule_scope, load_inputs
+from app.modules.automation_rules.inputs import load_inputs
 from app.modules.automation_rules.models import (
     AutomationConfirmation,
     AutomationRule,
@@ -192,22 +192,7 @@ def execute_run(
                 scope=optimizer_scope,
                 freshness=inputs.freshness,
                 publication_versions=inputs.publication_versions,
-                checked_objects=tuple(
-                    {
-                        "key": entity.key,
-                        "kind": entity.kind,
-                        "advertiser_id": entity.advertiser_id,
-                        "bc_id": entity.bc_id,
-                        "remote_id": entity.remote_id,
-                        "status": entity.status,
-                        "before": {
-                            key: None if value is None else str(value)
-                            for key, value in entity.attributes.items()
-                        },
-                    }
-                    for entity in inputs.entities.values()
-                    if in_rule_scope(entity, definition, ignore_status=True)
-                ),
+                inputs=inputs,
             )
     except SoftTimeLimitExceeded:
         logger.warning("automation rule timed out", extra={"rule_id": str(rule.id)})

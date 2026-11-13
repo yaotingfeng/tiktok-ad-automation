@@ -1,4 +1,4 @@
-"""UNKNOWN只读核查：状态观察与平台受理证据严格分离，永不据此重发写请求。"""
+"""受理与未知动作的只读核查：状态观察独立于写回执，永不据此重发写请求。"""
 
 from collections import defaultdict
 from datetime import UTC, datetime, timedelta
@@ -31,6 +31,7 @@ from app.modules.ad_management.models import (
 from app.modules.ad_management.schemas import ManagementItemPublic
 from app.modules.tenants.permissions import require_tenant
 
+OBSERVABLE_RESULTS = {"UNKNOWN", "ACCEPTED"}
 FINAL_OBSERVATIONS = {"OBSERVED_MATCH", "OBSERVED_DIFFERENT", "RECONCILE_FAILED"}
 MAX_RECONCILIATION_ATTEMPTS = 3
 
@@ -152,7 +153,7 @@ def queue_reconciliation(
     )
     ids = []
     for item in rows:
-        if item.execution_result != "UNKNOWN" or (
+        if item.execution_result not in OBSERVABLE_RESULTS or (
             round_key == "auto" and item.observation_state in FINAL_OBSERVATIONS
         ):
             continue
@@ -240,7 +241,7 @@ def reconcile_item(
     ).one_or_none()
     if task is None:
         raise DomainError("action_forbidden", "管理任务操作者不匹配")
-    if item.execution_result == "UNKNOWN":
+    if item.execution_result in OBSERVABLE_RESULTS:
         require_tenant(
             session,
             actor_id=context.actor_id,
@@ -344,7 +345,11 @@ def _persist_observation(
             )
             .with_for_update()
         ).one_or_none()
-        if task is None or item is None or item.execution_result != "UNKNOWN":
+        if (
+            task is None
+            or item is None
+            or item.execution_result not in OBSERVABLE_RESULTS
+        ):
             return
         source, current = _current_request(session, item, round_key, attempt)
         if source is None:
@@ -432,7 +437,7 @@ def reconcile_unknown_items(
     *,
     round_key: str = "auto",
 ):
-    """真实原路由定向读取，SQL事务不包围网络等待；最多三轮，UNKNOWN永不改为受理。"""
+    """真实原路由定向读取，最多三轮；核查不改变 UNKNOWN/ACCEPTED 写入结果。"""
     _validate_ids(item_ids, attempt)
     if len(item_ids) > 20:
         raise DomainError("dispatch_payload_invalid", "单次核查最多20项")
@@ -459,7 +464,7 @@ def reconcile_unknown_items(
         groups = defaultdict(list)
         for item in rows:
             if (
-                item.execution_result != "UNKNOWN"
+                item.execution_result not in OBSERVABLE_RESULTS
                 or item.observation_state in FINAL_OBSERVATIONS
             ):
                 continue

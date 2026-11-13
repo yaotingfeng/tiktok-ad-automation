@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -10,7 +11,9 @@ from uuid import UUID
 from sqlmodel import Session, col, select
 
 from app.modules.ai_workbench.rule_binding import RuleBindingScope
+from app.modules.ai_workbench.rule_history import freeze_rule_inputs
 from app.modules.automation_rules.evaluate import Evaluation
+from app.modules.automation_rules.inputs import Inputs
 from app.modules.automation_rules.models import (
     AutomationActionLedger,
     AutomationRule,
@@ -75,14 +78,12 @@ class RuleEvidenceSnapshot:
         freshness: list[dict[str, Any]] | None = None,
         publication_versions: dict[str, int] | None = None,
         checked_objects: tuple[dict[str, Any], ...] | None = None,
+        inputs: Inputs | None = None,
     ) -> RuleEvidenceSnapshot:
-        definition = RuleDefinition.model_validate(rule.definition)
-        checked_metrics = {
-            f"{condition.metric}:{condition.range}"
-            if condition.range
-            else condition.metric: list(condition.values)
-            for condition in definition.conditions
-        }
+        definition = RuleDefinition.model_validate(run.definition)
+        captured = freeze_rule_inputs(inputs) if inputs is not None else None
+        # 阈值是规则配置，绝不能冒充运行时指标；旧调用无输入时明确不可回测。
+        checked_metrics = captured["facts"] if captured else {}
         hits = tuple(
             {
                 "subject_key": hit.subject_key,
@@ -109,7 +110,7 @@ class RuleEvidenceSnapshot:
             tenant_id=rule.tenant_id,
             rule_id=rule.id,
             rule_version=run.rule_version,
-            definition=dict(rule.definition),
+            definition=deepcopy(run.definition),
             optimizer_id=scope.optimizer_id if scope else run.optimizer_id,
             optimizer_version=scope.optimizer_version
             if scope
@@ -130,7 +131,14 @@ class RuleEvidenceSnapshot:
             data_freshness={
                 "evaluated_at": run.finished_at.isoformat()
                 if run.finished_at
-                else datetime.now(UTC).isoformat(),
+                else run.started_at.isoformat(),
+                "threshold_conditions": [
+                    condition.model_dump(mode="json")
+                    for condition in definition.conditions
+                ],
+                "evaluation_inputs": captured["metadata"]
+                if captured
+                else {"complete": False, "reason": "historical_inputs_unavailable"},
                 "checked_count": result.checked,
                 "rows": list(freshness or []),
                 "sources": sorted({item.get("source", "") for item in freshness or []}),
@@ -150,8 +158,14 @@ class RuleEvidenceSnapshot:
                 ),
             },
             publication_versions=publication_versions or {},
-            skipped_accounts=tuple(skipped_accounts),
-            checked_objects=checked_objects or derived_checked_objects,
+            skipped_accounts=tuple(deepcopy(skipped_accounts)),
+            checked_objects=tuple(captured["objects"])
+            if captured
+            else (
+                checked_objects
+                if checked_objects is not None
+                else derived_checked_objects
+            ),
             hits=hits,
             retention_until=datetime.now(UTC) + DEFAULT_EVIDENCE_RETENTION,
         )
@@ -204,6 +218,7 @@ def persist_evidence(
     freshness: list[dict[str, Any]] | None = None,
     publication_versions: dict[str, int] | None = None,
     checked_objects: tuple[dict[str, Any], ...] | None = None,
+    inputs: Inputs | None = None,
 ) -> AutomationRuleEvidence:
     snapshot = RuleEvidenceSnapshot.from_evaluation(
         rule=rule,
@@ -214,6 +229,7 @@ def persist_evidence(
         freshness=freshness,
         publication_versions=publication_versions,
         checked_objects=checked_objects,
+        inputs=inputs,
     )
     row = snapshot.persist(session, run_id=run.id)
     run.evidence_id = row.id

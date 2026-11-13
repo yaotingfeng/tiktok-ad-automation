@@ -353,7 +353,12 @@ def test_reverse_action_conflicts_while_other_rule_still_matches(
     assert summary["conflict_details"] == [
         {"target_key": "adgroup:acc-x:g1", "rule_name": "other", "action": "ENABLE"}
     ]
-    assert session.exec(select(ManagementTask)).all() == []
+    assert (
+        session.exec(
+            select(ManagementTask).where(ManagementTask.tenant_id == env.tenant_id)
+        ).all()
+        == []
+    )
 
 
 def test_reverse_action_runs_when_other_rule_no_longer_matches(
@@ -462,7 +467,12 @@ def test_owner_without_manage_is_not_executed(session, env):
     )
     assert run.execution_status == "FAILED"
     assert run.execution_summary["error"] == "rule_owner_forbidden"
-    assert session.exec(select(ManagementTask)).all() == []
+    assert (
+        session.exec(
+            select(ManagementTask).where(ManagementTask.tenant_id == env.tenant_id)
+        ).all()
+        == []
+    )
 
 
 def test_one_bc_failure_does_not_block_others(session, env):
@@ -727,7 +737,12 @@ def test_recovery_rechecks_parent_state_after_hit_was_frozen(
     else:
         assert summary["submitted"] == 0
         assert _hits(session, run) == {"material:acc-x:m1": "SKIPPED_PARENT_STATUS"}
-        assert session.exec(select(ManagementTask)).all() == []
+        assert (
+            session.exec(
+                select(ManagementTask).where(ManagementTask.tenant_id == env.tenant_id)
+            ).all()
+            == []
+        )
         assert execution_brief(summary, "启用") == "跳过 1"
 
 
@@ -826,7 +841,9 @@ def test_confirmed_batch_runs_as_confirmer(session, env):
         require_manage=False,
     )
     assert summary["submitted"] == 1
-    task = session.exec(select(ManagementTask)).one()
+    task = session.exec(
+        select(ManagementTask).where(ManagementTask.tenant_id == env.tenant_id)
+    ).one()
     assert task.actor_id == confirmer.id
 
 
@@ -929,7 +946,14 @@ def test_confirm_execution_uses_decider(session, env, monkeypatch):
         },
     )
     assert result == "SUBMITTED"
-    assert session.exec(select(ManagementTask)).one().actor_id == decider.id
+    assert (
+        session.exec(
+            select(ManagementTask).where(ManagementTask.tenant_id == env.tenant_id)
+        )
+        .one()
+        .actor_id
+        == decider.id
+    )
 
 
 def test_deleted_rule_action_no_longer_conflicts(session, env):
@@ -1175,7 +1199,12 @@ def test_real_recheck_keeps_old_opposite_action_without_hidden_age_limit(session
     _current_conflict_report(session, env)
     summary = _execute_pause(session, env)
     assert summary["conflicts"] == 1 and summary["submitted"] == 0
-    assert session.exec(select(ManagementTask)).all() == []
+    assert (
+        session.exec(
+            select(ManagementTask).where(ManagementTask.tenant_id == env.tenant_id)
+        ).all()
+        == []
+    )
 
 
 @pytest.mark.parametrize(
@@ -1195,7 +1224,12 @@ def test_real_recheck_stale_report_cannot_release_opposite_action(session, env):
     _current_conflict_report(session, env, fresh=False)
     summary = _execute_pause(session, env)
     assert summary["submitted"] == 0 and summary["failed"] == 1
-    assert session.exec(select(ManagementTask)).all() == []
+    assert (
+        session.exec(
+            select(ManagementTask).where(ManagementTask.tenant_id == env.tenant_id)
+        ).all()
+        == []
+    )
 
 
 def test_real_recheck_missing_metric_cannot_release_opposite_action(session, env):
@@ -1215,7 +1249,12 @@ def test_real_recheck_missing_metric_cannot_release_opposite_action(session, env
     _current_conflict_report(session, env, total=None)
     summary = _execute_pause(session, env)
     assert summary["submitted"] == 0 and summary["failed"] == 1
-    assert session.exec(select(ManagementTask)).all() == []
+    assert (
+        session.exec(
+            select(ManagementTask).where(ManagementTask.tenant_id == env.tenant_id)
+        ).all()
+        == []
+    )
 
 
 @pytest.mark.parametrize("split", ["ads", "days"])
@@ -1262,7 +1301,12 @@ def test_real_recheck_partial_missing_facts_are_unknown(session, env, split):
     session.flush()
     summary = _execute_pause(session, env)
     assert summary["submitted"] == 0 and summary["failed"] == 1
-    assert session.exec(select(ManagementTask)).all() == []
+    assert (
+        session.exec(
+            select(ManagementTask).where(ManagementTask.tenant_id == env.tenant_id)
+        ).all()
+        == []
+    )
 
 
 def test_real_recheck_allows_reenable_after_roas_recovers(session, env):

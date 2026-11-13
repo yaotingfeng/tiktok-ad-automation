@@ -51,8 +51,7 @@ def _current_revision(
     # Keep account access imports lazy: account routing imports tenant models,
     # which in turn register the full model graph during application startup.
     from app.modules.accounts.access import usable_grants
-    from app.modules.accounts.connection_models import TikTokConnection
-    from app.modules.accounts.models import BCAccountAccess
+    from app.modules.accounts.models import BCAccountAccess, TikTokConnection
 
     if not advertiser_ids:
         return set(), 0, ()

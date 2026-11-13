@@ -5200,3 +5200,14 @@ c34b生产快速切换约3分28秒完成、锁释放/CI恢复；五分钟仍4.88
 - 修正新剧补贴误用 GroupID 新客户激励；知识导入改用凭据文件、拒绝重定向和幂等/显式版本更新，同步根目录预置包和脚本。
 - 已验证：后端相关回归 452 passed；追加确认范围回归所在文件 11 passed；DSH 6 passed；Playwright 22 passed；TypeScript/Vite/Ruff 通过。未真实模型联调、未写广告、未部署。
 - 完整闭环尚缺真实状态回读入证据、成熟 D3/D7 窗口、策略/素材归因映射、历史规则回测事实和素材订单复盘细节。部署配置/知识导入/真实模型只读验收待完成，不能将协议通过宣称完整自动投放生产就绪。详见 [上线审查记录](validation/2026-11-13-ai-workbench-release-review.md)。
+
+## 2026-11-13 AI 复盘事实补齐交付
+
+- 用户明确要求将事实缺口补齐；已接通规则 ACCEPTED 后真实只读回读、逐项实际值/时间/差异冻结及下一轮反馈，目录刷新不得覆盖已观察终态。
+- D0/D3/D7 分别使用成熟完整日窗口和成熟后观测资格，复用已有 32 日回刷，不用总收入代替成熟回收。
+- 规则执行保存命中与未命中的原始指标/层级/账户/窗口/摘要；新增任务级 `tkada_backtest_rule`，确定性重放历史候选条件、归档可引用结果；无历史事实、缺数、截断或越界均明确降级，不推定真实节省/因果。
+- 按成功 Campaign 真实身份关联策略版本及报表；新增已签名生产来源接收合同，按真实订单 payload/job/策略、入库文件、验证视频关联素材报表，冲突不归属。订单状态/排期/失败进入复盘，敏感链接和回写凭据不进入模型。修复优化师规则范围解析的错误模型导入。
+- API/Worker/Beat 与插件 1.3.0 配套；新增迁移 `0128_material_production_origin`。外部制作方仍需携带 order_id/job_id/strategy_id 回传，旧事实不可补造，未知外部系统未改动，真实模型/平台写入/部署未执行。
+- 独立复审发现真实订单 payload 层级错误，已集中 `production_payload()` 修复，改用真实 create_order 及已签名入口回归；复审确认无其他明确阻塞。
+- 最终新建隔离 PostgreSQL 与独立 Redis：**732 passed, 1 deselected, 77 warnings**；DSH 原生插件 **7 passed**；Ruff/本轮格式/Node 语法/差异检查通过。一个未修改的广告管理大批次 SQL 门槛（26 vs ≤25）在修改前 b2f1cbad 后端归档也复现，单独记录并排除，不报告通过。此前污染测试库残留干扰调度及测试 Redis MISCONF 不算产品通过证据，最终改用干净隔离环境重验。
+- 详见 [专项实施计划](superpowers/plans/2026-11-13-ai-review-evidence-completion.md)、[专项验收](validation/2026-11-13-ai-review-evidence-completion.md) 和 [接入说明](runbooks/ai-ad-workbench.md)。本节与本轮功能为同一聚焦本地提交；未合并、推送或上线。

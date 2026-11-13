@@ -12,6 +12,7 @@ from app.core.context import TenantContext
 from app.modules.accounts.models import AdvertiserAccount
 from app.modules.ai_workbench.knowledge_refs import sanitize_public
 from app.modules.ai_workbench.models import AIOptimizerVersion
+from app.modules.ai_workbench.review_maturity import maturity_evidence
 from app.modules.reporting.filters import authorized_grants
 from app.modules.reporting.schemas import ReportingFilter
 
@@ -33,6 +34,16 @@ def account_window(timezone: str, cutoff: datetime) -> dict:
         "start_date": (today - timedelta(days=WINDOW_DAYS)).isoformat(),
         "complete_through": complete.isoformat(),
         # 完整日与归因成熟是两种资格。D7 至少再等待七个当地完整日。
+        "maturity_windows": {
+            f"d{days}": {
+                "start_date": (
+                    complete - timedelta(days=days + WINDOW_DAYS - 1)
+                ).isoformat(),
+                "end_date": (complete - timedelta(days=days)).isoformat(),
+                "maturity_days": days,
+            }
+            for days in (0, 3, 7)
+        },
         "mature_through": {
             f"d{days}": (complete - timedelta(days=days)).isoformat()
             for days in (0, 3, 7)
@@ -73,39 +84,52 @@ def build_data_pack(
         accounts.append(window)
         if window["status"] != "AVAILABLE":
             continue
-        for dimension in ("account", "campaign", "drama", "material"):
-            filters = ReportingFilter(
-                dimension=dimension,
-                start_date=window["start_date"],
-                end_date=window["complete_through"],
-                advertiser_ids=(advertiser_id,),
-            )
-            # 缺投影属于业务数据缺失；其他错误传播，不能把程序错误伪装为无数据。
-            try:
-                with session.begin_nested():
-                    report = freeze_review_page(
-                        session,
-                        context=context,
-                        bc_id=version.bc_id,
-                        filters=filters,
-                        limit=MAX_ROWS,
-                    )
-            except HTTPException as error:
-                if error.status_code != 409:
-                    raise
-                report = {
-                    "status": "UNAVAILABLE",
-                    "reason": str(error.detail),
-                    "rows": [],
-                }
-            reports.append(
-                {
-                    "dimension": dimension,
-                    "advertiser_id": advertiser_id,
-                    "window": window,
-                    **report,
-                }
-            )
+        # 各归因周期独立取七个成熟完整日；D7 不能复用近七日未成熟合计。
+        for horizon, mature_window in window["maturity_windows"].items():
+            for dimension in ("account", "campaign", "drama", "material"):
+                filters = ReportingFilter(
+                    dimension=dimension,
+                    start_date=mature_window["start_date"],
+                    end_date=mature_window["end_date"],
+                    advertiser_ids=(advertiser_id,),
+                )
+                # 缺投影属于业务数据缺失；其他错误传播，不能把程序错误伪装为无数据。
+                try:
+                    with session.begin_nested():
+                        report = freeze_review_page(
+                            session,
+                            context=context,
+                            bc_id=version.bc_id,
+                            filters=filters,
+                            limit=MAX_ROWS,
+                        )
+                except HTTPException as error:
+                    if error.status_code != 409:
+                        raise
+                    report = {
+                        "status": "UNAVAILABLE",
+                        "reason": str(error.detail),
+                        "rows": [],
+                    }
+                reports.append(
+                    {
+                        "dimension": dimension,
+                        "advertiser_id": advertiser_id,
+                        "window": {**window, **mature_window},
+                        "maturity_horizon": horizon,
+                        "maturity_evidence": maturity_evidence(
+                            session,
+                            context=context,
+                            advertiser_id=advertiser_id,
+                            dimension=dimension,
+                            horizon=horizon,
+                            window={**mature_window, "timezone": window["timezone"]},
+                            report=report,
+                            cutoff=cutoff,
+                        ),
+                        **report,
+                    }
+                )
         rows = session.exec(
             select(BusinessDay)
             .join(
@@ -177,7 +201,12 @@ def build_data_pack(
                 "strategy_version_to_report_object",
                 "material_production_strategy_to_report_object",
             ],
-            "limits": {"accounts": MAX_ACCOUNTS, "rows_per_dimension": MAX_ROWS},
-            "interpretation": "Only selected optimizer accounts; shared-account delivery is not attributable to this optimizer without build-object mapping. Aggregates spanning immature dates cannot establish mature D3/D7 performance.",
+            "limits": {
+                "accounts": MAX_ACCOUNTS,
+                "rows_per_dimension_per_horizon": MAX_ROWS,
+                "maturity_horizons": 3,
+                "days_per_horizon": WINDOW_DAYS,
+            },
+            "interpretation": "Only selected optimizer accounts; shared-account delivery is not attributable to this optimizer without build-object mapping. Each horizon uses its own mature local-day window. Only maturity_evidence eligible_metric_keys with AVAILABLE maturity evidence establish that horizon performance; other metric columns are raw published context.",
         }
     )

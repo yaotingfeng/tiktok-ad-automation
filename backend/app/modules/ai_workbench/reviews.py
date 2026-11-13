@@ -141,6 +141,7 @@ def frozen_evidence_ids(evidence: Mapping[str, Any] | None) -> set[str]:
 
     fields_by_category: dict[str, tuple[str, ...]] = {
         "knowledge": ("id",),
+        "rule_backtests": ("id",),
         "plans": ("id",),
         "build_occurrences": ("id", "strategy_version_id"),
         "rule_evidence": ("id",),
@@ -183,6 +184,13 @@ def frozen_evidence_ids(evidence: Mapping[str, Any] | None) -> set[str]:
                 if item is not None:
                     result.add(str(item))
     # 只接纳已冻结类别中的来源标识，不递归接受任意 UUID/对象标识。
+    for row in evidence.get("material_orders", {}).get("rows", []):
+        if isinstance(row, Mapping) and _is_uuid(row.get("id")):
+            result.add(row["id"])
+    for row in evidence.get("attribution", {}).get("rows", []):
+        for report in row.get("reports", []):
+            if _is_uuid(report.get("id")):
+                result.add(report["id"])
     history = evidence.get("history", {})
     if isinstance(history, Mapping):
         for category in ("reviews", "proposals"):
@@ -212,6 +220,7 @@ def frozen_evidence(
     knowledge_refs: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Assemble read-only snapshots from existing plans, builds and rule evidence."""
+    cutoff = _now()
     plan_rows = session.exec(
         select(AIDailyPlanRow)
         .where(
@@ -229,6 +238,7 @@ def frozen_evidence(
             BuildOccurrence.tenant_id == context.tenant_id,
             BuildOccurrence.optimizer_id == optimizer.id,
             BuildOccurrence.bc_id == version.bc_id,
+            BuildOccurrence.created_at <= cutoff,
         )
         .order_by(col(BuildOccurrence.scheduled_at).desc())
         .limit(201)
@@ -244,6 +254,7 @@ def frozen_evidence(
             AutomationRuleEvidence.tenant_id == context.tenant_id,
             AutomationRuleEvidence.optimizer_id == optimizer.id,
             AutomationRuleEvidence.bc_id == version.bc_id,
+            AutomationRuleEvidence.created_at <= cutoff,
         )
         .order_by(col(AutomationRuleEvidence.created_at).desc())
         .limit(201)
@@ -264,7 +275,40 @@ def frozen_evidence(
     from app.modules.business.models import BusinessPublication, BusinessRun
     from app.modules.operation_logs.models import OperationCoverage, OperationExport
 
-    data_pack = build_data_pack(session, context=context, version=version)
+    data_pack = build_data_pack(
+        session, context=context, version=version, cutoff=cutoff
+    )
+    from app.modules.ai_workbench.attribution import build_attribution_pack
+    from app.modules.ai_workbench.execution_observations import freeze_rule_execution
+    from app.modules.ai_workbench.review_orders import freeze_orders
+    from app.modules.ai_workbench.rule_history import rule_snapshot_report
+
+    attribution = build_attribution_pack(
+        session,
+        context=context,
+        optimizer_id=optimizer.id,
+        version=version,
+        cutoff=cutoff,
+        account_windows=data_pack["accounts"],
+    )
+    data_pack["mapping_gaps"] = [
+        key
+        for kind, key in (
+            ("strategy", "strategy_version_to_report_object"),
+            ("material_strategy", "material_production_strategy_to_report_object"),
+        )
+        if not any(item["kind"] == kind for item in attribution["rows"])
+    ]
+    data_pack["mapping_scope"] = (
+        "Exact identities only; see attribution rows/conflicts/truncated and unmapped_policy, not full-account causal attribution"
+    )
+    material_orders = freeze_orders(
+        session,
+        context=context,
+        optimizer_id=optimizer.id,
+        version=version,
+        cutoff=cutoff,
+    )
     reporting_snapshots = data_pack["reporting"]
     business_scopes = session.exec(
         select(BusinessRun)
@@ -387,6 +431,9 @@ def frozen_evidence(
                     "business_date": str(row.business_date),
                     "title": row.title,
                     "position": row.position,
+                    "scheduled_time": row.scheduled_time.isoformat(),
+                    "order_materials": row.order_materials,
+                    "dispatch_error": row.last_dispatch_error,
                 }
                 for row in plan_rows[:200]
             ],
@@ -408,11 +455,32 @@ def frozen_evidence(
                     "created_at": row.created_at,
                     "data_freshness": row.data_freshness,
                     "publication_versions": row.publication_versions,
-                    "checked_objects": row.checked_objects,
+                    "definition": row.definition,
+                    "condition_thresholds": row.data_freshness.get(
+                        "threshold_conditions", []
+                    ),
+                    "skipped_accounts": row.skipped_accounts,
+                    "historical_inputs_digest": row.data_freshness.get(
+                        "evaluation_inputs", {}
+                    ).get("digest"),
+                    "historical_replay": rule_snapshot_report(
+                        row,
+                        object_limit=20,
+                        fact_cell_limit=1000,
+                        report_byte_limit=20000,
+                    ),
+                    "execution_observations": freeze_rule_execution(
+                        session,
+                        context=context,
+                        optimizer_id=optimizer.id,
+                        version=version,
+                        evidence=row,
+                        cutoff=cutoff,
+                    ),
                     "hits": row.hits,
                     "action_ledger_refs": row.action_ledger_refs,
                     "management_tasks": row.management_tasks,
-                    "readback_status": row.readback_status,
+                    "submission_receipt_summary": row.readback_status,
                 }
                 for row in rule_evidence[:200]
             ],
@@ -471,8 +539,10 @@ def frozen_evidence(
                     for row in operation_exports
                 ],
             },
+            "attribution": attribution,
+            "material_orders": material_orders,
             "knowledge_refs": snapshot_knowledge_refs(knowledge_refs),
-            "captured_at": _now(),
+            "captured_at": cutoff,
         }
     )
     from app.modules.ai_workbench.knowledge import select_knowledge

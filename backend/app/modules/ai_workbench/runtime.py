@@ -24,6 +24,7 @@ from app.modules.ai_workbench.knowledge_refs import sanitize_public
 from app.modules.ai_workbench.methods import MethodBundle
 from app.modules.ai_workbench.models import AIOptimizer, AIOptimizerVersion
 from app.modules.ai_workbench.proposals import ProposalInput
+from app.modules.automation_rules.schemas import RuleDefinition
 
 SERVICE_AUDIENCE = "tkada-ai-review"
 router = APIRouter(
@@ -421,5 +422,33 @@ def read_knowledge(
         raise HTTPException(403, "Task scope mismatch")
     _knowledge_task(task, session)
     result = read_for_task(session, task=task, knowledge_id=body.knowledge_id)
+    session.commit()
+    return result
+
+
+class RuleBacktest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    evidence_id: UUID
+    candidate_definition: RuleDefinition
+
+
+@router.post("/{task_id}/rules/backtest")
+def backtest_rule(
+    task_id: UUID,
+    body: RuleBacktest,
+    session: SessionDep,
+    task: reviews.DSHReviewTask = Depends(task_identity),
+) -> dict:
+    from app.modules.ai_workbench.backtests import backtest_for_task
+
+    if task.id != task_id:
+        raise HTTPException(403, "Task scope mismatch")
+    _knowledge_task(task, session)
+    result = backtest_for_task(
+        session,
+        task=task,
+        evidence_id=body.evidence_id,
+        candidate_definition=body.candidate_definition.model_dump(mode="json"),
+    )
     session.commit()
     return result

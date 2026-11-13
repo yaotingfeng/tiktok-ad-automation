@@ -186,6 +186,17 @@ def register_batch(
     session.add(batch)
     session.flush()
     for value in body.materials:
+        from app.modules.ai_workbench.production_origin import (
+            validate_production_origin,
+        )
+
+        origin = (
+            validate_production_origin(
+                session, tenant_id=tenant.id, origin=value.production_origin
+            )
+            if value.production_origin is not None
+            else None
+        )
         head = session.get(PushedMaterial, (tenant.id, value.material_id))
         if head is None:
             head = PushedMaterial(tenant_id=tenant.id, external_id=value.material_id)
@@ -199,6 +210,7 @@ def register_batch(
             external_id=value.material_id,
             revision=head.latest_revision,
             file_name=value.file_name,
+            production_origin=origin,
             url_ciphertext=encrypt_credentials(
                 tenant_id=tenant.id, value={"url": value.url}
             ),

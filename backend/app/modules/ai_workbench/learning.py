@@ -5,13 +5,20 @@ from decimal import Decimal
 
 from sqlmodel import Session, col, select
 
+from app.modules.ai_workbench.execution_observations import (
+    execution_status,
+    freeze_rule_execution,
+)
 from app.modules.ai_workbench.knowledge_refs import sanitize_public
 
 
 def _observations(pack: dict) -> list[dict]:
     result = []
     for report in pack.get("reporting", []):
-        if report.get("dimension") != "account":
+        if (
+            report.get("dimension") != "account"
+            or report.get("maturity_horizon", "d0") != "d0"
+        ):
             continue
         for row in report.get("rows", []):
             for bucket in row.get("metric_buckets", []):
@@ -75,11 +82,13 @@ def freeze_history(
     from app.modules.ai_workbench.reviews import DSHReviewTask
     from app.modules.automation_rules.models import AutomationRuleEvidence
 
+    cutoff = datetime.fromisoformat(data_pack["cutoff"])
     tasks = session.exec(
         select(DSHReviewTask)
         .where(
             DSHReviewTask.tenant_id == context.tenant_id,
             DSHReviewTask.optimizer_id == optimizer_id,
+            DSHReviewTask.created_at <= cutoff,
         )
         .order_by(col(DSHReviewTask.created_at).desc())
         .limit(21)
@@ -101,6 +110,7 @@ def freeze_history(
                 AIProposal.tenant_id == context.tenant_id,
                 AIProposal.optimizer_id == optimizer_id,
                 col(AIProposal.review_task_id).in_(task_map),
+                AIProposal.created_at <= cutoff,
             )
             .order_by(col(AIProposal.created_at).desc())
             .limit(101)
@@ -128,6 +138,7 @@ def freeze_history(
                     BuildOccurrence.bc_id == version.bc_id,
                     BuildOccurrence.strategy_version_id == p.published_version_id,
                     BuildOccurrence.created_at >= p.decision_at,
+                    BuildOccurrence.created_at <= cutoff,
                 )
                 .order_by(col(BuildOccurrence.created_at).desc())
                 .limit(51)
@@ -164,6 +175,7 @@ def freeze_history(
                     AutomationRuleEvidence.rule_version
                     == (p.base_rule_version or 0) + 1,
                     AutomationRuleEvidence.created_at >= p.decision_at,
+                    AutomationRuleEvidence.created_at <= cutoff,
                 )
                 .order_by(col(AutomationRuleEvidence.created_at).desc())
                 .limit(51)
@@ -179,15 +191,25 @@ def freeze_history(
                     "rule_version": r.rule_version,
                     "hits": len(r.hits),
                     "actions": r.action_ledger_refs,
-                    "readback": r.readback_status,
+                    "readback": freeze_rule_execution(
+                        session,
+                        context=context,
+                        optimizer_id=optimizer_id,
+                        version=version,
+                        evidence=r,
+                        cutoff=cutoff,
+                    ),
                 }
                 for r in rules[:50]
             ]
             if rules:
-                execution = (
-                    "READBACK_REQUIRED"
-                    if any(r.action_ledger_refs for r in rules)
-                    else "CHECKED_WITHOUT_ACTION"
+                execution = execution_status(
+                    [
+                        row["readback"]["status"]
+                        for row in evidence
+                        if row["readback"]["status"] != "CHECKED_WITHOUT_ACTION"
+                    ],
+                    missing=len(rules) > 50,
                 )
         source = task_map[p.review_task_id]
         baseline = _observations(source.evidence.get("data_pack", {}))

@@ -1,3 +1,4 @@
+import { mountBacktestTool, BACKTEST_RULE } from './backtests.mjs'
 import { readFile, mkdir } from 'node:fs/promises'
 import { join } from 'node:path'
 import { mountKnowledgeTools, SEARCH_KNOWLEDGE, READ_KNOWLEDGE } from './knowledge.mjs'
@@ -18,7 +19,7 @@ export function createRuntime(config, fetchImpl = fetch) {
     if (!response.ok) throw new Error(`TK-ADA runtime HTTP ${response.status}`)
     return response.json()
   }
-  return { searchKnowledge: (claim, args) => rpc(`/${encodeURIComponent(claim.task.id)}/knowledge/search`, args, claim.task_token), readKnowledge: (claim, args) => rpc(`/${encodeURIComponent(claim.task.id)}/knowledge/read`, args, claim.task_token), claim: async () => rpc('/claim', await loadMethods()), complete: (claim, result) => rpc(`/${encodeURIComponent(claim.task.id)}/complete`, result, claim.task_token), heartbeat: claim => rpc(`/${encodeURIComponent(claim.task.id)}/heartbeat`, {}, claim.task_token) }
+  return { backtestRule: (claim, args) => rpc(`/${encodeURIComponent(claim.task.id)}/rules/backtest`, args, claim.task_token), searchKnowledge: (claim, args) => rpc(`/${encodeURIComponent(claim.task.id)}/knowledge/search`, args, claim.task_token), readKnowledge: (claim, args) => rpc(`/${encodeURIComponent(claim.task.id)}/knowledge/read`, args, claim.task_token), claim: async () => rpc('/claim', await loadMethods()), complete: (claim, result) => rpc(`/${encodeURIComponent(claim.task.id)}/complete`, result, claim.task_token), heartbeat: claim => rpc(`/${encodeURIComponent(claim.task.id)}/heartbeat`, {}, claim.task_token) }
 }
 
 export async function runClaim(ctx, config, claim, runtime, { createUserMessage, SessionId, renderSkillContent, scopeOf }) {
@@ -52,7 +53,8 @@ export async function runClaim(ctx, config, claim, runtime, { createUserMessage,
         await ctx.agentPresets.mount(agentCtx, 'standard')
         const usedMethods = mountTaskSkills(agentCtx, methods, { renderSkillContent, scopeOf })
         mountKnowledgeTools(agentCtx, claim, runtime, controller.signal)
-        const allowed = [SKILL_TOOL, SEARCH_KNOWLEDGE, READ_KNOWLEDGE, COMPLETE_TOOL]
+        mountBacktestTool(agentCtx, claim, runtime, controller.signal)
+        const allowed = [SKILL_TOOL, SEARCH_KNOWLEDGE, READ_KNOWLEDGE, BACKTEST_RULE, COMPLETE_TOOL]
         // restrict 只过滤继承/全局工具；本任务局部注册始终可见。
         // 不能把局部工具名传入该接口，否则原生宿主在 setup 时拒绝启动。
         agentCtx.tools.restrict({ allow: [] })

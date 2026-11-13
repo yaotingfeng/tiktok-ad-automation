@@ -4,7 +4,7 @@
 
 ## 应用与数据库
 
-本版本迁移 head 为 `0127_ai_knowledge`。新增优化师时区/复盘时间、素材配置及独立素材订单台账，不可作为无迁移快修直接发布。部署按主部署手册选择数据库迁移方案、正常停止写入和排空；本文不表示已取得生产发布或真实投放授权。
+本版本迁移 head 为 `0128_material_production_origin`。新增优化师时区/复盘时间、素材配置及独立素材订单台账，不可作为无迁移快修直接发布。部署按主部署手册选择数据库迁移方案、正常停止写入和排空；本文不表示已取得生产发布或真实投放授权。
 
 Beat 的 `ai_workbench.dispatch_due_plans` 每 30 秒领取到期剧单，搭建交给 `builds` 队列；`ai_workbench.scan_material_orders` 每 30 秒交接/查询素材订单，订单任务在 `control`；`ai_workbench.schedule_reviews` 每 60 秒检查当地复盘时间。Worker 继续沿用现有队列，无新增常驻 Python Worker 或部署级布尔开关。
 
@@ -40,7 +40,7 @@ v1 使用文档约定的素材库工作流：`GET /api/strategy-catalog`、`GET 
 
 必须配置 DSH 默认模型；也可通过插件 `modelSelection` 显式选择已配置的模型。`url` 只允许 HTTPS 纯 origin；本机隔离验收可用 `http://127.0.0.1:<端口>`。生产域名、token 文件和状态目录由部署方明确提供，不能推断或复制测试凭据。
 
-运行链路为：用户手动发起或 Beat 创建复盘 → TK-ADA 冻结优化师、策略、规则、计划、搭建、报表、知识和历史 → 插件领取并首次绑定方法包 → 返回五分钟任务级 JWT → 原生 DSH 独立会话通过 `skill` 读取主方法及相关专项 → `tkada_complete_review` 提交结构化结果 → TK-ADA 校验及发布。领取服务凭据不进入模型提示；会话仅开放受限 `skill`、`tkada_search_knowledge`、`tkada_read_knowledge` 和 `tkada_complete_review`，不能执行 shell、读取凭据或调用平台。每任务目录按租户/优化师/任务/fence 分隔。
+运行链路为：用户手动发起或 Beat 创建复盘 → TK-ADA 冻结优化师、策略、规则、计划、搭建、报表、知识和历史 → 插件领取并首次绑定方法包 → 返回五分钟任务级 JWT → 原生 DSH 独立会话通过 `skill` 读取主方法及相关专项 → `tkada_complete_review` 提交结构化结果 → TK-ADA 校验及发布。领取服务凭据不进入模型提示；会话仅开放受限 `skill`、`tkada_search_knowledge`、`tkada_read_knowledge`、`tkada_backtest_rule` 和 `tkada_complete_review`，不能执行 shell、读取凭据或调用平台。每任务目录按租户/优化师/任务/fence 分隔。
 
 ### 方法、插件与领域系统边界（2026-11-13）
 
@@ -83,3 +83,21 @@ v1 使用文档约定的素材库工作流：`GET /api/strategy-catalog`、`GET 
 通过 `scripts/import-ai-knowledge-pack.py --help` 查看参数。管理员凭据只通过 `--token-file` 传入私有文件路径；远程 API 必须为 HTTPS 纯 origin，脚本拒绝重定向。导入会查询同 key 公共资产：相同正文/元数据跳过，变化则追加同资产版本；重复资产需人工整理。文件预置不代表已导入任何环境。
 
 发布前阅读 [全分支上线审查](../validation/2026-11-13-ai-workbench-release-review.md)，其未完成业务项仍适用。
+
+### 复盘事实与只读回测（插件 1.3.0）
+
+API/Worker/Beat 与插件 1.3.0 配套，新增迁移 head `0128_material_production_origin`。升级前取消旧格式待处理复盘并重建；旧历史不补造指标。规则新执行会保存完整候选对象、父子关系、判断时原始指标、账户/窗口/版本及摘要；真实状态回读继续通过 TK-ADA 只读队列执行，模型不直接访问平台。
+
+- `data_pack.reporting` 每账户/维度分为 D0、D3、D7 各自七个成熟完整日。D7 窗口覆盖当地今日前 8–14 日；另核验来源在成熟后已重新观测。复用既有 32 日每日回刷；未回刷、缺覆盖或平台不支持则降级，`revenue_total` 不替代 D3/D7。
+- `rule_evidence[].execution_observations` 包含实际对象、期望/实际值、回执、时间、是否有效与差异；`submission_receipt_summary` 只代表受理。UNKNOWN/ACCEPTED/未核查均不能当作实际执行成功。核查失败保留未知，既有有限重试不重发写请求。
+- `historical_replay` 提供有界候选/未命中指标和确定性重放；`tkada_backtest_rule` 对冻结的 `evidence_id` 与完整 `candidate_definition` 比较命中变化。任务范围/配置/令牌校验同知识工具，每轮十个不同候选，结果归档且可引用。超出原范围、指标窗口、数据缺失或截断会给出限制，不能称完整回测。不得推导实际节省或因果收益。
+- `attribution` 只按本优化师真实成功 Campaign 身份关联投放策略版本；手工/外部广告仍进入账户及规则分析，不按同名剧强行归属策略。
+- `material_orders` 冻结订单策略、排期、job 状态和失败原因，隐藏回写凭据/下载链接；订单成功不代表素材已用于广告。
+
+素材制作策略归属需要生产方在既有已签名素材回传的每个素材中携带：
+
+```json
+{"material_id":"<生产文件唯一 ID>","file_name":"示例.mp4","url":"<下载地址>","production_origin":{"order_id":"<TK-ADA 订单 UUID>","job_id":"<原生产 job ID>","strategy_id":"<该文件实际制作策略 ID>"}}
+```
+
+TK-ADA 订单 UUID 可由发单 `Idempotency-Key: tkada-ai:<订单 UUID>` 对应，job/strategy 由生产方真实记录提供。服务端核对同租户订单及冻结 `payload.selectedStrategyIds` 后保存不可变推送修订，再关联实际库文件及验证的视频 ID。该声明来自已鉴权生产方，仍是观察关联，不证明因果；同视频多个策略来源有冲突时排除归属。**生产方尚未回传这些字段、旧历史无谱系或文件尚未成功入库时，明确不可按制作策略归因，不能由 Agent 补造。** 本轮仅完成 TK-ADA 接收、校验及读取合同，未改动未知外部生产工具、未执行外部联调。
