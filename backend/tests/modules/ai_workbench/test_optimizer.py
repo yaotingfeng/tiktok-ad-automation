@@ -210,7 +210,12 @@ def seed_optimizer_dependencies(session: Session, context, *, account="acc-1"):
     return version
 
 
-def api_headers(context):
+def api_headers(context, *, session=None):
+    if session is not None and context.role != "viewer":
+        from app.models import User
+
+        session.get(User, context.actor_id).is_superuser = True
+        session.flush()
     return {
         "Authorization": f"Bearer {create_access_token(context.actor_id, timedelta(minutes=5))}"
     }
@@ -230,7 +235,7 @@ def test_tenant_and_optimizer_ids_are_isolated(client, session, context, other_c
     strategy = seed_optimizer_dependencies(session, context)
     created = client.post(
         f"/api/tenants/{context.tenant_id}/ai-optimizers",
-        headers=api_headers(context),
+        headers=api_headers(context, session=session),
         json=create_body(strategy.id),
     )
     assert created.status_code == 201, created.text
@@ -238,7 +243,7 @@ def test_tenant_and_optimizer_ids_are_isolated(client, session, context, other_c
     assert (
         client.get(
             f"/api/tenants/{other_context.tenant_id}/ai-optimizers/{optimizer_id}",
-            headers=api_headers(other_context),
+            headers=api_headers(other_context, session=session),
         ).status_code
         == 404
     )
@@ -251,13 +256,13 @@ def test_invalid_scope_and_missing_strategy_binding_are_rejected(
     url = f"/api/tenants/{context.tenant_id}/ai-optimizers"
     invalid_scope = client.post(
         url,
-        headers=api_headers(context),
+        headers=api_headers(context, session=session),
         json=create_body(strategy.id, bc_id="missing-bc"),
     )
     assert invalid_scope.status_code == 422
     missing_strategy = client.post(
         url,
-        headers=api_headers(context),
+        headers=api_headers(context, session=session),
         json=create_body(uuid4()),
     )
     assert missing_strategy.status_code == 409
@@ -269,17 +274,19 @@ def test_shared_strategy_and_explicit_target_roas_clear_are_guarded(
     strategy = seed_optimizer_dependencies(session, context)
     url = f"/api/tenants/{context.tenant_id}/ai-optimizers"
     first = client.post(
-        url, headers=api_headers(context), json=create_body(strategy.id)
+        url,
+        headers=api_headers(context, session=session),
+        json=create_body(strategy.id),
     ).json()
     second = client.post(
         url,
-        headers=api_headers(context),
+        headers=api_headers(context, session=session),
         json=create_body(strategy.id),
     )
     assert second.status_code == 409
     cleared = client.patch(
         f"{url}/{first['id']}",
-        headers=api_headers(context),
+        headers=api_headers(context, session=session),
         json={"target_roas": None, "request_id": str(uuid4())},
     )
     assert cleared.status_code == 200, cleared.text

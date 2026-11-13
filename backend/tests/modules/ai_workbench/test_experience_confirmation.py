@@ -46,11 +46,11 @@ def test_max_length_candidate_and_validation_confirm_without_loss(
     session.flush()
     url = f"/api/tenants/{context.tenant_id}/ai-optimizers/{optimizer.id}/reviews/{task.id}/experiences/0/confirm"
     first = client.post(
-        url, headers=api_headers(context), json={"validation_result": "验" * 2000}
+        url, headers=api_headers(context, session=session), json={"validation_result": "验" * 2000}
     )
     assert first.status_code == 201, first.text
     second = client.post(
-        url, headers=api_headers(context), json={"validation_result": "验" * 2000}
+        url, headers=api_headers(context, session=session), json={"validation_result": "验" * 2000}
     )
     assert second.json()["id"] == first.json()["id"]
     from uuid import UUID

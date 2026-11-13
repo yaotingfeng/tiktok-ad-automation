@@ -19,10 +19,12 @@ import type { NavGroup } from "./Main"
 export function workspaceNavigation({
   prefix = "",
   manage,
+  platformAdmin = false,
   materialProduction,
 }: {
   prefix?: string
   manage: boolean
+  platformAdmin?: boolean
   materialProduction?: {
     open: () => void
     pending: boolean
@@ -105,7 +107,7 @@ export function workspaceNavigation({
       ],
     },
     // AI 工作台是独立二级菜单，放在所有常规分组之后、体验版入口之前。
-    ...(prefix
+    ...(prefix && platformAdmin
       ? [
           {
             label: "AI 优化师",

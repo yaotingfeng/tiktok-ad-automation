@@ -11,6 +11,8 @@ import { useCallback, useEffect, useMemo, useState } from "react"
 import { Button } from "@/components/ui/button"
 import { Separator } from "@/components/ui/separator"
 import { cn } from "@/lib/utils"
+import useAuth from "@/hooks/useAuth"
+import { Alert, AlertTitle, AlertDescription } from "@/components/ui/alert"
 import { AIOptimizerConfig } from "./AIOptimizerConfig"
 import { AIOptimizerEditor } from "./AIOptimizerEditor"
 import { type AIOptimizer, AIOptimizerList } from "./AIOptimizerList"
@@ -80,6 +82,9 @@ export function buildAIWorkbenchHref(
 
 /** AI 工作台独立于广告投放分组；左侧菜单和 URL 一起切换，切换优化师时整棵视图重新挂载。 */
 export function AIWorkbenchShell(props: Props) {
+  const { user, isPending } = useAuth()
+  if (isPending || !user) return <p role="status">正在核验工作台权限…</p>
+  if (!user.is_superuser) return <Alert variant="destructive"><AlertTitle>暂未开放</AlertTitle><AlertDescription>AI 投放工作台目前仅对平台管理员开放。</AlertDescription></Alert>
   return <TenantWorkbenchShell key={props.tenantId} {...props} />
 }
 

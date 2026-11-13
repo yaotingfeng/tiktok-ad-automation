@@ -21,7 +21,7 @@ def setup_plan(client, session, context):
     strategy = seed_optimizer_dependencies(session, context)
     optimizer = client.post(
         f"/api/tenants/{context.tenant_id}/ai-optimizers",
-        headers=api_headers(context),
+        headers=api_headers(context, session=session),
         json=create_body(strategy.id),
     ).json()
     connection, _ = _provider_application(session, context)

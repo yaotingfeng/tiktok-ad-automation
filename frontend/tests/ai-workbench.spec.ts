@@ -49,7 +49,7 @@ test("AI 剧单粘贴可以扩展到十行之外并保持租户上下文", () =>
 })
 
 test("AI 入口是体验版之前的独立二级菜单，不混入广告投放", () => {
-  const groups = workspaceNavigation({ prefix: "/tenants/tenant-a", manage: true })
+  const groups = workspaceNavigation({ prefix: "/tenants/tenant-a", manage: true, platformAdmin: true })
   const aiIndex = groups.findIndex((group) => group.label === "AI 优化师")
   const settingsIndex = groups.findIndex((group) => group.label === "设置")
   expect(aiIndex).toBeGreaterThan(settingsIndex)
@@ -120,4 +120,9 @@ test("冻结排期行不能通过 TSV 覆盖", () => {
     applyPlanPaste(rows, 0, 0, "09:00\t覆盖", "2026-11-12", "optimizer-a"),
   ).toThrow("只读行")
   expect(rows[0].title).toBe("已提交剧目")
+})
+
+
+test("租户管理员权限不能替代平台管理员的 AI 灰度权限", () => {
+  expect(workspaceNavigation({ prefix: "/tenants/tenant-a", manage: true }).some(group => group.items.some(item => item.path?.endsWith("/ai-workbench")))).toBe(false)
 })

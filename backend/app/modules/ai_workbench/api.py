@@ -4,11 +4,11 @@ from datetime import date, datetime
 from uuid import UUID
 from zoneinfo import ZoneInfo
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel, ConfigDict
 from sqlmodel import select
 
-from app.api.deps import CurrentUser, SessionDep
+from app.api.deps import CurrentUser, SessionDep, get_current_active_superuser
 from app.core.context import TenantContext
 from app.modules.ai_workbench import (
     daily_report,
@@ -32,7 +32,12 @@ from app.modules.ai_workbench.schemas import (
     OptimizerUpdate,
 )
 
-router = APIRouter(prefix="/tenants/{tenant_id}", tags=["ai_workbench"])
+# 灰度阶段仅平台管理员开放，覆盖全部入口与知识 API，不能仅隐藏菜单。
+router = APIRouter(
+    prefix="/tenants/{tenant_id}",
+    tags=["ai_workbench"],
+    dependencies=[Depends(get_current_active_superuser)],
+)
 
 
 class RunPlanRequest(BaseModel):

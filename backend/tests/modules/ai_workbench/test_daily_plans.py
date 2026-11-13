@@ -104,13 +104,13 @@ def test_daily_plan_api_persists_order_intent_and_checks_provider_scope(
     strategy = seed_optimizer_dependencies(session, context)
     optimizer = client.post(
         f"/api/tenants/{context.tenant_id}/ai-optimizers",
-        headers=api_headers(context),
+        headers=api_headers(context, session=session),
         json=create_body(strategy.id),
     ).json()
     connection, _application = _provider_application(session, context)
     response = client.post(
         f"/api/tenants/{context.tenant_id}/ai-optimizers/{optimizer['id']}/daily-plans",
-        headers=api_headers(context),
+        headers=api_headers(context, session=session),
         json=_plan_body(optimizer["id"], connection.id, external_drama_id="0012"),
     )
     assert response.status_code == 201, response.text
@@ -118,7 +118,7 @@ def test_daily_plan_api_persists_order_intent_and_checks_provider_scope(
     assert response.json()["rows"][0]["order_materials"] is True
     wrong_scope = client.post(
         f"/api/tenants/{context.tenant_id}/ai-optimizers/{optimizer['id']}/daily-plans",
-        headers=api_headers(context),
+        headers=api_headers(context, session=session),
         json=_plan_body(optimizer["id"], uuid4()),
     )
     assert wrong_scope.status_code == 422
@@ -133,19 +133,19 @@ def test_daily_plan_rejects_inactive_optimizer_and_missing_active_binding(
     connection, _application = _provider_application(session, context)
     inactive = client.post(
         f"/api/tenants/{context.tenant_id}/ai-optimizers",
-        headers=api_headers(context),
+        headers=api_headers(context, session=session),
         json=create_body(strategy.id, active=False),
     ).json()
     inactive_response = client.post(
         f"/api/tenants/{context.tenant_id}/ai-optimizers/{inactive['id']}/daily-plans",
-        headers=api_headers(context),
+        headers=api_headers(context, session=session),
         json=_plan_body(inactive["id"], connection.id),
     )
     assert inactive_response.status_code == 409
     strategy_two = seed_optimizer_dependencies(session, context, account="acc-2")
     active = client.post(
         f"/api/tenants/{context.tenant_id}/ai-optimizers",
-        headers=api_headers(context),
+        headers=api_headers(context, session=session),
         json=create_body(strategy_two.id, advertiser_ids=["acc-2"]),
     ).json()
     binding = session.exec(
@@ -157,7 +157,7 @@ def test_daily_plan_rejects_inactive_optimizer_and_missing_active_binding(
     session.flush()
     missing_binding = client.post(
         f"/api/tenants/{context.tenant_id}/ai-optimizers/{active['id']}/daily-plans",
-        headers=api_headers(context),
+        headers=api_headers(context, session=session),
         json=_plan_body(active["id"], connection.id),
     )
     assert missing_binding.status_code == 409

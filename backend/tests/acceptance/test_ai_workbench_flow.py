@@ -87,7 +87,7 @@ def test_two_tenants_and_two_optimizers_keep_daily_report_scope(
     base = f"/api/tenants/{context.tenant_id}/ai-optimizers"
     first = client.post(
         base,
-        headers=api_headers(context),
+        headers=api_headers(context, session=session),
         json=create_body(
             first_strategy.id, name="自动优化师", optimization_mode="AUTO"
         ),
@@ -95,13 +95,13 @@ def test_two_tenants_and_two_optimizers_keep_daily_report_scope(
     assert first.status_code == 201, first.text
     sibling = client.post(
         base,
-        headers=api_headers(context),
+        headers=api_headers(context, session=session),
         json=create_body(sibling_strategy.id, name="同租户优化师"),
     )
     assert sibling.status_code == 201, sibling.text
     other = client.post(
         f"/api/tenants/{other_context.tenant_id}/ai-optimizers",
-        headers=api_headers(other_context),
+        headers=api_headers(other_context, session=session),
         json=create_body(other_strategy.id, name="其他租户优化师"),
     )
     assert other.status_code == 201, other.text
@@ -165,7 +165,7 @@ def test_two_tenants_and_two_optimizers_keep_daily_report_scope(
 
     first_report = client.get(
         f"{base}/{first_id}/daily-report?business_date=2026-11-12",
-        headers=api_headers(context),
+        headers=api_headers(context, session=session),
     )
     assert first_report.status_code == 200, first_report.text
     first_payload = first_report.json()
@@ -175,7 +175,7 @@ def test_two_tenants_and_two_optimizers_keep_daily_report_scope(
 
     sibling_report = client.get(
         f"{base}/{sibling_id}/daily-report?business_date=2026-11-12",
-        headers=api_headers(context),
+        headers=api_headers(context, session=session),
     )
     assert sibling_report.status_code == 200, sibling_report.text
     sibling_payload = sibling_report.json()
@@ -185,7 +185,7 @@ def test_two_tenants_and_two_optimizers_keep_daily_report_scope(
 
     other_report = client.get(
         f"/api/tenants/{other_context.tenant_id}/ai-optimizers/{other_id}/daily-report?business_date=2026-11-12",
-        headers=api_headers(other_context),
+        headers=api_headers(other_context, session=session),
     )
     assert other_report.status_code == 200, other_report.text
     other_payload = other_report.json()
@@ -195,7 +195,7 @@ def test_two_tenants_and_two_optimizers_keep_daily_report_scope(
 
     cross_tenant = client.get(
         f"/api/tenants/{other_context.tenant_id}/ai-optimizers/{first_id}/daily-report",
-        headers=api_headers(other_context),
+        headers=api_headers(other_context, session=session),
     )
     assert cross_tenant.status_code == 404
 

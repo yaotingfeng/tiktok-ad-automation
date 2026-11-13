@@ -22,7 +22,7 @@ test.beforeEach(async ({ page }) => {
           username: "ai-test",
           full_name: "AI 测试",
           is_active: true,
-          is_superuser: false,
+          is_superuser: true,
         },
       })
     if (path === "/api/me/tenants")
@@ -796,4 +796,15 @@ test("复盘历史支持失败重试、取消排队任务和服务未配置提�
   await expect(
     page.getByRole("button", { name: "发起复盘", exact: true }),
   ).toBeDisabled()
+})
+
+
+test("租户管理员看不到 AI 入口且直接地址不能加载工作台数据", async ({ page }) => {
+  let aiRequests = 0
+  await page.route("**/api/users/me", route => route.fulfill({ json: { id: "44444444-4444-4444-8444-444444444444", username: "tenant-admin", is_active: true, is_superuser: false } }))
+  await page.route("**/api/tenants/*/ai-optimizers**", route => { aiRequests++; return route.fulfill({ json: { items: [] } }) })
+  await page.goto(`/tenants/${tenant}/ai-workbench`)
+  await expect(page.getByText("AI 投放工作台目前仅对平台管理员开放。")).toBeVisible()
+  await expect(page.locator(`a[href="/tenants/${tenant}/ai-workbench"]`)).toHaveCount(0)
+  expect(aiRequests).toBe(0)
 })

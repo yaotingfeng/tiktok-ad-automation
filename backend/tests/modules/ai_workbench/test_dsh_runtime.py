@@ -17,13 +17,13 @@ def test_runtime_claim_complete_and_reject_old_fence(
     strategy = seed_optimizer_dependencies(session, context)
     created = client.post(
         f"/api/tenants/{context.tenant_id}/ai-optimizers",
-        headers=api_headers(context),
+        headers=api_headers(context, session=session),
         json=create_body(strategy.id),
     ).json()
     base = f"/api/tenants/{context.tenant_id}/ai-optimizers/{created['id']}"
     task = client.post(
         base + "/reviews",
-        headers=api_headers(context),
+        headers=api_headers(context, session=session),
         json={"request_id": str(uuid4())},
     )
     assert task.status_code == 201
@@ -78,13 +78,13 @@ def test_runtime_recovery_changes_fence_and_cancel_revokes_token(
     strategy = seed_optimizer_dependencies(session, context)
     optimizer = client.post(
         f"/api/tenants/{context.tenant_id}/ai-optimizers",
-        headers=api_headers(context),
+        headers=api_headers(context, session=session),
         json=create_body(strategy.id),
     ).json()
     base = f"/api/tenants/{context.tenant_id}/ai-optimizers/{optimizer['id']}"
     client.post(
         base + "/reviews",
-        headers=api_headers(context),
+        headers=api_headers(context, session=session),
         json={"request_id": str(uuid4())},
     )
     claim = client.post(
@@ -94,7 +94,7 @@ def test_runtime_recovery_changes_fence_and_cancel_revokes_token(
     ).json()
     cancelled = client.post(
         base + "/reviews/" + claim["task"]["id"] + "/cancel",
-        headers=api_headers(context),
+        headers=api_headers(context, session=session),
         json={},
     )
     assert cancelled.status_code == 200
@@ -112,7 +112,7 @@ def test_outside_auto_budget_proposal_can_be_explicitly_approved(
     strategy = seed_optimizer_dependencies(session, context)
     optimizer = client.post(
         f"/api/tenants/{context.tenant_id}/ai-optimizers",
-        headers=api_headers(context),
+        headers=api_headers(context, session=session),
         json=create_body(
             strategy.id,
             optimization_mode="AUTO",
@@ -123,7 +123,7 @@ def test_outside_auto_budget_proposal_can_be_explicitly_approved(
     config = {**strategy.config, "budget": "20"}
     response = client.post(
         base + "/reviews",
-        headers=api_headers(context),
+        headers=api_headers(context, session=session),
         json={
             "request_id": str(uuid4()),
             "proposals": [
@@ -140,7 +140,7 @@ def test_outside_auto_budget_proposal_can_be_explicitly_approved(
     assert proposal["status"] == "PENDING"
     approved = client.post(
         base + "/proposals/" + proposal["id"] + "/accept",
-        headers=api_headers(context),
+        headers=api_headers(context, session=session),
         json={"request_id": str(uuid4())},
     )
     assert approved.status_code == 200, approved.text
@@ -158,7 +158,7 @@ def test_periodic_review_uses_optimizer_local_time_and_deduplicates(
     strategy = seed_optimizer_dependencies(session, context)
     result = client.post(
         f"/api/tenants/{context.tenant_id}/ai-optimizers",
-        headers=api_headers(context),
+        headers=api_headers(context, session=session),
         json=create_body(strategy.id, timezone="Asia/Shanghai", review_time="13:00"),
     )
     assert result.status_code == 201, result.text
@@ -179,7 +179,7 @@ def test_business_review_evidence_excludes_other_optimizer_account_inputs(
     strategy = seed_optimizer_dependencies(session, context)
     created = client.post(
         f"/api/tenants/{context.tenant_id}/ai-optimizers",
-        headers=api_headers(context),
+        headers=api_headers(context, session=session),
         json=create_body(strategy.id),
     ).json()
     optimizer, version = load_optimizer(session, context, UUID(created["id"]))

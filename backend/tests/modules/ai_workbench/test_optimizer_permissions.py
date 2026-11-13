@@ -35,7 +35,7 @@ def test_invalid_optimization_mode_is_rejected(client, session, context):
     strategy = seed_optimizer_dependencies(session, context)
     response = client.post(
         f"/api/tenants/{context.tenant_id}/ai-optimizers",
-        headers=api_headers(context),
+        headers=api_headers(context, session=session),
         json=create_body(strategy.id, optimization_mode="INVALID"),
     )
     assert response.status_code == 422
@@ -58,7 +58,34 @@ def test_stale_or_unauthorized_account_scope_is_rejected(client, session, contex
     session.flush()
     response = client.post(
         f"/api/tenants/{context.tenant_id}/ai-optimizers",
-        headers=api_headers(context),
+        headers=api_headers(context, session=session),
         json=create_body(strategy.id),
     )
     assert response.status_code == 422
+
+
+@pytest.mark.parametrize("role", ["viewer", "operator", "tenant_admin"])
+def test_workbench_http_is_closed_to_non_platform_users(client, session, role):
+    from uuid import uuid4
+
+    context = create_context(session, role=role)
+    base = f"/api/tenants/{context.tenant_id}"
+    for path in (
+        "/ai-optimizers",
+        "/ai-knowledge",
+        "/ai-material-options",
+        f"/ai-optimizers/{uuid4()}/reviews",
+    ):
+        response = client.get(base + path, headers=api_headers(context))
+        assert response.status_code == 403
+
+
+def test_platform_admin_can_access_workbench_http(client, session, context):
+    from app.models import User
+
+    session.get(User, context.actor_id).is_superuser = True
+    session.flush()
+    response = client.get(
+        f"/api/tenants/{context.tenant_id}/ai-optimizers", headers=api_headers(context)
+    )
+    assert response.status_code == 200

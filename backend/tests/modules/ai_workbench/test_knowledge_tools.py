@@ -296,7 +296,7 @@ def test_bc_retrieval_pagination_retirement_and_cancellation(
     )
     cancel = client.post(
         f"/api/tenants/{context.tenant_id}/ai-optimizers/{optimizer.id}/reviews/{task.id}/cancel",
-        headers=api_headers(context),
+        headers=api_headers(context, session=session),
         json={},
     )
     assert cancel.status_code == 200

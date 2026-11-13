@@ -5211,3 +5211,9 @@ c34b生产快速切换约3分28秒完成、锁释放/CI恢复；五分钟仍4.88
 - 独立复审发现真实订单 payload 层级错误，已集中 `production_payload()` 修复，改用真实 create_order 及已签名入口回归；复审确认无其他明确阻塞。
 - 最终新建隔离 PostgreSQL 与独立 Redis：**732 passed, 1 deselected, 77 warnings**；DSH 原生插件 **7 passed**；Ruff/本轮格式/Node 语法/差异检查通过。一个未修改的广告管理大批次 SQL 门槛（26 vs ≤25）在修改前 b2f1cbad 后端归档也复现，单独记录并排除，不报告通过。此前污染测试库残留干扰调度及测试 Redis MISCONF 不算产品通过证据，最终改用干净隔离环境重验。
 - 详见 [专项实施计划](superpowers/plans/2026-11-13-ai-review-evidence-completion.md)、[专项验收](validation/2026-11-13-ai-review-evidence-completion.md) 和 [接入说明](runbooks/ai-ad-workbench.md)。本节与本轮功能为同一聚焦本地提交；未合并、推送或上线。
+
+## 2026-11-13 AI 工作台平台管理员灰度
+
+- 按用户要求，仅 is_superuser 可见 AI 入口；直接地址在组件边界阻断，不发工作台数据请求；全部租户工作台 API/知识接口使用平台管理员依赖，普通成员和租户管理员均返回403。
+- 现有成功HTTP用例显式使用平台管理员，保留普通身份拒绝覆盖。真实PG相关153项、Playwright24项、TypeScript/Vite及Ruff通过。
+- 用户已授权合并、推送和生产发布，包含独立DSH部署。尚在核对实际生产连通和准备DSH镜像/配置，不能将本地通过视为已发布。
