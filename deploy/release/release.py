@@ -534,9 +534,9 @@ class Release:
                     dict(backup, readOnly=True),
                 ],
                 "resources": {
-                    # 4 个恢复进程各自建索引，每个最多用 maintenance_work_mem；
-                    # 仅停写期间存在，节点为 8 核 / 14 GiB。
-                    "requests": {"cpu": "2", "memory": "2Gi"},
+                    # 生产集群发布时仍保留在线 Worker，恢复校验 Pod 必须先能调度；
+                    # 降低 request 让它进入空闲节点，limit 保留恢复峰值空间。
+                    "requests": {"cpu": "500m", "memory": "1Gi"},
                     "limits": {"cpu": "6", "memory": "8Gi"},
                 },
             },
