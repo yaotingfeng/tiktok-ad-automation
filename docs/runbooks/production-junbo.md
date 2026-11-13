@@ -1,3 +1,7 @@
+## 2026-11-13 操作日志失效恢复已发布，私有归档待配置
+
+应用`c01b811637b78c1149b53a834814359886040c80`/schema`0129_ai_proposal_operation`已发布；11角色精确镜像/Ready及配置保持核对，独立DSH保持，锁释放、CI恢复。旧导出40007已进入有界重建；真实新导出CHECK成功并进入DOWNLOAD，但`SYNC_ARCHIVE_BUCKET`为空导致归档不可用。现有R2凭据列桶/建桶AccessDenied，需管理员补独立私有桶及应用读写权限；没有使用公开素材桶。仍约2.43万操作日志待处理/0归档，不能称故障已完全解决。无DDL、新备份/恢复演练或广告写入，详见[实际发布与依赖阻断](../validation/2026-11-13-operation-log-recovery.md)。以下当前均为历史记录。
+
 ## 2026-11-13 AI投手与DSH官方WebUI已上线
 
 当前TK-ADA应用 `00f7d1cd0986065cb880d469111f41b454542646` / schema `0129_ai_proposal_operation`，独立DSH镜像 `3ca20a3f6017730fc8a6d04301137abc51ece91e`。十一应用角色与DSH Ready/0重启，实际配置/数据库池/四开关与HTTPS通过；仅平台管理员访问官方WebUI，实际资源、WebSocket、持久默认工作区、模型设置页面通过。默认模型保留com/claude-opus-5-5，凭据0600；无广告或素材业务写入、无新备份或恢复演练。详见[发布与验证](../validation/2026-11-13-ai-shooter-webui-release.md)。后续文档提交不改变运行镜像，以下“当前”均为历史。
