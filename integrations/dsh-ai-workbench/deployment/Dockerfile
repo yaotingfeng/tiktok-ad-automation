@@ -14,5 +14,5 @@ RUN mkdir -p /var/lib/dsh && chown -R node:node /var/lib/dsh
 ARG VCS_REF=local
 LABEL org.opencontainers.image.revision=${VCS_REF}
 USER node
-EXPOSE 9080
+EXPOSE 9080 9081
 CMD ["node", "/opt/tkada-dsh/plugin/deployment/start.mjs"]

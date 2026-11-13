@@ -12,6 +12,17 @@ import { setTimeout as delay } from 'node:timers/promises'
 
 const packageRoot = process.env.DSH_TEST_PACKAGE_ROOT
 
+test('deployment selects the shipped official web profile and keeps port boundaries explicit', async () => {
+  const packageJson = JSON.parse(await readFile(join(resolve(packageRoot || dirname(dirname(fileURLToPath(import.meta.url)))), 'package.json'), 'utf8'))
+  assert.equal(packageJson.dependencies['@deepseek-ai/dsh'], '0.2.2-rc.1')
+  const start = await readFile(join(dirname(fileURLToPath(import.meta.url)), 'start.mjs'), 'utf8')
+  assert.match(start, /@deepseek-ai\/dsh-web-app/)
+  assert.match(start, /port: 9082/)
+  const proxy = await readFile(join(dirname(fileURLToPath(import.meta.url)), 'admin-proxy.mjs'), 'utf8')
+  assert.match(proxy, /127\.0\.0\.1:9082/)
+  assert.match(proxy, /listen\(9081/)
+})
+
 test('production entrypoint boots real DSH, polls TK-ADA and serves readiness without model calls', { skip: !packageRoot, timeout: 45000 }, async () => {
   const root = await mkdtemp(join(tmpdir(), 'tkada-dsh-production-'))
   const requests = []

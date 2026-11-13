@@ -2,6 +2,7 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { spawn } from 'node:child_process'
+import { createRequire } from 'node:module'
 
 export async function prepareRuntime({ home, workspace, providerFile, tokenFile, apiUrl, port = 9080 }) {
   const provider = JSON.parse(await readFile(providerFile, 'utf8'))
@@ -14,20 +15,42 @@ export async function prepareRuntime({ home, workspace, providerFile, tokenFile,
   await mkdir(profile, { recursive: true, mode: 0o700 })
   await mkdir(workspace, { recursive: true, mode: 0o700 })
   const patch = [
-    { id: 'plugin-manager', disabled: true }, { id: 'hmr', disabled: true }, { id: 'config-editor', disabled: true },
-    { id: 'settings', disabled: true }, { id: 'session-title-llm', disabled: true }, { id: 'session-telemetry-otel', disabled: true },
+    { id: 'plugin-manager', disabled: true }, { id: 'hmr', disabled: true },
+    { id: 'session-title-llm', disabled: true }, { id: 'session-telemetry-otel', disabled: true },
     { id: 'llm-pi-ai', config: { providers: { [provider.provider]: provider.config } } },
     { id: 'agent-default-model', config: { provider: provider.provider, model: provider.model } },
-    // base 没有 Web profile 的 preset 注册表；显式注册空 standard，任务自身挂载受限工具。
+    // 复用官方 Web profile；禁止打印带凭据 URL，原生监听只在 Pod 回环。
+    { id: 'webserver', config: { host: '127.0.0.1', port: 9082 } },
+    { id: 'web-runtime', config: { openBrowser: false, printUrl: false, surfaceContext: false, publicUrl: `${url.origin}/dsh/` } },
     { insert: [
-      { id: 'agent-preset-registry', name: '@deepseek-ai/dsh-agent-preset-registry', config: { default: 'standard' } },
-      { id: 'preset-standard', name: '@deepseek-ai/dsh-agent-preset', config: { id: 'standard', plugins: [] } },
-      { id: 'tkada-reviews', name: join(dirname(fileURLToPath(import.meta.url)), 'service.mjs'), config: { url: apiUrl, tokenFile, stateRoot: join(dirname(home), 'reviews'), modelSelection: { provider: provider.provider, model: provider.model }, healthPort: Number(port) } },
+      { id: 'tkada-admin-proxy', name: join(dirname(fileURLToPath(import.meta.url)), 'admin-proxy.mjs'), config: { apiUrl } },
+      { id: 'tkada-reviews', name: join(dirname(fileURLToPath(import.meta.url)), 'service.mjs'), config: { url: apiUrl, tokenFile, stateRoot: join(dirname(home), 'reviews'), healthPort: Number(port) } },
     ] },
   ]
-  await writeFile(join(profile, 'package.json'), JSON.stringify({ name: 'dsh-profile-tkada', private: true, dsh: { profile: { bundles: ['@deepseek-ai/dsh-base'] } } }), { mode: 0o600 })
-  // 状态卷只保存部署配置引用，不复制用户个人会话或明文模型凭据。
-  await writeFile(join(profile, 'cordis.patch.yml'), JSON.stringify(patch), { mode: 0o600 })
+  await writeFile(join(profile, 'package.json'), JSON.stringify({ name: 'dsh-profile-tkada', private: true, dsh: { profile: { bundles: ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app'] } } }), { mode: 0o600 })
+  // 官方 Models 页写入 profile patch；重启必须保留管理员设置，只刷新部署拥有的安全/接入行。
+  const { parseDocument } = createRequire(import.meta.url)('yaml')
+  const patchFile = join(profile, 'cordis.patch.yml')
+  let previous
+  try { previous = await readFile(patchFile, 'utf8') } catch (error) { if (error.code !== 'ENOENT') throw error }
+  if (previous) {
+    const document = parseDocument(previous)
+    if (document.errors.length || !Array.isArray(document.toJSON())) throw new Error('Invalid DSH profile patch')
+    const managed = new Set(patch.flatMap(row => row.insert || [row]).map(row => row.id).filter(id => !['llm-pi-ai', 'agent-default-model'].includes(id)))
+    const obsolete = new Set(['settings', 'config-editor'])
+    for (let index = document.contents.items.length - 1; index >= 0; index--) {
+      const row = document.contents.items[index]
+      if (managed.has(row.get('id')) || obsolete.has(row.get('id'))) document.contents.items.splice(index, 1)
+      else if (row.has('insert')) {
+        const rows = row.get('insert').items
+        for (let child = rows.length - 1; child >= 0; child--) if (managed.has(rows[child].get('id'))) rows.splice(child, 1)
+      }
+    }
+    for (const row of patch) {
+      if (!['llm-pi-ai', 'agent-default-model'].includes(row.id)) document.contents.add(row)
+    }
+    await writeFile(patchFile, String(document), { mode: 0o600 })
+  } else await writeFile(patchFile, JSON.stringify(patch), { mode: 0o600 })
   return profile
 }
 

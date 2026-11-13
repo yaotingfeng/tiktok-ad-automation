@@ -1,6 +1,6 @@
 from fastapi import APIRouter
 
-from app.api.routes import integrations, login, users, utils
+from app.api.routes import dsh_admin, integrations, login, users, utils
 from app.modules.accounts.capability_router import router as capability_router
 from app.modules.accounts.mcp_router import callback_router as mcp_callback_router
 from app.modules.accounts.mcp_router import router as mcp_accounts_router
@@ -31,6 +31,7 @@ from app.modules.tenants.router import router as tenants_router
 api_router = APIRouter()
 api_router.include_router(ai_runtime_router)
 api_router.include_router(login.router)
+api_router.include_router(dsh_admin.router)
 api_router.include_router(users.router)
 api_router.include_router(utils.router)
 api_router.include_router(integrations.router)

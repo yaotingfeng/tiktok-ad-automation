@@ -55,7 +55,7 @@ v1 使用文档约定的素材库工作流：`GET /api/strategy-catalog`、`GET 
 - `/run/secrets/tkada-ai-review-token`：与 TK-ADA 运行 Secret 的 `AI_DSH_SERVICE_TOKEN` 相同；Kubernetes 使用 `0440`、服务组读取，普通文件使用 `0600`。
 - 持久化 `/var/lib/dsh`：`home/` 保存独立 profile，`workspace/` 为工作区，`reviews/<租户>/<优化师>/<任务>/<fence>/` 保存任务状态。不复制个人 DSH 会话和完整个人凭据库。
 
-原生入口自动注册插件、preset registry 和空 standard preset，禁用个人插件管理、热更新及会话遥测。部署清单为 `deploy/k8s/ai-dsh.yaml`，渲染 `__DSH_IMAGE__` 后应用；模型 Secret 名为 `tiktok-ad-automation-dsh-model`。独立 app 标签保持原十一角色发布清单不变，20Gi PVC 满足当前云盘最低容量。没有公网管理入口，`9080` 仅供集群健康探针：`/health` 表示进程在线，`/ready` 必须成功领取接口后才返回200。
+原生入口复用官方 `@deepseek-ai/dsh-web-app` 的 preset registry 和 standard preset，禁用个人插件管理、热更新及会话遥测。部署清单为 `deploy/k8s/ai-dsh.yaml`，渲染 `__DSH_IMAGE__` 后应用；模型 Secret 名为 `tiktok-ad-automation-dsh-model`。独立 app 标签保持原十一角色发布清单不变，20Gi PVC 满足当前云盘最低容量。管理入口由共享 HTTPS Ingress 的 `/dsh/` 提供，Service 仅暴露管理员代理 9081；9082 仅供 Pod 内官方 WebUI，`9080` 仅供集群健康探针：`/health` 表示进程在线，`/ready` 必须成功领取接口后才返回200。
 
 镜像验收须在只读根文件系统、非 root 用户下运行原生测试。DSH 原生模块会将随包的库复制到临时目录加载；Docker 验收的 `/tmp` 若使用 tmpfs，需显式 `rw,exec`，默认 `noexec` 会出现 `failed to map segment`。生产清单使用可加载原生库的磁盘 emptyDir，保持根文件系统只读。
 
@@ -122,3 +122,16 @@ API/Worker/Beat 与插件 1.3.0 配套，新增迁移 head `0128_material_produc
 ```
 
 TK-ADA 订单 UUID 可由发单 `Idempotency-Key: tkada-ai:<订单 UUID>` 对应，job/strategy 由生产方真实记录提供。服务端核对同租户订单及冻结 `payload.selectedStrategyIds` 后保存不可变推送修订，再关联实际库文件及验证的视频 ID。该声明来自已鉴权生产方，仍是观察关联，不证明因果；同视频多个策略来源有冲突时排除归属。**生产方尚未回传这些字段、旧历史无谱系或文件尚未成功入库时，明确不可按制作策略归因，不能由 Agent 补造。** 本轮仅完成 TK-ADA 接收、校验及读取合同，未改动未知外部生产工具、未执行外部联调。
+
+## DSH WebUI（平台管理员入口）
+
+DSH `0.2.2-rc.1` 已随包提供官方 `web` profile、模型设置页和 WebSocket transport；`headless` profile 是无 HTTP 的一次性任务模式，不能作为管理界面。部署入口复用官方 Web profile：原生 Web listener 仅绑定 Pod 回环 `127.0.0.1:9082`，管理代理监听 `9081`，Service 只暴露代理端口。代理每个 HTTP 请求和 WebSocket 升级都回查 TK-ADA `/api/admin/dsh/authorize`，只有 `is_superuser=true` 且 active 的平台管理员通过；不向浏览器暴露 DSH launch token、模型 Key 或原生 cookie。平台管理员从 `/api/admin/dsh/entry` 换取 15 分钟、`HttpOnly; Secure; SameSite=Strict; Path=/dsh/` 的短会话后进入 `/dsh/`。
+
+共享 `test-https` Ingress 增加唯一的 `/dsh` Prefix 路由，后端为 `tiktok-ad-automation-dsh:9081`。先只读生成并审查补丁，再显式应用：
+
+```bash
+python3 deploy/k8s/dsh_web_ingress.py --kubeconfig .runtime/company-production-20261010/ack/kubeconfig --kubectl .tools/bin/kubectl-1.36
+python3 deploy/k8s/dsh_web_ingress.py --kubeconfig .runtime/company-production-20261010/ack/kubeconfig --kubectl .tools/bin/kubectl-1.36 --apply
+```
+
+不要把 9082 加入 Service/Ingress；它只供 Pod 内官方 WebUI 使用。模型配置页写入 `/var/lib/dsh/home/profiles/tkada/cordis.patch.yml`，启动脚本保留管理员写入的 provider/model 设置，仅重写部署拥有的 Web listener、管理员代理和任务插件行。变更模型后重启 DSH Pod，确认 `/ready`、`/dsh/`、管理员与普通用户 403，再记录实际模型配置和 Ingress resourceVersion。

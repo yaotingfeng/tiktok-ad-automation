@@ -50,6 +50,8 @@ spec:
                 secretKeyRef: {name: tiktok-ad-automation-dsh-model, key: COM_API_KEY}
           ports:
             - {name: health, containerPort: 9080}
+            # 原生 9082 只绑定回环，不能添加 Service/Ingress 直通。
+            - {name: admin-web, containerPort: 9081}
           startupProbe:
             httpGet: {path: /health, port: health}
             periodSeconds: 5
@@ -85,3 +87,4 @@ spec:
   selector: {app: tiktok-ad-automation-dsh}
   ports:
     - {name: health, port: 9080, targetPort: health}
+    - {name: admin-web, port: 9081, targetPort: admin-web}

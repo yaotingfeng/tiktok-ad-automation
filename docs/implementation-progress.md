@@ -5251,3 +5251,11 @@ c34b生产快速切换约3分28秒完成、锁释放/CI恢复；五分钟仍4.88
 - 投手编辑页移除“AI 发布授权”细项、单次调整上限、素材策略 ID 和飞书表格 token；人工/自动仅由优化模式控制，素材下单改为平台内置 CL6 v4、CL8 v5、GM-精剪 v4 按当前租户目录解析。
 - 复盘提案增加 `operation=create|update`，结构化 DSH 完成工具要求显式操作类型；服务端保留租户账户范围、领域 Schema、版本和审计校验，并支持在当前投手范围内创建策略/规则。
 - 新增迁移 `0129_ai_proposal_operation`。`.venv` compileall、前端 TypeScript/Vite production build、`git diff --check` 通过；尚未执行真实广告或素材订单。
+
+### 2026-11-13 DSH WebUI 管理员入口实现（未部署）
+
+- 已核对本机与配套包：`@deepseek-ai/dsh` / `@deepseek-ai/dsh-web-app` 均为 `0.2.2-rc.1`；`headless` 不提供 HTTP/WebUI，改为官方 `web` profile。原生 WebUI 回环 `127.0.0.1:9082`，管理员代理 `9081`，健康端口 `9080`；Service 只暴露 9080/9081，Ingress 仅准备 `/dsh` → 9081。
+- 新增 TK-ADA `/api/admin/dsh/session`、`/authorize` 及 `/entry`：平台管理员短会话、每次数据库回查 active/superuser，Cookie 限定 `/dsh/`；代理覆盖 HTTP/WebSocket、同源检查、撤权回查，并剥离原生 Cookie/令牌。
+- DSH profile 改用官方 WebUI 和 Models 设置面；启动脚本保留管理员写入的 provider/model 配置，避免重启覆盖 `cordis.patch.yml`。Ingress 补丁脚本默认只读输出并做 resourceVersion test，未执行 apply。
+- 验证：DSH 原生部署测试 **4 passed**（含真实 `0.2.2-rc.1` 启动/领取、官方包名和 9082→9081 端口边界）；Python AST/Node syntax/`git diff --check` 通过；只读 Ingress 生成成功，资源版本 `109629158`。管理员 API 测试因隔离 PostgreSQL 容器持续 `the database system is in recovery mode` 未能执行，不将权限回归宣称通过。
+- 阻塞：尚未构建 AMD64 镜像、应用 Service/Ingress 或线上验证；必须在目标环境重新构建并确认 DSH WebUI 静态包、模型 Secret、`/dsh/` 管理员200/普通用户403、WebSocket和模型设置持久化后，才能交付为可部署。
