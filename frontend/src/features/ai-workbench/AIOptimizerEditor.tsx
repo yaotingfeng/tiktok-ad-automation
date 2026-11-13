@@ -79,7 +79,7 @@ function Choice({
   )
 }
 
-/** 这里只维护投手引用和授权；策略、规则正文仍由原模块编辑。 */
+/** 投手只维护范围与运行模式；策略和规则由领域模块及 AI 能力目录统一校验。 */
 export function AIOptimizerEditor({
   tenantId,
   optimizer,
@@ -98,56 +98,17 @@ export function AIOptimizerEditor({
     return () => controller.abort()
   }, [])
   const requestIdentity = useRef(createRequestIdentity())
-  const limits = optimizer?.authorization_limits ?? {}
   const [name, setName] = useState(optimizer?.name ?? "")
   const [bcId, setBcId] = useState(optimizer?.bc_id ?? "")
   const [accountIds, setAccountIds] = useState(optimizer?.advertiser_ids ?? [])
-  const [strategyId, setStrategyId] = useState(
-    optimizer?.strategy_version_id ?? "",
-  )
+  const [strategyId, setStrategyId] = useState(optimizer?.strategy_version_id ?? "")
   const [ruleIds, setRuleIds] = useState(optimizer?.rule_ids ?? [])
   const [spend, setSpend] = useState(String(optimizer?.daily_spend ?? ""))
   const [roas, setRoas] = useState(String(optimizer?.target_roas ?? ""))
   const [priority, setPriority] = useState(optimizer?.priority ?? "BALANCED")
   const [mode, setMode] = useState(optimizer?.optimization_mode ?? "MANUAL")
-  const [timezone, setTimezone] = useState(
-    optimizer?.timezone ?? "Asia/Shanghai",
-  )
-  const [reviewTime, setReviewTime] = useState(
-    (optimizer?.review_time ?? "13:00").slice(0, 5),
-  )
-  const authorized = (key: string) =>
-    limits[key] === true ||
-    (typeof limits[key] === "object" &&
-      limits[key] !== null &&
-      (limits[key] as { allowed?: boolean }).allowed === true)
-  const [strategyAllowed, setStrategyAllowed] = useState(authorized("strategy"))
-  const [ruleAllowed, setRuleAllowed] = useState(authorized("rule"))
-  const [budgetDelta, setBudgetDelta] = useState(
-    String(limits.max_budget_delta ?? ""),
-  )
-  const [spendDelta, setSpendDelta] = useState(
-    String(limits.max_daily_spend_delta ?? ""),
-  )
-  const [materialIds, setMaterialIds] = useState(
-    (optimizer?.material_config?.strategy_ids ?? []).join(","),
-  )
-  const [materialSheet, setMaterialSheet] = useState(
-    optimizer?.material_config?.feishu_token ?? "",
-  )
-  const [strategyFields, setStrategyFields] = useState<string[]>(
-    Array.isArray(limits.strategy_allowed_fields)
-      ? (limits.strategy_allowed_fields as string[])
-      : [],
-  )
-  const [ruleFields, setRuleFields] = useState<string[]>(
-    Array.isArray(limits.rule_allowed_fields)
-      ? (limits.rule_allowed_fields as string[])
-      : [],
-  )
-  const [roasDelta, setRoasDelta] = useState(
-    String(limits.max_target_roas_delta ?? ""),
-  )
+  const [timezone, setTimezone] = useState(optimizer?.timezone ?? "Asia/Shanghai")
+  const [reviewTime, setReviewTime] = useState((optimizer?.review_time ?? "13:00").slice(0, 5))
   const [bcs, setBcs] = useState<BC[]>([])
   const [accounts, setAccounts] = useState<Account[]>([])
   const [strategies, setStrategies] = useState<Strategy[]>([])
@@ -224,44 +185,7 @@ export function AIOptimizerEditor({
       new Intl.DateTimeFormat("en", { timeZone: timezone }).format()
       if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(reviewTime))
         throw new Error("请填写有效复盘时间")
-      if (
-        [budgetDelta, spendDelta, roasDelta].some(
-          (value) =>
-            value !== "" &&
-            (!Number.isFinite(Number(value)) || Number(value) < 0),
-        )
-      )
-        throw new Error("授权调整上限必须为非负数")
       setSaving(true)
-      // 仅修改已展示的授权键，保留服务器认可的其他细分边界。
-      const updatePermission = (kind: string, allowed: boolean) =>
-        typeof limits[kind] === "object" && limits[kind] !== null
-          ? { ...(limits[kind] as Record<string, unknown>), allowed }
-          : allowed
-      const authorization: Record<string, unknown> = {
-        ...limits,
-        strategy: updatePermission("strategy", strategyAllowed),
-        rule: updatePermission("rule", ruleAllowed),
-      }
-      if (budgetDelta) authorization.max_budget_delta = Number(budgetDelta)
-      else delete authorization.max_budget_delta
-      if (spendDelta) authorization.max_daily_spend_delta = Number(spendDelta)
-      else delete authorization.max_daily_spend_delta
-      if (roasDelta) authorization.max_target_roas_delta = Number(roasDelta)
-      else delete authorization.max_target_roas_delta
-      if (strategyFields.length)
-        authorization.strategy_allowed_fields = strategyFields
-      else delete authorization.strategy_allowed_fields
-      if (ruleFields.length) authorization.rule_allowed_fields = ruleFields
-      else delete authorization.rule_allowed_fields
-      const materialStrategies = [
-        ...new Set(
-          materialIds
-            .split(/[,，\n]/)
-            .map((item) => item.trim())
-            .filter(Boolean),
-        ),
-      ]
       const body = {
         name: name.trim(),
         bc_id: bcId,
@@ -272,14 +196,6 @@ export function AIOptimizerEditor({
         target_roas: roas || null,
         priority,
         optimization_mode: mode,
-        authorization_limits: authorization,
-        material_config:
-          materialStrategies.length || materialSheet.trim()
-            ? {
-                strategy_ids: materialStrategies,
-                feishu_token: materialSheet.trim(),
-              }
-            : {},
         timezone,
         review_time: reviewTime,
         ...(optimizer ? {} : { active: true }),
@@ -393,6 +309,9 @@ export function AIOptimizerEditor({
                 ]}
                 onChange={(value) => setMode(value as typeof mode)}
               />
+              <p className="text-xs text-muted-foreground sm:col-span-2">
+                人工确认会先生成提案；自动优化会在当前账户范围和领域能力内执行。素材下单使用平台内置 CL6 v4、CL8 v5、GM-精剪 v4，无需填写策略 ID 或表格。
+              </p>
               <Choice
                 label="绑定策略版本"
                 value={strategyId}
@@ -486,146 +405,8 @@ export function AIOptimizerEditor({
               )}
             </FieldGroup>
           </FieldSet>
-          <FieldSet disabled={saving}>
-            <FieldLegend>素材下单配置</FieldLegend>
-            <FieldGroup>
-              <Field>
-                <FieldLabel htmlFor="material-strategies">
-                  素材制作策略 ID
-                </FieldLabel>
-                <Input
-                  id="material-strategies"
-                  value={materialIds}
-                  onChange={(event) => setMaterialIds(event.target.value)}
-                  placeholder="填写已启用的素材制作策略 ID，多个用逗号分隔"
-                />
-              </Field>
-              <Field>
-                <FieldLabel htmlFor="material-sheet">素材回写表格</FieldLabel>
-                <Input
-                  id="material-sheet"
-                  value={materialSheet}
-                  onChange={(event) => setMaterialSheet(event.target.value)}
-                  placeholder="飞书表格链接或 token"
-                />
-              </Field>
-            </FieldGroup>
-            <p className="text-xs text-muted-foreground">
-              只有剧单勾选下单时使用。必须使用本租户素材工作台已启用的策略；未配置时保留下单意图并显示受阻。
-            </p>
-          </FieldSet>
-          <FieldSet disabled={saving}>
-            <FieldLegend>AI 发布授权</FieldLegend>
-            <FieldGroup>
-              <Field orientation="horizontal">
-                <Checkbox
-                  id="authorize-strategy"
-                  checked={strategyAllowed}
-                  onCheckedChange={(checked) =>
-                    setStrategyAllowed(checked === true)
-                  }
-                />
-                <FieldLabel htmlFor="authorize-strategy">
-                  允许调整绑定策略
-                </FieldLabel>
-              </Field>
-              <Field orientation="horizontal">
-                <Checkbox
-                  id="authorize-rule"
-                  checked={ruleAllowed}
-                  onCheckedChange={(checked) =>
-                    setRuleAllowed(checked === true)
-                  }
-                />
-                <FieldLabel htmlFor="authorize-rule">
-                  允许调整绑定规则
-                </FieldLabel>
-              </Field>
-              <Field>
-                <FieldLabel htmlFor="budget-delta">
-                  单次预算调整绝对上限
-                </FieldLabel>
-                <Input
-                  id="budget-delta"
-                  type="number"
-                  min="0"
-                  step="any"
-                  value={budgetDelta}
-                  onChange={(event) => setBudgetDelta(event.target.value)}
-                  placeholder="未授权"
-                />
-              </Field>
-              <Field>
-                <FieldLabel htmlFor="spend-delta">
-                  单次日消耗调整绝对上限
-                </FieldLabel>
-                <Input
-                  id="spend-delta"
-                  type="number"
-                  min="0"
-                  step="any"
-                  value={spendDelta}
-                  onChange={(event) => setSpendDelta(event.target.value)}
-                  placeholder="未授权"
-                />
-              </Field>
-              <Field>
-                <FieldLabel htmlFor="roas-delta">
-                  单次 ROAS 出价调整绝对上限
-                </FieldLabel>
-                <Input
-                  id="roas-delta"
-                  type="number"
-                  min="0"
-                  step="any"
-                  value={roasDelta}
-                  onChange={(event) => setRoasDelta(event.target.value)}
-                  placeholder="未授权"
-                />
-              </Field>
-              <Field orientation="horizontal">
-                <Checkbox
-                  id="allow-structure"
-                  checked={strategyFields.includes("group_count")}
-                  onCheckedChange={(checked) =>
-                    setStrategyFields(
-                      checked
-                        ? [
-                            "group_count",
-                            "ads_per_group",
-                            "group_generation_mode",
-                            "ad_generation_mode",
-                            "creative_count",
-                          ]
-                        : [],
-                    )
-                  }
-                />
-                <FieldLabel htmlFor="allow-structure">
-                  允许自动调整搭建数量与结构
-                </FieldLabel>
-              </Field>
-              {[
-                ["conditions", "允许自动调整规则条件"],
-                ["action", "允许自动调整规则动作"],
-                ["schedule", "允许自动调整规则执行时间"],
-              ].map(([key, label]) => (
-                <Field key={key} orientation="horizontal">
-                  <Checkbox
-                    id={`allow-rule-${key}`}
-                    checked={ruleFields.includes(key)}
-                    onCheckedChange={(checked) =>
-                      setRuleFields(toggle(ruleFields, key, checked === true))
-                    }
-                  />
-                  <FieldLabel htmlFor={`allow-rule-${key}`}>{label}</FieldLabel>
-                </Field>
-              ))}
-            </FieldGroup>
-            <p className="text-xs text-muted-foreground">
-              授权账户仅限上方所选范围。人工模式每次仍需确认；自动模式的未授权调整会被阻止。
-            </p>
-          </FieldSet>
+
+
           {error && (
             <p role="alert" className="text-sm text-destructive">
               {error}

@@ -20,6 +20,9 @@ from app.modules.material_production.client import ORIGIN
 from app.modules.material_production.models import MaterialProductionBinding
 from app.modules.tenants.permissions import require_tenant
 
+# 素材工作台的默认方案由平台维护，投手配置不再暴露策略 ID 或个人表格。
+BUILTIN_STRATEGIES = ("CL6-v4", "CL8-v5", "GM-精剪-v4")
+
 register_dispatch_task("ai_workbench.material_order", "control")
 
 
@@ -82,6 +85,8 @@ def company_client(session: Session, *, context: TenantContext) -> ProductionCli
 
 
 def validate_config(config: dict) -> None:
+    if not config:
+        return
     ids = config.get("strategy_ids", [])
     if (
         not isinstance(ids, list)
@@ -95,9 +100,17 @@ def validate_config(config: dict) -> None:
         or any(len(value) > 255 for value in ids)
         or set(config) - {"strategy_ids", "feishu_token"}
     ):
-        raise DomainError(
-            "ai_material_config_required", "请配置素材制作策略 ID 和回写表格"
-        )
+        raise DomainError("ai_material_config_invalid", "素材方案必须使用平台内置配置")
+
+
+def resolve_builtin_config(remote: ProductionClient) -> dict:
+    """按语义名称从当前租户目录解析内置方案，避免跨租户复制 UUID。"""
+    catalogue = remote.request("GET", "/api/strategy-catalog").get("strategies", [])
+    names = {str(item.get("name", "")).strip(): item.get("id") for item in catalogue if isinstance(item, dict) and item.get("enabled") is True}
+    selected = [names[name] for name in BUILTIN_STRATEGIES if names.get(name)]
+    if not selected:
+        raise DomainError("ai_material_order_failed", "当前租户未启用内置素材方案")
+    return {"strategy_ids": selected}
 
 
 def create_order(
@@ -123,7 +136,7 @@ def create_order(
     ).first()
     if prior:
         return prior
-    validate_config(config)
+        validate_config(config)
     # 提交时间及请求体只生成一次；超时重试绝不重算 startTime。
     now = datetime.now(UTC)
     order = MaterialOrder(
@@ -139,10 +152,9 @@ def create_order(
                 "title": row.title,
                 "titles": [row.title],
                 "titleSource": "manual",
-                "titleFeishuToken": config["feishu_token"],
                 "businessDate": str(row.business_date),
                 "targets": ["self_download"],
-                "selectedStrategyIds": list(config["strategy_ids"]),
+                "selectedStrategyIds": list(config.get("strategy_ids", [])),
                 "createdFrom": "unified-new-webui",
                 "startTime": now.isoformat(),
                 "intervalMinutes": 0,
@@ -183,9 +195,9 @@ def process_order(
     try:
         remote = remote or company_client(session, context=context)
         if not order.job_id:
-            catalog = remote.request("GET", "/api/strategy-catalog").get(
-                "strategies", []
-            )
+            catalog = remote.request("GET", "/api/strategy-catalog").get("strategies", [])
+            if not order.request_body["payload"]["selectedStrategyIds"]:
+                order.request_body["payload"].update(resolve_builtin_config(remote))
             enabled = {
                 item["id"]
                 for item in catalog
@@ -315,7 +327,6 @@ def scan_orders(session: Session, *, now: datetime, limit: int = 100) -> int:
             AIDailyPlanRow.order_materials.is_(True),
             missing,
             AIOptimizer.active.is_(True),
-            AIOptimizerVersion.material_config != {},
             AIDailyPlanRow.business_date
             >= func.date(func.timezone(AIDailyPlanRow.timezone, now)),
         )
@@ -338,8 +349,6 @@ def scan_orders(session: Session, *, now: datetime, limit: int = 100) -> int:
                 AIOptimizerVersion.number == optimizer.latest_version,
             )
         ).one()
-        if not version.material_config:
-            continue
         try:
             with session.begin_nested():
                 create_order(
@@ -348,7 +357,7 @@ def scan_orders(session: Session, *, now: datetime, limit: int = 100) -> int:
                         tenant_id=row.tenant_id, actor_id=optimizer.created_by, role=""
                     ),
                     row_id=row.id,
-                    config=version.material_config,
+                    config=version.material_config or {},
                 )
         except DomainError:
             continue

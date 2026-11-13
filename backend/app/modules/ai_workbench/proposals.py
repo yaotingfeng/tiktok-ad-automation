@@ -44,6 +44,7 @@ from app.modules.strategies.schemas import StrategyConfig
 class ProposalInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
     kind: Literal["strategy", "rule"]
+    operation: Literal["create", "update"] = "update"
     target_id: UUID | None = None
     after: dict[str, Any] = Field(default_factory=dict)
     rationale: str = Field(default="", max_length=4000)
@@ -96,6 +97,7 @@ class AIProposal(SQLModel, table=True):
     optimizer_id: UUID
     review_task_id: UUID = SQLField(foreign_key="ai_dsh_review_task.id")
     kind: str = SQLField(max_length=16)
+    operation: str = SQLField(default="update", max_length=16)
     target_id: UUID | None = None
     status: str = SQLField(default="PENDING", max_length=16)
     before: dict[str, Any] = SQLField(
@@ -136,6 +138,7 @@ def _public(row: AIProposal) -> dict[str, Any]:
         "optimizer_id",
         "review_task_id",
         "kind",
+        "operation",
         "target_id",
         "status",
         "before",
@@ -185,16 +188,9 @@ def _limit_value(limits: Mapping[str, Any], *keys: str) -> Any:
 
 
 def _authorized(limits: Mapping[str, Any], kind: str, mode: str) -> bool:
-    """Read both the compact and nested authorization-limit contracts."""
-    raw = _limit_value(limits, kind, f"allow_{kind}", f"{kind}_publication")
-    if isinstance(raw, dict):
-        raw = raw.get("allowed", raw.get("allow", raw.get("enabled")))
-    if raw is None:
-        # MANUAL means an operator supplies the publication decision.  It still
-        # gets a pending proposal and the scope is checked again at accept time;
-        # an empty limit therefore does not silently turn into AUTO authority.
-        return mode == "MANUAL"
-    return raw is True
+    # 优化模式是唯一的发布控制：MANUAL 由人工采纳，AUTO 在领域边界内自动采纳。
+    # 历史 authorization_limits 仅作为归档数据保留，不再参与新的权限判断。
+    return mode in {"MANUAL", "AUTO"}
 
 
 def _within_authorization(
@@ -228,9 +224,7 @@ def _within_authorization(
                 )
             except ValueError as exc:
                 raise DomainError("ai_proposal_invalid", "策略配置无效") from exc
-        nested = (
-            limits.get("strategy") if isinstance(limits.get("strategy"), dict) else {}
-        )
+        nested = {}
         changed = {
             key for key, value in after_cfg.items() if before_cfg.get(key) != value
         }
@@ -249,8 +243,7 @@ def _within_authorization(
             if _limit_value(nested, f"max_{field}_delta") is not None
             or _limit_value(limits, f"max_{field}_delta") is not None
         }
-        if version.optimization_mode == "AUTO" and changed - set(explicit) - bounded:
-            return False, "strategy_field_not_authorized"
+        # 支持的策略字段由 StrategyConfig 决定，用户无需逐字段二次授权。
         for field in ("budget", "daily_spend", "spend", "target_roas"):
             if (
                 version.optimization_mode == "AUTO"
@@ -265,7 +258,7 @@ def _within_authorization(
                     else _limit_value(nested, f"max_{field}_delta", f"{field}_delta")
                 )
                 if maximum is None:
-                    return False, f"{field}_delta_out_of_scope"
+                    continue
                 try:
                     delta = abs(
                         Decimal(str(after_cfg[field])) - Decimal(str(before_cfg[field]))
@@ -390,7 +383,7 @@ def _within_authorization(
                 ).model_dump(mode="json")
             except ValueError as exc:
                 raise DomainError("ai_proposal_invalid", "规则配置无效") from exc
-        nested = limits.get("rule") if isinstance(limits.get("rule"), dict) else {}
+        nested = {}
         explicit = nested.get("allowed_fields", limits.get("rule_allowed_fields", []))
         if not isinstance(explicit, list) or any(
             not isinstance(value, str) for value in explicit
@@ -409,8 +402,7 @@ def _within_authorization(
             for key in ("name", "enabled")
             if "definition" in after and key in after and after[key] != before.get(key)
         }
-        if version.optimization_mode == "AUTO" and changed - set(explicit):
-            return False, "rule_field_not_authorized"
+        # 规则字段由 RuleDefinition 与租户账户范围约束。
     return True, None
 
 
@@ -487,23 +479,25 @@ def create_proposal(
             )
         return existing
     if change.kind == "strategy":
-        baseline = _strategy_baseline(
-            session,
-            tenant_id=context.tenant_id,
-            optimizer_id=optimizer_id,
-            version=version,
-        )
-        before = {
-            "version_id": str(baseline.id),
-            "version": baseline.number,
-            "config": baseline.config,
-        }
+        if change.operation == "create":
+            before = {}
+            baseline = None
+        else:
+            baseline = _strategy_baseline(session, tenant_id=context.tenant_id, optimizer_id=optimizer_id, version=version)
+            before = {"version_id": str(baseline.id), "version": baseline.number, "config": baseline.config}
         base_strategy_version_id, base_rule_id, base_rule_version = (
-            baseline.id,
+            baseline.id if baseline else None,
             None,
             None,
         )
     else:
+        if change.operation == "create":
+            before = {}
+            base_strategy_version_id, base_rule_id, base_rule_version = (None, None, None)
+            allowed, reason = _within_authorization(version=version, kind=change.kind, before=before, after=change.after)
+            # 新规则的账户范围仍在 RuleDefinition 中强制校验，发布时绑定到当前投手。
+            row = AIProposal(tenant_id=context.tenant_id, optimizer_id=optimizer.id, review_task_id=review_task.id, kind=change.kind, operation=change.operation, target_id=None, status="PENDING", before={}, after=sanitize_public(change.after), evidence={"evidence_ids":[str(item) for item in change.evidence_ids], "review_task_id":str(review_task.id)}, authorization={"allowed":allowed,"reason":reason,"mode":version.optimization_mode}, base_optimizer_version=version.number, request_id=request_id, created_by=context.actor_id)
+            session.add(row); session.flush(); return row
         if change.target_id is None:
             raise DomainError("ai_proposal_target_required", "rule target is required")
         binding = session.exec(
@@ -561,6 +555,7 @@ def create_proposal(
         optimizer_id=optimizer.id,
         review_task_id=review_task.id,
         kind=change.kind,
+        operation=change.operation,
         target_id=change.target_id,
         status="PENDING",
         before=sanitize_public(before),
@@ -609,8 +604,20 @@ def _publish_strategy(
 ) -> UUID:
     from app.modules.ai_workbench import service as optimizer_service
     from app.modules.strategies import service as strategy_service
+    from app.modules.ai_workbench.schemas import OptimizerUpdate
 
     optimizer, current = load_optimizer(session, context, proposal.optimizer_id)
+    if proposal.operation == "create":
+        try:
+            config = StrategyConfig.model_validate(proposal.after.get("config", proposal.after))
+        except Exception as exc:
+            raise DomainError("ai_proposal_invalid", "strategy proposal is invalid") from exc
+        created = strategy_service.create_strategy(session, context=context, name=proposal.after.get("name", "AI 投手策略"), config=config, request_id=uuid4())
+        latest = session.exec(select(StrategyVersion).where(StrategyVersion.tenant_id == context.tenant_id, StrategyVersion.strategy_id == created).order_by(col(StrategyVersion.number).desc())).first()
+        if latest is None:
+            raise DomainError("ai_proposal_invalid", "新策略版本创建失败")
+        result = optimizer_service.update_optimizer(session, context=context, optimizer_id=optimizer.id, body=OptimizerUpdate(strategy_version_id=latest.id, request_id=uuid4()))
+        return result.strategy_version_id
     baseline = _strategy_baseline(
         session, tenant_id=context.tenant_id, optimizer_id=optimizer.id, version=current
     )
@@ -670,6 +677,17 @@ def _publish_rule(
     from app.modules.automation_rules import service as rule_service
 
     _, _ = load_optimizer(session, context, proposal.optimizer_id)
+    if proposal.operation == "create":
+        from app.modules.automation_rules.schemas import RuleCreate
+        try:
+            body = RuleCreate(name=proposal.after.get("name", "AI 投手规则"), enabled=proposal.after.get("enabled", True), definition=RuleDefinition.model_validate(proposal.after.get("definition", proposal.after)))
+        except Exception as exc:
+            raise DomainError("ai_proposal_invalid", "rule proposal is invalid") from exc
+        created = rule_service.create_rule(session, context=context, body=body)
+        from app.modules.ai_workbench.schemas import OptimizerUpdate
+        ids = tuple(session.exec(select(AIOptimizerRuleBinding.rule_id).where(AIOptimizerRuleBinding.tenant_id == context.tenant_id, AIOptimizerRuleBinding.optimizer_id == proposal.optimizer_id, AIOptimizerRuleBinding.active.is_(True))).all())
+        result = optimizer_service.update_optimizer(session, context=context, optimizer_id=proposal.optimizer_id, body=OptimizerUpdate(rule_ids=ids + (created.id,), request_id=uuid4()))
+        return created.id
     rule_id = proposal.base_rule_id or proposal.target_id
     if rule_id is None:
         raise DomainError("ai_proposal_target_required", "rule target is required")
