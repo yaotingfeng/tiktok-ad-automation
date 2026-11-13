@@ -47,10 +47,13 @@ test('gateway checks every request, strips credentials/prefix and rejects cross-
 
 test('WebSocket handshake is gated and live connections close after revocation', { timeout: 5000 }, async () => {
   let allowed = true, upgradeCount = 0
+  const upstreamSockets = new Set()
   const upstream = createServer()
   upstream.on('upgrade', (request, socket) => {
     upgradeCount++
+    upstreamSockets.add(socket)
     socket.on('error', () => {})
+    socket.on('close', () => upstreamSockets.delete(socket))
     socket.write('HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n')
   })
   const target = await listen(upstream)
@@ -64,7 +67,19 @@ test('WebSocket handshake is gated and live connections close after revocation',
     const rejectedResponse = once(rejected, 'response'); rejected.end()
     assert.equal((await rejectedResponse)[0].statusCode, 403)
     assert.equal(upgradeCount, 0)
-    // 上游握手依赖运行中的 DSH；权限门在升级前已由恶意 Origin 拒绝，
-    // 授权回查由代理实现并在生产连接上定时关闭已撤销会话。
-  } finally { await proxy.close(); upstream.closeAllConnections(); await new Promise(resolve => upstream.close(resolve)) }
+    const accepted = upgrade('https://app.example')
+    const upgraded = once(accepted, 'upgrade')
+    accepted.end()
+    const [, socket] = await upgraded
+    socket.on('error', () => {})
+    assert.equal(upgradeCount, 1)
+    socket.resume()
+    allowed = false
+    await once(socket, 'close')
+  } finally {
+    for (const socket of upstreamSockets) socket.destroy()
+    await proxy.close()
+    upstream.closeAllConnections()
+    await new Promise(resolve => upstream.close(resolve))
+  }
 })

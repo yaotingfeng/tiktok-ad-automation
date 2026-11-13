@@ -1,14 +1,15 @@
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
 import { once } from 'node:events'
-import { cp, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises'
-import { createServer } from 'node:http'
+import { cp, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises'
+import { createServer, request as httpRequest } from 'node:http'
 import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { test } from 'node:test'
 import { fileURLToPath } from 'node:url'
 import { setTimeout as delay } from 'node:timers/promises'
+import { prepareRuntime } from './start.mjs'
 
 const packageRoot = process.env.DSH_TEST_PACKAGE_ROOT
 
@@ -21,6 +22,29 @@ test('deployment selects the shipped official web profile and keeps port boundar
   const proxy = await readFile(join(dirname(fileURLToPath(import.meta.url)), 'admin-proxy.mjs'), 'utf8')
   assert.match(proxy, /127\.0\.0\.1:9082/)
   assert.match(proxy, /listen\(9081/)
+})
+
+test('migrates old base preset inserts before loading the official web profile', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'tkada-dsh-profile-migration-'))
+  const providerFile = join(root, 'provider.json')
+  const tokenFile = join(root, 'token')
+  const profile = join(root, 'home', 'profiles', 'tkada')
+  try {
+    process.env.DSH_MIGRATION_MODEL_KEY = 'test-only-model-key'
+    await mkdir(profile, { recursive: true })
+    await writeFile(providerFile, JSON.stringify({ provider: 'openai', model: 'gpt-4o-mini', config: { apiKeyEnv: 'DSH_MIGRATION_MODEL_KEY' } }))
+    await writeFile(tokenFile, 'migration-token-' + 'x'.repeat(40))
+    await writeFile(join(profile, 'cordis.patch.yml'), `- insert:\n    - id: agent-preset-registry\n      name: '@deepseek-ai/dsh-agent-preset-registry'\n    - id: preset-standard\n      name: '@deepseek-ai/dsh-agent-preset'\n    - id: keep-admin-setting\n      config:\n        enabled: true\n`)
+    await prepareRuntime({ home: join(root, 'home'), workspace: join(root, 'workspace'), providerFile, tokenFile, apiUrl: 'http://127.0.0.1:39999' })
+    const patch = await readFile(join(profile, 'cordis.patch.yml'), 'utf8')
+    assert.doesNotMatch(patch, /agent-preset-registry|preset-standard/)
+    assert.match(patch, /keep-admin-setting/)
+    assert.match(patch, /id: webserver[\s\S]*port: 9082/)
+    assert.match(patch, /id: web-runtime/)
+  } finally {
+    delete process.env.DSH_MIGRATION_MODEL_KEY
+    await rm(root, { recursive: true, force: true })
+  }
 })
 
 test('production entrypoint boots real DSH, polls TK-ADA and serves readiness without model calls', { skip: !packageRoot, timeout: 45000 }, async () => {
@@ -72,6 +96,31 @@ test('production entrypoint boots real DSH, polls TK-ADA and serves readiness wi
     assert.ok(requests.every(request => request.path === '/api/integrations/ai-workbench/reviews/claim'))
     assert.equal(requests[0].authorization, `Bearer ${token}`)
     assert.equal(requests[0].body.main.key, 'ai-delivery-review')
+    // 真实浏览器面：publicUrl 只负责生成上下文 URL，/dsh 前缀由管理代理剥离。
+    const webOrigin = `http://127.0.0.1:${api.address().port}`
+    const page = await fetch('http://127.0.0.1:9081/dsh/', { headers: { origin: webOrigin } })
+    const html = await page.text()
+    assert.equal(page.status, 200, `WebUI root response ${page.status}: ${html}`)
+    assert.match(html, /<script/)
+    const assetPath = html.match(/src="([^"?]*\/assets\/[^"?]+\.js)"/)?.[1]
+    assert.ok(assetPath, `official WebUI bootstrap asset missing: ${html.slice(0, 500)}`)
+    const assetUrl = new URL(assetPath, 'http://127.0.0.1:9081/dsh/')
+    const asset = await fetch(assetUrl, { headers: { origin: webOrigin } })
+    assert.equal(asset.status, 200)
+    assert.match(asset.headers.get('content-type') || '', /javascript/)
+    // DSH API_PATH=/api 是 HTTP RPC 前缀；实时 WebSocket 使用官方
+    // REMOTE_STREAM_MUX_PATH=/api/remote.mux。
+    const wsRequest = httpRequest('http://127.0.0.1:9081/dsh/api/remote.mux', {
+      headers: { origin: webOrigin, upgrade: 'websocket', connection: 'Upgrade', 'sec-websocket-key': 'MTIzNDU2Nzg5MGFiY2RlZg==', 'sec-websocket-version': '13' },
+    })
+    const wsResult = await new Promise((resolve, reject) => {
+      wsRequest.once('upgrade', response => resolve({ status: response.statusCode, socket: response.socket }))
+      wsRequest.once('response', response => resolve({ status: response.statusCode }))
+      wsRequest.once('error', reject)
+      wsRequest.end()
+    })
+    assert.equal(wsResult.status, 101, `official WebUI WebSocket was not upgraded: ${wsResult.status}`)
+    wsResult.socket.destroy()
     const patch = await readFile(join(root, 'home/profiles/tkada/cordis.patch.yml'), 'utf8')
     assert.ok(!patch.includes('test-only-unused-model-key'))
     assert.equal((await fetch(`http://127.0.0.1:${healthPort}/sessions`)).status, 404)

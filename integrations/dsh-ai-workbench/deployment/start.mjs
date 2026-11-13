@@ -1,5 +1,5 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
-import { dirname, join } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { spawn } from 'node:child_process'
 import { createRequire } from 'node:module'
@@ -29,7 +29,10 @@ export async function prepareRuntime({ home, workspace, providerFile, tokenFile,
   ]
   await writeFile(join(profile, 'package.json'), JSON.stringify({ name: 'dsh-profile-tkada', private: true, dsh: { profile: { bundles: ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app'] } } }), { mode: 0o600 })
   // 官方 Models 页写入 profile patch；重启必须保留管理员设置，只刷新部署拥有的安全/接入行。
-  const { parseDocument } = createRequire(import.meta.url)('yaml')
+  // 生产镜像从 deployment/package.json 解析依赖；本地原生验收可指向
+  // 已安装官方 DSH 宿主，避免隐式读取开发者其他项目的依赖树。
+  const packageRoot = resolve(process.env.DSH_PACKAGE_ROOT || dirname(fileURLToPath(import.meta.url)))
+  const { parseDocument } = createRequire(join(packageRoot, 'package.json'))('yaml')
   const patchFile = join(profile, 'cordis.patch.yml')
   let previous
   try { previous = await readFile(patchFile, 'utf8') } catch (error) { if (error.code !== 'ENOENT') throw error }
@@ -37,13 +40,17 @@ export async function prepareRuntime({ home, workspace, providerFile, tokenFile,
     const document = parseDocument(previous)
     if (document.errors.length || !Array.isArray(document.toJSON())) throw new Error('Invalid DSH profile patch')
     const managed = new Set(patch.flatMap(row => row.insert || [row]).map(row => row.id).filter(id => !['llm-pi-ai', 'agent-default-model'].includes(id)))
-    const obsolete = new Set(['settings', 'config-editor'])
+    // 旧 base profile 曾把这两个 preset 行写入用户 patch；Web profile
+    // 会再次注册同名 id，必须迁移删除，否则 Loader 会因重复 id 拒绝启动。
+    const obsolete = new Set(['settings', 'config-editor', 'agent-preset-registry', 'preset-standard'])
     for (let index = document.contents.items.length - 1; index >= 0; index--) {
       const row = document.contents.items[index]
       if (managed.has(row.get('id')) || obsolete.has(row.get('id'))) document.contents.items.splice(index, 1)
       else if (row.has('insert')) {
         const rows = row.get('insert').items
-        for (let child = rows.length - 1; child >= 0; child--) if (managed.has(rows[child].get('id'))) rows.splice(child, 1)
+        for (let child = rows.length - 1; child >= 0; child--) {
+          if (managed.has(rows[child].get('id')) || obsolete.has(rows[child].get('id'))) rows.splice(child, 1)
+        }
       }
     }
     for (const row of patch) {

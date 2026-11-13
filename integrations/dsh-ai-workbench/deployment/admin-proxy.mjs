@@ -36,6 +36,7 @@ export function createAdminProxy({ apiUrl, upstream, authenticatedUrl, fetchImpl
     response.end('DSH administrator access required')
   }
   const sockets = new Set()
+  const remotes = new Set()
   const server = createServer(async (request, response) => {
     if (request.url === '/dsh') { response.writeHead(308, { location: '/dsh/', 'cache-control': 'no-store' }); response.end(); return }
     const status = await authorize(request)
@@ -59,7 +60,15 @@ export function createAdminProxy({ apiUrl, upstream, authenticatedUrl, fetchImpl
     const status = await authorize(request)
     if (status !== 200) { reject(status); return }
     try {
-      const proxy = httpRequest(target, { path: request.url.slice('/dsh'.length), headers: await headers(request) })
+      const proxy = httpRequest({
+        protocol: target.protocol,
+        hostname: target.hostname,
+        port: target.port,
+        method: 'GET',
+        path: request.url.slice('/dsh'.length),
+        headers: await headers(request),
+        agent: false,
+      })
       proxy.setTimeout(5000, () => proxy.destroy())
       proxy.on('error', () => socket.destroy())
       socket.on('error', () => proxy.destroy())
@@ -72,6 +81,7 @@ export function createAdminProxy({ apiUrl, upstream, authenticatedUrl, fetchImpl
         if (head.length) remote.write(head)
         socket.pipe(remote).pipe(socket)
         sockets.add(socket)
+        remotes.add(remote)
         // 已连接的管理会话也定期回查，撤权、禁用或过期时关闭。
         let checking = false
         const timer = setInterval(async () => {
@@ -80,14 +90,14 @@ export function createAdminProxy({ apiUrl, upstream, authenticatedUrl, fetchImpl
           try { if (await authorize(request) !== 200) socket.destroy() } finally { checking = false }
         }, recheckMs)
         timer.unref()
-        socket.on('close', () => { clearInterval(timer); sockets.delete(socket); remote.destroy() })
+        socket.on('close', () => { clearInterval(timer); sockets.delete(socket); remotes.delete(remote); remote.destroy() })
         remote.on('error', () => socket.destroy())
-        remote.on('close', () => socket.destroy())
+        remote.on('close', () => { remotes.delete(remote); socket.destroy() })
       })
       proxy.end()
     } catch { reject(503) }
   })
-  return { server, close: () => { for (const socket of sockets) socket.destroy(); server.closeAllConnections(); return new Promise(resolve => server.close(resolve)) } }
+  return { server, close: () => { for (const socket of sockets) socket.destroy(); for (const remote of remotes) remote.destroy(); server.closeAllConnections(); return new Promise(resolve => server.close(resolve)) } }
 }
 
 export const inject = ['connection', 'webServer']
