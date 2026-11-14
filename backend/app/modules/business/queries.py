@@ -4,12 +4,14 @@ from collections.abc import Sequence
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from typing import Any
+from typing import cast as typing_cast
 from uuid import UUID
 from zoneinfo import ZoneInfo
 
 from fastapi import HTTPException
 from sqlalchemy import func
 from sqlalchemy import select as sa_select
+from sqlalchemy.orm import Session as SQLAlchemySession
 from sqlmodel import Session, col, select
 
 from app.core.context import TenantContext
@@ -140,7 +142,8 @@ def query_dashboard(
     total = session.exec(select(func.count()).select_from(grouped)).one()
     order = sort_expression(grouped, filters)
     rows = (
-        session.execute(
+        typing_cast(SQLAlchemySession, session)
+        .execute(
             sa_select(grouped)
             .order_by(
                 order.desc().nulls_last()
@@ -155,7 +158,8 @@ def query_dashboard(
         .all()
     )
     raw_totals = (
-        session.execute(
+        typing_cast(SQLAlchemySession, session)
+        .execute(
             sa_select(
                 *[nullable_sum(getattr(grouped.c, k)).label(k) for k in AMOUNT_KEYS]
             ).select_from(grouped)
@@ -203,7 +207,8 @@ def query_dashboard(
         issues.add("POLICY_SCOPE_RESTRICTED")
     restricted = "POLICY_SCOPE_RESTRICTED" in issues
     all_issues = (
-        session.execute(
+        typing_cast(SQLAlchemySession, session)
+        .execute(
             select(func.jsonb_array_elements_text(col(B.issues)))
             .where(*predicates)
             .distinct()
@@ -227,7 +232,7 @@ def query_dashboard(
             calculated.update(scenario_revenue=None, scenario_roas=None)
         return calculated
 
-    totals = dict(raw_totals)
+    totals: dict[str, Decimal | None] = dict(raw_totals)
     if not total and not missing:
         totals = dict.fromkeys(AMOUNT_KEYS, ZERO)
     if missing or plan.policy_unknown:
