@@ -111,7 +111,7 @@ jobs:
       - run: bun run --filter frontend build
       - run: bun x playwright install --with-deps chromium
         working-directory: frontend
-      - run: bun x playwright test --project workspace
+      - run: bun x playwright test --project=workspace --project=workspace-source
         working-directory: frontend
   image:
     runs-on: ubuntu-latest
