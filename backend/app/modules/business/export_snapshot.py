@@ -1,7 +1,10 @@
 """一次SQL冻结导出行值和顺序，后续批次不重新扫描全范围报表。"""
 
+from typing import cast as typing_cast
+
 from sqlalchemy import Text, cast, func, insert, literal, text
 from sqlalchemy import select as sa_select
+from sqlalchemy.orm import Session as SQLAlchemySession
 from sqlmodel import Session, col, select
 
 from app.core.context import TenantContext
@@ -50,7 +53,7 @@ def freeze_rows(session: Session, row: BusinessExport, context: TenantContext) -
         if filters.dimension == "day"
         else grouped.c.key
     )
-    session.execute(
+    typing_cast(SQLAlchemySession, session).execute(
         insert(BusinessExportRow).from_select(
             [
                 "export_id",
@@ -83,7 +86,7 @@ def freeze_rows(session: Session, row: BusinessExport, context: TenantContext) -
     adjustments = ", ".join(
         f"'{key}', CAST(totals.{key} AS text)" for key in SUBSIDY_KEYS
     )
-    session.execute(
+    typing_cast(SQLAlchemySession, session).execute(
         text(f"""
         WITH totals AS (
             SELECT rounding_group, max(row_key) AS target, {values}

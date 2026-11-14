@@ -3,11 +3,13 @@
 from datetime import UTC, date, datetime, time, timedelta
 from decimal import Decimal, InvalidOperation
 from typing import Any
+from typing import cast as typing_cast
 from uuid import UUID, uuid5
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import case
+from sqlalchemy import and_, case, or_
 from sqlalchemy.dialects.postgresql import insert
+from sqlalchemy.orm import Session as SQLAlchemySession
 from sqlmodel import Session, col, select
 
 from app.modules.accounts.models import AdvertiserAccount
@@ -55,7 +57,7 @@ def frozen_sources(
             col(OperationObservation.observed_at),
         )
         .where(
-            OperationObservation.tenant_id == tenant_id,
+            col(OperationObservation.tenant_id) == tenant_id,
             col(OperationObservation.advertiser_id).in_(accounts),
         )
         .distinct(
@@ -77,14 +79,39 @@ def frozen_sources(
             col(OperationObservation.observed_at).desc(),
         )
     ).all()
+    timezone_map = dict(
+        session.exec(
+            select(
+                col(AdvertiserAccount.advertiser_id), col(AdvertiserAccount.timezone)
+            ).where(
+                col(AdvertiserAccount.tenant_id) == tenant_id,
+                col(AdvertiserAccount.advertiser_id).in_(accounts),
+            )
+        ).all()
+    )
+    # 取证边界来自每个账户已选锚点的本地日期；原start/end仍是核算范围。
+    # 不沿用其它账户的早期/晚期历史，也不将UTC日期当作账户自然日。
+    bounds = dict.fromkeys(accounts, (start, end))
+    for _, advertiser, observed_at in observations:
+        zone = timezone_map.get(advertiser)
+        if zone:
+            anchor_day = observed_at.astimezone(ZoneInfo(zone)).date()
+            left, right = bounds[advertiser]
+            bounds[advertiser] = min(left, anchor_day), max(right, anchor_day)
     days = session.exec(
         select(OperationCoverage)
         .where(
-            OperationCoverage.tenant_id == tenant_id,
-            col(OperationCoverage.advertiser_id).in_(accounts),
-            OperationCoverage.stat_date >= start,
-            OperationCoverage.stat_date
-            <= max([end, *(o.observed_at.date() for o in observations)]),
+            col(OperationCoverage.tenant_id) == tenant_id,
+            or_(
+                *(
+                    and_(
+                        col(OperationCoverage.advertiser_id) == advertiser,
+                        col(OperationCoverage.stat_date) >= left,
+                        col(OperationCoverage.stat_date) <= right,
+                    )
+                    for advertiser, (left, right) in bounds.items()
+                )
+            ),
         )
         .order_by(
             col(OperationCoverage.advertiser_id), col(OperationCoverage.stat_date)
@@ -94,22 +121,13 @@ def frozen_sources(
     export_digests = (
         session.exec(
             select(OperationExport).where(
-                OperationExport.tenant_id == tenant_id,
+                col(OperationExport.tenant_id) == tenant_id,
+                col(OperationExport.advertiser_id).in_(accounts),
                 col(OperationExport.id).in_([UUID(i) for i in export_ids]),
             )
         ).all()
         if export_ids
         else []
-    )
-    timezone_map = dict(
-        session.exec(
-            select(
-                col(AdvertiserAccount.advertiser_id), col(AdvertiserAccount.timezone)
-            ).where(
-                AdvertiserAccount.tenant_id == tenant_id,
-                col(AdvertiserAccount.advertiser_id).in_(accounts),
-            )
-        ).all()
     )
     footprints = {}
     for advertiser in {e.advertiser_id for e in export_digests}:
@@ -118,7 +136,11 @@ def frozen_sources(
             continue
         first = utc_window(start, start, zone)[0]
         last = utc_window(end, end, zone)[1]
-        anchors = [o.observed_at for o in observations if o.advertiser_id == advertiser]
+        anchors = [
+            observed_at
+            for _, account, observed_at in observations
+            if account == advertiser
+        ]
         required_start, required_end = min([first, *anchors]), max([last, *anchors])
         segments: list[list[datetime]] = []
         for exported in sorted(
@@ -140,12 +162,13 @@ def frozen_sources(
     account_signatures = {
         a: digest(
             [[str(d.stat_date), d.digest] for d in days if d.advertiser_id == a]
-            + [str(o.id) for o in observations if o.advertiser_id == a]
+            + [str(identity) for identity, account, _ in observations if account == a]
             + sorted({e.digest for e in export_digests if e.advertiser_id == a})
             + [footprints.get(a, [])]
         )
         for a in sorted(
-            {d.advertiser_id for d in days} | {o.advertiser_id for o in observations}
+            {d.advertiser_id for d in days}
+            | {account for _, account, _ in observations}
         )
     }
     return {
@@ -160,7 +183,7 @@ def frozen_sources(
             }
             for d in days
         },
-        "observations": [str(o.id) for o in observations],
+        "observations": [str(identity) for identity, _, _ in observations],
         "exports": export_ids,
         "signature": digest(account_signatures),
     }
@@ -213,8 +236,8 @@ def build_evidence(
     if cache_key not in cache:
         exports = session.exec(
             select(OperationExport).where(
-                OperationExport.tenant_id == tenant_id,
-                OperationExport.advertiser_id == advertiser_id,
+                col(OperationExport.tenant_id) == tenant_id,
+                col(OperationExport.advertiser_id) == advertiser_id,
                 col(OperationExport.id).in_(
                     [UUID(i) for i in frozen.get("exports", [])]
                 ),
@@ -222,8 +245,8 @@ def build_evidence(
         ).all()
         observations = session.exec(
             select(OperationObservation).where(
-                OperationObservation.tenant_id == tenant_id,
-                OperationObservation.advertiser_id == advertiser_id,
+                col(OperationObservation.tenant_id) == tenant_id,
+                col(OperationObservation.advertiser_id) == advertiser_id,
                 col(OperationObservation.id).in_(
                     [UUID(i) for i in frozen.get("observations", [])]
                 ),
@@ -494,7 +517,7 @@ def build_evidence(
         digest=fingerprint,
         data=result,
     )
-    session.execute(
+    typing_cast(SQLAlchemySession, session).execute(
         insert(OperationDayEvidence)
         .values(**row.model_dump())
         .on_conflict_do_nothing(constraint="uq_operation_day_evidence")

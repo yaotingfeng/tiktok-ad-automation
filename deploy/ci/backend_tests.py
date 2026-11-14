@@ -185,15 +185,21 @@ def start_groups(groups, first_index, label, args, base_env, database_url=None):
 
 def wait_groups(running, label, args, started):
     outcomes, measured = {}, {}
+    process_errors = []
     for index, process, log, results in running:
-        process.wait()
+        returncode = process.wait()
         log.close()
         shard_outcomes, shard_durations = read_results(results)
         outcomes.update(shard_outcomes)
         measured.update(shard_durations)
+        # sessionfinish/插件错误可能发生在全部用例通过后，不能只看逐项结果。
+        if returncode not in (0, 1) or (
+            returncode == 1 and "failed" not in shard_outcomes.values()
+        ):
+            process_errors.append(f"{label}组 {index}：pytest 退出码 {returncode}")
         tail = (args.work / f"shard{index}.log").read_text().strip().splitlines()[-1:]
         print(f"  {label}组 {index} 结束（{(time.monotonic() - started) / 60:.1f} 分钟）：{tail[0] if tail else ''}", flush=True)
-    return outcomes, measured
+    return outcomes, measured, process_errors
 
 
 def main():
@@ -240,16 +246,18 @@ def main():
         if concurrent
         else []
     )
-    outcomes, measured = {}, {}
+    outcomes, measured, process_errors = {}, {}, []
     if concurrent:
-        more, more_measured = wait_groups(acceptance_running, "验收", args, started)
+        more, more_measured, errors = wait_groups(acceptance_running, "验收", args, started)
         outcomes.update(more)
         measured.update(more_measured)
-    more, more_measured = wait_groups(regular_running, "", args, started)
+        process_errors.extend(errors)
+    more, more_measured, errors = wait_groups(regular_running, "", args, started)
     outcomes.update(more)
     measured.update(more_measured)
+    process_errors.extend(errors)
     if exclusive_groups and not concurrent:
-        more, more_measured = wait_groups(
+        more, more_measured, errors = wait_groups(
             start_groups(exclusive_groups, shards, "验收", args, base_env),
             "验收",
             args,
@@ -257,6 +265,7 @@ def main():
         )
         outcomes.update(more)
         measured.update(more_measured)
+        process_errors.extend(errors)
     failed = sorted(n for n, o in outcomes.items() if o == "failed")
     missing = sorted(set(nodeids) - set(outcomes))
     if missing:
@@ -277,7 +286,7 @@ def main():
         )
         rerun_args = sorted({n if n in current else n.split("::", 1)[0] for n in failed})
         with (args.work / "rerun.log").open("w") as log:
-            subprocess.run(
+            rerun_process = subprocess.run(
                 pytest_command(rerun_args, args.fast),
                 env=shard_env(base_env, shards + args.exclusive_shards, name, results),
                 stdout=log,
@@ -287,6 +296,8 @@ def main():
         rerun, _ = read_results(results)
         # 重跑整个文件时，用例 ID 中的随机参数会改变；按文件内同名函数前缀对应。
         def rerun_outcome(nodeid):
+            if rerun_process.returncode != 0:
+                return "failed"
             if nodeid in rerun:
                 return rerun[nodeid]
             prefix = nodeid.split("[", 1)[0]
@@ -312,7 +323,9 @@ def main():
         print("  并行不稳定（单独重跑通过）：" + nodeid)
     for nodeid in failed:
         print("  失败：" + nodeid)
-    if failed:
+    for error in process_errors:
+        print("  进程失败：" + error)
+    if failed or process_errors:
         # check.sh 退出会回收临时目录，先保留失败复跑的尾部证据供发布排查。
         rerun_log = args.work / "rerun.log"
         if rerun_log.exists():
