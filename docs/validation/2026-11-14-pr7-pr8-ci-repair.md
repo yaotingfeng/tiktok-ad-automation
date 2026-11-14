@@ -65,3 +65,15 @@ R2：独立 Standards PASS、Spec PASS，无 P0/P1；旧 P1/P2 已关闭。跨�
 ## 交付边界
 
 本记录证明本地实现及所列检查。没有重跑全仓后端、Linux镜像或远端新CI，没有部署、生产BC数据对账、真实平台投放或远程审批。两份PR的远端head在明确推送前保持原值；源分支使用普通合入，不重写已有历史，不强推。
+
+## 推送后的 frontend CI 回调修复
+
+- 首次推送 head 为 PR7 `5085d1be`、PR8 `b5ff9bb3`。两边 acceptance、campaign-recovery、other-recovery、browser、image 已成功；取证时 modules 仍运行，frontend 均因登录反馈用例失败。PR8 图片预览另有重试波动。
+- 远端日志：[PR7 frontend](https://github.com/yaotingfeng/tiktok-ad-automation/actions/runs/43574892392/job/132386907608)、[PR8 frontend](https://github.com/yaotingfeng/tiktok-ad-automation/actions/runs/43574892353/job/132386907399)。本地相同生产预览入口复现 `1 failed / 1 passed`；不能把此前本地通过当作当前 CI 通过。
+- 登录问题位于测试观察边界：真实跨站导航挂起后，新的文档读取或 JSHandle 取值会等待新上下文。提前观察/卸载快照虽然可过，却不能拒绝原来的 assign 返回后 finally 过早恢复按钮；该试验方案已撤回。
+- 最终复用既有 `setAssignLocation` 导航运输边界，仅延迟真正离开。真实 hook、签发、URL校验、assign 返回后的 finally 均继续执行；先核对实际导航 href，再断言禁用、busy、完整反馈及单次签发，然后转发原生导航核对最终 URL。用例明确归入 `workspace-source`，GitHub 与本地门禁同样运行 `workspace` 和 `workspace-source`，不把场景漏出 CI。
+- 图片用例在 HTTP 边界提供有效 PNG，增加 `naturalWidth=1`；原尺寸、src、无 video 断言保留，避免不存在的预览响应触发 onError 后移除图片造成波动。
+- 正向：两个相关用例 `2 passed (7.1s)`；新增 CI 输入的整个源码项目 `40 passed (17.3s)`，无重试。复用此前普通 workspace 751项成功的远端结果，不重复全量。
+- 真实负控：仅把 hook 中 assign 后的 `navigating=true` 改 false，让 finally 恢复按钮；最终测试在 `toBeDisabled` 处失败，收到 enabled。源码逐字节恢复，交付不包含组件修改。对应旧需求为 [素材登录加载反馈记录](2026-10-21-material-login-loading.md)。
+- 测试专项 R3：Standards PASS、Spec PASS，零 finding。负控后仅将 route.fulfill 格式化多4行；最终40项运行使用格式化后的当前逻辑。未扩大超时、增加重试或放宽原行为断言。
+- 本地日志：`/tmp/tkada-frontend-navigation-boundary-green.log`、`/tmp/tkada-navigation-boundary-negative.log`、`/tmp/tkada-workspace-source-ci-green.log`。本节只证明所列本地修复与已有远端结果；下一 head 的远端 CI 等待实际运行。

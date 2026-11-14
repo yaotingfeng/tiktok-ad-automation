@@ -3338,45 +3338,43 @@ test("material login pending prevents duplicate clicks and cannot cross tenant s
   expect(requests.filter((r) => r.path.endsWith("/login-link"))).toHaveLength(1)
 })
 
-test("material login keeps feedback while the destination is loading", async ({
+test("@dev-server material login keeps feedback while the destination is loading", async ({
   page,
 }) => {
   const { requests } = await boundary(page)
-  let release!: () => void
-  const destination = new Promise<void>((resolve) => {
-    release = resolve
-  })
   await page.route(
     "https://manjumt.gzjunbo.net/api/login-links/consume?**",
-    async (route) => {
-      await destination
-      await route.fulfill({ contentType: "text/html", body: "素材工作台" })
-    },
+    (route) =>
+      route.fulfill({
+        contentType: "text/html; charset=utf-8",
+        body: "素材工作台",
+      }),
   )
   await page.goto(`/tenants/${A}/accounts`)
+  // 只延迟整页导航运输；真实登录逻辑继续返回并执行 finally，旧文档仍可观察。
+  await page.evaluate(async () => {
+    const modulePath = "/src/lib/browser-navigation.ts"
+    const { setAssignLocation } = await import(modulePath)
+    setAssignLocation((href: string) => {
+      document.body.dataset.materialNavigationHref = href
+    })
+  })
   const entry = page.getByRole("button", { name: "素材制作", exact: true })
-  try {
-    await entry.click({ noWaitAfter: true })
-    // Playwright locator 会等待待提交导航；直接检查仍可见的旧文档。
-    await expect
-      .poll(() =>
-        page.evaluate(() => ({
-          text: document.body.innerText.includes("正在打开素材工作台…"),
-          busy: document
-            .querySelector('[aria-label="素材制作"]')
-            ?.getAttribute("aria-busy"),
-          disabled: document.querySelector<HTMLButtonElement>(
-            '[aria-label="素材制作"]',
-          )?.disabled,
-        })),
-      )
-      .toEqual({ text: true, busy: "true", disabled: true })
-    expect(requests.filter((r) => r.path.endsWith("/login-link"))).toHaveLength(
-      1,
-    )
-  } finally {
-    release()
-  }
+  await entry.click()
+  await expect(page.locator("body")).toHaveAttribute(
+    "data-material-navigation-href",
+    "https://manjumt.gzjunbo.net/api/login-links/consume?token=browser-fixture",
+  )
+  await expect(entry).toBeDisabled()
+  await expect(entry).toHaveAttribute("aria-busy", "true")
+  await expect(
+    page.getByText("正在打开素材工作台…", { exact: true }),
+  ).toBeVisible()
+  expect(requests.filter((r) => r.path.endsWith("/login-link"))).toHaveLength(1)
+  await page.evaluate(() => {
+    const href = document.body.dataset.materialNavigationHref!
+    setTimeout(() => window.location.assign(href), 0)
+  })
   await expect(page).toHaveURL(/manjumt\.gzjunbo\.net/)
 })
 
