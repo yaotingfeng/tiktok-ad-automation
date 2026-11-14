@@ -14,5 +14,7 @@ def pytest_runtest_logreport(report):
         "outcome": report.outcome,
         "duration": report.duration,
     }
+    if report.failed:
+        record["longrepr"] = report.longreprtext
     with open(path, "a") as stream:
         stream.write(json.dumps(record) + "\n")

@@ -2,8 +2,11 @@
 """并行分组：均衡装箱、慢文件拆分、组内路径有序。"""
 
 import sys
+import tempfile
+import time
 import unittest
 from pathlib import Path
+from unittest.mock import Mock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import backend_tests  # noqa: E402
@@ -69,6 +72,33 @@ class PartitionTests(unittest.TestCase):
         exclusive = backend_tests.shard_env(env, 6, "ci_shard6_test", Path("/tmp/b"))
         self.assertNotEqual(regular["REDIS_URL"], exclusive["REDIS_URL"])
         self.assertNotEqual(regular["TEST_REDIS_URL"], exclusive["TEST_REDIS_URL"])
+
+
+class ProcessResultTests(unittest.TestCase):
+    def wait_for_result(self, returncode, outcomes):
+        with tempfile.TemporaryDirectory() as directory:
+            work = Path(directory)
+            (work / "shard0.log").write_text("pytest finished\n")
+            args = Mock(work=work)
+            process = Mock()
+            process.wait.return_value = returncode
+            with patch.object(backend_tests, "read_results", return_value=(outcomes, {})):
+                return backend_tests.wait_groups(
+                    [(0, process, Mock(), work / "shard0.jsonl")],
+                    "", args, time.monotonic(),
+                )[2]
+
+    def test_passing_cases_do_not_hide_session_failure(self):
+        self.assertTrue(self.wait_for_result(1, {"tests/x.py::case": "passed"}))
+
+    def test_internal_error_remains_fatal_with_failed_cases(self):
+        self.assertTrue(self.wait_for_result(3, {"tests/x.py::case": "failed"}))
+
+    def test_normal_test_failure_is_available_for_existing_rerun(self):
+        self.assertEqual(self.wait_for_result(1, {"tests/x.py::case": "failed"}), [])
+
+    def test_successful_process_has_no_process_error(self):
+        self.assertEqual(self.wait_for_result(0, {"tests/x.py::case": "passed"}), [])
 
 if __name__ == "__main__":
     unittest.main()
