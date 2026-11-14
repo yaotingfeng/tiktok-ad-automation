@@ -16,7 +16,7 @@ from typing import Any, cast
 from uuid import UUID, uuid4
 
 from sqlalchemy import and_, inspect, or_, text, update
-from sqlalchemy.orm import load_only
+from sqlalchemy.orm import InstrumentedAttribute, load_only
 from sqlmodel import Session, col, select
 
 from app.core.context import TenantContext
@@ -154,7 +154,7 @@ def stage_directory_page(
     # 先锁运行行，再检查代数并写页；claim 替换无法插入旧代数的页。
     run = session.exec(
         select(AdDirectoryRun)
-        .where(AdDirectoryRun.id == run_id)
+        .where(col(AdDirectoryRun.id) == run_id)
         .with_for_update()
         .execution_options(populate_existing=True)
     ).one_or_none()
@@ -395,7 +395,7 @@ def _object_identity_filter(identities):
         grouped.setdefault(kind, []).append(remote_id)
     return or_(
         *(
-            and_(AdObject.kind == kind, col(AdObject.remote_id).in_(ids))
+            and_(col(AdObject.kind) == kind, col(AdObject.remote_id).in_(ids))
             for kind, ids in sorted(grouped.items())
         )
     )
@@ -641,9 +641,9 @@ def _queue_missing_parents(
     for batch in _batches(parents):
         missing.difference_update(
             session.exec(
-                select(AdObject.kind, AdObject.remote_id).where(
-                    AdObject.tenant_id == run.tenant_id,
-                    AdObject.advertiser_id == run.advertiser_id,
+                select(col(AdObject.kind), col(AdObject.remote_id)).where(
+                    col(AdObject.tenant_id) == run.tenant_id,
+                    col(AdObject.advertiser_id) == run.advertiser_id,
                     _object_identity_filter(batch),
                 )
             ).all()
@@ -660,12 +660,12 @@ def _queue_missing_parents(
         include_deleted = bool(run.query.get("include_deleted"))
         pending = session.exec(
             select(AdDirectoryRun).where(
-                AdDirectoryRun.tenant_id == run.tenant_id,
-                AdDirectoryRun.bc_id == run.bc_id,
-                AdDirectoryRun.advertiser_id == run.advertiser_id,
-                AdDirectoryRun.actor_id == run.actor_id,
-                AdDirectoryRun.frozen_route == run.frozen_route,
-                AdDirectoryRun.ad_type == run.ad_type,
+                col(AdDirectoryRun.tenant_id) == run.tenant_id,
+                col(AdDirectoryRun.bc_id) == run.bc_id,
+                col(AdDirectoryRun.advertiser_id) == run.advertiser_id,
+                col(AdDirectoryRun.actor_id) == run.actor_id,
+                col(AdDirectoryRun.frozen_route) == run.frozen_route,
+                col(AdDirectoryRun.ad_type) == run.ad_type,
                 pending_directory_condition(),
             )
         ).all()
@@ -738,7 +738,7 @@ def directory_run_superseded(
 
     return (
         session.exec(
-            select(AdDirectoryRun.id)
+            select(col(AdDirectoryRun.id))
             .where(superseding_directory_predicate(run, AdDirectoryRun))
             .limit(1)
         ).first()
@@ -906,18 +906,18 @@ def _publish_staged_entities(session, run, staged):
     result = session.exec(
         select(AdObject)
         .where(
-            AdObject.tenant_id == run.tenant_id,
-            AdObject.advertiser_id == run.advertiser_id,
+            col(AdObject.tenant_id) == run.tenant_id,
+            col(AdObject.advertiser_id) == run.advertiser_id,
             text(
                 f"EXISTS (SELECT 1 FROM {staged} s WHERE s.kind=ad_object.kind AND s.remote_id=ad_object.remote_id)"
             ),
         )
         .options(
             load_only(
-                AdObject.parent_kind,
-                AdObject.parent_remote_id,
-                AdObject.name,
-                AdObject.published_version,
+                cast(InstrumentedAttribute, col(AdObject.parent_kind)),
+                cast(InstrumentedAttribute, col(AdObject.parent_remote_id)),
+                cast(InstrumentedAttribute, col(AdObject.name)),
+                cast(InstrumentedAttribute, col(AdObject.published_version)),
             )
         )
         .execution_options(populate_existing=True, yield_per=_PUBLISH_BATCH_SIZE)
@@ -979,7 +979,9 @@ def publish_directory(
         raise _domain("directory_claim_invalid", "目录 claim 代数无效")
     with session.begin_nested():
         run = session.exec(
-            select(AdDirectoryRun).where(AdDirectoryRun.id == run_id).with_for_update()
+            select(AdDirectoryRun)
+            .where(col(AdDirectoryRun.id) == run_id)
+            .with_for_update()
         ).one_or_none()
         if run is None:
             raise _domain("directory_run_not_found", "目录同步运行不存在")
@@ -999,16 +1001,16 @@ def publish_directory(
         _ensure_route_authority(session, run, route)
         pages = session.exec(
             select(AdDirectoryPage)
-            .where(AdDirectoryPage.run_id == run.id)
+            .where(col(AdDirectoryPage.run_id) == run.id)
             .order_by(col(AdDirectoryPage.page))
             .options(
                 load_only(
-                    AdDirectoryPage.page,
-                    AdDirectoryPage.complete,
-                    AdDirectoryPage.next_page,
-                    AdDirectoryPage.coverage,
-                    AdDirectoryPage.missing_reason,
-                    AdDirectoryPage.observed_at,
+                    cast(InstrumentedAttribute, col(AdDirectoryPage.page)),
+                    cast(InstrumentedAttribute, col(AdDirectoryPage.complete)),
+                    cast(InstrumentedAttribute, col(AdDirectoryPage.next_page)),
+                    cast(InstrumentedAttribute, col(AdDirectoryPage.coverage)),
+                    cast(InstrumentedAttribute, col(AdDirectoryPage.missing_reason)),
+                    cast(InstrumentedAttribute, col(AdDirectoryPage.observed_at)),
                 )
             )
             .with_for_update()
@@ -1023,7 +1025,7 @@ def publish_directory(
         # 版本来自数据库序列；同账户的请求排序用账户锁保护。整租户行锁会让
         # 一个大历史目录挡住其他账户的实时发布，不能作为多账户的执行容量。
         tenant = session.exec(
-            select(Tenant).where(Tenant.id == run.tenant_id)
+            select(Tenant).where(col(Tenant.id) == run.tenant_id)
         ).one_or_none()
         if tenant is None:
             raise _domain("tenant_forbidden", "目录运行的租户不存在")
@@ -1164,8 +1166,8 @@ def publish_directory(
         session.connection().execute(
             update(AdDirectoryPage)
             .where(
-                AdDirectoryPage.run_id == run.id,
-                AdDirectoryPage.coverage != "MATERIAL_CONTEXT",
+                col(AdDirectoryPage.run_id) == run.id,
+                col(AdDirectoryPage.coverage) != "MATERIAL_CONTEXT",
             )
             .values(published_version=version)
         )

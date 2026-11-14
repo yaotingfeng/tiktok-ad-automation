@@ -4,10 +4,12 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 from typing import Literal, NamedTuple
+from typing import cast as typing_cast
 from uuid import UUID, uuid4
 
 from redis import Redis
 from sqlalchemy import or_, text, update
+from sqlalchemy.orm import Session as SQLAlchemySession
 from sqlmodel import Session, col, select
 
 from app.core.config import settings
@@ -385,7 +387,7 @@ def _dispatch_directories_due(
                         _write_scan(redis, scan_position, "before")
                         continue
                 run.claim_generation = next_generation
-                session.execute(
+                typing_cast(SQLAlchemySession, session).execute(
                     update(SyncExecutionScope)
                     .where(
                         col(SyncExecutionScope.directory_run_id) == run.id,
