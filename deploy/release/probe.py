@@ -227,8 +227,12 @@ def creative_unit_drain(connection=None):
     heads = list(
         connection.execute(text("SELECT version_num FROM alembic_version")).scalars()
     )
-    if len(heads) != 1 or heads[0] not in LEGACY_CREATIVE_HEADS | V2_CREATIVE_HEADS:
+    if len(heads) != 1:
         raise RuntimeError("Unknown creative contract schema; review release plan")
+    if heads[0] not in LEGACY_CREATIVE_HEADS | V2_CREATIVE_HEADS:
+        # 已完成后续迁移的数据库已经脱离 0060–0067 旧合同；继续执行旧
+        # creative-unit SQL 只会误报 schema，不应阻断候选发布。
+        return {"drained": True, "schema": heads[0], "reason": "modern_schema"}
     legacy = heads[0] in LEGACY_CREATIVE_HEADS
     # 0060 已给每个旧预览写入显式 descriptor；缺失不是 V1，必须单独阻断。
     join = (

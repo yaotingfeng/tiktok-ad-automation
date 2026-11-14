@@ -168,7 +168,18 @@ def test_retry_after_http_date_is_respected_for_429():
     assert caught.value.admission_reason == "retry_after"
 
 
-def test_unknown_report_throttle_uses_shared_probe_instead_of_five_minute_pause():
+@pytest.mark.parametrize(
+    "operation",
+    [
+        "reports.material_breakdown",
+        "changelog.create",
+        "changelog.check",
+        "changelog.download",
+    ],
+)
+def test_unknown_report_throttle_uses_shared_probe_instead_of_five_minute_pause(
+    operation,
+):
     import json
 
     requests = _requests()
@@ -178,7 +189,7 @@ def test_unknown_report_throttle_uses_shared_probe_instead_of_five_minute_pause(
     )
     with pytest.raises(AccountAdmissionDeferred) as caught:
         requests.invoke(
-            "reports.material_breakdown",
+            operation,
             "adv",
             lambda _: requests.client.deserialize(response, "object"),
         )

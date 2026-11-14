@@ -165,3 +165,54 @@ def test_run_detail_shows_execution_state_and_outcomes(session, sync_seed, batch
     assert detail.run.execution_status == "AWAITING_CONFIRMATION"
     assert detail.confirmation_id == batch.id
     assert {hit.outcome for hit in detail.hits} == {"PENDING_CONFIRMATION"}
+
+
+def test_optimizer_confirmation_rechecks_using_fenced_scope(
+    session, sync_seed, batch, monkeypatch
+):
+    from uuid import uuid4
+
+    from app.modules.ai_workbench import rule_binding
+    from app.modules.automation_rules import confirmations
+    from app.modules.automation_rules.models import AutomationRuleRun
+
+    run = session.get(AutomationRuleRun, batch.run_id)
+    # 此用例只替换绑定解析边界；实际输入查询/聚合沿用原服务。
+    expected = rule_binding.RuleBindingScope(
+        tenant_id=run.tenant_id,
+        optimizer_id=uuid4(),
+        rule_id=run.rule_id,
+        bc_id="bc-1",
+        advertiser_ids=("acc-1",),
+        authorization_revision=3,
+        optimizer_version=2,
+        rule_version=run.rule_version,
+        binding_id=uuid4(),
+    )
+    run.optimizer_id = expected.optimizer_id
+    run.optimizer_version = expected.optimizer_version
+    run.authorization_revision = expected.authorization_revision
+    run.binding_id = expected.binding_id
+    captured = []
+
+    def validate(_db, scope, **_kwargs):
+        assert scope.optimizer_id == expected.optimizer_id
+        assert scope.binding_id == expected.binding_id
+        assert scope.authorization_revision == 3
+        assert scope.optimizer_version == 2
+        return expected
+
+    original = confirmations.load_inputs
+
+    def scoped_inputs(*args, **kwargs):
+        captured.append(kwargs["optimizer_scope"])
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(rule_binding, "validate_rule_binding", validate)
+    monkeypatch.setattr(confirmations, "load_inputs", scoped_inputs)
+    # 避免未落库的测试优化师外键被查询自动 flush；只读确认不依赖该虚构对象。
+    with session.no_autoflush:
+        confirmations.confirmation_detail(
+            session, context=sync_seed.context, confirmation_id=batch.id, now=NOW
+        )
+    assert captured == [expected]

@@ -3,6 +3,7 @@
 from datetime import UTC, datetime
 
 from alembic import command
+from sqlalchemy import insert, inspect
 from sqlmodel import Session, select
 
 from app.modules.automation_rules.models import AutomationRule, AutomationRuleRun
@@ -33,6 +34,8 @@ def test_frequency_upgrade_and_downgrade_cover_rules_and_run_snapshots(monkeypat
                 )
                 session.add(rule)
                 session.flush()
+                # 历史库停在 0040，运行表还没有后续新增的优化师列；
+                # 用当前模型生成默认值，只写入历史表实际存在的列。
                 run = AutomationRuleRun(
                     tenant_id=context.tenant_id,
                     rule_id=rule.id,
@@ -40,13 +43,27 @@ def test_frequency_upgrade_and_downgrade_cover_rules_and_run_snapshots(monkeypat
                     definition=definition,
                     slot_at=datetime.now(UTC),
                 )
-                session.add(run)
-                session.flush()
-                originals[rule.id] = originals[run.id] = definition
+                existing = {
+                    column["name"]
+                    for column in inspect(session.connection()).get_columns(
+                        AutomationRuleRun.__tablename__
+                    )
+                }
+                run_id = run.id
+                session.exec(
+                    insert(AutomationRuleRun.__table__).values(
+                        {
+                            name: getattr(run, name)
+                            for name in AutomationRuleRun.__table__.columns.keys()
+                            if name in existing
+                        }
+                    )
+                )
+                originals[rule.id] = originals[run_id] = definition
         command.upgrade(config, "0041_rule_frequency")
         with Session(engine) as session:
             for model in (AutomationRule, AutomationRuleRun):
-                for row in session.exec(select(model)).all():
+                for row in session.exec(select(model.id, model.definition)).all():
                     expected = originals[row.id] | {
                         "schedule": originals[row.id]["schedule"]
                         | {
@@ -63,5 +80,5 @@ def test_frequency_upgrade_and_downgrade_cover_rules_and_run_snapshots(monkeypat
         command.downgrade(config, "0040_material_production")
         with Session(engine) as session:
             for model in (AutomationRule, AutomationRuleRun):
-                for row in session.exec(select(model)).all():
+                for row in session.exec(select(model.id, model.definition)).all():
                     assert row.definition == originals[row.id]

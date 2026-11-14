@@ -28,6 +28,8 @@ type Props = {
   value: string
   disabled: boolean
   onChange: (value: string) => void
+  selectionMode?: "append" | "replace"
+  triggerLabel?: string
 }
 
 export function AccountPicker(props: Props) {
@@ -36,7 +38,7 @@ export function AccountPicker(props: Props) {
     <Dialog open={open && !props.disabled} onOpenChange={setOpen}>
       <DialogTrigger asChild>
         <Button type="button" variant="outline" disabled={props.disabled}>
-          选择账户
+          {props.triggerLabel ?? "选择账户"}
         </Button>
       </DialogTrigger>
       {open && !props.disabled && (
@@ -56,12 +58,25 @@ function AccountSelection({
   value,
   onChange,
   close,
+  selectionMode = "append",
 }: Props & { close: () => void }) {
   const id = useId()
   const [input, setInput] = useState("")
   const [search, setSearch] = useState("")
   const [availability, setAvailability] = useState("all")
-  const [selected, setSelected] = useState(new Set<string>())
+  // 绑定范围需要编辑已有选择；广告搭建仍保留原来的追加语义。
+  const replacing = selectionMode === "replace"
+  const [selected, setSelected] = useState(
+    () =>
+      new Set<string>(
+        replacing
+          ? value
+              .split("\n")
+              .map((id) => id.trim())
+              .filter(Boolean)
+          : [],
+      ),
+  )
   const [bulkBusy, setBulkBusy] = useState(false)
   const [bulkError, setBulkError] = useState<unknown>()
   const paging = useCursorPage()
@@ -74,6 +89,7 @@ function AccountSelection({
   // 复用后端名称解析，不凭名称猜 ID；分批遵守解析接口的 500 行上限。
   const existing = useQuery({
     queryKey: ["tenant", tenantId, "account-picker-existing", bcId, value],
+    enabled: !replacing,
     queryFn: async ({ signal }) => {
       const lines = value
         .split("\n")
@@ -138,13 +154,16 @@ function AccountSelection({
     !!query.error ||
     !!existing.error
   const eligible = (item: AccountPublic) =>
-    item.can_build && !existingIds.has(item.advertiser_id)
+    item.bc_id === bcId &&
+    item.can_build &&
+    !item.ownership_conflict &&
+    (replacing || !existingIds.has(item.advertiser_id))
   const available = (query.data?.items ?? []).filter(eligible)
   const pageCount = available.filter((item) =>
     selected.has(item.advertiser_id),
   ).length
   const chosen = [...selected].filter(
-    (accountId) => !existingIds.has(accountId),
+    (accountId) => replacing || !existingIds.has(accountId),
   )
   function toggle(items: AccountPublic[], checked: boolean) {
     setSelected((old) => {
@@ -178,6 +197,11 @@ function AccountSelection({
     }
   }
   function confirm() {
+    if (replacing) {
+      onChange(chosen.join("\n"))
+      close()
+      return
+    }
     // 保留原文及未解析行，仅按已解析的实际账户 ID 去重，追加新选 ID。
     const resolved = new Map(
       existing.data?.map((row) => [row.line_no, row.advertiser_id]),
@@ -200,8 +224,12 @@ function AccountSelection({
   }
   return (
     <PickerDialogContent
-      title="选择账户"
-      description="搜索当前 BC 的账户，勾选后将账户 ID 添加到输入框。"
+      title={replacing ? "选择管理账户" : "选择账户"}
+      description={
+        replacing
+          ? "搜索当前 BC 的账户，支持跨页勾选和批量选择；确认后更新管理范围。"
+          : "搜索当前 BC 的账户，勾选后将账户 ID 添加到输入框。"
+      }
       contained
     >
       <form
@@ -282,7 +310,7 @@ function AccountSelection({
         </Button>
       </div>
       <div className="min-h-0 overflow-y-auto" aria-busy={locked}>
-        {(query.isPending || existing.isPending) && (
+        {(query.isPending || (!replacing && existing.isPending)) && (
           <p role="status" className="text-sm text-muted-foreground">
             正在读取账户…
           </p>
@@ -316,7 +344,7 @@ function AccountSelection({
                   id={`${id}-${item.advertiser_id}`}
                   disabled={locked || !eligible(item)}
                   checked={
-                    existingIds.has(item.advertiser_id) ||
+                    (!replacing && existingIds.has(item.advertiser_id)) ||
                     selected.has(item.advertiser_id)
                   }
                   onCheckedChange={(checked) =>
@@ -332,7 +360,9 @@ function AccountSelection({
                     {item.advertiser_id}
                   </span>
                   <span className="text-xs text-muted-foreground">
-                    {existingIds.has(item.advertiser_id) ? "已添加 · " : ""}
+                    {!replacing && existingIds.has(item.advertiser_id)
+                      ? "已添加 · "
+                      : ""}
                     {availabilityLabels[item.availability]} ·{" "}
                     {item.remote_status}
                     {!item.can_build
@@ -379,10 +409,10 @@ function AccountSelection({
           </Button>
           <Button
             type="button"
-            disabled={locked || !chosen.length}
+            disabled={locked || (!replacing && !chosen.length)}
             onClick={confirm}
           >
-            确定添加
+            {replacing ? "确定选择" : "确定添加"}
           </Button>
         </div>
       </div>

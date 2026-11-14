@@ -749,6 +749,7 @@ def get_submission(
                 + resolved_sql("s")
                 + ") mismatch FROM execution_step s WHERE tenant_id=:tenant AND submission_id=:submission AND NOT "
                 + obsolete_readback_sql("s")
+                + " AND EXISTS (SELECT 1 FROM submission_unit su WHERE su.tenant_id=s.tenant_id AND su.submission_id=s.submission_id AND su.unit_id=s.unit_id AND su.disposition='INCLUDED')"
                 + " GROUP BY kind,CASE WHEN "
                 + resolved_sql("s")
                 + " THEN 'VERIFIED_REPLACEMENT' ELSE status END"

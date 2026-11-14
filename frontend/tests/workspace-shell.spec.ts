@@ -226,6 +226,9 @@ for (const width of [1440, 1280]) {
     await page.goto("/")
     await expect(page.getByText("尚未接入租户", { exact: true })).toBeVisible()
     await expect(page.getByText("BC 未连接", { exact: true })).toBeVisible()
+    await expect(
+      page.getByRole("link", { name: "DSH 管理台", exact: true }),
+    ).toHaveAttribute("href", "/api/admin/dsh/entry")
     const labels = await page
       .getByRole("navigation")
       .getByRole("link")
@@ -352,6 +355,9 @@ test("ordinary users cannot enter platform management", async ({ page }) => {
   await expect(page.getByRole("button", { name: "Add User" })).toHaveCount(0)
   await expect(
     page.getByRole("link", { name: "平台管理", exact: true }),
+  ).toHaveCount(0)
+  await expect(
+    page.getByRole("link", { name: "DSH 管理台", exact: true }),
   ).toHaveCount(0)
 })
 

@@ -31,6 +31,7 @@ import { Route as LayoutTenantsTenantIdIndexRouteImport } from './routes/_layout
 import { Route as LayoutTenantsTenantIdAccountsRouteImport } from './routes/_layout/tenants.$tenantId.accounts'
 import { Route as LayoutTenantsTenantIdAdManagementTasksRouteImport } from './routes/_layout/tenants.$tenantId.ad-management-tasks'
 import { Route as LayoutTenantsTenantIdAdsRouteImport } from './routes/_layout/tenants.$tenantId.ads'
+import { Route as LayoutTenantsTenantIdAiWorkbenchRouteImport } from './routes/_layout/tenants.$tenantId.ai-workbench'
 import { Route as LayoutTenantsTenantIdAutomationRulesRouteImport } from './routes/_layout/tenants.$tenantId.automation-rules'
 import { Route as LayoutTenantsTenantIdBuildTasksRouteImport } from './routes/_layout/tenants.$tenantId.build-tasks'
 import { Route as LayoutTenantsTenantIdBusinessRouteImport } from './routes/_layout/tenants.$tenantId.business'
@@ -163,6 +164,12 @@ const LayoutTenantsTenantIdAdsRoute =
   LayoutTenantsTenantIdAdsRouteImport.update({
     id: '/ads',
     path: '/ads',
+    getParentRoute: () => LayoutTenantsTenantIdRoute,
+  } as any)
+const LayoutTenantsTenantIdAiWorkbenchRoute =
+  LayoutTenantsTenantIdAiWorkbenchRouteImport.update({
+    id: '/ai-workbench',
+    path: '/ai-workbench',
     getParentRoute: () => LayoutTenantsTenantIdRoute,
   } as any)
 const LayoutTenantsTenantIdAutomationRulesRoute =
@@ -301,6 +308,7 @@ export interface FileRoutesByFullPath {
   '/tenants/$tenantId/accounts': typeof LayoutTenantsTenantIdAccountsRoute
   '/tenants/$tenantId/ad-management-tasks': typeof LayoutTenantsTenantIdAdManagementTasksRouteWithChildren
   '/tenants/$tenantId/ads': typeof LayoutTenantsTenantIdAdsRoute
+  '/tenants/$tenantId/ai-workbench': typeof LayoutTenantsTenantIdAiWorkbenchRoute
   '/tenants/$tenantId/automation-rules': typeof LayoutTenantsTenantIdAutomationRulesRoute
   '/tenants/$tenantId/build-tasks': typeof LayoutTenantsTenantIdBuildTasksRouteWithChildren
   '/tenants/$tenantId/business': typeof LayoutTenantsTenantIdBusinessRoute
@@ -341,6 +349,7 @@ export interface FileRoutesByTo {
   '/platform/tenants': typeof LayoutPlatformTenantsRoute
   '/tenants/$tenantId/accounts': typeof LayoutTenantsTenantIdAccountsRoute
   '/tenants/$tenantId/ads': typeof LayoutTenantsTenantIdAdsRoute
+  '/tenants/$tenantId/ai-workbench': typeof LayoutTenantsTenantIdAiWorkbenchRoute
   '/tenants/$tenantId/automation-rules': typeof LayoutTenantsTenantIdAutomationRulesRoute
   '/tenants/$tenantId/business': typeof LayoutTenantsTenantIdBusinessRoute
   '/tenants/$tenantId/materials': typeof LayoutTenantsTenantIdMaterialsRoute
@@ -383,6 +392,7 @@ export interface FileRoutesById {
   '/_layout/tenants/$tenantId/accounts': typeof LayoutTenantsTenantIdAccountsRoute
   '/_layout/tenants/$tenantId/ad-management-tasks': typeof LayoutTenantsTenantIdAdManagementTasksRouteWithChildren
   '/_layout/tenants/$tenantId/ads': typeof LayoutTenantsTenantIdAdsRoute
+  '/_layout/tenants/$tenantId/ai-workbench': typeof LayoutTenantsTenantIdAiWorkbenchRoute
   '/_layout/tenants/$tenantId/automation-rules': typeof LayoutTenantsTenantIdAutomationRulesRoute
   '/_layout/tenants/$tenantId/build-tasks': typeof LayoutTenantsTenantIdBuildTasksRouteWithChildren
   '/_layout/tenants/$tenantId/business': typeof LayoutTenantsTenantIdBusinessRoute
@@ -427,6 +437,7 @@ export interface FileRouteTypes {
     | '/tenants/$tenantId/accounts'
     | '/tenants/$tenantId/ad-management-tasks'
     | '/tenants/$tenantId/ads'
+    | '/tenants/$tenantId/ai-workbench'
     | '/tenants/$tenantId/automation-rules'
     | '/tenants/$tenantId/build-tasks'
     | '/tenants/$tenantId/business'
@@ -467,6 +478,7 @@ export interface FileRouteTypes {
     | '/platform/tenants'
     | '/tenants/$tenantId/accounts'
     | '/tenants/$tenantId/ads'
+    | '/tenants/$tenantId/ai-workbench'
     | '/tenants/$tenantId/automation-rules'
     | '/tenants/$tenantId/business'
     | '/tenants/$tenantId/materials'
@@ -508,6 +520,7 @@ export interface FileRouteTypes {
     | '/_layout/tenants/$tenantId/accounts'
     | '/_layout/tenants/$tenantId/ad-management-tasks'
     | '/_layout/tenants/$tenantId/ads'
+    | '/_layout/tenants/$tenantId/ai-workbench'
     | '/_layout/tenants/$tenantId/automation-rules'
     | '/_layout/tenants/$tenantId/build-tasks'
     | '/_layout/tenants/$tenantId/business'
@@ -692,6 +705,13 @@ declare module '@tanstack/react-router' {
       path: '/ads'
       fullPath: '/tenants/$tenantId/ads'
       preLoaderRoute: typeof LayoutTenantsTenantIdAdsRouteImport
+      parentRoute: typeof LayoutTenantsTenantIdRoute
+    }
+    '/_layout/tenants/$tenantId/ai-workbench': {
+      id: '/_layout/tenants/$tenantId/ai-workbench'
+      path: '/ai-workbench'
+      fullPath: '/tenants/$tenantId/ai-workbench'
+      preLoaderRoute: typeof LayoutTenantsTenantIdAiWorkbenchRouteImport
       parentRoute: typeof LayoutTenantsTenantIdRoute
     }
     '/_layout/tenants/$tenantId/automation-rules': {
@@ -891,6 +911,7 @@ interface LayoutTenantsTenantIdRouteChildren {
   LayoutTenantsTenantIdAccountsRoute: typeof LayoutTenantsTenantIdAccountsRoute
   LayoutTenantsTenantIdAdManagementTasksRoute: typeof LayoutTenantsTenantIdAdManagementTasksRouteWithChildren
   LayoutTenantsTenantIdAdsRoute: typeof LayoutTenantsTenantIdAdsRoute
+  LayoutTenantsTenantIdAiWorkbenchRoute: typeof LayoutTenantsTenantIdAiWorkbenchRoute
   LayoutTenantsTenantIdAutomationRulesRoute: typeof LayoutTenantsTenantIdAutomationRulesRoute
   LayoutTenantsTenantIdBuildTasksRoute: typeof LayoutTenantsTenantIdBuildTasksRouteWithChildren
   LayoutTenantsTenantIdBusinessRoute: typeof LayoutTenantsTenantIdBusinessRoute
@@ -911,6 +932,7 @@ const LayoutTenantsTenantIdRouteChildren: LayoutTenantsTenantIdRouteChildren = {
   LayoutTenantsTenantIdAdManagementTasksRoute:
     LayoutTenantsTenantIdAdManagementTasksRouteWithChildren,
   LayoutTenantsTenantIdAdsRoute: LayoutTenantsTenantIdAdsRoute,
+  LayoutTenantsTenantIdAiWorkbenchRoute: LayoutTenantsTenantIdAiWorkbenchRoute,
   LayoutTenantsTenantIdAutomationRulesRoute:
     LayoutTenantsTenantIdAutomationRulesRoute,
   LayoutTenantsTenantIdBuildTasksRoute:

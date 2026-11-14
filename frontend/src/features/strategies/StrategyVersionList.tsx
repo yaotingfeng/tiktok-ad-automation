@@ -19,15 +19,23 @@ export function StrategyVersionList({
   strategyId,
   name,
   onClose,
+  aiOptimizerId,
+  recordId,
+  versionId,
+  returnContext,
 }: {
   strategyId: string
   name: string
   onClose: () => void
+  aiOptimizerId?: string
+  recordId?: string
+  versionId?: string
+  returnContext?: string
 }) {
   const { tenantId, scope } = useTenantScope(),
     paging = useCursorPage(),
     navigate = useNavigate()
-  const write = !!scope && scope.role !== "viewer"
+  const write = !!scope && scope.role !== "viewer" && !aiOptimizerId
   const query = useQuery({
     queryKey: [
       ...strategyKey(tenantId!),
@@ -96,8 +104,12 @@ export function StrategyVersionList({
                   params: { tenantId: tenantId!, strategyId },
                   search: {
                     bc_id: scope?.bcId || undefined,
+                    ai_optimizer_id: aiOptimizerId,
+                    record_id: recordId,
                     version_id: row.original.id,
+                    return_to: returnContext,
                     readonly: true,
+                    scope: aiOptimizerId ? "bound" : undefined,
                   },
                 })
               }}
@@ -127,7 +139,7 @@ export function StrategyVersionList({
         ),
       },
     ],
-    [navigate, onClose, scope?.bcId, tenantId, strategyId, write],
+    [navigate, onClose, scope?.bcId, tenantId, strategyId, write, aiOptimizerId, recordId, versionId, returnContext],
   )
   return (
     <ManagementSheet

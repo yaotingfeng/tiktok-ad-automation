@@ -716,6 +716,9 @@ def _set_refresh_state(
         item = _locked_item(session, item_id)
         if item is None or item.execution_result != "ACCEPTED":
             return
+        # 目录刷新比真实状态观察弱；异步刷新不能覆盖正在核查或已落库的观察终态。
+        if item.observation_state not in {"ACCEPTED", "REFRESH_PENDING"}:
+            return
         item.observation_state = "REFRESH_PENDING" if pending else "ACCEPTED"
         if pending:
             item.reason = error or "targeted_refresh_failed"

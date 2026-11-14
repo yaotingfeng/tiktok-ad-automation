@@ -1,0 +1,16 @@
+{
+  "name": "tkada-dsh-production-runtime",
+  "version": "1.4.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@deepseek-ai/dsh": "0.2.2-rc.1",
+    "yaml": "2.9.1"
+  },
+  "overrides": {
+    "undici": "8.12.2",
+    "zod": "4.6.7",
+    "fflate": "0.8.3",
+    "@modelcontextprotocol/client": "2.3.0"
+  }
+}

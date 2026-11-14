@@ -4,7 +4,14 @@ from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID, uuid4
 
-from sqlalchemy import CheckConstraint, Column, Index, UniqueConstraint
+from sqlalchemy import (
+    CheckConstraint,
+    Column,
+    ForeignKeyConstraint,
+    Index,
+    UniqueConstraint,
+    text,
+)
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlmodel import Field, SQLModel
 
@@ -40,7 +47,21 @@ class AutomationRule(SQLModel, table=True):
 class AutomationRuleRun(SQLModel, table=True):
     __tablename__ = "automation_rule_run"
     __table_args__ = (
-        UniqueConstraint("rule_id", "slot_at", name="uq_automation_run_slot"),
+        Index(
+            "uq_automation_run_unscoped_slot",
+            "rule_id",
+            "slot_at",
+            unique=True,
+            postgresql_where=text("optimizer_id IS NULL"),
+        ),
+        Index(
+            "uq_automation_run_optimizer_slot",
+            "rule_id",
+            "slot_at",
+            "optimizer_id",
+            unique=True,
+            postgresql_where=text("optimizer_id IS NOT NULL"),
+        ),
         Index("ix_automation_run_tenant_time", "tenant_id", "started_at"),
         CheckConstraint(
             "status IN ('RUNNING','COMPLETE','FAILED')", name="ck_automation_run_status"
@@ -49,10 +70,25 @@ class AutomationRuleRun(SQLModel, table=True):
             "notify_status IN ('NOT_REQUIRED','PENDING','SUMMARY','SENT','FAILED')",
             name="ck_automation_run_notify",
         ),
+        ForeignKeyConstraint(
+            ["tenant_id", "optimizer_id"],
+            ["ai_optimizer.tenant_id", "ai_optimizer.id"],
+            name="fk_automation_run_optimizer",
+        ),
     )
     id: UUID = Field(default_factory=uuid4, primary_key=True)
     tenant_id: UUID = Field(foreign_key="tenant.id")
     rule_id: UUID = Field(foreign_key="automation_rule.id", ondelete="CASCADE")
+    # AI optimizer runs carry an immutable optimizer/version fence.  Ordinary
+    # automation runs leave these nullable and keep their existing behaviour.
+    optimizer_id: UUID | None = None
+    optimizer_version: int | None = None
+    binding_version: int | None = None
+    binding_id: UUID | None = None
+    authorization_revision: int | None = None
+    authorization_revisions: dict[str, int] = Field(
+        default_factory=dict, sa_column=Column(JSONB, nullable=False)
+    )
     rule_version: int
     # 运行所用的规则定义快照;规则后续修改不影响历史记录解释。
     definition: dict[str, Any] = Field(sa_column=Column(JSONB, nullable=False))
@@ -75,6 +111,81 @@ class AutomationRuleRun(SQLModel, table=True):
     execution_summary: dict[str, Any] = Field(
         default_factory=dict, sa_column=Column(JSONB, nullable=False)
     )
+    evidence_id: UUID | None = Field(
+        default=None, foreign_key="automation_rule_evidence.id", ondelete="SET NULL"
+    )
+
+
+class AutomationRuleEvidence(SQLModel, table=True):
+    """Immutable decision-time evidence for an automation rule run.
+
+    Evidence is deliberately independent from the 30-day run cleanup.  A
+    referenced action ledger or management task can therefore still explain a
+    historical optimizer decision after its transient run row is removed.
+    """
+
+    __tablename__ = "automation_rule_evidence"
+    __table_args__ = (
+        Index("ix_automation_rule_evidence_tenant_created", "tenant_id", "created_at"),
+        Index("ix_automation_rule_evidence_retention", "retention_until"),
+        ForeignKeyConstraint(
+            ["tenant_id", "optimizer_id"],
+            ["ai_optimizer.tenant_id", "ai_optimizer.id"],
+            name="fk_automation_evidence_optimizer",
+        ),
+    )
+
+    id: UUID = Field(default_factory=uuid4, primary_key=True)
+    tenant_id: UUID = Field(foreign_key="tenant.id")
+    run_id: UUID | None = Field(
+        default=None, foreign_key="automation_rule_run.id", ondelete="SET NULL"
+    )
+    rule_id: UUID | None = Field(
+        default=None, foreign_key="automation_rule.id", ondelete="SET NULL"
+    )
+    rule_version: int
+    definition: dict[str, Any] = Field(sa_column=Column(JSONB, nullable=False))
+    optimizer_id: UUID | None = None
+    optimizer_version: int | None = None
+    binding_version: int | None = None
+    binding_id: UUID | None = None
+    bc_id: str | None = Field(default=None, max_length=128)
+    advertiser_ids: list[str] = Field(
+        default_factory=list, sa_column=Column(JSONB, nullable=False)
+    )
+    authorization_revision: int | None = None
+    authorization_revisions: dict[str, int] = Field(
+        default_factory=dict, sa_column=Column(JSONB, nullable=False)
+    )
+    checked_metrics: dict[str, Any] = Field(
+        default_factory=dict, sa_column=Column(JSONB, nullable=False)
+    )
+    data_freshness: dict[str, Any] = Field(
+        default_factory=dict, sa_column=Column(JSONB, nullable=False)
+    )
+    publication_versions: dict[str, Any] = Field(
+        default_factory=dict, sa_column=Column(JSONB, nullable=False)
+    )
+    skipped_accounts: list[dict[str, Any]] = Field(
+        default_factory=list, sa_column=Column(JSONB, nullable=False)
+    )
+    checked_objects: list[dict[str, Any]] = Field(
+        default_factory=list, sa_column=Column(JSONB, nullable=False)
+    )
+    hits: list[dict[str, Any]] = Field(
+        default_factory=list, sa_column=Column(JSONB, nullable=False)
+    )
+    action_ledger_refs: list[str] = Field(
+        default_factory=list, sa_column=Column(JSONB, nullable=False)
+    )
+    management_tasks: list[dict[str, Any]] = Field(
+        default_factory=list, sa_column=Column(JSONB, nullable=False)
+    )
+    readback_status: dict[str, Any] = Field(
+        default_factory=dict, sa_column=Column(JSONB, nullable=False)
+    )
+    retention_until: datetime = Field(sa_type=AwareDateTime)
+    created_at: datetime = Field(default_factory=_now, sa_type=AwareDateTime)
 
 
 class AutomationRuleHit(SQLModel, table=True):
@@ -128,6 +239,11 @@ class AutomationActionLedger(SQLModel, table=True):
     __tablename__ = "automation_action_ledger"
     __table_args__ = (
         Index("ix_automation_ledger_target", "tenant_id", "target_key", "created_at"),
+        ForeignKeyConstraint(
+            ["tenant_id", "optimizer_id"],
+            ["ai_optimizer.tenant_id", "ai_optimizer.id"],
+            name="fk_automation_ledger_optimizer",
+        ),
     )
     id: UUID = Field(default_factory=uuid4, primary_key=True)
     tenant_id: UUID = Field(foreign_key="tenant.id")
@@ -136,6 +252,11 @@ class AutomationActionLedger(SQLModel, table=True):
     )
     run_id: UUID | None = Field(
         default=None, foreign_key="automation_rule_run.id", ondelete="SET NULL"
+    )
+    optimizer_id: UUID | None = None
+    rule_version: int | None = None
+    evidence_id: UUID | None = Field(
+        default=None, foreign_key="automation_rule_evidence.id", ondelete="SET NULL"
     )
     target_key: str = Field(max_length=300)
     action: str = Field(max_length=32)

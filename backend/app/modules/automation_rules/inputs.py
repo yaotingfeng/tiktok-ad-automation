@@ -1,5 +1,7 @@
 """判断输入：展开租户账户、加载对象目录、报表事实与新鲜度。只读本地已同步数据。"""
 
+from __future__ import annotations
+
 from collections import defaultdict
 from dataclasses import dataclass, field, replace
 from datetime import UTC, date, datetime, timedelta
@@ -19,6 +21,9 @@ from app.modules.automation_rules.schemas import AccountScope, RuleDefinition
 from app.modules.automation_rules.statuses import hierarchy_statuses
 from app.modules.reporting.freshness import fresh_report_success
 from app.modules.reporting.metric_catalog import STORED_KEYS
+
+if False:  # pragma: no cover - type checking only, avoids runtime import cycle
+    from app.modules.ai_workbench.rule_binding import RuleBindingScope
 
 _PAST = {"PAST_3_DAYS": 3, "PAST_5_DAYS": 5, "PAST_7_DAYS": 7}
 _LIFETIME_START = date(2000, 1, 1)
@@ -67,6 +72,10 @@ class Inputs:
     entities: dict[str, Entity]
     facts: dict[str, dict[str, dict[str, Decimal | None]]]
     skipped_accounts: list[dict[str, str]] = field(default_factory=list)
+    # Decision evidence keeps the sync publication watermarks instead of only
+    # retaining a coarse STALE_REPORT reason.
+    freshness: list[dict[str, Any]] = field(default_factory=list)
+    publication_versions: dict[str, int] = field(default_factory=dict)
 
 
 def in_rule_scope(
@@ -117,7 +126,11 @@ def local_window(range_type: str, timezone: str, now: datetime) -> tuple[date, d
 
 
 def expand_accounts(
-    session: Session, *, tenant_id: UUID, scope: AccountScope
+    session: Session,
+    *,
+    tenant_id: UUID,
+    scope: AccountScope,
+    optimizer_scope: RuleBindingScope | None = None,
 ) -> dict[str, AccountInfo]:
     """展开租户内可读账户；同一账户属于多个 BC 时只取一次（最小 BC ID，结果稳定）。"""
     statement = usable_grants(
@@ -128,6 +141,14 @@ def expand_accounts(
     elif scope.mode == "ACCOUNTS":
         statement = statement.where(
             col(BCAccountAccess.advertiser_id).in_(scope.advertiser_ids)
+        )
+    if optimizer_scope is not None:
+        # The optimizer boundary is an intersection, never a replacement for
+        # the rule scope.  Existing/manual ad objects in these accounts remain
+        # visible because only account grants are narrowed here.
+        statement = statement.where(
+            BCAccountAccess.bc_id == optimizer_scope.bc_id,
+            col(BCAccountAccess.advertiser_id).in_(optimizer_scope.advertiser_ids),
         )
     statement = statement.order_by(
         col(BCAccountAccess.advertiser_id), col(BCAccountAccess.bc_id)
@@ -214,6 +235,63 @@ def _fresh_accounts(
         else:
             skipped.append({"advertiser_id": adv, "reason": "STALE_REPORT"})
     return fresh, skipped
+
+
+def _freshness_metadata(
+    session: Session,
+    *,
+    tenant_id: UUID,
+    accounts: dict[str, AccountInfo],
+    report_kinds: tuple[str, ...],
+    now: datetime,
+) -> tuple[list[dict[str, Any]], dict[str, int]]:
+    """Capture per-account stat date, timezone, source and publication watermark."""
+    if not accounts:
+        return [], {}
+    rows = (
+        session.connection()
+        .execute(
+            text(
+                "SELECT advertiser_id, report_kind, stat_date, status, last_success_at, "
+                "observed_at, publication_version FROM report_sync_state "
+                "WHERE tenant_id=:t AND advertiser_id = ANY(:advs) "
+                "AND report_kind = ANY(:kinds) AND stat_date >= :since "
+                "ORDER BY advertiser_id, report_kind, stat_date"
+            ),
+            {
+                "t": tenant_id,
+                "advs": list(accounts),
+                "kinds": list(report_kinds),
+                "since": now.date() - timedelta(days=31),
+            },
+        )
+        .all()
+    )
+    freshness: list[dict[str, Any]] = []
+    versions: dict[str, int] = {}
+    for row in rows:
+        info = accounts.get(row.advertiser_id)
+        if info is None:
+            continue
+        key = f"{row.advertiser_id}:{row.report_kind}:{row.stat_date.isoformat()}"
+        versions[key] = int(row.publication_version or 0)
+        freshness.append(
+            {
+                "advertiser_id": row.advertiser_id,
+                "bc_id": info.bc_id,
+                "report_kind": row.report_kind,
+                "source": "report_sync_state",
+                "stat_date": row.stat_date.isoformat(),
+                "timezone": info.timezone,
+                "status": row.status,
+                "last_success_at": row.last_success_at.isoformat()
+                if row.last_success_at
+                else None,
+                "observed_at": row.observed_at.isoformat() if row.observed_at else None,
+                "publication_version": int(row.publication_version or 0),
+            }
+        )
+    return freshness, versions
 
 
 def _decimal(value: Any) -> Decimal | None:
@@ -454,10 +532,16 @@ def load_inputs(
     now: datetime,
     slot_at: datetime | None = None,
     strict_facts: bool = False,
+    optimizer_scope: RuleBindingScope | None = None,
 ) -> Inputs:
     """slot_at 为定时运行的槽位：按账户时区运行时只判断当地正处于该槽位的账户；
     试运行等不带槽位的判断覆盖全部账户。"""
-    accounts = expand_accounts(session, tenant_id=tenant_id, scope=definition.accounts)
+    accounts = expand_accounts(
+        session,
+        tenant_id=tenant_id,
+        scope=definition.accounts,
+        optimizer_scope=optimizer_scope,
+    )
     if slot_at is not None and definition.schedule.timezone_basis == "ACCOUNT":
         accounts = {
             adv: info
@@ -466,6 +550,13 @@ def load_inputs(
         }
     level = definition.apply_to.level
     kind = "creative_day" if level == "material" else "ad_day"
+    freshness, publication_versions = _freshness_metadata(
+        session,
+        tenant_id=tenant_id,
+        accounts=accounts,
+        report_kinds=(kind, "ad_day") if kind != "ad_day" else (kind,),
+        now=now,
+    )
     accounts, skipped = _fresh_accounts(
         session, tenant_id=tenant_id, accounts=accounts, kind=kind, now=now
     )
@@ -475,7 +566,14 @@ def load_inputs(
         )
         skipped.extend(ledger_skipped)
     if not accounts:
-        return Inputs(accounts={}, entities={}, facts={}, skipped_accounts=skipped)
+        return Inputs(
+            accounts={},
+            entities={},
+            facts={},
+            skipped_accounts=skipped,
+            freshness=freshness,
+            publication_versions=publication_versions,
+        )
     ranges: list[str] = sorted(
         {
             str(c.range)
@@ -548,5 +646,10 @@ def load_inputs(
             for adv in sorted(changed - audited)
         )
     return Inputs(
-        accounts=accounts, entities=entities, facts=facts, skipped_accounts=skipped
+        accounts=accounts,
+        entities=entities,
+        facts=facts,
+        skipped_accounts=skipped,
+        freshness=freshness,
+        publication_versions=publication_versions,
     )

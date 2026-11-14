@@ -35,6 +35,16 @@ class Settings(BaseSettings):
     )
     API_V1_STR: Literal["/api"] = "/api"
     SECRET_KEY: str = Field(repr=False)
+    # 独立 DSH 服务身份；任务领取后只使用五分钟任务级令牌。
+    AI_DSH_SERVICE_TOKEN: str = Field(default="", repr=False)
+
+    @field_validator("AI_DSH_SERVICE_TOKEN")
+    @classmethod
+    def validate_ai_dsh_token(cls, value: str) -> str:
+        if value and len(value) < 32:
+            raise ValueError("AI_DSH_SERVICE_TOKEN must contain at least 32 characters")
+        return value
+
     # 60 minutes * 24 hours * 8 days = 8 days
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24 * 8
     FRONTEND_HOST: str = "http://localhost:5173"

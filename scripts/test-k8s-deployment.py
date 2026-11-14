@@ -439,6 +439,33 @@ else:
             self.assertNotEqual(result.returncode, 0)
             self.assertEqual(self.calls(), [])
 
+    def test_dsh_companion_is_separate_and_does_not_bypass_ownership(self):
+        companion = PROJECT + "-dsh"
+        deployment = {
+            "kind": "Deployment",
+            "metadata": {"name": companion, "namespace": "test", "labels": {"app": companion}},
+            "spec": {"template": {"spec": {"containers": [{"image": IMAGE.replace(PROJECT + ":", companion + ":")}]}}},
+        }
+        items = [deployment] + [
+            {"kind": kind, "metadata": {"name": name, "namespace": "test", "labels": {"app": companion}}}
+            for kind, name in [("Service", companion), ("PersistentVolumeClaim", companion + "-state")]
+        ]
+        self.state.write_text(json.dumps({"items": items}))
+        result = self.run_script(dry=False, PREFLIGHT_ONLY="1")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assert_no_writes()
+        for field, value in [("namespace", "other"), ("labels", {"app": "foreign"})]:
+            with self.subTest(field=field):
+                invalid = json.loads(json.dumps(deployment))
+                invalid["metadata"][field] = value
+                self.state.write_text(json.dumps({"items": [invalid]}))
+                self.assertNotEqual(self.run_script(dry=False, PREFLIGHT_ONLY="1").returncode, 0)
+                self.assert_no_writes()
+        deployment["spec"]["template"]["spec"]["containers"][0]["image"] = IMAGE
+        self.state.write_text(json.dumps({"items": [deployment]}))
+        self.assertNotEqual(self.run_script(dry=False, PREFLIGHT_ONLY="1").returncode, 0)
+        self.assert_no_writes()
+
     def test_preflight_only_never_writes(self):
         result = self.run_script(dry=False, PREFLIGHT_ONLY="1")
         self.assertEqual(result.returncode, 0, result.stderr)

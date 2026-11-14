@@ -629,7 +629,15 @@ def repair_execution(*, database_engine: Any, limit: int = 100) -> int:
         units = session.exec(
             select(SubmissionUnit)
             .where(
-                col(SubmissionUnit.dispatch_id).is_not(None),
+                or_(
+                    col(SubmissionUnit.dispatch_id).is_not(None),
+                    and_(
+                        col(SubmissionUnit.dispatch_id).is_(None),
+                        SubmissionUnit.disposition == "INCLUDED",
+                        SubmissionUnit.expanded,
+                        col(SubmissionUnit.reason_code).is_(None),
+                    ),
+                ),
                 SubmissionUnit.repair_after <= now,
             )
             .order_by(col(SubmissionUnit.repair_after), col(SubmissionUnit.unit_id))

@@ -62,6 +62,16 @@ function hasFilters(filters: Filters) {
   return Object.values(filters).some((value) => value !== "ALL")
 }
 
+export function filterBoundRules<T extends { id: string }>(
+  rows: T[],
+  boundOnly: boolean,
+  boundRuleIds: string[],
+) {
+  return boundOnly
+    ? rows.filter((rule) => boundRuleIds.includes(rule.id))
+    : rows
+}
+
 function matchesFilters(rule: RulePublic, filters: Filters) {
   const def = rule.definition
   return (
@@ -165,10 +175,14 @@ export function RuleList({
   tenantId,
   write,
   admin,
+  boundOnly = false,
+  boundRuleIds = [],
 }: {
   tenantId: string
   write: boolean
   admin: boolean
+  boundOnly?: boolean
+  boundRuleIds?: string[]
 }) {
   const client = useQueryClient()
   const rules = useQuery(rulesQuery(tenantId))
@@ -224,7 +238,11 @@ export function RuleList({
       await refresh()
     },
   })
-  const rows = (rules.data?.items ?? []).filter(
+  const rows = filterBoundRules(
+    rules.data?.items ?? [],
+    boundOnly,
+    boundRuleIds,
+  ).filter(
     (rule) =>
       rule.name.includes(search.trim()) && matchesFilters(rule, filters),
   )
@@ -379,7 +397,7 @@ export function RuleList({
   }, [catalog.data, write, toggle, selected, toggleSelected])
   return (
     <div className="flex flex-col gap-4">
-      <OverviewCards tenantId={tenantId} />
+      {!boundOnly && <OverviewCards tenantId={tenantId} />}
       <Card>
         <CardHeader className="flex flex-wrap items-end justify-between gap-3">
           <Field className="w-full sm:w-80">

@@ -159,6 +159,17 @@ def finish_delivery(
         submission_id=submission_id,
         attention=attention,
     )
+    if read_result is not None and not read_result.needs_more:
+        # Finalize first: one submission can contain many units/steps, and a
+        # single readback must not terminalize the occurrence prematurely.
+        from app.modules.ai_workbench.build_handoff import BuildHandoff
+
+        with Session(database_engine) as session, session.begin():
+            BuildHandoff(session, context=context).record_submission_result(
+                submission_id,
+                state=read_result.state,
+                evidence={"step_id": str(step_id), "revision": revision},
+            )
 
 
 def deliver_step(
