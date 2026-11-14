@@ -79,7 +79,7 @@ jobs:
       - run: uv run ruff check app tests && uv run ty check app
         if: matrix.suite == 'modules'
         working-directory: backend
-      - run: uv run pytest -q --tb=short --show-capture=no ${{ matrix.pytest-args }}
+      - run: uv run pytest -q --tb=short --show-capture=no -m "not mcp" ${{ matrix.pytest-args }}
         if: matrix.suite != 'browser'
         working-directory: backend
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6

@@ -60,7 +60,8 @@ def tier_amounts(
         (0, (0, 0, 0)),
     ):
         if spend >= threshold:
-            return tuple(Decimal(v) for v in values)  # type: ignore[return-value]
+            first, second, third = values
+            return Decimal(first), Decimal(second), Decimal(third)
     raise ValueError("累计消耗不能为负")
 
 
