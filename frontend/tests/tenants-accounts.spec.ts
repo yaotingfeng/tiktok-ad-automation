@@ -1690,7 +1690,7 @@ test("unsaved member edits guard BC changes without saving or rebinding", async 
   await page.getByRole("option", { name: "只读成员", exact: true }).click()
   await page.goBack()
   await expect(
-    page.getByRole("dialog", { name: "有未保存的修改" }),
+    page.getByRole("dialog", { name: "有未保存的内容" }),
   ).toBeVisible()
   await page.getByRole("button", { name: "留在当前页" }).click()
   await expect(sheet.getByLabel("租户角色")).toContainText("只读成员")
@@ -2082,7 +2082,7 @@ for (const arrival of ["initial", "refetch"] as const)
       await expect.poll(() => reads).toBeGreaterThan(1)
     }
     release()
-    const guard = page.getByRole("dialog", { name: "有未保存的修改" })
+    const guard = page.getByRole("dialog", { name: "有未保存的内容" })
     await expect(guard).toBeVisible()
     await expect(page).toHaveURL(new RegExp(`/tenants/${A}/members$`))
     await guard.getByRole("button", { name: "留在当前页" }).click()
