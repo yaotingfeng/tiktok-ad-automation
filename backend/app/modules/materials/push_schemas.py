@@ -10,11 +10,19 @@ from pydantic import BaseModel, Field, model_validator
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".m4v", ".avi", ".webm", ".mpeg", ".3gp", ".mkv"}
 
 
+class ProductionOrigin(BaseModel):
+    model_config = {"extra": "forbid"}
+    order_id: UUID
+    job_id: str = Field(min_length=1, max_length=255)
+    strategy_id: str = Field(min_length=1, max_length=255)
+
+
 class PushMaterialInput(BaseModel):
     model_config = {"extra": "forbid"}
     material_id: str = Field(min_length=1, max_length=255)
     file_name: str = Field(min_length=1, max_length=100)
     url: str = Field(min_length=1, max_length=8192, repr=False)
+    production_origin: ProductionOrigin | None = None
 
     @model_validator(mode="after")
     def validate_identity(self) -> Self:

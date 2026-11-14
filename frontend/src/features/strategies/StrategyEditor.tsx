@@ -12,11 +12,17 @@ export function StrategyEditor({
   versionId,
   copyVersionId,
   readonly = false,
+  returnContext,
+  aiOptimizerId,
+  recordId: contextRecordId,
 }: {
   strategyId?: string
   versionId?: string
   copyVersionId?: string
   readonly?: boolean
+  returnContext?: string
+  aiOptimizerId?: string
+  recordId?: string
 }) {
   const { tenantId, scope } = useTenantScope(),
     requestedVersion = versionId || copyVersionId
@@ -89,6 +95,9 @@ export function StrategyEditor({
         strategy={record.data}
         version={version.data}
         copy={!!copyVersionId}
+        returnContext={returnContext}
+        aiOptimizerId={aiOptimizerId}
+        recordId={contextRecordId}
         forceReadonly={
           readonly ||
           !!(

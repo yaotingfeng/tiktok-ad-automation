@@ -159,6 +159,8 @@ class AdGroupObservedFacts(FrozenModel):
     gender: Gender | None = None
     spc_audience_age: Literal["OVER_EIGHTEEN", "OVER_TWENTY_FIVE"] | None = None
     targeting_optimization_mode: Literal["MANUAL", "AUTOMATIC"] | None = None
+    # Smart+ 自动定向会回读该建议受众开关；它也是创建接口支持的可选字段，复制时须保留。
+    suggestion_audience_enabled: bool | None = None
 
     @field_validator("languages", "age_groups")
     @classmethod

@@ -128,7 +128,7 @@ def test_outcome_routes_due_sibling_instead_of_finished_jobs_next_phase(
     session, sync_seed, redis_client
 ):
     now = datetime.now(UTC)
-    current = _job(session, sync_seed, phase="CREATE", day=1, due=now)
+    current = _job(session, sync_seed, phase="CREATE", day=3, due=now)
     sibling = _job(session, sync_seed, phase="DOWNLOAD", day=2, due=now)
     assert _dispatch(session, redis_client, now + timedelta(seconds=1)) == 1
     assert current.claim_token is not None
@@ -162,7 +162,6 @@ def _gateway(monkeypatch, seed, redis, responses, *, opening_error=None):
     from app.integrations.tiktok.platform_quotas import sdk_endpoint
     from app.integrations.tiktok.sdk import AccountAdmissionDeferred, official_client
     from app.jobs.admission import admission_policy, admitted_scope
-    from app.modules.sync_control.archive_storage import S3RunArchive
     from tests.modules.sync_control.test_archive import ObjectTransport
 
     calls = []
@@ -191,10 +190,9 @@ def _gateway(monkeypatch, seed, redis, responses, *, opening_error=None):
     monkeypatch.setattr("urllib3.PoolManager.request", wire)
     objects = ObjectTransport()
     monkeypatch.setattr(
-        S3RunArchive,
-        "configured",
-        classmethod(lambda cls: cls(objects, "private-test")),
+        "app.modules.operation_logs.archive.make_s3", lambda _config: objects
     )
+    monkeypatch.setattr("app.core.config.settings.S3_BUCKET", "existing-material-test")
 
     @contextmanager
     def gateway(**kwargs):
@@ -525,3 +523,22 @@ def test_stale_create_token_replay_cannot_release_new_check_generation(
         redis_client.zscore(key, str(new_token)) is not None
         for key in occupancy_keys(**_scope(seed, CHECK))
     )
+
+
+def test_daily_log_precedes_older_history_and_routes_its_stage(
+    session, sync_seed, redis_client
+):
+    from app.modules.sync_control.schedule import _pending_operation_endpoint
+
+    now = datetime.now(UTC)
+    _job(session, sync_seed, phase="CHECK", day=1, due=now)
+    daily = _job(session, sync_seed, phase="DOWNLOAD", day=2, due=now)
+    daily.priority = 3
+    session.flush()
+    head = session.exec(select(SyncSchedule)).one()
+    assert _pending_operation_endpoint(session, head, now=now) == DOWNLOAD
+    # 首轮修复旧端点，下一轮必须选中昨日任务，不能按创建时间发历史CHECK。
+    assert _dispatch(session, redis_client, now + timedelta(seconds=1)) == 0
+    assert head.physical_endpoint == DOWNLOAD
+    assert _dispatch(session, redis_client, now + timedelta(seconds=1)) == 1
+    assert daily.claim_token is not None

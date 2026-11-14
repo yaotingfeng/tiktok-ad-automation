@@ -38,6 +38,16 @@ def report_endpoint(kind: str, progress: Mapping | None = None) -> str:
     return sdk_endpoint(operation)
 
 
+def operation_log_order():
+    """同账户日志先昨日增量、再较近历史；其他报表保持原有顺序。"""
+    return (
+        case((ReportSyncJob.kind == "operation_log", ReportSyncJob.priority), else_=0),
+        case(
+            (ReportSyncJob.kind == "operation_log", ReportSyncJob.end_date), else_=None
+        ).desc(),
+    )
+
+
 def report_class(_kind: str, priority: int) -> str:
     return "realtime" if priority <= 2 else "history"
 
@@ -147,7 +157,7 @@ def _pending_operation_endpoint(
             execution_owner_current(ReportSyncJob, "report_job_id"),
         )
         .order_by(
-            # 已到期候选保持dispatcher的冻结revision/创建次序；没有到期任务
+            # 已到期候选保持dispatcher的revision/日志优先级次序；没有到期任务
             # 时才按最早due选下一阶段，不能让刚轮询的30秒等待挡住另一日桶。
             case((ReportSyncJob.due_at <= now, 0), else_=1),
             case((ReportSyncJob.due_at > now, ReportSyncJob.due_at), else_=None),
@@ -159,6 +169,7 @@ def _pending_operation_endpoint(
                 ),
                 else_=1,
             ),
+            *operation_log_order(),
             ReportSyncJob.created_at,
             ReportSyncJob.id,
         )

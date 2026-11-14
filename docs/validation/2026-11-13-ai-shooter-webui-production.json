@@ -1,0 +1,134 @@
+{
+  "app_sha": "00f7d1cd0986065cb880d469111f41b454542646",
+  "dsh_sha": "3ca20a3f6017730fc8a6d04301137abc51ece91e",
+  "webui": {
+    "unauthenticated": 401,
+    "ordinary_session": 403,
+    "admin_session": 200,
+    "html": 200,
+    "html_document": true,
+    "assets": [
+      {
+        "path": "./assets/index-BgUyXZcc.js",
+        "status": 200
+      },
+      {
+        "path": "./assets/vendor-BUMdD3V7.js",
+        "status": 200
+      },
+      {
+        "path": "./assets/vendor-DV2921Zo.css",
+        "status": 200
+      },
+      {
+        "path": "./assets/index-lh_YM6sT.css",
+        "status": 200
+      }
+    ],
+    "workspace_initialized": true,
+    "cookie_scoped": true,
+    "cookie_count": 1,
+    "websocket_status": 101
+  },
+  "roles": [
+    {
+      "role": "api",
+      "ready": true,
+      "digest": "sha256:5656c0b233bb4f99943b86a39b6bcb4dbf19c2b0e473296c1986a6908511f6cf",
+      "restarts": 0
+    },
+    {
+      "role": "beat",
+      "ready": true,
+      "digest": "sha256:5656c0b233bb4f99943b86a39b6bcb4dbf19c2b0e473296c1986a6908511f6cf",
+      "restarts": 0
+    },
+    {
+      "role": "worker-ad-management",
+      "ready": true,
+      "digest": "sha256:5656c0b233bb4f99943b86a39b6bcb4dbf19c2b0e473296c1986a6908511f6cf",
+      "restarts": 0
+    },
+    {
+      "role": "worker-ads-backfill",
+      "ready": true,
+      "digest": "sha256:5656c0b233bb4f99943b86a39b6bcb4dbf19c2b0e473296c1986a6908511f6cf",
+      "restarts": 0
+    },
+    {
+      "role": "worker-ads-directory",
+      "ready": true,
+      "digest": "sha256:5656c0b233bb4f99943b86a39b6bcb4dbf19c2b0e473296c1986a6908511f6cf",
+      "restarts": 0
+    },
+    {
+      "role": "worker-ads-live-directory",
+      "ready": true,
+      "digest": "sha256:5656c0b233bb4f99943b86a39b6bcb4dbf19c2b0e473296c1986a6908511f6cf",
+      "restarts": 0
+    },
+    {
+      "role": "worker-ads-reporting",
+      "ready": true,
+      "digest": "sha256:5656c0b233bb4f99943b86a39b6bcb4dbf19c2b0e473296c1986a6908511f6cf",
+      "restarts": 0
+    },
+    {
+      "role": "worker-builds",
+      "ready": true,
+      "digest": "sha256:5656c0b233bb4f99943b86a39b6bcb4dbf19c2b0e473296c1986a6908511f6cf",
+      "restarts": 0
+    },
+    {
+      "role": "worker-control",
+      "ready": true,
+      "digest": "sha256:5656c0b233bb4f99943b86a39b6bcb4dbf19c2b0e473296c1986a6908511f6cf",
+      "restarts": 0
+    },
+    {
+      "role": "worker-resource",
+      "ready": true,
+      "digest": "sha256:5656c0b233bb4f99943b86a39b6bcb4dbf19c2b0e473296c1986a6908511f6cf",
+      "restarts": 0
+    },
+    {
+      "role": "worker-results",
+      "ready": true,
+      "digest": "sha256:5656c0b233bb4f99943b86a39b6bcb4dbf19c2b0e473296c1986a6908511f6cf",
+      "restarts": 0
+    }
+  ],
+  "dsh_ready": true,
+  "backup_created": false,
+  "restore_verification_performed": false,
+  "real_ad_or_material_write": false,
+  "dsh_runtime": {
+    "default_model": {
+      "provider": "com",
+      "model": "claude-opus-5-5"
+    },
+    "credentials_mode": "600",
+    "workspace_exists": true,
+    "image_digest": "sha256:4e8d290a0076e9a4630862722e1682ab28728788f4a09420cb86e0e5fc774031",
+    "restarts": 0
+  },
+  "migration": {
+    "source": [
+      "0128_material_production_origin"
+    ],
+    "target": [
+      "0129_ai_proposal_operation"
+    ],
+    "job": "tiktok-ad-automation-aiwb-migrate-fcea9290",
+    "sha": "00f7d1cd0986065cb880d469111f41b454542646"
+  },
+  "feature_flags": {
+    "ADS_SYNC_ENABLED": "true",
+    "AUTOMATED_RULES_ENABLED": "true",
+    "MATERIAL_CLEANUP_ENABLED": "true",
+    "MATERIAL_INGEST_ENABLED": "true"
+  },
+  "beat_count": 1,
+  "browser_webui_verified": true,
+  "models_settings_page_verified": true
+}

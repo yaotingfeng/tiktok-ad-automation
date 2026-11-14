@@ -93,6 +93,8 @@ class MaterialPushItem(SQLModel, table=True):
     revision: int
     file_name: str = Field(max_length=100)
     url_ciphertext: str = Field(repr=False)
+    # 已鉴权生产方声明，关联本租户已冻结 job/strategy；历史缺失保持 NULL。
+    production_origin: dict | None = Field(default=None, sa_column=Column(JSONB))
     material_id: UUID | None = None
     status: str = Field(default="queued", max_length=16)
     error_code: str | None = Field(default=None, max_length=128)

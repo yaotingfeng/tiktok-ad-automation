@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query"
-import { Link, useNavigate } from "@tanstack/react-router"
+import { Link, getRouteApi, useNavigate } from "@tanstack/react-router"
 import type { ColumnDef } from "@tanstack/react-table"
 import { Plus } from "lucide-react"
 import { useMemo, useState } from "react"
@@ -30,10 +30,87 @@ import { useTenantScope } from "@/features/tenants/TenantScope"
 import { WorkspacePageTitle } from "@/features/workspace/WorkspacePageTitle"
 import { handleApiError } from "@/lib/api-feedback"
 import { StrategyError as RequestError } from "./feedback"
-import { strategyKey } from "./queries"
+import { strategyKey, versionQuery, strategyQuery } from "./queries"
+import { aiRequest } from "@/features/ai-workbench/api"
+import type { AIOptimizer } from "@/features/ai-workbench/AIOptimizerList"
 import { StrategyVersionList } from "./StrategyVersionList"
+const strategiesRoute = getRouteApi("/_layout/tenants/$tenantId/strategies")
+
 export function StrategyList() {
+  const search = strategiesRoute.useSearch()
+  // 绑定入口独立加载实际绑定，只读标记本身不会筛选租户列表。
+  return search.ai_optimizer_id ? (
+    <BoundStrategyList optimizerId={search.ai_optimizer_id} />
+  ) : (
+    <TenantStrategyList />
+  )
+}
+
+function BoundStrategyList({ optimizerId }: { optimizerId: string }) {
+  const { tenantId } = useTenantScope()
+  const search = strategiesRoute.useSearch()
+  const optimizer = useQuery({
+    queryKey: ["tenant", tenantId, "ai-optimizer", optimizerId],
+    queryFn: ({ signal }) =>
+      aiRequest<AIOptimizer>(
+        `/api/tenants/${tenantId}/ai-optimizers/${optimizerId}`,
+        { signal },
+      ),
+  })
+  const version = useQuery({
+    ...versionQuery(tenantId!, optimizer.data?.strategy_version_id ?? ""),
+    enabled: !!optimizer.data?.strategy_version_id,
+  })
+  const strategy = useQuery({
+    ...strategyQuery(tenantId!, version.data?.strategy_id ?? ""),
+    enabled: !!version.data?.strategy_id,
+  })
+  const error = optimizer.error || version.error || strategy.error
+  return (
+    <section className="space-y-4" data-testid="strategy-bound-context">
+      <WorkspacePageTitle>当前绑定策略</WorkspacePageTitle>
+      {search.return_to && (
+        <Button asChild variant="outline">
+          <a href={search.return_to}>返回 AI 工作台</a>
+        </Button>
+      )}
+      {error ? (
+        <p role="alert">绑定策略读取失败，请刷新重试。</p>
+      ) : !strategy.data || !version.data ? (
+        <p role="status">正在读取绑定策略…</p>
+      ) : (
+        <Card>
+          <CardHeader>
+            <h2 className="font-semibold">{strategy.data.name}</h2>
+            <p className="text-sm text-muted-foreground">
+              当前投手绑定版本 v{version.data.number}
+            </p>
+          </CardHeader>
+          <CardContent>
+            <Button asChild variant="outline">
+              <Link
+                to="/tenants/$tenantId/strategies/$strategyId"
+                params={{ tenantId: tenantId!, strategyId: strategy.data.id }}
+                search={{
+                  ...search,
+                  version_id: version.data.id,
+                  readonly: true,
+                  scope: "bound",
+                }}
+              >
+                查看绑定版本
+              </Link>
+            </Button>
+          </CardContent>
+        </Card>
+      )}
+    </section>
+  )
+}
+
+function TenantStrategyList() {
   const { tenantId, tenant, scope } = useTenantScope(),
+    contextSearch = strategiesRoute.useSearch(),
     client = useQueryClient(),
     navigate = useNavigate(),
     paging = useCursorPage()
@@ -67,10 +144,12 @@ export function StrategyList() {
         })
       ).data,
   })
+  const boundContext = !!contextSearch.ai_optimizer_id
   const data = useRetainedData(query.data, query.error),
     write =
       !!scope &&
       scope.role !== "viewer" &&
+      !boundContext &&
       !isForbidden(query.error) &&
       !isForbidden(error)
   const columns = useMemo<ColumnDef<StrategyPublic>[]>(
@@ -85,7 +164,11 @@ export function StrategyList() {
             title={row.original.name}
             to="/tenants/$tenantId/strategies/$strategyId"
             params={{ tenantId: tenantId!, strategyId: row.original.id }}
-            search={{ bc_id: scope?.bcId || undefined }}
+            search={{
+              bc_id: scope?.bcId || undefined,
+              ...contextSearch,
+              readonly: boundContext || undefined,
+            }}
           >
             {row.original.name}
           </Link>
@@ -138,7 +221,11 @@ export function StrategyList() {
         cell: ({ row }) => {
           const config = row.original.config
           return (
-            <span>{config.creation_status === "DISABLE" ? "创建后停用" : "创建后启用"}</span>
+            <span>
+              {config.creation_status === "DISABLE"
+                ? "创建后停用"
+                : "创建后启用"}
+            </span>
           )
         },
       },
@@ -262,6 +349,21 @@ export function StrategyList() {
           <p className="text-sm text-muted-foreground">
             当前租户策略 · {tenant?.name} · 不按 BC 筛选
           </p>
+          {boundContext && (
+            <p
+              className="text-xs text-amber-700"
+              data-testid="strategy-bound-context"
+            >
+              当前为 AI 投手绑定策略上下文（{contextSearch.ai_optimizer_id}
+              ），租户策略列表仅查看；保存返回将回到{" "}
+              {contextSearch.return_to ?? "AI 工作台"}。{" "}
+              {contextSearch.return_to && (
+                <a className="underline" href={contextSearch.return_to}>
+                  返回 AI 工作台
+                </a>
+              )}
+            </p>
+          )}
         </div>
         {write && (
           <Button asChild>
@@ -349,6 +451,10 @@ export function StrategyList() {
           strategyId={history.id}
           name={history.name}
           onClose={() => setHistory(null)}
+          aiOptimizerId={contextSearch.ai_optimizer_id}
+          recordId={contextSearch.record_id}
+          versionId={contextSearch.version_id}
+          returnContext={contextSearch.return_to}
         />
       )}
       <Dialog

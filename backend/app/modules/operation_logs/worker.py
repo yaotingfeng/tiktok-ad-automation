@@ -10,6 +10,7 @@ from sqlmodel import Session
 
 from app.core.errors import DomainError
 from app.integrations.tiktok.contracts.change_log_reader import ChangeLogReader
+from app.modules.operation_logs.archive import OperationLogArchive
 from app.modules.operation_logs.parser import parse_export, utc_window
 from app.modules.operation_logs.store import publish_export
 from app.modules.reporting.publish import AccountMeta, _database_now
@@ -17,7 +18,6 @@ from app.modules.reporting.store_models import ReportSyncJob
 from app.modules.sync_control.archive_storage import (
     ArchiveReceipt,
     ArchiveStorageError,
-    S3RunArchive,
 )
 
 
@@ -43,10 +43,7 @@ def run_step(
                 "operation_log_create_exhausted", "日志导出重建次数已达上限"
             )
         lower, upper = utc_window(job.start_date, job.end_date, timezone)
-        # 最新窗口连同今日已发生的操作读取，连接最新实际配置锚点；
-        # 今日不发布完整日覆盖，不能假称已取得尚未发生的操作。
-        if (now - upper).total_seconds() < 86400 and upper <= now:
-            upper = min(now.replace(microsecond=0), lower + timedelta(days=30))
+        # 只读取冻结窗口的完整日，不延伸到今天产生重复读取。
         state.update(
             phase="CREATE",
             create_attempts=attempts,
@@ -77,19 +74,31 @@ def run_step(
                 if error.code != "operation_log_task_unavailable":
                     raise
                 state.update(phase="CREATE")
+                # 新导出有独立的读取重试预算；重建总次数仍由create_attempts限制。
+                job.attempts = 0
             else:
                 state.update(
                     phase="DOWNLOAD" if status == "SUCCESS" else "CHECK", polls=polls
                 )
     elif phase == "DOWNLOAD":
-        content = reader.change_log_download(
-            advertiser_id=advertiser, task_id=state["task_id"]
-        )
+        try:
+            content = reader.change_log_download(
+                advertiser_id=advertiser, task_id=state["task_id"]
+            )
+        except DomainError as error:
+            if error.code != "operation_log_task_unavailable":
+                raise
+            # 查询成功后也可能因排队过久失去文件；保留原窗口/审计，走有界重建。
+            state.update(phase="CREATE")
+            job.attempts = 0
+            job.progress = job.progress | {"operation_log": dict(state)}
+            job.due_at = now + timedelta(seconds=1)
+            return None
         events = parse_export(content)
         payload = json.dumps({"changelog": content}, ensure_ascii=False).encode()
         content_digest = hashlib.sha256(payload).hexdigest()
 
-        # 原始内容先进入既有私有审计桶；存储失败不可发布“完整覆盖”。
+        # 原始内容先认证加密并进入既有素材桶独立日志目录；存储失败不可发布“完整覆盖”。
         def archive_content() -> ArchiveReceipt:
             from botocore.exceptions import (  # type: ignore[import-untyped]
                 BotoCoreError,
@@ -97,7 +106,7 @@ def run_step(
             )
 
             try:
-                archive = S3RunArchive.configured()
+                archive = OperationLogArchive.configured()
                 receipt = archive.persist(
                     tenant_id=job.tenant_id,
                     kind="report",

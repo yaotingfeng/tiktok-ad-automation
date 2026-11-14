@@ -189,7 +189,7 @@ CATALOG_SUBMISSIONS = (
     + """) THEN 'PARTIAL'
  WHEN bool_and(e.status='FAILED') THEN 'FAILED' ELSE 'QUEUED' END
  FROM execution_step e WHERE e.tenant_id=original.tenant_id
- AND e.submission_id=original.id AND NOT """
+ AND e.submission_id=original.id AND EXISTS (SELECT 1 FROM submission_unit su WHERE su.tenant_id=e.tenant_id AND su.submission_id=e.submission_id AND su.unit_id=e.unit_id AND su.disposition='INCLUDED') AND NOT """
     + obsolete_readback_sql("e")
     + """) ELSE original.status END visible_status
  FROM build_submission original WHERE original.tenant_id=:tenant)"""

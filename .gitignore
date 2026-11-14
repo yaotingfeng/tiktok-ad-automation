@@ -26,3 +26,8 @@ backend/app/frontend/
 /deploy/k8s/mcp-client-registration.json
 /frontend/openapi.json
 /.runtime/*
+
+# TypeScript incremental state and emitted Vite configuration (source is .ts)
+/frontend/*.tsbuildinfo
+/frontend/vite.config.js
+/frontend/vite.config.d.ts

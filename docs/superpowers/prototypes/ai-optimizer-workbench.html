@@ -181,6 +181,7 @@
 </style>
 <script>
 
+
 (() => {
   const root = document.getElementById('tkada-ai-optimizer');
   const esc = v => String(v == null ? '' : v).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -227,6 +228,7 @@
   }
   const initial = [makeTenant('a','演示租户 A'),makeTenant('b','演示租户 B')];
   initial[1].optimizers = initial[1].optimizers.slice(0,1);
+  initial.forEach(t => t.optimizers.forEach(o => { o.schemes = o.schemes.slice(0,1); o.experiments = []; }));
   const state = {area:'ai',moduleScope:'bound',highlightId:null,highlightScheme:null,picker:null,schemeEdit:null,abEdit:null,revision:0,tenants:initial,tenant:'a',selected:'ao1',view:'optimizers',tab:'goals',date:'2026-11-12',draft:null,edit:null,returnContext:null,grid:null,gridKey:'',history:[],notice:'',error:false,executionRecord:null,proposalId:null};
   const tenant = () => state.tenants.find(t => t.id === state.tenant) || state.tenants[0];
   const optimizer = () => tenant().optimizers.find(o => o.id === state.selected) || tenant().optimizers[0];
@@ -245,7 +247,7 @@
   function persist() {
     if (!window.openai || !window.openai.setWidgetState) return;
     const o = optimizer();
-    const snapshot = {modelContent:{tenant:tenant().name,optimizer:o.name,view:state.view,optimizationMode:o.reviewMode},privateContent:{schema:3,area:state.area,moduleScope:state.moduleScope,revision:++state.revision,tenant:state.tenant,selected:state.selected,view:state.view,tenants:state.tenants}};
+    const snapshot = {modelContent:{tenant:tenant().name,optimizer:o.name,view:state.view,optimizationMode:o.reviewMode},privateContent:{schema:4,area:state.area,moduleScope:state.moduleScope,revision:++state.revision,tenant:state.tenant,selected:state.selected,view:state.view,tenants:state.tenants}};
     if (new TextEncoder().encode(JSON.stringify(snapshot)).length < 15500) window.openai.setWidgetState(snapshot).catch(() => {});
   }
   function flash(text, error = false) {state.notice = text;state.error = error;}
@@ -471,9 +473,9 @@
     const ai = state.area !== 'tool';
     const navItem = (label,view,ic) => '<button type="button" class="cursor-interaction ' + ((view === 'optimizers' ? ai : !ai && state.view === view) ? 'is-active' : '') + '" data-action="global-nav" data-view="' + view + '">' + icon(ic) + label + '</button>';
     const aiItem = (label,view,ic) => '<button type="button" class="cursor-interaction ' + (state.view === view ? 'is-active' : '') + '" data-action="ai-nav" data-view="' + view + '"' + (state.view === view ? ' aria-current="page"' : '') + '>' + icon(ic) + label + '</button>';
-    const secondary = ai ? '<aside class="tk-subside" aria-label="AI 优化师导航"><nav class="tk-nav" aria-label="优化师列表">' + aiItem('全部优化师','optimizers','users') + '</nav><label class="tk-current-optimizer"><span>当前优化师</span><select class="tk-select" data-optimizer aria-label="切换 AI 优化师">' + optionList(tenant().optimizers,o.id) + '</select></label><nav class="tk-nav" aria-label="优化师工作页面">' + [['overview','概览','layout-dashboard'],['schemes','搭建方案','layers'],['schedule','剧单排期','calendar-days'],['execution','执行记录','list-checks'],['review','复盘优化','chart-no-axes-combined'],['pending','待确认 ' + pending(o).length,'circle-check']].map(([view,label,ic]) => aiItem(label,view,ic)).join('') + '</nav><div class="tk-nav-label">绑定配置</div><nav class="tk-nav" aria-label="优化师绑定配置">' + aiItem('已绑定投放策略','strategies','sliders-horizontal') + aiItem('已绑定自动规则','rules','workflow') + '</nav><p class="tk-small tk-context-caption">' + esc(o.bc) + '<br>' + o.accounts.length + ' 个分配账户</p></aside>' : '';
+    const secondary = ai ? '<aside class="tk-subside" aria-label="AI 优化师导航"><nav class="tk-nav" aria-label="优化师列表">' + aiItem('全部优化师','optimizers','users') + '</nav><label class="tk-current-optimizer"><span>当前优化师</span><select class="tk-select" data-optimizer aria-label="切换 AI 优化师">' + optionList(tenant().optimizers,o.id) + '</select></label><nav class="tk-nav" aria-label="优化师工作页面">' + [['overview','概览','layout-dashboard'],['schemes','投放策略','sliders-horizontal'],['schedule','剧单排期','calendar-days'],['execution','执行记录','list-checks'],['review','复盘优化','chart-no-axes-combined'],['pending','待确认 ' + pending(o).length,'circle-check']].map(([view,label,ic]) => aiItem(label,view,ic)).join('') + '</nav><div class="tk-nav-label">绑定配置</div><nav class="tk-nav" aria-label="优化师绑定配置">' + aiItem('已绑定投放策略','strategies','sliders-horizontal') + aiItem('已绑定自动规则','rules','workflow') + '</nav><p class="tk-small tk-context-caption">' + esc(o.bc) + '<br>' + o.accounts.length + ' 个分配账户</p></aside>' : '';
     const body = state.view === 'optimizers' ? listPage() : state.view === 'overview' ? overviewPage(o) : state.view === 'config' ? configPage() : state.view === 'schemes' ? schemesPage(o) : state.view === 'schedule' ? schedulePage(o) : state.view === 'execution' ? executionPage(o) : state.view === 'review' ? reviewPage(o) : state.view === 'pending' ? pendingPage(o) : state.view === 'strategies' ? strategiesPage() : state.view === 'rules' ? rulesPage() : miscPage(o);
-    root.innerHTML = '<div class="tk-proto"><b>交互原型 · 第三版</b><span>示例数据 · 多搭建方案、既有能力复用与配置上下文</span></div><div class="tk-app"><aside class="tk-side"><div class="tk-brand">TK-ADA</div><div class="tk-brand-sub">广告投放工具</div><div class="tk-nav-label">投放准备</div><nav class="tk-nav" aria-label="投放准备"><span class="tk-nav-static">' + icon('clapperboard') + '素材制作</span>' + navItem('素材库','materials','file-video') + navItem('投放策略','strategies','sliders-horizontal') + '</nav><div class="tk-nav-label">广告投放</div><nav class="tk-nav" aria-label="广告投放">' + navItem('广告搭建','builds','clapperboard') + navItem('搭建任务','build-tasks','list-checks') + '<span class="tk-nav-static">' + icon('chart-no-axes-combined') + '广告报表</span><span class="tk-nav-static">' + icon('chart-no-axes-combined') + '经营看板</span><span class="tk-nav-static">' + icon('history') + '操作记录</span>' + navItem('自动规则','rules','workflow') + '</nav><div class="tk-nav-label">设置</div><div class="tk-small" style="padding:0 11px">账户与授权<br>版权方连接<br>通知设置<br>成员管理</div><div class="tk-side-foot tk-ai-footer"><nav class="tk-nav" aria-label="AI 一级入口">' + navItem('AI 投放工作台','optimizers','bot') + '</nav><div class="tk-experience-entry">' + icon('external-link') + '<span>打开体验版</span><small>示意</small></div><div class="tk-footer-tenant">当前租户 · ' + esc(tenant().name) + '</div></div></aside><div class="tk-workspace"><header class="tk-topbar"><div class="tk-tenant"><select aria-label="切换租户" data-tenant>' + state.tenants.map(t => '<option value="' + esc(t.id) + '" ' + (state.tenant === t.id ? 'selected' : '') + '>' + esc(t.name) + '</option>').join('') + '</select><span class="tk-small">/ ' + (ai ? 'AI 投放工作台' : '投放工具') + '</span></div><span class="tk-small">租户管理员</span></header><div class="tk-workbody ' + (ai ? 'has-ai-nav' : '') + '">' + secondary + '<main class="tk-content">' + (ai && state.view !== 'optimizers' ? '<div class="tk-breadcrumb">AI 投放工作台 / ' + esc(activeConfig().name) + '</div>' : '') + (state.notice ? '<div class="tk-notice ' + (state.error ? 'tk-error' : '') + '" role="' + (state.error ? 'alert' : 'status') + '"><span>' + esc(state.notice) + '</span><button type="button" class="tk-link cursor-interaction" data-action="dismiss">关闭</button></div>' : '') + body + '</main></div></div></div>';
+    root.innerHTML = '<div class="tk-proto"><b>交互原型 · 简化版</b><span>示例数据 · 多搭建方案、既有能力复用与配置上下文</span></div><div class="tk-app"><aside class="tk-side"><div class="tk-brand">TK-ADA</div><div class="tk-brand-sub">广告投放工具</div><div class="tk-nav-label">投放准备</div><nav class="tk-nav" aria-label="投放准备"><span class="tk-nav-static">' + icon('clapperboard') + '素材制作</span>' + navItem('素材库','materials','file-video') + navItem('投放策略','strategies','sliders-horizontal') + '</nav><div class="tk-nav-label">广告投放</div><nav class="tk-nav" aria-label="广告投放">' + navItem('广告搭建','builds','clapperboard') + navItem('搭建任务','build-tasks','list-checks') + '<span class="tk-nav-static">' + icon('chart-no-axes-combined') + '广告报表</span><span class="tk-nav-static">' + icon('chart-no-axes-combined') + '经营看板</span><span class="tk-nav-static">' + icon('history') + '操作记录</span>' + navItem('自动规则','rules','workflow') + '</nav><div class="tk-nav-label">设置</div><div class="tk-small" style="padding:0 11px">账户与授权<br>版权方连接<br>通知设置<br>成员管理</div><div class="tk-side-foot tk-ai-footer"><nav class="tk-nav" aria-label="AI 一级入口">' + navItem('AI 投放工作台','optimizers','bot') + '</nav><div class="tk-experience-entry">' + icon('external-link') + '<span>打开体验版</span><small>示意</small></div><div class="tk-footer-tenant">当前租户 · ' + esc(tenant().name) + '</div></div></aside><div class="tk-workspace"><header class="tk-topbar"><div class="tk-tenant"><select aria-label="切换租户" data-tenant>' + state.tenants.map(t => '<option value="' + esc(t.id) + '" ' + (state.tenant === t.id ? 'selected' : '') + '>' + esc(t.name) + '</option>').join('') + '</select><span class="tk-small">/ ' + (ai ? 'AI 投放工作台' : '投放工具') + '</span></div><span class="tk-small">租户管理员</span></header><div class="tk-workbody ' + (ai ? 'has-ai-nav' : '') + '">' + secondary + '<main class="tk-content">' + (ai && state.view !== 'optimizers' ? '<div class="tk-breadcrumb">AI 投放工作台 / ' + esc(activeConfig().name) + '</div>' : '') + (state.notice ? '<div class="tk-notice ' + (state.error ? 'tk-error' : '') + '" role="' + (state.error ? 'alert' : 'status') + '"><span>' + esc(state.notice) + '</span><button type="button" class="tk-link cursor-interaction" data-action="dismiss">关闭</button></div>' : '') + body + '</main></div></div></div>';
     if (globalThis.lucide) lucide.createIcons({attrs:{width:16,height:16}});
   }
 
@@ -549,7 +551,7 @@
       const p=state.picker,c=activeConfig();if(!p||!p.selectedIds.length){flash('请选择要绑定的配置。',true);return true;}
       if(p.kind==='rule')c.ruleIds=[...p.selectedIds];
       else if(p.schemeId){const sc=c.schemes.find(s=>s.id===p.schemeId);sc.strategyId=p.selectedIds[0];sc.version++;}
-      else p.selectedIds.forEach(id=>{const t=tenant().strategies.find(x=>x.id===id);c.schemes.push({id:'scheme-'+(++seq),name:t.name+' · 新方案',strategyId:id,publisher:'全部',round:1,delayMinutes:0,enabled:true,version:1});});
+      else {const sc=c.schemes[0], next=tenant().strategies.find(x=>x.id===p.selectedIds[0]);if(sc&&next){sc.strategyId=next.id;sc.version++;}}
       state.edit=null;state.highlightId=p.kind==='strategy'&&p.schemeId?p.selectedIds[0]:null;state.picker=null;flash('已更新当前优化师的绑定；租户库原记录保持不变。');return true;
     }
     if(a==='new-scheme'){state.schemeEdit={id:'new',isNew:true,name:'新搭建方案',strategyId:tenant().strategies[0].id,publisher:'全部',round:1,delayMinutes:0,enabled:true,version:1};state.abEdit=null;return true;}
@@ -590,6 +592,50 @@
   }
 
   const numbers=new Set(['dailySpend','roas','maxBudget','maxChange','groups','ads','budget','bid','cost']);
+  function singleScheme(o){return o.schemes[0];}
+  function singleStrategy(o){return schemeStrategy(singleScheme(o));}
+  function listPage() {
+    return heading('AI 投放工作台','一个租户可创建多位 AI 优化师，每位绑定一条投放策略。',button(icon('plus')+' 创建 AI 优化师','create',true))+
+      '<div class="tk-grid">'+tenant().optimizers.map(o=>'<article class="tk-card"><div class="tk-row"><div class="tk-card-title"><div class="tk-avatar">'+icon('bot')+'</div><div><h2>'+esc(o.name)+'</h2><p class="tk-small">'+esc(o.bc)+' · '+o.accounts.length+' 个账户</p></div></div>'+pill(o.active?'运行中':'已暂停',o.active?'good':'')+'</div><div class="tk-goals"><div><span class="tk-small">日消耗目标</span><div class="tk-number">'+money(o.dailySpend)+'</div></div><div><span class="tk-small">ROAS 目标</span><div class="tk-number">'+o.roas.toFixed(2)+'</div></div></div><div class="tk-meta"><div>投放策略 <strong>'+esc(singleStrategy(o).name)+'</strong> · v'+singleStrategy(o).version+'</div><div>自动规则 <strong>'+rules(o).length+' 条</strong> · 按分配账户监控</div><div>AI 优化方式 <strong>'+(o.reviewMode==='manual'?'人工确认':'自动优化')+'</strong></div></div><div class="tk-card-foot"><span class="tk-small">'+(pending(o).length?pending(o).length+' 项建议待确认':'每日复盘 '+o.reviewAt)+'</span>'+button('进入优化师 '+icon('arrow-right'),'open',true,'data-id="'+o.id+'"')+'</div></article>').join('')+'</div>';
+  }
+  function overviewPage(o) {
+    const s=singleStrategy(o);
+    return heading(o.name,esc(o.bc)+' · '+o.accounts.join('、'),button('编辑优化师','edit')+button(o.active?'暂停优化师':'恢复优化师','toggle-active'))+
+      '<section class="tk-card" style="margin-bottom:16px"><div class="tk-stats" style="margin-bottom:0"><div class="tk-stat"><span class="tk-small">日消耗目标</span><div class="tk-number">'+money(o.dailySpend)+'</div></div><div class="tk-stat"><span class="tk-small">ROAS 目标</span><div class="tk-number">'+o.roas.toFixed(2)+'</div></div><div class="tk-stat"><span class="tk-small">AI 优化方式</span><div style="margin-top:9px">'+pill(o.reviewMode==='manual'?'人工确认':'自动优化',o.reviewMode==='manual'?'wait':'good')+'</div></div></div></section>'+
+      '<div class="tk-grid"><section class="tk-card"><div class="tk-section-head"><h2>当前投放策略</h2>'+pill('TKADA 投放策略')+'</div><h3>'+esc(s.name)+' · v'+s.version+'</h3><p class="tk-sub">1 系列 / '+s.groups+' 组 / 每组 '+s.ads+' 条</p><p class="tk-sub">系列日预算 '+money(s.budget)+' · ROAS 出价 '+s.bid.toFixed(2)+'</p><div class="tk-actions" style="margin-top:16px">'+button('查看 / 编辑投放策略','scheme-strategy',false,'data-scheme-id="'+singleScheme(o).id+'"')+'</div></section><section class="tk-card"><div class="tk-section-head"><h2>自动规则 '+rules(o).length+' 条</h2>'+button('查看当前优化师规则','manage-rules')+'</div><p class="tk-sub">监控 '+esc(o.accounts.join('、'))+' 内符合条件的广告。</p></section></div>'+
+      '<section class="tk-card" style="margin-top:16px"><h2>自动工作安排</h2><div class="tk-flow"><span>提前填写每日剧单</span><span>→</span><span>到点调用广告搭建</span><span>→</span><span>按剧名匹配素材</span><span>→</span><span>既有自动规则管理账户</span><span>→</span><span>复盘与策略更新</span></div><p class="tk-sub">搭建账户使用优化师分配范围；排期时不选择素材。</p></section>';
+  }
+  function configPage() {
+    const d=state.draft,s=singleScheme(d),t=schemeStrategy(s);
+    const basic='<section class="tk-card tk-stack"><h2>目标与范围</h2><div class="tk-form-grid">'+field('优化师名称','name',d.name)+choose('目标优先关系','priority',prefs[d.priority],Object.values(prefs))+field('日消耗目标（USD）','dailySpend',d.dailySpend,'number','min="1"')+field('ROAS 目标','roas',d.roas,'number','min=".01" step=".05"')+'<div class="tk-field"><span>投放 BC</span><p>'+esc(d.bc)+'</p></div><div class="tk-field"><span>分配账户</span><div class="tk-checks">'+['账户 01','账户 02','账户 03'].map(a=>'<label><input type="checkbox" data-account="'+a+'" '+(d.accounts.includes(a)?'checked':'')+'>'+a+'</label>').join('')+'</div></div></div><div class="tk-note">定时搭建和自动规则都使用这里分配的账户。</div><div class="tk-checks"><label><input type="radio" checked>人工剧单排期</label><label><input type="radio" disabled>自动选剧 '+pill('暂未开放')+'</label></div></section>';
+    const binding='<div class="tk-stack"><section class="tk-card"><div class="tk-section-head"><div><h2>投放策略</h2><p class="tk-sub">每个优化师当前绑定一条 TKADA 投放策略。</p></div>'+button('从租户库选择投放策略','open-picker',false,'data-kind="strategy"')+'</div><div class="tk-binding"><span><strong>'+esc(t.name)+'</strong><small>1 系列 / '+t.groups+' 组 / 每组 '+t.ads+' 条 · '+money(t.budget)+' · ROAS '+t.bid.toFixed(2)+'</small></span>'+pill('v'+t.version)+'</div><div class="tk-actions" style="margin-top:14px">'+button('管理当前投放策略','scheme-strategy',false,'data-scheme-id="'+s.id+'"')+'</div></section><section class="tk-card"><div class="tk-section-head"><h2>自动规则 '+d.ruleIds.length+' 条</h2>'+button('从规则库选择','open-picker',false,'data-kind="rule"')+'</div>'+rules(d).map(r=>'<div class="tk-binding"><span><strong>'+esc(r.name)+'</strong><small>'+esc(ruleSummary(r))+'</small></span>'+pill('v'+r.version)+'</div>').join('')+'<div class="tk-actions" style="margin-top:14px">'+button('管理当前绑定规则','manage-rules')+'</div></section></div>';
+    const optimization='<div class="tk-stack"><section class="tk-card"><h2>AI 规则优化方式</h2><div style="margin-top:14px">'+modePicker(d)+'</div><p class="tk-sub">人工确认时，搭建策略和自动规则调整均需逐项采纳。</p></section><section class="tk-card"><h2>工作安排与优化边界</h2><div class="tk-form-grid" style="margin-top:14px">'+field('每天搭建时间','buildAt',d.buildAt,'time')+field('每天复盘时间','reviewAt',d.reviewAt,'time')+field('系列日预算最高可调至（USD）','maxBudget',d.maxBudget,'number','min="1"')+field('单次预算调整上限（%）','maxChange',d.maxChange,'number','min="1" max="100"')+'</div><p class="tk-sub">工作时区 Asia/Shanghai。</p></section></div>';
+    return heading(d.isNew?'创建 AI 优化师':'配置 '+d.name,'目标、账户、单一投放策略和自动规则。',button('返回优化师','cancel-config'))+
+      '<div class="tk-config-steps">'+[['goals','1 目标与账户'],['bindings','2 投放策略与规则'],['optimization','3 优化方式']].map(([key,label])=>'<button type="button" class="tk-button cursor-interaction '+(state.tab===key?'primary':'')+'" data-action="config-tab" data-tab="'+key+'">'+label+'</button>').join('')+'</div>'+
+      (state.tab==='goals'?basic:state.tab==='bindings'?binding:optimization)+
+      '<div class="tk-footer"><span class="tk-small">引用的投放策略和规则仍在 TKADA 原模块维护。</span>'+(state.tab==='optimization'?button(d.isNew?'创建优化师':'保存优化师','save-config',true):button('下一步','next-config',true))+'</div>';
+  }
+  function schemesPage(o) {
+    const s=singleScheme(o),t=schemeStrategy(s),e=state.edit;
+    return heading('投放策略',esc(o.name)+' · 当前优化师绑定的 TKADA 投放策略',returnButton()+button('从租户库选择','open-picker',false,'data-kind="strategy"'))+
+      moduleBanner('投放策略')+moduleScopeBar('strategy',o)+selectionPanel('strategy',o)+
+      '<section class="tk-card"><div class="tk-table-wrap"><table><thead><tr><th>策略名称</th><th>搭建结构</th><th>日预算 / ROAS</th><th>版本</th><th>当前优化师</th><th></th></tr></thead><tbody><tr class="'+(state.highlightId===t.id?'tk-highlight-row':'')+'"><td><strong>'+esc(t.name)+'</strong></td><td>1 / '+t.groups+' / '+t.ads+'</td><td>'+money(t.budget)+' / '+Number(t.bid).toFixed(2)+'</td><td>v'+t.version+'</td><td>'+esc(o.name)+'</td><td>'+button('编辑策略','edit-strategy',false,'data-id="'+t.id+'"')+'</td></tr></tbody></table></div></section>'+
+      (e&&e.kind==='strategy'?'<section class="tk-card tk-stack" style="margin-top:16px"><h2>编辑投放策略 · '+esc(e.name)+'</h2><div class="tk-form-grid">'+field('策略名称','entity:name',e.name)+field('每系列广告组数','entity:groups',e.groups,'number','min="1"')+field('每组广告数','entity:ads',e.ads,'number','min="1"')+field('系列日预算（USD）','entity:budget',e.budget,'number','min="1"')+field('ROAS 出价','entity:bid',e.bid,'number','min="1" step=".05"')+'</div><p class="tk-sub">保存生成新的策略版本；已冻结的搭建任务保留原版本。</p><div class="tk-actions">'+button('保存策略版本','save-entity',true)+button('取消','cancel-entity')+'</div></section>':'');
+  }
+  function selectionPanel(kind,o) {
+    const picker=state.picker;if(!picker||picker.kind!==kind)return '';
+    const items=kind==='strategy'?tenant().strategies:tenant().rules;
+    return '<section class="tk-card tk-selection-panel" aria-label="从租户库选择"><div class="tk-section-head"><div><h2>选择'+(kind==='strategy'?'投放策略':'自动规则')+'</h2><p class="tk-sub">'+esc(tenant().name)+' → '+esc(o.name)+'</p></div>'+pill(kind==='strategy'?'单选':'多选')+'</div><p class="tk-sub">'+(kind==='strategy'?'单选后替换当前优化师绑定的投放策略；租户原记录不变。':'选择后更新当前优化师绑定的规则；规则按分配账户取交集。')+'</p><div class="tk-stack" style="margin-top:12px">'+items.map(item=>'<label class="tk-binding"><input type="'+(kind==='strategy'?'radio':'checkbox')+'" name="tk-library-picker" data-pick="'+esc(item.id)+'" '+(picker.selectedIds.includes(item.id)?'checked':'')+'><span><strong>'+esc(item.name)+'</strong><small>'+(kind==='strategy'?'1 系列 / '+item.groups+' 组 / 每组 '+item.ads+' 条 · '+money(item.budget)+' · ROAS '+Number(item.bid).toFixed(2):esc(ruleSummary(item))+' → '+esc(item.action))+'</small></span>'+pill('v'+item.version)+'</label>').join('')+'</div><div class="tk-actions" style="margin-top:16px">'+button('确认选择','confirm-picker',true)+button('取消','cancel-picker')+'</div></section>';
+  }
+  function createReview(o) {
+    if(o.proposals.length&&!o.proposals.some(p=>p.status==='stale')){flash('本示例窗口已有复盘结果，请处理待确认或等待下一窗口。');return;}
+    const stale=o.proposals.filter(p=>p.status==='stale'),r=rules(o)[0],s=singleStrategy(o);
+    if(!r||!s){flash('请先绑定投放策略和自动规则。',true);return;}
+    const proposals=[{id:'proposal-'+(++seq),kind:'rule',entityId:r.id,name:r.name,field:'cost',before:r.cost,after:Math.max(5,Math.round(r.cost*.8)),baseVersion:r.version,status:'pending',reason:'示例：低回收系列在阈值附近继续消耗，建议调整控损阈值，后续窗口验证。'},{id:'proposal-'+(++seq),kind:'strategy',entityId:s.id,name:s.name,field:'bid',before:s.bid,after:Number((s.bid+.1).toFixed(2)),baseVersion:s.version,status:'pending',reason:'示例：完整日数据支持调整当前投放策略的 ROAS 出价，保持结构不变，下一窗口验证。'}].filter(p=>!stale.length||stale.some(old=>old.entityId===p.entityId));
+    stale.forEach(p=>p.status='superseded');o.proposals.push(...proposals);
+    if(o.reviewMode==='auto'){proposals.forEach(p=>applyProposal(o,p,'auto'));flash('示例复盘：授权内更新当前投放策略或自动规则；越界建议待确认。');}else flash('复盘产生投放策略和规则建议；全部等待人工采纳，当前配置未变。');
+  }
+
   root.addEventListener('input',e=>{
     const el=e.target;
     if(el.dataset.schemeField&&state.schemeEdit){const key=el.dataset.schemeField;state.schemeEdit[key]=el.type==='checkbox'?el.checked:el.type==='number'?Number(el.value):el.value;return;}
@@ -650,7 +696,7 @@
     if(a==='return-module'){const ctx=state.returnContext;state.returnContext=null;state.edit=null;state.view=ctx?ctx.view:'optimizers';if(ctx&&ctx.tab)state.tab=ctx.tab;state.highlightScheme=ctx&&ctx.schemeId||null;state.notice='';}
     if(a==='save-config'){
       const d=state.draft;
-      if(!d.name.trim()||!(d.dailySpend>0)||!(d.roas>0)||!d.accounts.length||!d.schemes.length||d.schemes.some(sc=>!tenant().strategies.some(s=>s.id===sc.strategyId))){flash('请填写名称、有效目标，分配账户并选择搭建策略。',true);render();return;}
+      if(!d.name.trim()||!(d.dailySpend>0)||!(d.roas>0)||!d.accounts.length||d.schemes.length!==1||d.schemes.some(sc=>!tenant().strategies.some(s=>s.id===sc.strategyId))){flash('请填写名称、有效目标，分配账户并选择搭建策略。',true);render();return;}
       if(d.isNew){d.id='opt-'+(++seq);delete d.isNew;tenant().optimizers.push(d);}else{d.version++;tenant().optimizers[tenant().optimizers.findIndex(x=>x.id===d.id)]=d;}
       state.selected=d.id;state.draft=null;state.view='overview';flash('已保存优化师及绑定关系；AI 规则优化方式为“'+(d.reviewMode==='manual'?'人工确认':'自动优化')+'”。');
     }
@@ -689,6 +735,7 @@
   window.addEventListener('openai:set_globals',e=>{if(e.detail&&e.detail.globals&&e.detail.globals.widgetState){restore(e.detail.globals.widgetState);render();}});
   render();
 })();
+
 
 
 </script>

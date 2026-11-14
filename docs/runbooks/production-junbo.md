@@ -1,6 +1,22 @@
+## 2026-11-13 日志同步归档已恢复
+
+应用`d2bce2cf`/schema`0129_ai_proposal_operation`完成11角色精确镜像/Ready及原配置保持，独立DSH保持、共享锁释放、CI恢复原disabled。日志原文和marker复用现有素材R2桶，应用端认证加密后写入`operation-logs/encrypted-v1/`，明细仍写数据库，不再要求独立日志桶或Cloudflare管理权限；通用终态归档私有桶合同保持。74份真实归档/3956明细/1068日覆盖及密文解密摘要/marker核验通过，仍约2.55万历史任务与平台限流，不能称积压清零或全部最新。失效40007及下载40000明确回执均进入有界重建。无DDL/配置变更/新备份恢复或广告写入，详见[实际发布证据](../validation/2026-11-13-operation-log-recovery.md)。以下私有桶阻断均为修复前历史。
+
+## 2026-11-13 操作日志失效恢复已发布，私有归档待配置
+
+应用`c01b811637b78c1149b53a834814359886040c80`/schema`0129_ai_proposal_operation`已发布；11角色精确镜像/Ready及配置保持核对，独立DSH保持，锁释放、CI恢复。旧导出40007已进入有界重建；真实新导出CHECK成功并进入DOWNLOAD，但`SYNC_ARCHIVE_BUCKET`为空导致归档不可用。现有R2凭据列桶/建桶AccessDenied，需管理员补独立私有桶及应用读写权限；没有使用公开素材桶。仍约2.43万操作日志待处理/0归档，不能称故障已完全解决。无DDL、新备份/恢复演练或广告写入，详见[实际发布与依赖阻断](../validation/2026-11-13-operation-log-recovery.md)。以下当前均为历史记录。
+
+## 2026-11-13 AI投手与DSH官方WebUI已上线
+
+当前TK-ADA应用 `00f7d1cd0986065cb880d469111f41b454542646` / schema `0129_ai_proposal_operation`，独立DSH镜像 `3ca20a3f6017730fc8a6d04301137abc51ece91e`。十一应用角色与DSH Ready/0重启，实际配置/数据库池/四开关与HTTPS通过；仅平台管理员访问官方WebUI，实际资源、WebSocket、持久默认工作区、模型设置页面通过。默认模型保留com/claude-opus-5-5，凭据0600；无广告或素材业务写入、无新备份或恢复演练。详见[发布与验证](../validation/2026-11-13-ai-shooter-webui-release.md)。后续文档提交不改变运行镜像，以下“当前”均为历史。
+
 ## 2026-11-12 筛查规划阻断修复已上线，及时性继续观察
 
 当前应用 `f10dff9706c1dcf91e9d1cc55c33afb964ac172d` / schema `0118_sync_schedule_service_age`。修复筛查轻量计划缺少报表 `kind` 导致的 `screen_hot` 异常；滞后计划已恢复并完成 hot/material/live 规划。11角色、九Worker、唯一Beat、精确镜像/配置/额度/并发/四开关/数据库池及HTTPS通过，发布锁释放、CI恢复。阶段端点修复与本次兼容修复都不含DDL；旧素材三表/分区/六函数仍已物理删除，旧creative_ids关系仍保留，身份保全未完成。全局历史 stale 计数受切换窗口和身份缺口影响，尚未以此宣称20分钟SLO全部达标。详见[生产证据和剩余问题](../validation/2026-11-11-material-physical-retirement.md)。
+
+## 2026-11-13 AI 工作台平台管理员灰度与 DSH 已上线
+
+当前应用及独立DSH镜像均为 `a1a78e91ba045194c854a0df49080461abf027fa`，schema `0128_material_production_origin`。原十一角色、九Worker、唯一Beat、精确镜像摘要、有效配置/四开关/数据库池及HTTPS验收通过。工作台仅平台管理员可用，普通用户优化师/知识API403。DSH使用独立20Gi持久化工作区与模型Secret，Ready且0重启，实际Pod内 `com / claude-opus-5-5` 模型连接检查成功；两份公共知识预置包已导入。未进行真实经营复盘、广告创建或素材订单；无新全库备份或恢复演练。详见[生产发布记录](../validation/2026-11-13-ai-workbench-production.md)。以下“当前”均为历史。
 
 ## 2026-11-11 旧素材三表已物理删除，及时性仍在修复
 

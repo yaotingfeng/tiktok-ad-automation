@@ -1,3 +1,5 @@
+# ruff: noqa: I001
+
 import uuid
 from datetime import UTC, datetime
 from typing import Any
@@ -156,6 +158,10 @@ from app.modules.ad_management import (  # noqa: E402
 )
 from app.modules.ad_management import models as ad_management_models  # noqa: E402, F401
 from app.modules.ads import creative_models as ad_creative_models  # noqa: E402, F401
+from app.modules.ai_workbench import models as ai_workbench_models  # noqa: E402, F401
+from app.modules.ai_workbench import plans as ai_workbench_plan_models  # noqa: E402, F401, I001
+from app.modules.ai_workbench import proposals as ai_workbench_proposal_models  # noqa: E402, F401, I001
+from app.modules.ai_workbench import reviews as ai_workbench_review_models  # noqa: E402, F401, I001
 from app.modules.builds import (  # noqa: E402
     carousel_music_models,  # noqa: E402,F401
     image_composition_models,  # noqa: E402, F401
@@ -187,3 +193,7 @@ from app.modules.reporting.read_models import (  # noqa: E402
     models as reporting_read_models,  # noqa: E402, F401
 )
 from app.modules.sync_control import models as sync_control_models  # noqa: E402, F401
+
+from app.modules.ai_workbench.order_models import MaterialOrder  # noqa: F401, E402
+
+from app.modules.ai_workbench import knowledge as ai_knowledge_models  # noqa: E402,F401

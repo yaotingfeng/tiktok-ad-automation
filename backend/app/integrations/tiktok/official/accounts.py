@@ -70,6 +70,10 @@ def _strict_sdk_envelope(
         ):
             raise DomainError("tiktok_response_error", "TikTok 返回不支持的数据结构")
         if raw["code"] == 40100:
+            # 日志异步导出也复用既有共享探测轮；不因未知频率拒绝固定停满五分钟。
+            adaptive_read = bool(
+                operation and operation.startswith(("reports.", "changelog."))
+            )
             # 明确的配额类别保留平台要求；未知类别不冒充 QPM。
             message = str(raw.get("message") or "").lower()
             getheaders = getattr(response, "getheaders", None)
@@ -92,19 +96,32 @@ def _strict_sdk_envelope(
             elif retry_after is not None:
                 delay, reason = retry_after, "retry_after"
             else:
-                # 报表未知类型交共享探测轮退避；不能先写五分钟冷却再让任务五秒重试。
-                # 非报表继续保守等待，不把未知类型冒充平台QPS。
-                delay = (
-                    5_000 if operation and operation.startswith("reports.") else 300_000
-                )
+                # 未知类型交共享探测轮退避；连续拒绝仍逐级增长到五分钟。
+                # 其它读取继续保守等待，不把未知类型冒充平台QPS。
+                delay = 5_000 if adaptive_read else 300_000
                 reason = "40100"
             raise AccountAdmissionDeferred(
                 max(delay, retry_after or 0),
                 source="provider",
                 reason=reason,
-                shared_throttle_probe=bool(
-                    reason == "40100" and operation and operation.startswith("reports.")
-                ),
+                shared_throttle_probe=bool(reason == "40100" and adaptive_read),
+            )
+        if (
+            operation in {"changelog.check", "changelog.download"}
+            and raw["code"] == 40007
+            and str(raw.get("message") or "").strip().lower() == "resource not exist."
+        ) or (
+            operation == "changelog.download"
+            and raw["code"] == 40000
+            and str(raw.get("message") or "").strip().lower()
+            == "service error: object not exist."
+        ):
+            # 已核实的平台失效导出/下载文件回执：按原窗口重建，不能反复读取失效文件。
+            # 只识别日志读取的明确回执，不把其它接口/权限错误当作可重建导出。
+            raise DomainError(
+                "operation_log_task_unavailable",
+                "平台日志导出已不可用，请重建导出",
+                retryable=True,
             )
         if (
             operation == "scene.get_identity_video"

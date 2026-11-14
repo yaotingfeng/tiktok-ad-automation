@@ -1,3 +1,52 @@
+## 2026-11-13：日志加密归档与失效下载恢复已生产发布
+
+最终应用`d2bce2cf`，11角色精确摘要/Ready、原配置与独立DSH保持、共享锁释放及CI恢复原disabled。真实归档0→74，日志明细3956、日覆盖1068；全部导出状态COMPLETE，真实R2密文/认证解密/摘要/marker核对通过。SDK下载40000精确失效回执线上已归类为可重建，86项相关测试与继承时限4项通过；本机DSH运行包不完整测试失败不计为验收，该独立镜像未改。仍25495条日志任务待处理/4546条CHECK普通错误，平台限流与历史恢复继续，不称全部最新或清零。无DDL/配置/新备份恢复/广告写入，见[最终证据](validation/2026-11-13-operation-log-recovery.md)。
+
+## 2026-11-13：加密日志归档已生产恢复，补齐下载文件失效分类
+
+`ab1f28f8`已生产发布11角色，精确镜像/配置/DSH保持、锁释放、CI恢复原disabled，无DDL/备份恢复。真实归档0→20，事件51、日覆盖132，实际R2认证解密/摘要/marker与任务COMPLETE验证通过；原归档失败样本按既有需求重新提交，保留失败审计。仍约2.53万日志待处理/平台40100，不能称清零或全部数据最新。另核实下载40000原文`Service Error: Object Not Exist.`，补精确失效分类复用有界重建，相关回归后快速再发布。详见[实际证据](validation/2026-11-13-operation-log-recovery.md)。
+
+## 2026-11-13：日志归档复用生产素材桶并认证加密（待发布）
+
+用户明确要求直接复用现有R2配置并继续修复/发布。日志原文与marker改为AES-256-GCM认证加密后写入素材桶独立`operation-logs/encrypted-v1/`目录，HKDF从现有持久主密钥派生独立用途密钥，绑定桶/租户/运行路径，解密回读通过后才发布事件与覆盖。无需Cloudflare登录、建桶、扩权或配置变化；通用终态归档仍要求独立私有桶。独立PG18/Redis7相关85项、Ruff与语法通过，无DDL、新依赖或广告写入。后续生产归档/入库/积压回读见[专项记录](validation/2026-11-13-operation-log-recovery.md)。
+
+## 2026-11-13：操作日志首轮修复已发布，发现私有归档依赖缺失
+
+`c01b811637b78c1149b53a834814359886040c80`已推送两远端并生产发布；11角色精确镜像/Ready、配置保持、共享锁释放与CI恢复通过，108项针对性测试通过。修复40007失效导出重新创建及未知40100共享退避。实际后台prefork32，通用Ultimate物理接口50QPS是上限；短窗口实际峰值8在途/每秒8创建，仍有平台40100，不能称跑满或无积压。
+
+真实3条新导出样本按原共享调度优先回读，已证明CHECK成功→DOWNLOAD，随后因生产`SYNC_ARCHIVE_BUCKET`为空报`operation_log_archive_unavailable`。现有R2凭据列桶与建私有桶均AccessDenied，无法独立补齐；未写公开素材桶或改权限。样本服务年龄已恢复；待管理员提供同一R2独立私有桶和应用读写权限，再配置重载、核对真实归档/覆盖及积压。19:01仍约2.43万日志任务/5309普通错误/0归档，不能宣称问题已全部解决。无DDL、新备份/恢复演练或广告写入；详见[排查与发布记录](validation/2026-11-13-operation-log-recovery.md)。
+
+## 2026-11-13：明确公共经验、扩量分析与受控自动发布范围
+
+用户进一步指定：通用投放知识/经验可作为平台公共层跨租户复用，私有数据和案例仍按归属限制；跟投复盘仅限本地，不迁入工作台；放量/扩量本期纳入分析与建议，即使复制等执行能力尚未提供。已同步[专项计划](superpowers/plans/2026-11-13-ai-review-methods-and-learning.md)和设计第7.1节，补充公共经验提炼/共享审核、跨租户公共版本复用验收，以及已有 AUTO/MANUAL 领域发布的准确边界。
+
+投放知识和经验接入在阶段3，历次复盘/建议决定/真实执行/效果反馈在阶段4；两者尚待实施。已核对现有代码：DSH提交结构化提案后，TK-ADA按模式、授权、版本和Schema发布策略/规则新版本，Agent不直写数据库或TikTok；策略版本仅影响后续搭建，无执行能力的放量动作只保留建议。此次只更正文档，不修改业务代码或执行外部操作。
+
+## 2026-11-13：确认统一复盘 Skill 与经验闭环方案（待实施）
+
+用户确认一个主复盘 Skill、按需专项方法、共用确定性数据计算层及租户隔离经验库。已核对整体、控损、测新、放量、跟投五个旧 Skill 与脚本方法，将固定数据包、方法/知识正文和版本、建议效果反馈、能力合同与完整验收拆为[五阶段专项计划](superpowers/plans/2026-11-13-ai-review-methods-and-learning.md)，并同步[设计](superpowers/specs/2026-11-11-ai-ad-workbench-v2-design.md)第7.1节。
+
+更正旧“补完交付”范围：原分支具备运行协议、页面、已有快照及通用提示词；尚未完成工作台专用 Skill/知识正文装配、主动完整复盘数据包和历史建议反馈。本轮只记录已确认设计和实施标准，未修改业务代码、原本机 Skill、数据库、运行配置或部署，不将文档检查视为行为测试。单策略、无自动选剧/复制放量/跨 BC 执行/多方案/A/B 范围保持。
+
+## 2026-11-12：AI 投放工作台 v1 补完交付（分支完成，未部署）
+
+代码提交 `e33764c3`，位于既有 `codex/ai-ad-workbench-v1` 工作树。七项计划的实现与本地验收已补齐，具体交付见[验收记录](validation/2026-11-12-ai-workbench-v1.md)，配置和接入见[运行手册](runbooks/ai-ad-workbench.md)。正式界面复用登录客户端，具备优化师创建/编辑/暂停/恢复、单策略及规则绑定、当地时区剧单、完整提案证据和人工决定；稳定行与异步准备/恢复、到期/截止和未知去重均已验证。
+
+新增素材订单持久化、租户公司 Key 幂等提交及原 job 查询；DSH 原生插件通过机器领取、短期任务令牌、心跳、取消/重启 fence 和结构化结果接入。自动发布有字段和数值边界，越界保留待确认，具体人工采纳不会扩大长期自动授权。修正不存在报表模型引用及 AI 模型/迁移的 JSONB、索引和外键差异。迁移 head `0126_ai_plan_retry_fairness`，包含 `0124` 时区、`0125` 订单与 `0126` 重试公平性三份新增迁移。
+
+独立 `gpt-6-astra/high` 复审提出等待/受阻行挤占扫描、暂停订单仍调度、经营证据未到账户范围三项 P2，均新增真实 PostgreSQL 红绿回归并修复；定向复审全部 ADDRESSED。最终后端 **422 passed**（含自动规则全模块、AI 全模块/接受测试、搭建交接及真实并发锁），前端 **22 passed**，DSH 适配 **2 passed**，TypeScript/正式与体验版 Vite/Ruff/编译/差异检查通过；`0126→0123→0126` 与 AI 表模型比对通过。真实浏览器连接本地 API/数据库完成创建、暂停/恢复、剧单保存和刷新回读。
+
+验证使用独立本机 PostgreSQL 和隔离种子，未清理原 Docker 数据；原 Docker PG 因磁盘耗尽处于恢复状态。无 Bun 时使用现有 Node 工具，未冒报 Bun。整体 schema 比对仅余旧素材列/约束的原分支差异，未混入独立退役任务。本轮没有真实公司订单、版权方/TikTok 写入、真实模型调用、推送或部署；主工作区存在其他未提交修改且分支已分叉，保留主工作区，未自动合并。自动选剧、复制放量、多方案及 A/B 仍明确在 v1 范围外。
+## 2026-11-12：修复批量复制广告组建议受众字段阻断
+
+定位到 TikTok 广告组目录回读已包含 `suggestion_audience_enabled`，但本地 `AdGroupObservedFacts` 合同遗漏该可选字段；严格 `extra="forbid"` 将其误判为不可继承，导致批量复制在来源预览阶段阻断。已将字段加入观察/创建合同，复制编译和发送载荷会保留原值。`backend/tests/modules/builds/test_campaign_copy_compile.py` 新增回归覆盖；17 项复制合同测试、无网络的 MCP 载荷保留检查及 Python 编译检查通过。尚未部署或调用生产广告接口。
+
+## 2026-11-12：收敛为单投放策略并完成 v1 实施计划
+
+按用户最新反馈，AI 优化师 v1 收敛为每位优化师绑定一条投放策略；移除多搭建方案、轮次编排和 A/B/对照设计。自动复制放量仍留作后续。第三版原型已回退到单策略交互，同时保留已确认的独立一级入口（位于“打开体验版”正上方）、第二列 AI 侧栏、Excel 式剧单排期、执行时素材匹配、自动优化/人工确认及策略/规则上下文入口。
+
+新增[实施计划](superpowers/plans/2026-11-12-ai-ad-workbench-v1.md)：按优化师领域模型、每日剧单、定时搭建交接、账户级自动规则、DSH 复盘提案、TKADA 前端工作台、证据保留与验收七个任务实施。当前只更新设计、原型和计划，未修改产品代码、数据库或部署；计划待用户审阅后再选择执行方式。
+
 ## 2026-11-12：第三版双侧栏、多搭建方案与配置上下文原型通过检查
 
 更新[交互原型](superpowers/prototypes/ai-optimizer-workbench.html)：最左保留 TK-ADA 菜单，独立 AI 投放工作台入口位于“打开体验版”正上方；进入后第二列为优化师工作菜单，移除工作台内容页签。每优化师支持多套搭建方案，分别引用现有投放策略，设置版权方、轮次、相对延后时间；规则仍为独立绑定。AI 内策略/规则默认当前优化师已用，租户全部显式切换，选择器明确绑定，具体方案进入时定位实际策略并可返回原方案。新增策略/规则时明确保存并绑定或添加方案，切换优化师会清除旧草稿、选择器及返回上下文。
@@ -5122,6 +5171,82 @@ c34b生产快速切换约3分28秒完成、锁释放/CI恢复；五分钟仍4.88
 - 72项真实PG/Redis相关回归与Ruff/格式检查通过，独立审查Ready；集成工作树另外2项关键行为回归通过。
 - 计划按现行无DDL快速镜像切换发布，保留11角色全部配置/资源/退出宽限、50QPS和四开关；不新建备份、恢复演练或全量停服排空。真实时效尚待验，具体边界见物理退休验证记录。
 
+## 2026-11-13 AI review methods/knowledge/learning
+
+- Implemented active local review data pack: account-local complete days, maturity, currency, missing/zero distinction, bounded dimensions and frozen input budget; no prior query snapshot or provider call required.
+- Added versioned workbench main Skill and builds/rules/materials/business/scale references. Frozen task stores body/hash/version and capability status; transfer review remains local-only.
+- Added versioned PUBLIC/TENANT/BC knowledge with scope checks, expiry/conflict metadata, body hashing, bounded retrieval, explicit platform-admin sanitized public promotion, task freezing and confirmation API for private experience candidates.
+- Added history feedback assembly for proposals and reviews, execution/readback/observation maturity states, deterministic observational comparisons, candidate experience contract, and AUTO/MANUAL-safe capability prevalidation.
+- DSH completion tool now accepts bounded recommendations and evidence-backed experience candidates while retaining a single structured tool and no shell/platform mutation.
+- Verification: focused AI workbench tests 25 passed; Node runtime syntax check passed; ruff checks passed. Full AI suite has unrelated date-sensitive completion expectations when run on 2026-11-13; no build-handoff behavior was changed.
+
+
+## 2026-11-13 DSH / 插件 / TK-ADA 方法边界调整
+
+- 用户确认后，将主 Skill 和五个专项的唯一源移至 DSH 插件；业务任务创建只冻结业务证据，首次领取校验并绑定方法清单，重试不改变旧正文。为方法归档预留容量，绑定时不再截断业务事实。
+- 插件在每任务 scope 使用 DSH `0.2.2-rc.1` 原生 SkillRegistry，受限 `skill` 工具按需加载；初始上下文仅展示目录，完成必须先加载主方法，并归档实际 `method_usage`。禁止访问宿主个人方法；未修改 DSH 核心。
+- 修复独立 review 的三项问题：允许引用冻结历史/按账户筛选的经营来源；经验适用条件与人工验证分开保存避免合法文本超长；同一候选确认采用 PostgreSQL 事务锁防止并发重复建资产。
+- 修正知识库 UI 的冻结状态表述与租户 effect 依赖。为两个使用固定历史日期的准备/暂停用例冻结执行时钟，不改变搭建到期行为。
+- 已创建并回读开发复用指南：[从业务工具到 AI 工作台](https://gz-junbo.feishu.cn/docx/BWDudD226o6A5cxEjvscVVOZnSh)，包含边界、旧 Skill 提炼、开发阶段、数据资格、经验闭环、验收和可复制 Skill 指令模板。
+- 验证：AI workbench PostgreSQL 回归 92 passed（含方法版本绑定/重试、历史证据引用、最大长度及真实跨连接并发确认）；Playwright 工作台 22 passed；DSH 插件 4 passed（含宿主原生 SkillRegistry、两任务 scope 隔离和实际按需加载）；TypeScript、Vite 正式构建、Ruff、Skill 格式检查及差异检查通过。
+- 前后端各有使用固定历史日期的回归例受真实日历推进影响，本轮只固定测试时钟以核验目标分支，不改变生产搭建到期行为。数据库元数据检查仍有既有 rule/run 双向外键的排序提示，检查结果通过。
+- 未部署、未执行真实广告写入或真实模型效果验收。API 与插件 1.1.0 需配套更新；发布前取消旧格式待处理复盘并重新发起，已完成历史保留。
+
+
+## 2026-11-13 主动知识搜索与读取
+
+- 插件 1.2.0 增加 `tkada_search_knowledge` / `tkada_read_knowledge`，复用同一短任务令牌，业务知识仍在 TK-ADA，DSH 仅运行工具和 Skill。
+- 任务初始只带少量非完整知识目录；搜索可找到目录之外的政策/经验，分页关键词匹配；正文按需加载、按版本/哈希持久归档，既有冻结证据引用校验支持引用这些条目。
+- 版本选择固定在任务 captured_at，过滤租户/BC/候选/退休；每次核验当前权限、配置与账户，完成/取消后拒绝访问。知识读取总量与 JSON 字节预算明确约束；无需迁移、向量数据库或对话功能。
+- 验证：AI workbench 真实 PostgreSQL 回归 96 passed；DSH 插件 5 passed（含原生 SkillRegistry、任务知识工具与取消阻断）；Ruff、Python 编译、Node 语法及 Skill 格式检查通过。覆盖目录外知识发现、正文冻结/引用、截止后版本、分页/通配符转义、租户/BC/任务隔离、退休/过期及正文预算。既有 rule/run 双向外键排序提示仍在，元数据检查通过。
+- 未加载真实赔付/补贴政策全集，未部署、未执行真实模型质量或广告写入验收。
+
+## 2026-11-13 新剧补贴知识预置包
+
+- 根据用户确认“Q3 与 Q4 沿用同一套新剧补贴口径”，提炼公共知识包 `docs/knowledge-packs-new-drama-subsidy-q3-q4.json`。
+- 内容已在本轮审查更正为按剧目季度业绩分档的新剧补贴；GroupID 纯新开客户激励属于不同政策，不随新剧补贴确认延长至 Q4。潜在测算、平台确认和实际到账分开。
+- 原始来源为 Q3 政策整理与截图；Q4 同口径标记为 2026-11-13 用户业务确认，`source_verified=false`，有效期至 2026-12-31，正式结算仍需复核平台通知。
+- 新增 `scripts/import-ai-knowledge-pack.py`，必须显式提供 TK-ADA API、租户 ID 和平台管理员令牌后导入 PUBLIC 知识；本轮未写入未知环境数据库。
+- 验证：知识包 Pydantic 合同测试通过，JSON/脚本语法通过。
+
+## 2026-11-13 变现链路与模式知识包
+
+- 新增公共知识包 `docs/knowledge-packs-monetization-models.json`，覆盖 APP、TikTok Minis IAP/IAA、端原生 IAA、平台收入/结算/返点/赔付/激励分层和复盘识别框架。
+- 资料混合官方手册、会议摘要和行业整理，明确 `source_verified=false`、来源、保存日期和到期时间；行业数据不当作租户事实，历史价格/地区/回本周期不作为默认配置。
+- 验证 IAP/IAA/端原生、平台 ROAS/经营收入/实际到账拆分及公共知识合同；未写入未知运行环境数据库。
+
+## 2026-11-13 AI 工作台全分支上线审查
+
+- 修复原生 DSH ToolsService 限制 API、AUTO 默认值授权绕过、外层规则字段授权、冻结规则基线覆盖，以及共享规则确认过期/详情范围隔离；新增真实 PG 与原生 DSH 回归。
+- 修正新剧补贴误用 GroupID 新客户激励；知识导入改用凭据文件、拒绝重定向和幂等/显式版本更新，同步根目录预置包和脚本。
+- 已验证：后端相关回归 452 passed；追加确认范围回归所在文件 11 passed；DSH 6 passed；Playwright 22 passed；TypeScript/Vite/Ruff 通过。未真实模型联调、未写广告、未部署。
+- 完整闭环尚缺真实状态回读入证据、成熟 D3/D7 窗口、策略/素材归因映射、历史规则回测事实和素材订单复盘细节。部署配置/知识导入/真实模型只读验收待完成，不能将协议通过宣称完整自动投放生产就绪。详见 [上线审查记录](validation/2026-11-13-ai-workbench-release-review.md)。
+
+## 2026-11-13 AI 复盘事实补齐交付
+
+- 用户明确要求将事实缺口补齐；已接通规则 ACCEPTED 后真实只读回读、逐项实际值/时间/差异冻结及下一轮反馈，目录刷新不得覆盖已观察终态。
+- D0/D3/D7 分别使用成熟完整日窗口和成熟后观测资格，复用已有 32 日回刷，不用总收入代替成熟回收。
+- 规则执行保存命中与未命中的原始指标/层级/账户/窗口/摘要；新增任务级 `tkada_backtest_rule`，确定性重放历史候选条件、归档可引用结果；无历史事实、缺数、截断或越界均明确降级，不推定真实节省/因果。
+- 按成功 Campaign 真实身份关联策略版本及报表；新增已签名生产来源接收合同，按真实订单 payload/job/策略、入库文件、验证视频关联素材报表，冲突不归属。订单状态/排期/失败进入复盘，敏感链接和回写凭据不进入模型。修复优化师规则范围解析的错误模型导入。
+- API/Worker/Beat 与插件 1.3.0 配套；新增迁移 `0128_material_production_origin`。外部制作方仍需携带 order_id/job_id/strategy_id 回传，旧事实不可补造，未知外部系统未改动，真实模型/平台写入/部署未执行。
+- 独立复审发现真实订单 payload 层级错误，已集中 `production_payload()` 修复，改用真实 create_order 及已签名入口回归；复审确认无其他明确阻塞。
+- 最终新建隔离 PostgreSQL 与独立 Redis：**732 passed, 1 deselected, 77 warnings**；DSH 原生插件 **7 passed**；Ruff/本轮格式/Node 语法/差异检查通过。一个未修改的广告管理大批次 SQL 门槛（26 vs ≤25）在修改前 b2f1cbad 后端归档也复现，单独记录并排除，不报告通过。此前污染测试库残留干扰调度及测试 Redis MISCONF 不算产品通过证据，最终改用干净隔离环境重验。
+- 详见 [专项实施计划](superpowers/plans/2026-11-13-ai-review-evidence-completion.md)、[专项验收](validation/2026-11-13-ai-review-evidence-completion.md) 和 [接入说明](runbooks/ai-ad-workbench.md)。本节与本轮功能为同一聚焦本地提交；未合并、推送或上线。
+
+## 2026-11-13 AI 工作台平台管理员灰度
+
+- 按用户要求，仅 is_superuser 可见 AI 入口；直接地址在组件边界阻断，不发工作台数据请求；全部租户工作台 API/知识接口使用平台管理员依赖，普通成员和租户管理员均返回403。
+- 现有成功HTTP用例显式使用平台管理员，保留普通身份拒绝覆盖。真实PG相关153项、Playwright24项、TypeScript/Vite及Ruff通过。
+- 用户已授权合并、推送和生产发布，包含独立DSH部署。尚在核对实际生产连通和准备DSH镜像/配置，不能将本地通过视为已发布。
+
+### 2026-11-13 AI 工作台管理员灰度及独立 DSH 已发布
+
+- `codex/ai-ad-workbench-v1` 已快进并入 main，应用与 DSH 生产镜像均为 `a1a78e91ba045194c854a0df49080461abf027fa`；GitHub/company main 已推送。主目录原三个未提交搭建改动逐字节保留，未混入发布。
+- 生产 ACK/test 执行已审查的一次性迁移 `0118→0128_material_production_origin`，正常停止受理、排空和切换；十一角色/九Worker/唯一Beat、精确镜像摘要、有效配置/四开关/数据库池/HTTPS验收通过。没有新全备或恢复演练，未改原资源/并发/额度/反亲和；仅正常重排本次新启动Worker解决资源碎片。
+- 实际 HTTPS 工作台/知识接口：平台管理员200、既有普通用户403。独立 DSH 0.2.2-rc.1 + 插件1.3.0 + Node24.22.2 已部署，20Gi持久化工作区，Ready且0重启；只开放集群健康Service，领取连接成功。模型复用 `com / claude-opus-5-5`，凭据独立Secret注入，实际Pod内模型连接返回200与预期内容。
+- AMD64只读容器原生8项测试通过。Docker tmpfs必须exec以供DSH加载随包原生库，生产磁盘emptyDir正常；未解除只读根文件系统。模型/服务凭据和个人会话不进镜像或Git。
+- 两个已审查公共知识预置包（新剧补贴Q3/Q4、短剧变现链路）通过正式API导入PUBLIC v1。未创建优化师或执行真实广告/素材订单，未把连接检查冒充经营复盘；外部生产方尚未配套的来源回传和旧历史缺失仍明确降级。
+- 具体版本、摘要、上线检查及操作边界见 [生产发布记录](validation/2026-11-13-ai-workbench-production.md)；容器配置与后续插件发布方法见 [运行手册](runbooks/ai-ad-workbench.md)。
 ## 2026-11-12 筛查规划阻断修复已发布
 
 - 线上7f版本中发现筛查回放的轻量计划缺少报表`kind`，`screen_hot`进入`AttributeError`并按5分钟退避；修复由`_report_plan_kind`为缺失字段明确选择integrated报表入口。新增回归与阶段端点专项通过，旧4,859账户压力用例因本地PG `max_locks_per_transaction` 不足失败，未归因于本次代码。
@@ -5144,3 +5269,107 @@ c34b生产快速切换约3分28秒完成、锁释放/CI恢复；五分钟仍4.88
 - Standards 与 Spec R1 均 PASS，零 P0–P3；产品代码仍为已审 ce025a76，后续仅补测试与证据。
   ty 基线 tuple 错误仍存在；未推送、部署或生产验证，M2 不在本次实现范围。
 - 详细命令、范围、失败、模型假设及下一步：[JB-3 验证记录](validation/2026-11-12-jb3-business-export.md)。
+
+### 2026-11-13 工作台术语统一为 AI 投手
+
+- 按用户要求将导航、页面标题、创建/编辑/选择/暂停/恢复、策略/规则上下文和后端相关错误提示中的“优化师”统一为“投手”；同步现有前端用例的文案和选择器。内部ID、接口、模型及授权行为保持原合同。
+- 验证：14个源码/用例文件逐一确认仅为精确中文术语替换，Python AST语法和差异检查通过。当前本机前端依赖已不在，TypeScript/Vite命令未能启动，不报告构建或浏览器回归通过。本轮未推送/发布。
+- 用户询问发布授权复杂性：现有细项用于自动发布的对象、字段及绝对变化量边界，人工具体采纳另行确认。建议将人工模式与自动模式的配置区分，自动授权按策略/规则归组并折叠高级字段；尚未改动授权语义。
+
+### 2026-11-13 AI 投手能力边界优化
+
+- 投手编辑页移除“AI 发布授权”细项、单次调整上限、素材策略 ID 和飞书表格 token；人工/自动仅由优化模式控制，素材下单改为平台内置 CL6 v4、CL8 v5、GM-精剪 v4 按当前租户目录解析。
+- 复盘提案增加 `operation=create|update`，结构化 DSH 完成工具要求显式操作类型；服务端保留租户账户范围、领域 Schema、版本和审计校验，并支持在当前投手范围内创建策略/规则。
+- 新增迁移 `0129_ai_proposal_operation`。`.venv` compileall、前端 TypeScript/Vite production build、`git diff --check` 通过；尚未执行真实广告或素材订单。
+
+### 2026-11-13 DSH WebUI 管理员入口实现（未部署）
+
+- 已核对本机与配套包：`@deepseek-ai/dsh` / `@deepseek-ai/dsh-web-app` 均为 `0.2.2-rc.1`；`headless` 不提供 HTTP/WebUI，改为官方 `web` profile。原生 WebUI 回环 `127.0.0.1:9082`，管理员代理 `9081`，健康端口 `9080`；Service 只暴露 9080/9081，Ingress 仅准备 `/dsh` → 9081。
+- 新增 TK-ADA `/api/admin/dsh/session`、`/authorize` 及 `/entry`：平台管理员短会话、每次数据库回查 active/superuser，Cookie 限定 `/dsh/`；代理覆盖 HTTP/WebSocket、同源检查、撤权回查，并剥离原生 Cookie/令牌。
+- DSH profile 改用官方 WebUI 和 Models 设置面；启动脚本保留管理员写入的 provider/model 配置，避免重启覆盖 `cordis.patch.yml`。Ingress 补丁脚本默认只读输出并做 resourceVersion test，未执行 apply。
+- 验证：DSH 原生部署测试 **4 passed**（含真实 `0.2.2-rc.1` 启动/领取、官方包名和 9082→9081 端口边界）；Python AST/Node syntax/`git diff --check` 通过；只读 Ingress 生成成功，资源版本 `109629158`。管理员 API 测试因隔离 PostgreSQL 容器持续 `the database system is in recovery mode` 未能执行，不将权限回归宣称通过。
+- 阻塞：尚未构建 AMD64 镜像、应用 Service/Ingress 或线上验证；必须在目标环境重新构建并确认 DSH WebUI 静态包、模型 Secret、`/dsh/` 管理员200/普通用户403、WebSocket和模型设置持久化后，才能交付为可部署。
+
+### 2026-11-13 修正 AI 投手绑定配置入口
+
+- 确认原策略入口只是只读上下文，仍查询租户全部策略；改为读取当前投手实际绑定版本，再获取该版本对应策略，只展示这一项及精确版本查看入口。跳转不再沿用可能过期的 `version_id`。
+- 规则入口以投手接口返回的当前绑定为准，忽略 URL 的 `rule_ids`；读取失败和空绑定均不回退到全量规则。隐藏绑定入口下租户全量统计、待确认/执行记录标签，避免混淆绑定与租户范围。
+- 验证：新增三个 Playwright 浏览器回归通过（实际绑定策略、实际绑定规则、空绑定），TypeScript/Vite production build 通过。仅本地完成，未发布生产。
+
+### 2026-11-13 全部本地修改生产发布准备
+
+- 用户明确授权全部源代码修改提交、推送并发布；包含原三个搭建恢复/状态汇总修改。TypeScript 增量缓存和自动生成的 Vite 配置加入忽略，不将编译缓存作为源码发布。
+- 发布前修复：历史细粒度授权不再参与 AUTO 判断；创建提案先校验完整 Schema，新规则要求显式账户；补齐新规则发布服务引用及 operation 数据库约束；素材默认策略写入真实 `selectedStrategyIds`，冻结后重试不变，缺少任一内置方案则明确报错。
+- 真实 PostgreSQL 隔离库：管理员 API + AI 全模块 156 项通过（含新增手动/自动创建策略规则及范围验证）；素材/搭建目录查询专项19项通过。旧执行 dispatch 五项在创建预览的共同fixture阶段因身份目录不可用而未进入测试主体，未将其报告为通过。未真实调用广告写入或素材下单。
+
+- 2026-11-13 发布收尾：工作台端到端15项通过，覆盖账户/规则弹窗选择、单一优化模式请求合同及绑定策略/规则定向跳转；生产迁移方案见 `docs/validation/2026-11-13-ai-shooter-webui-release.md`。
+
+- 2026-11-13 生产发布预检发现独立DSH资源共享项目前缀被误判归属冲突，修复为精确识别本命名空间的DSH Deployment/Service/PVC和专属SHA镜像，不计入十一角色；25项部署合同测试通过（含跨命名空间、外部归属及错误镜像拒绝）。预检失败时未停服、未迁移；保留同一发布锁接续。
+
+- 2026-11-13 DSH WebUI公网检查发现Linux容器无系统Documents导致默认工作区失败；显式指定workspace-controller.documentsDirectory为持久化工作目录。原生测试实际调用initializeDefault，确认创建落在持久卷目录且无模型调用，5项通过。本修复仅更新独立DSH镜像，不重启已验收的TK-ADA十一角色。
+
+- 2026-11-13 DSH真实重启检查发现Kubernetes fsGroup将既有.credentials.yaml改为0660，官方凭据插件按owner-only拒绝启动；启动前仅将本宿主凭据文件收紧至0600（内容保持），DSH卷改用OnRootMismatch。回归覆盖权限和内容保全，实际默认工作区初始化及WebUI连接。TK-ADA十一角色不受此独立服务问题影响。
+
+- 2026-11-13 AI投手与DSH WebUI已生产发布：应用00f7d1cd/schema0129，DSH3ca20a3f；11角色+DSH Ready/0重启、配置/四开关/池/HTTPS、管理员访问与普通用户拒绝、WebSocket101、持久工作区与模型页实测通过。精确证据见 `docs/validation/2026-11-13-ai-shooter-webui-release.md`；无广告或素材订单写入、无新备份/恢复演练。
+
+### 2026-11-13 AI 工作台管理范围与批量选择修复
+
+- 顶部上下文及配置卡片移除全量账户 ID，改成账户/规则数量与中文优化模式摘要。
+- BC 与广告账户合并为“管理范围”，切换 BC 清空旧账户。复用广告搭建 AccountPicker，增加编辑绑定集合的模式；支持搜索、分页、全选本页/全部筛选结果、清空和确认/取消，排除其他 BC 及所有权冲突账户。
+- 自动规则弹窗补齐名称/ID 搜索、跨页选择、筛选全选、清空及草稿确认/取消。
+- 验证：AI 工作台原有27项通过；新增390/1440px行为2项及受影响广告搭建账户选择3项通过（最后聚焦批次6项）；TypeScript、生产与演示构建通过。未进行真实广告或规则写入。
+- 本批仅前端代码及测试/文档，无迁移、后台任务合同或运行配置变更，按用户既有授权快速发布；实际版本及上线结果见后续发布回执。
+
+### 2026-11-13 DSH 会话创建与插件管理修复
+
+- 浏览器实际复现 `agent-preset/invalid: tool-plugin-manager ... waiting for pluginManager`：生产启动 patch 禁用了 Host plugin-manager，而官方 standard 预设仍依赖该服务。
+- 恢复官方 plugin-manager，保留 HMR 关闭（安装/配置变更按官方界面提示重启生效）、管理员入口与模型凭据。镜像增加固定 pnpm 10.34.9，满足插件包安装执行依赖。
+- 原生运行测试新增真实 `session/create`（standard）验收，避免再次只检查页面/工作区就宣称可用。官方 AMD64 运行镜像挂载候选启动文件，三项测试全部通过；测试不调用模型、不创建广告。
+- 同步完成 TK-ADA 线上界面只读核验：50 个账户摘要、管理范围内 BC/账户联动布局、账户与规则弹窗搜索/全选按钮、无横向溢出；未保存生产投手配置。
+- 进一步修复重启覆盖 profile package.json 的问题：保留管理员安装的依赖和额外 bundle，并验证配置迁移保全；pnpm/npm缓存目录位于原DSH持久卷的可写路径，不修改容器只读根文件系统或模型Secret。
+- 已发布：TK-ADA `5f7750ad`（11角色Ready）；DSH `fcf90354`（独立服务Ready）。真实浏览器新会话获模型回复“连接成功”，插件列表和内置配置正常；原模型Secret、PVC、Service及四开关保持不变。12项原生镜像测试通过，pnpm profile存储路径验证成功。无广告/素材业务写入，无新备份/恢复演练。详细证据见 `docs/validation/2026-11-13-ai-workbench-scope-and-dsh-session.md`。
+
+## 2026-11-13 操作日志积压：失效导出与固定冷却修复
+
+生产原始SDK回执确认旧导出40007/Resource not exist.，原代码丢弃业务码后重复普通重试；日志未知40100又使整个接口固定冷却五分钟。本轮按精确日志回执恢复原窗口的有界重建（最多三次CREATE，保留审计），并复用既有Redis共享探测退避，明确平台等待不缩短。实际后台32进程/接口本地96在途，通用Ultimate50QPS；未证明平台日志接口实际允许跑满50QPS。80项日志/阶段/限流测试及28项共享退避/持久重试测试通过，Ruff通过。生产完整恢复仍待回读，不将积压减少冒充完成；详见docs/validation/2026-11-13-operation-log-recovery.md。无DDL或广告写入；部署待推送授权与发布。
+
+### 2026-11-13 AI 工作台业务用语与执行范围说明
+
+- 概览、投手列表、配置和日报统一中文模式/优先级；Decimal展示去除冗余尾零，最多4位小数；“日预算”明确为“日消耗目标”，不冒充平台预算上限。接口数值及枚举保持不变。
+- 用户指定“排期”入口改为“剧单排”；执行区域改名“剧单搭建执行记录”（接口默认最近100条）与“本投手自动规则运行证据”（daily-report当日归属证据），明确命中/动作/回读不等于实际动作全量历史。规则报告读取失败单独提示，不伪装为空。
+- 回读代码确认：规则证据按tenant_id+optimizer_id归属过滤，再按业务日事实/创建日期筛选；不是全租户规则动作列表，未归属投手的旧证据不自动导入。历史曾绑定规则的已归属证据仍保留。
+- 工作台29项既有用例通过，新增中文/数值/范围/失败提示行为用例通过；TypeScript、生产与演示构建通过。无数据库/任务合同/开关变化。
+- DSH标准Bundle管理展示建议补齐名称、版本、能力范围及接入状态；业务配置留在TK-ADA。本次是建议，未实施新的Bundle封装。
+
+### 2026-11-13：独立知识库与复盘确认入口合并
+
+- 工作台新增“知识库”菜单，使用租户可见的现有知识 API；不要求选择投手，隐藏投手绑定上下文。目录以标题、中文范围、版本、状态展示，支持已加载条目标题/正文搜索；点击详情才显示正文、来源、适用条件及有效期，保留来源待核实提示。现有 API 单次上限 100 条，本轮未新增分页或知识编辑能力。
+- “待确认”从独立菜单合并至“复盘与建议”：全部建议、待确认（实时数量）、已处理。接受/拒绝继续走原领域接口，更新本地条目与计数，复盘页不再加载/铺开知识正文。URL 视图枚举同步改为 knowledge，不保留废弃 pending 视图。
+- 本地验证：工作台 Playwright 31 项全部通过，覆盖独立知识导航/无投手访问、正文不铺开、搜索/详情、确认后计数与历史归档；TypeScript 与正式/演示构建通过。测试采用 transport double，未触发真实投放或生产写入。本轮尚未发布生产。
+
+### 2026-11-13：发起复盘内部错误修复
+
+- 生产浏览器确认 POST reviews 返回 500。以原投手数据、事务回滚诊断复现 DomainError `ai_review_input_too_large`，未创建任务/建议或进行平台写入。原因是 10 账户 × 3 成熟窗口 × 4 维度产生 120 组报表，报表索引重复复制正文元数据，输入预算又有任意 200 次缩减上限；未注册的容量错误退化成 internal_error。
+- 报表索引只保留来源身份；预算按实际列表元素严格递减收敛，超量时保留所有已选账户 D0/D3/D7 汇总、明确记录详细维度采样与行截断；保留历次截断标记且精确计算 JSON 字节数，不扩大容量。固定配置仍超限返回可操作的 422 中文提示。
+- 页面点击后显示“正在准备复盘证据…”与准备进度说明、禁止重复点击；失败明确标注“发起复盘失败”。
+- 本地纯预算回归 3 项通过，涵盖超过 200 步、多账户成熟汇总完整保留及错误映射；前端等待/失败/重试用例通过，TypeScript 与正式/演示构建通过。生产原账户数据采用修复函数回滚诊断成功，未持久化任务/建议；不是实际 DSH 模型复盘完成验收。
+
+### 2026-11-13：真实复盘联调与 DSH 作用域注入修复
+
+- 应用 b4987f03 已快速发布：11角色 Ready、只更新镜像、原配置/四开关/DSH保持；生产原投手证据准备回滚诊断通过。新目录、筛选、中文显示已在真实页面确认。
+- 按当前人工确认模式实际重试复盘，POST201且DSH领取；暴露第二阻断：新 Agent 工厂作用域不继承插件外层 skills inject，装配异常后任务显示RUNNING至授权过期重试。已取消该异常任务。
+- runtime 改为在真实新会话显式注入 tools/skills，异常主动回写FAILED。完整官方profile/真实Agent工厂/模型HTTP运输替身回归覆盖claim→Skill→complete；14项原生测试通过，准备独立DSH镜像发布。详见 validation/2026-11-13-ai-review-start.md。
+
+### 2026-11-13：排队授权窗口与结构化回写补齐
+
+- 独立DSH16f5e33d已上线，Linux镜像14项通过、Ready，配置/模型Secret/工作区与TKADA镜像保持。实际新会话已完成模型多轮及两项知识读取，证明skills作用域阻断解除。
+- 联调发现排队约三分钟会消耗创建时的五分钟授权，导致领取后仅剩约两分钟并重新分析。领取时在原权限/版本核验后按原30..900秒时长重新签发，恢复轮沿用原五分钟，不改变账户或业务权限。
+- 遗留轮出现模型只返回自然语言、未调用complete；在同一会话有界提醒一次补交结构化结果，仍未提交则明确FAILED，不将文本当作成功或伪造提案。
+- 纯预算/时限7项、完整DSH14项通过（新原生运输替身故意先返回文本，确认补交后才COMPLETE）。准备最终应用及DSH发布，真实完整复盘待验证。
+
+
+### 2026-11-14：操作日志昨日增量与历史缺口规划
+
+- 每账户按当地时区只规划昨天完整日，CREATE不再延伸到今天；成功覆盖与当前冻结授权下的在途日期不重复建需求或提升revision。历史从前天向更早日期补连续缺口，每片最多29日，跳过成功/在途日期；终态失败最多下一当地日重新规划。历史范围沿用经营数据需求起始日，不扩大授权。
+- 原升序history_cursor不再决定缺口，避免旧游标跳过近期遗漏；保留游标字段记录本轮进度，无DDL。已冻结运行中的旧窗口继续处理。相同账户调度及阶段路由共用日志优先级/日期次序，先daily再近期history；跨账户仍按共享公平调度。
+- 真实独立PostgreSQL18/Redis7聚焦测试90项通过（日志模块、归档、阶段调度），覆盖时区边界、覆盖分割、在途去重、失败跨日重试、昨日优先路由及CREATE完整日边界；Ruff/格式通过。生产发布尚待完成，不能将本地通过视为线上积压清零。

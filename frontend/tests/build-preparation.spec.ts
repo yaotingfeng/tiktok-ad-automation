@@ -264,6 +264,7 @@ test("账户全选中途失败不加入半批，单选翻页保留且取消后�
         items: [
           {
             advertiser_id: String(n),
+            bc_id: bc,
             name: `P1-${n}`,
             can_build: true,
             availability: "AVAILABLE",
@@ -316,6 +317,7 @@ test("账户筛选和全选使用同一条件，窄屏可操作且取消中止�
         items: [
           {
             advertiser_id: "77",
+            bc_id: bc,
             name: "P1-测试账户",
             can_build: true,
             availability: "AVAILABLE",

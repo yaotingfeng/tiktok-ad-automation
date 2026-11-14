@@ -161,10 +161,13 @@ class Deployment:
         for rule in rules:
             if rule.get("host") == self.host:
                 paths = rule.get("http", {}).get("paths", [])
+                # DSH 与 TK-ADA 共用一个 host：DSH 使用更具体的 /dsh 路径，
+                # TK-ADA 仍必须独占根路径。只校验根路径，保留同 host 下的
+                # 其他受管路径，避免 DSH 挂载后发布被误判为跨服务占用。
+                root_paths = [path for path in paths if path.get("path") == "/"]
                 own = (
-                    len(paths) == 1
-                    and paths[0].get("path") == "/"
-                    and paths[0].get("backend", {}).get("service")
+                    len(root_paths) == 1
+                    and root_paths[0].get("backend", {}).get("service")
                     == {"name": PROJECT, "port": {"number": 80}}
                 )
                 require(
@@ -321,6 +324,35 @@ class Deployment:
             "offline image runtime validation failed; run scripts/check_deployment.py privately for diagnostic category",
         )
 
+    def dsh_companion(self, obj):
+        # DSH 独立发布，名称仍共享项目前缀；只识别明确登记的资源，
+        # 不把它加入十一角色，也不放行同名前缀的其他应用或跨命名空间资源。
+        companion = PROJECT + "-dsh"
+        expected = {
+            ("Deployment", companion),
+            ("Service", companion),
+            ("PersistentVolumeClaim", companion + "-state"),
+        }
+        metadata = obj.get("metadata", {})
+        if (obj.get("kind"), metadata.get("name")) not in expected:
+            return False
+        require(
+            metadata.get("namespace") == self.namespace
+            and metadata.get("labels", {}).get("app") == companion,
+            "DSH companion ownership or namespace conflict",
+        )
+        if obj["kind"] == "Deployment":
+            containers = obj.get("spec", {}).get("template", {}).get("spec", {}).get("containers", [])
+            require(
+                len(containers) == 1
+                and re.fullmatch(
+                    re.escape(IMAGE_PREFIX.replace(PROJECT + ":", companion + ":")) + r"[0-9a-f]{40}",
+                    containers[0].get("image", ""),
+                ),
+                "DSH companion must use its exact approved image",
+            )
+        return True
+
     def preflight(self):
         self.kubectl("get", "namespace", self.namespace, "-o", "json")
         # 全集群查重；Secret 仅查询本项目运行配置、注册文件和镜像拉取凭据。
@@ -339,6 +371,8 @@ class Deployment:
             metadata = obj.get("metadata", {})
             name = metadata.get("name", "")
             labeled = metadata.get("labels", {}).get("app") == PROJECT
+            if self.dsh_companion(obj):
+                continue
             if name == PROJECT or name.startswith(PROJECT + "-") or labeled:
                 if (obj.get("kind"), metadata.get("namespace"), name) in retired:
                     continue

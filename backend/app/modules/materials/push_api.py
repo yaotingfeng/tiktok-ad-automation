@@ -17,10 +17,23 @@ from .push_service import read_batch, register_batch
 router = APIRouter(prefix="/integrations/materials/batches", tags=["material-push"])
 source_router = APIRouter(prefix="/integrations/materials", tags=["material-push"])
 MAX_BODY_BYTES = 2 * 1024 * 1024
-INPUT_SCHEMA = PushBatchInput.model_json_schema()
-INPUT_SCHEMA["properties"]["materials"]["items"] = INPUT_SCHEMA.pop("$defs")[
-    "PushMaterialInput"
-]
+
+
+def _inline_schema(value, definitions):
+    # 手工 OpenAPI 请求合同需要递归内联，否则嵌套生产谱系会留下悬空 $ref。
+    if isinstance(value, dict):
+        if "$ref" in value:
+            return _inline_schema(
+                definitions[value["$ref"].split("/")[-1]], definitions
+            )
+        return {key: _inline_schema(child, definitions) for key, child in value.items()}
+    if isinstance(value, list):
+        return [_inline_schema(child, definitions) for child in value]
+    return value
+
+
+_schema = PushBatchInput.model_json_schema()
+INPUT_SCHEMA = _inline_schema(_schema, _schema.pop("$defs", {}))
 SIGNATURE_HEADERS = [
     {
         "name": name,

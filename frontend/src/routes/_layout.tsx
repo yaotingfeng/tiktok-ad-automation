@@ -55,6 +55,7 @@ function ScopedLayout() {
     ? workspaceNavigation({
         prefix,
         manage: canManage(scope?.role),
+        platformAdmin: !!user.is_superuser,
         materialProduction:
           scope && scope.role !== "viewer" ? materialProduction : undefined,
       })
