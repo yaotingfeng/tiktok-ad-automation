@@ -3,7 +3,7 @@
 from uuid import UUID
 
 from pydantic import ValidationError
-from sqlmodel import Session, select
+from sqlmodel import Session, col, select
 
 from app.modules.automation_rules.schemas import RuleDefinition
 from app.modules.strategies.schemas import StrategyConfig
@@ -89,10 +89,11 @@ def validate_candidate(
             shared = (
                 session.exec(
                     select(AIOptimizerStrategyBinding).where(
-                        AIOptimizerStrategyBinding.tenant_id == context.tenant_id,
-                        AIOptimizerStrategyBinding.strategy_version_id == baseline.id,
-                        AIOptimizerStrategyBinding.optimizer_id != optimizer_id,
-                        AIOptimizerStrategyBinding.active.is_(True),
+                        col(AIOptimizerStrategyBinding.tenant_id) == context.tenant_id,
+                        col(AIOptimizerStrategyBinding.strategy_version_id)
+                        == baseline.id,
+                        col(AIOptimizerStrategyBinding.optimizer_id) != optimizer_id,
+                        col(AIOptimizerStrategyBinding.active).is_(True),
                     )
                 ).first()
                 is not None
@@ -102,16 +103,16 @@ def validate_candidate(
             definition = RuleDefinition.model_validate(after.get("definition", after))
             rule = session.exec(
                 select(AutomationRule).where(
-                    AutomationRule.tenant_id == context.tenant_id,
-                    AutomationRule.id == target_id,
+                    col(AutomationRule.tenant_id) == context.tenant_id,
+                    col(AutomationRule.id) == target_id,
                 )
             ).one_or_none()
             binding = session.exec(
                 select(AIOptimizerRuleBinding).where(
-                    AIOptimizerRuleBinding.tenant_id == context.tenant_id,
-                    AIOptimizerRuleBinding.optimizer_id == optimizer_id,
-                    AIOptimizerRuleBinding.rule_id == target_id,
-                    AIOptimizerRuleBinding.active.is_(True),
+                    col(AIOptimizerRuleBinding.tenant_id) == context.tenant_id,
+                    col(AIOptimizerRuleBinding.optimizer_id) == optimizer_id,
+                    col(AIOptimizerRuleBinding.rule_id) == target_id,
+                    col(AIOptimizerRuleBinding.active).is_(True),
                 )
             ).first()
             if rule is None or binding is None:
@@ -119,10 +120,10 @@ def validate_candidate(
             shared = (
                 session.exec(
                     select(AIOptimizerRuleBinding).where(
-                        AIOptimizerRuleBinding.tenant_id == context.tenant_id,
-                        AIOptimizerRuleBinding.optimizer_id != optimizer_id,
-                        AIOptimizerRuleBinding.rule_id == target_id,
-                        AIOptimizerRuleBinding.active.is_(True),
+                        col(AIOptimizerRuleBinding.tenant_id) == context.tenant_id,
+                        col(AIOptimizerRuleBinding.optimizer_id) != optimizer_id,
+                        col(AIOptimizerRuleBinding.rule_id) == target_id,
+                        col(AIOptimizerRuleBinding.active).is_(True),
                     )
                 ).first()
                 is not None

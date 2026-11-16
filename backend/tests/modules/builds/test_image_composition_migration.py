@@ -25,7 +25,7 @@ from app.modules.builds.models import (
     DraftGroupMaterial,
     DraftPreparation,
 )
-from tests.migration_database import historical_database
+from tests.migration_database import historical_database, insert_historical_row
 from tests.modules.builds.test_drafts import account, create_intent, finish, ready_links
 from tests.modules.conftest import create_context
 from tests.modules.materials.test_tenant_materials import material
@@ -64,7 +64,8 @@ def test_upgrade_defaults_old_drafts_without_creating_stale_video_mirror(monkeyp
             identity, request = draft.id, draft.request_id
         command.upgrade(config, "0049_image_composition")
         with Session(engine) as session:
-            row = session.get(BuildDraft, identity)
+            table = Table("build_draft", MetaData(), autoload_with=session.connection())
+            row = session.execute(table.select().where(table.c.id == identity)).one()
             assert (
                 row.media_kind,
                 row.active_image_generation,
@@ -88,6 +89,77 @@ def scaffold(session, context, intent):
     drama = session.exec(
         select(DraftDrama).where(DraftDrama.draft_id == identity)
     ).first()
+    return draft, drama
+
+
+def historical_scaffold(
+    session, context, intent, *, media_kind="CAROUSEL", active_image_generation=0
+):
+    """播种迁移输入事实，不让今日准备队列/派发 ORM 读取旧库中尚不存在的列。"""
+    from datetime import UTC, datetime
+
+    from app.modules.providers.models import PromotionLink, ProviderDrama
+    from app.modules.providers.repository import link_reuse_key
+
+    account(session, context, historical=True)
+    draft = BuildDraft(
+        tenant_id=context.tenant_id,
+        created_by=context.actor_id,
+        request_id=uuid4(),
+        request_digest="a" * 64,
+        media_kind=media_kind,
+        active_image_generation=active_image_generation,
+        status="READY",
+        **{
+            key: value
+            for key, value in intent.items()
+            if key not in {"drama_lines", "account_lines"}
+        },
+    )
+    insert_historical_row(session, draft)
+    title = next(line.strip() for line in intent["drama_lines"] if line.strip())
+    provider_drama = ProviderDrama(
+        tenant_id=context.tenant_id,
+        connection_id=intent["provider_connection_id"],
+        application_id=intent["application_id"],
+        external_drama_id="1",
+        display_drama_id="1",
+        title=title,
+    )
+    session.add(provider_drama)
+    session.flush()
+    link = PromotionLink(
+        tenant_id=context.tenant_id,
+        connection_id=intent["provider_connection_id"],
+        application_id=intent["application_id"],
+        drama_id=provider_drama.id,
+        reuse_key=link_reuse_key(
+            context.tenant_id,
+            intent["provider_connection_id"],
+            intent["application_id"],
+            "1",
+            intent["link_config"],
+        ),
+        config=intent["link_config"],
+        url="https://example.com/drama",
+        protected_base=title,
+        status="ready",
+        verified_at=datetime.now(UTC),
+    )
+    session.add(link)
+    session.flush()
+    drama = DraftDrama(
+        tenant_id=context.tenant_id,
+        draft_id=draft.id,
+        bc_id=draft.bc_id,
+        drama_id=provider_drama.id,
+        link_id=link.id,
+        title=title,
+        first_line=1,
+        material_state="ready",
+    )
+    session.add(drama)
+    session.flush()
     return draft, drama
 
 

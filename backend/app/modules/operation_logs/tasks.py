@@ -27,7 +27,7 @@ def plan_next_batch(session: Session, *, now: datetime, batch_size: int = 8) -> 
     plan = session.exec(
         select(AdSyncBc)
         .where(
-            AdSyncBc.enabled.is_(True),
+            col(AdSyncBc.enabled).is_(True),
             or_(
                 col(AdSyncBc.screening_progress)[PROGRESS]["next_scan_at"].astext.is_(
                     None
@@ -40,8 +40,8 @@ def plan_next_batch(session: Session, *, now: datetime, batch_size: int = 8) -> 
             col(AdSyncBc.screening_progress)[PROGRESS]["last_turn"]
             .astext.asc()
             .nulls_first(),
-            AdSyncBc.tenant_id,
-            AdSyncBc.bc_id,
+            col(AdSyncBc.tenant_id),
+            col(AdSyncBc.bc_id),
         )
         .limit(1)
         .with_for_update(skip_locked=True)

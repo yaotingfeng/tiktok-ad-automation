@@ -61,7 +61,11 @@ class DSHReviewTask(SQLModel, table=True):
     request_digest: str = Field(default="", max_length=64)
     dsh_task_id: str = Field(max_length=160)
     status: str = Field(default="PENDING", max_length=16)
-    authorization_expires_at: datetime = Field(sa_type=DateTime(timezone=True))
+    authorization_expires_at: datetime = Field(
+        sa_column=Column(
+            DateTime(timezone=True), index=False, unique=False, nullable=False
+        )
+    )
     fence: str = Field(max_length=64)
     restart_generation: int = 0
     cancellation_requested: bool = False
@@ -77,9 +81,28 @@ class DSHReviewTask(SQLModel, table=True):
         default_factory=dict, sa_column=Column(JSONB, nullable=False)
     )
     created_by: UUID = Field(foreign_key="user.id")
-    created_at: datetime = Field(default_factory=_now, sa_type=DateTime(timezone=True))
-    started_at: datetime | None = Field(default=None, sa_type=DateTime(timezone=True))
-    finished_at: datetime | None = Field(default=None, sa_type=DateTime(timezone=True))
+    created_at: datetime = Field(
+        default_factory=_now,
+        sa_column=Column(
+            DateTime(timezone=True),
+            index=False,
+            unique=False,
+            nullable=False,
+            default=_now,
+        ),
+    )
+    started_at: datetime | None = Field(
+        default=None,
+        sa_column=Column(
+            DateTime(timezone=True), index=False, unique=False, nullable=True
+        ),
+    )
+    finished_at: datetime | None = Field(
+        default=None,
+        sa_column=Column(
+            DateTime(timezone=True), index=False, unique=False, nullable=True
+        ),
+    )
 
 
 def authorize(session: Session, context: TenantContext, *, write: bool = False) -> None:
@@ -101,17 +124,17 @@ def load_optimizer(
 ) -> tuple[AIOptimizer, AIOptimizerVersion]:
     optimizer = session.exec(
         select(AIOptimizer).where(
-            AIOptimizer.tenant_id == context.tenant_id,
-            AIOptimizer.id == optimizer_id,
+            col(AIOptimizer.tenant_id) == context.tenant_id,
+            col(AIOptimizer.id) == optimizer_id,
         )
     ).one_or_none()
     if optimizer is None:
         raise DomainError("ai_optimizer_not_found", "ai_optimizer_not_found")
     version = session.exec(
         select(AIOptimizerVersion).where(
-            AIOptimizerVersion.tenant_id == context.tenant_id,
-            AIOptimizerVersion.optimizer_id == optimizer.id,
-            AIOptimizerVersion.number == optimizer.latest_version,
+            col(AIOptimizerVersion.tenant_id) == context.tenant_id,
+            col(AIOptimizerVersion.optimizer_id) == optimizer.id,
+            col(AIOptimizerVersion.number) == optimizer.latest_version,
         )
     ).one_or_none()
     if version is None:
@@ -242,7 +265,7 @@ def frozen_configuration(session, *, optimizer, version, context):
         select(AIOptimizerRuleBinding.rule_id).where(
             AIOptimizerRuleBinding.tenant_id == context.tenant_id,
             AIOptimizerRuleBinding.optimizer_id == optimizer.id,
-            AIOptimizerRuleBinding.active.is_(True),
+            col(AIOptimizerRuleBinding.active).is_(True),
         )
     ).all()
     bound_rules = (
@@ -307,8 +330,8 @@ def frozen_evidence(
     plan_rows = session.exec(
         select(AIDailyPlanRow)
         .where(
-            AIDailyPlanRow.tenant_id == context.tenant_id,
-            AIDailyPlanRow.optimizer_id == optimizer.id,
+            col(AIDailyPlanRow.tenant_id) == context.tenant_id,
+            col(AIDailyPlanRow.optimizer_id) == optimizer.id,
         )
         .order_by(
             col(AIDailyPlanRow.business_date).desc(), col(AIDailyPlanRow.position)
@@ -318,10 +341,10 @@ def frozen_evidence(
     occurrences = session.exec(
         select(BuildOccurrence)
         .where(
-            BuildOccurrence.tenant_id == context.tenant_id,
-            BuildOccurrence.optimizer_id == optimizer.id,
-            BuildOccurrence.bc_id == version.bc_id,
-            BuildOccurrence.created_at <= cutoff,
+            col(BuildOccurrence.tenant_id) == context.tenant_id,
+            col(BuildOccurrence.optimizer_id) == optimizer.id,
+            col(BuildOccurrence.bc_id) == version.bc_id,
+            col(BuildOccurrence.created_at) <= cutoff,
         )
         .order_by(col(BuildOccurrence.scheduled_at).desc())
         .limit(201)
@@ -334,10 +357,10 @@ def frozen_evidence(
     all_rule_evidence = session.exec(
         select(AutomationRuleEvidence)
         .where(
-            AutomationRuleEvidence.tenant_id == context.tenant_id,
-            AutomationRuleEvidence.optimizer_id == optimizer.id,
-            AutomationRuleEvidence.bc_id == version.bc_id,
-            AutomationRuleEvidence.created_at <= cutoff,
+            col(AutomationRuleEvidence.tenant_id) == context.tenant_id,
+            col(AutomationRuleEvidence.optimizer_id) == optimizer.id,
+            col(AutomationRuleEvidence.bc_id) == version.bc_id,
+            col(AutomationRuleEvidence.created_at) <= cutoff,
         )
         .order_by(col(AutomationRuleEvidence.created_at).desc())
         .limit(201)
@@ -397,10 +420,10 @@ def frozen_evidence(
     business_scopes = session.exec(
         select(BusinessRun)
         .where(
-            BusinessRun.tenant_id == context.tenant_id,
-            BusinessRun.bc_id == version.bc_id,
-            BusinessRun.created_at <= cutoff,
-            BusinessRun.finished_at <= cutoff,
+            col(BusinessRun.tenant_id) == context.tenant_id,
+            col(BusinessRun.bc_id) == version.bc_id,
+            col(BusinessRun.created_at) <= cutoff,
+            col(BusinessRun.finished_at) <= cutoff,
         )
         .order_by(col(BusinessRun.created_at).desc())
         .limit(50)
@@ -417,8 +440,8 @@ def frozen_evidence(
     allowed_run_ids = {row.id for row in business_scopes}
     business_pubs = session.exec(
         select(BusinessPublication).where(
-            BusinessPublication.tenant_id == context.tenant_id,
-            BusinessPublication.bc_id == version.bc_id,
+            col(BusinessPublication.tenant_id) == context.tenant_id,
+            col(BusinessPublication.bc_id) == version.bc_id,
         )
     ).all()
     business_pubs = [row for row in business_pubs if row.run_id in allowed_run_ids]
@@ -426,24 +449,27 @@ def frozen_evidence(
         select(OperationCoverage)
         .join(
             OperationExport,
-            (OperationExport.id == OperationCoverage.export_id)
-            & (OperationExport.tenant_id == OperationCoverage.tenant_id)
-            & (OperationExport.advertiser_id == OperationCoverage.advertiser_id),
+            (col(OperationExport.id) == col(OperationCoverage.export_id))
+            & (col(OperationExport.tenant_id) == col(OperationCoverage.tenant_id))
+            & (
+                col(OperationExport.advertiser_id)
+                == col(OperationCoverage.advertiser_id)
+            ),
         )
         .where(
-            OperationCoverage.tenant_id == context.tenant_id,
+            col(OperationCoverage.tenant_id) == context.tenant_id,
             col(OperationCoverage.advertiser_id).in_(version.advertiser_ids),
-            OperationExport.bc_id == version.bc_id,
-            OperationExport.observed_at <= cutoff,
+            col(OperationExport.bc_id) == version.bc_id,
+            col(OperationExport.observed_at) <= cutoff,
         )
     ).all()
     operation_exports = session.exec(
         select(OperationExport)
         .where(
-            OperationExport.tenant_id == context.tenant_id,
-            OperationExport.bc_id == version.bc_id,
+            col(OperationExport.tenant_id) == context.tenant_id,
+            col(OperationExport.bc_id) == version.bc_id,
             col(OperationExport.advertiser_id).in_(version.advertiser_ids),
-            OperationExport.observed_at <= cutoff,
+            col(OperationExport.observed_at) <= cutoff,
         )
         .order_by(col(OperationExport.observed_at).desc())
         .limit(50)
@@ -642,8 +668,8 @@ def create_review_task(
     optimizer, version = load_optimizer(session, context, optimizer_id)
     existing = session.exec(
         select(DSHReviewTask).where(
-            DSHReviewTask.tenant_id == context.tenant_id,
-            DSHReviewTask.request_id == request_id,
+            col(DSHReviewTask.tenant_id) == context.tenant_id,
+            col(DSHReviewTask.request_id) == request_id,
         )
     ).one_or_none()
     if existing is not None:
@@ -728,9 +754,9 @@ def get_review_task(
     authorize(session, context)
     row = session.exec(
         select(DSHReviewTask).where(
-            DSHReviewTask.tenant_id == context.tenant_id,
-            DSHReviewTask.optimizer_id == optimizer_id,
-            DSHReviewTask.id == task_id,
+            col(DSHReviewTask.tenant_id) == context.tenant_id,
+            col(DSHReviewTask.optimizer_id) == optimizer_id,
+            col(DSHReviewTask.id) == task_id,
         )
     ).one_or_none()
     if row is None:

@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query"
 import { ArrowLeft } from "lucide-react"
 import type { ReactNode } from "react"
+import type { EntityRef } from "@/client"
 import { AdsReportingService, type ReportRow } from "@/client"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -21,13 +22,16 @@ import {
   toolbarAction,
   toolbarActionLabel,
 } from "../AdsTableToolbar"
+import type { DirectoryDetailEntry } from "../DirectoryBrowser"
 import { columnsFor, useMetricCatalog } from "../metricCatalog"
 import { type AdsDimension, rowAdvertiserId, rowObjectId } from "../search"
 import { statusLabel } from "../statusLabel"
+import { FrozenReport } from "./FrozenReport"
+import { DirectoryConfiguration } from "./DirectoryConfiguration"
+import { DirectoryDetailBody } from "./DirectoryDetailBody"
 import { HistoryTab } from "./HistoryTab"
 import { AdMaterialsTab, MaterialsTab } from "./MaterialsTab"
 import { OverviewTab } from "./OverviewTab"
-import { SettingsTab } from "./SettingsTab"
 import { TrendTab } from "./TrendTab"
 import { type LinkedTarget, useLinkedRows } from "./useLinkedRows"
 
@@ -48,6 +52,7 @@ const DETAIL_KINDS = new Set<AdsDimension>(["campaign", "adgroup", "ad"])
  * 关联目标按 ID 重新查询真实报表行，因此与在该维度报表里点开的详情一致、可直接操作。
  */
 export type DetailEntry =
+  | DirectoryDetailEntry
   | { source: "table"; row: ReportRow; dimension: AdsDimension }
   | { source: "linked"; target: LinkedTarget }
 
@@ -58,6 +63,7 @@ export type DetailActionScope = {
 }
 
 export type AdsDetailSheetProps = {
+  onOpenDirectory: (ref: EntityRef) => void
   entry: DetailEntry | null
   // 表格来源的行在工作台里已按最新表格数据替换；关联来源为 null，由抽屉自行查询。
   tableRow: ReportRow | null
@@ -85,6 +91,7 @@ export type AdsDetailSheetProps = {
 
 export function AdsDetailSheet({
   entry,
+  onOpenDirectory,
   tableRow,
   canGoBack,
   startDate,
@@ -97,6 +104,7 @@ export function AdsDetailSheet({
   onAdMaterialAction,
   onOpenLinked,
 }: AdsDetailSheetProps) {
+  const { tenantId, bc } = useTenantScope()
   const target = entry?.source === "linked" ? entry.target : null
   const linked = useLinkedRows({
     dimension: target?.dimension ?? "campaign",
@@ -142,7 +150,15 @@ export function AdsDetailSheet({
             </Button>
           </div>
         )}
-        {row ? (
+        {entry?.source === "directory" && tenantId && bc ? (
+          <DirectoryDetailBody
+            key={`${bc.bc_id}:${entry.ref.kind}:${entry.ref.advertiser_id}:${entry.ref.remote_id}`}
+            tenantId={tenantId}
+            bcId={bc.bc_id}
+            ref={entry.ref}
+            onOpen={onOpenDirectory}
+          />
+        ) : row ? (
           <DetailBody
             key={`${dimension}:${row.row_key}`}
             row={row}
@@ -156,6 +172,7 @@ export function AdsDetailSheet({
             }
             onAdMaterialAction={onAdMaterialAction}
             onOpenLinked={onOpenLinked}
+            onOpenDirectory={onOpenDirectory}
           />
         ) : (
           target && (
@@ -222,6 +239,7 @@ function DetailBody({
   onAction,
   onAdMaterialAction,
   onOpenLinked,
+  onOpenDirectory,
 }: {
   row: ReportRow
   dimension: AdsDimension
@@ -232,6 +250,7 @@ function DetailBody({
   onAction: (action: ManagementAction) => void
   onAdMaterialAction: AdsDetailSheetProps["onAdMaterialAction"]
   onOpenLinked: (target: LinkedTarget) => void
+  onOpenDirectory: (ref: EntityRef) => void
 }) {
   const { tenantId, bc } = useTenantScope()
   const bcId = bc?.bc_id
@@ -273,7 +292,12 @@ function DetailBody({
   })
   const detail = detailQuery.data
   const name = detail?.name ?? rowDisplayName(row, dimension)
-  const status = statusLabel(row.display ?? {})
+  // 页头与目录配置同属当前观察；下方冻结报表仍保留查询时的状态和金额。
+  const status = statusLabel(detail ? {
+    operation_status: detail.statuses?.operation,
+    secondary_status: detail.statuses?.delivery,
+    review_status: detail.statuses?.review,
+  } : row.display ?? {})
   // 没有快照的行无法冻结选择，不显示操作按钮。
   const actions =
     readonly ||
@@ -320,6 +344,7 @@ function DetailBody({
           {kind && <TabsTrigger value="history">操作记录</TabsTrigger>}
         </TabsList>
         <TabsContent value="overview" className="mt-4">
+          {detail?.report_result && detail.report_snapshot && <FrozenReport row={detail.report_result} snapshot={detail.report_snapshot} />}
           <OverviewTab
             row={row}
             dimension={dimension}
@@ -345,13 +370,7 @@ function DetailBody({
         {kind && (
           <TabsContent value="settings" className="mt-4">
             <DetailState query={detailQuery}>
-              {detail && (
-                <SettingsTab
-                  kind={kind}
-                  configuration={detail.configuration ?? {}}
-                  observedAt={detail.observed_at}
-                />
-              )}
+              {detail && <DirectoryConfiguration detail={detail} />}
             </DetailState>
           </TabsContent>
         )}
@@ -371,6 +390,9 @@ function DetailBody({
               />
             ) : (
               <MaterialsTab
+                row={row}
+                onOpenDirectory={onOpenDirectory}
+                onOpenLinked={onOpenLinked}
                 materials={(row.material_uses ?? []).map((use) => ({
                   use_ref: use,
                   name: row.display?.material_name ?? "",

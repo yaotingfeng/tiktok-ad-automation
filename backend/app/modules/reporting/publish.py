@@ -5,19 +5,26 @@
 汇总规则：任一成员指标为 NULL（平台 '-'）时合计为 NULL，绝不显示部分合计。
 """
 
+import hashlib
+import json
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
-from typing import Any
+from typing import Any, TypedDict
 from uuid import UUID, uuid4
 
 from sqlalchemy import MetaData, delete, insert, or_, text, tuple_
+from sqlalchemy import select as core_select
+from sqlalchemy.sql import ColumnElement
 from sqlmodel import Session, col, select
 
 from app.core.errors import DomainError
+from app.integrations.tiktok.contracts.context import FrozenTikTokRoute
 from app.modules.reporting import diagnostics
+from app.modules.reporting.metric_catalog import NATIVE_CONTRACT
 from app.modules.reporting.metrics import (
     basic_metric_values,
+    metric_evidence,
     parse_decimal,
     parse_local_day,
     parse_local_hour,
@@ -102,7 +109,57 @@ def _writable_buckets(session, *, tenant_id, accounts, kind, start, end, request
     } - protected
 
 
-def _bucket_filter(model, buckets):
+def _publication_buckets(
+    session: Session,
+    *,
+    tenant_id: UUID,
+    kind: str,
+    buckets: set[tuple[str, date]],
+    observed_at: datetime,
+    payloads: dict[tuple[str, date], str],
+) -> set[tuple[str, date]]:
+    """账户锁内裁决相同观测：重放不写，冲突拒绝，不能借重试推进版本。"""
+    writable = set(buckets)
+    ordered = sorted(buckets)
+    for offset in range(0, len(ordered), _PUBLISH_BATCH_SIZE):
+        states = session.exec(
+            select(ReportSyncState).where(
+                ReportSyncState.tenant_id == tenant_id,
+                ReportSyncState.report_kind == kind,
+                ReportSyncState.observed_at == observed_at,
+                _bucket_filter(
+                    ReportSyncState, ordered[offset : offset + _PUBLISH_BATCH_SIZE]
+                ),
+            )
+        ).all()
+        for state in states:
+            key = (state.advertiser_id, state.stat_date)
+            if (state.active_contract, state.publication_digest) != (
+                NATIVE_CONTRACT,
+                payloads[key],
+            ):
+                raise DomainError(
+                    "report_publication_conflict", "同一观测时点的报表内容冲突"
+                )
+            writable.remove(key)
+    return writable
+
+
+def _payload_digest(payload: Sequence[Any]) -> str:
+    return hashlib.sha256(
+        json.dumps(sorted(payload), sort_keys=True, default=str).encode()
+    ).hexdigest()
+
+
+class _AdPublicationStamp(TypedDict):
+    advertiser: str
+    day: str
+    stamp: dict[str, Any]
+
+
+def _bucket_filter(
+    model: Any, buckets: Iterable[tuple[str, date]]
+) -> ColumnElement[bool]:
     return tuple_(model.advertiser_id, model.stat_date).in_(sorted(buckets))
 
 
@@ -114,22 +171,33 @@ def _bucket_days(buckets):
 
 
 @diagnostics.timed("publish_state")
-def _set_state(session, *, tenant_id, kind, buckets, counts, observed_at, job_id=None):
+def _set_state(
+    session,
+    *,
+    tenant_id,
+    kind,
+    buckets,
+    counts,
+    observed_at,
+    job_id=None,
+    publication_metadata=None,
+):
     from app.modules.reporting.store_models import ReportSyncJob
     from app.modules.sync_control.contracts import ExecutionFence
     from app.modules.sync_control.requirements import satisfy_requirements
 
     if not buckets:
-        return
+        return {}
     job = session.get(ReportSyncJob, job_id) if job_id is not None else None
     if job is not None and job.tenant_id != tenant_id:
         raise ValueError("publication job tenant does not match facts")
     now = _database_now(session)
     ordered = sorted(buckets)
+    published_versions = {}
     # _writable_buckets 已持有账户事务锁。固定大小预读并统一 flush，避免
     # 每桶 SELECT/UPDATE/确认需求各往返一次，同时限制 SQL 参数和 ORM 内存。
-    for offset in range(0, len(ordered), 500):
-        batch = ordered[offset : offset + 500]
+    for offset in range(0, len(ordered), _PUBLISH_BATCH_SIZE):
+        batch = ordered[offset : offset + _PUBLISH_BATCH_SIZE]
         states = {
             (state.advertiser_id, state.stat_date): state
             for state in session.exec(
@@ -157,6 +225,13 @@ def _set_state(session, *, tenant_id, kind, buckets, counts, observed_at, job_id
             state.last_success_at = state.updated_at = now
             state.observed_at = observed_at
             state.publication_version += 1
+            if publication_metadata is not None:
+                coordinates, digest = publication_metadata[(advertiser, day)]
+                state.publication_coordinates = coordinates
+                state.active_contract = NATIVE_CONTRACT
+                state.publication_digest = digest
+            # 事实证据复用本事务分配的精确版本，不能逐桶重读或使用整批统一版本。
+            published_versions[(advertiser, day)] = state.publication_version
             versions[(advertiser, day.isoformat())] = state.publication_version
         session.flush()
         if job is not None:
@@ -168,6 +243,7 @@ def _set_state(session, *, tenant_id, kind, buckets, counts, observed_at, job_id
                 observed_at=observed_at,
                 publication_version=versions,
             )
+    return published_versions
 
 
 def mark_failed(
@@ -286,10 +362,13 @@ def publish_ad_day(
     rows: Iterable[dict],
     campaign_ids: tuple[str, ...] = (),
     requested_at: datetime | None = None,
+    route: FrozenTikTokRoute | None = None,
 ) -> int:
     now = _database_now(session)
     counts: dict[tuple[str, date], int] = {}
     requested_at = requested_at or now
+
+    seen = set()
 
     def records():
         for row in rows:
@@ -307,6 +386,10 @@ def publish_ad_day(
                 )
             if campaign_ids and campaign not in campaign_ids:
                 raise DomainError("report_row_invalid", "按系列分批结果包含范围外系列")
+            key = (advertiser, day, str(ad_id))
+            if key in seen:
+                raise DomainError("report_row_invalid", "广告日报包含重复身份")
+            seen.add(key)
             meta = accounts[advertiser]
             yield (
                 {
@@ -314,6 +397,22 @@ def publish_ad_day(
                     "advertiser_id": advertiser,
                     "stat_date": day,
                     "ad_id": str(ad_id),
+                    "evidence": metric_evidence(metrics)
+                    | (
+                        {
+                            "source_connection_id": str(route.connection_id),
+                            "source_channel": route.channel,
+                            "source_bc_id": route.bc_id,
+                            "route_revision": str(route.binding_revision),
+                        }
+                        if route
+                        else {}
+                    )
+                    | {
+                        "response_row_digest": hashlib.sha256(
+                            json.dumps(row, sort_keys=True).encode()
+                        ).hexdigest()
+                    },
                     "campaign_id": str(campaign),
                     "adgroup_id": str(adgroup),
                     "campaign_automation_type": metrics.get("campaign_automation_type"),
@@ -340,6 +439,53 @@ def publish_ad_day(
         end=end,
         requested_at=requested_at,
     )
+    payloads = {}
+    ordered = sorted(buckets)
+    # 暂存行已完整校验，按有界日期桶读取摘要输入，避免每个空日期也单独查一次。
+    for offset in range(0, len(ordered), _PUBLISH_BATCH_SIZE):
+        batch = ordered[offset : offset + _PUBLISH_BATCH_SIZE]
+        payload_rows = (
+            session.connection()
+            .execute(
+                core_select(
+                    staged.c.advertiser_id,
+                    staged.c.stat_date,
+                    staged.c.ad_id,
+                    staged.c.evidence,
+                    staged.c.currency,
+                    staged.c.timezone,
+                ).where(_bucket_filter(staged.c, batch))
+            )
+            .all()
+        )
+        payload_by_bucket = {key: [] for key in batch}
+        for row in payload_rows:
+            payload_by_bucket[(row.advertiser_id, row.stat_date)].append(
+                (row.ad_id, row.evidence, row.currency, row.timezone)
+            )
+        for advertiser, day in batch:
+            payloads[(advertiser, day)] = _payload_digest(
+                [
+                    (
+                        "",
+                        _publication_coordinates(
+                            "ad", accounts[advertiser], day, campaign_ids=campaign_ids
+                        ),
+                        None,
+                        None,
+                    ),
+                    *payload_by_bucket[(advertiser, day)],
+                ]
+            )
+    if not campaign_ids:
+        buckets = _publication_buckets(
+            session,
+            tenant_id=tenant_id,
+            kind="ad_day",
+            buckets=buckets,
+            observed_at=requested_at,
+            payloads=payloads,
+        )
     if not buckets:
         return 0
     diagnostics.counts(buckets=len(buckets))
@@ -373,8 +519,9 @@ def publish_ad_day(
                 },
             )
     # 系列分片只替换其范围，不能把部分成功声明成整个账户当天 COMPLETE。
+    published_versions = {}
     if not campaign_ids:
-        _set_state(
+        published_versions = _set_state(
             session,
             tenant_id=tenant_id,
             kind="ad_day",
@@ -382,6 +529,70 @@ def publish_ad_day(
             counts=counts,
             observed_at=requested_at,
             job_id=job_id,
+            publication_metadata={
+                (advertiser, day): (
+                    _publication_coordinates("ad", accounts[advertiser], day),
+                    payloads[(advertiser, day)],
+                )
+                for advertiser, day in buckets
+            },
+        )
+    # 行观测与金额同事务落地；定向发布没有整账户版本，使用任务ID和精确范围标识。
+    published_at = _database_now(session)
+    stamps: list[_AdPublicationStamp] = []
+    for advertiser, day in sorted(buckets):
+        if not counts.get((advertiser, day)):
+            continue
+        publication = {
+            "publication_id": str(job_id),
+            "publication_version": published_versions.get((advertiser, day), 0),
+            "observed_at": requested_at.isoformat(),
+            "last_success_at": published_at.isoformat(),
+            "status": "COMPLETE",
+            "active_contract": NATIVE_CONTRACT,
+            "publication_digest": payloads[(advertiser, day)],
+            "scope": {
+                "tenant_id": str(tenant_id),
+                "advertiser_id": advertiser,
+                "start_date": str(start),
+                "end_date": str(end),
+                "campaign_ids": sorted(campaign_ids or ()),
+                "kind": "CAMPAIGNS" if campaign_ids else "ACCOUNT_DAY",
+            },
+            "publication_coordinates": _publication_coordinates(
+                "ad", accounts[advertiser], day, campaign_ids=campaign_ids
+            ),
+        }
+        stamps.append(
+            {
+                "advertiser": advertiser,
+                "day": day.isoformat(),
+                "stamp": {
+                    "publication": publication,
+                    "observed_at": requested_at.isoformat(),
+                    "publication_version": publication["publication_version"],
+                    "local_day": day.isoformat(),
+                },
+            }
+        )
+    # 精确桶坐标和 job_id 共同限定集合更新；定向发布仍只盖本次实际写入的行。
+    for offset in range(0, len(stamps), _PUBLISH_BATCH_SIZE):
+        batch = stamps[offset : offset + _PUBLISH_BATCH_SIZE]
+        session.connection().execute(
+            text(
+                "UPDATE ad_report_day a SET evidence=a.evidence || s.stamp "
+                "FROM jsonb_to_recordset(CAST(:stamps AS jsonb)) "
+                "AS s(advertiser text, day date, stamp jsonb) "
+                "WHERE a.tenant_id=:t AND a.advertiser_id=s.advertiser "
+                "AND a.stat_date=s.day AND a.stat_date=ANY(:days) "
+                "AND a.sync_job_id=:job"
+            ),
+            {
+                "t": tenant_id,
+                "days": sorted({date.fromisoformat(item["day"]) for item in batch}),
+                "job": job_id,
+                "stamps": json.dumps(batch),
+            },
         )
     with diagnostics.stage("publish_flush"):
         session.flush()
@@ -403,11 +614,16 @@ def publish_creative_day(
     rows,
     campaign_ids=(),
     requested_at=None,
+    route=None,
 ) -> int:
     """完整创意快照独立原子替换；失败/旧观察绝不改写广告总账。"""
     now = _database_now(session)
     observed = requested_at or now
+    from app.modules.reporting.metric_catalog import CREATIVE_OBSERVED_CONTRACT
+    from app.modules.reporting.metrics import creative_metric_evidence
+
     counts = {}
+    seen: dict[tuple[str, date, str], dict[str, Any]] = {}
 
     def records():
         for row in rows:
@@ -422,6 +638,14 @@ def publish_creative_day(
                 )
             if campaign_ids and campaign not in campaign_ids:
                 raise DomainError("report_row_invalid", "创意分批包含范围外系列")
+            identity = (advertiser, day, str(creative))
+            if identity in seen:
+                if seen[identity] != row:
+                    raise DomainError(
+                        "report_row_invalid", "同一创意事实的重复页数值冲突"
+                    )
+                continue
+            seen[identity] = row
             meta = accounts[advertiser]
             yield dict(
                 tenant_id=tenant_id,
@@ -435,6 +659,28 @@ def publish_creative_day(
                 timezone=meta.timezone,
                 fetched_at=now,
                 sync_job_id=job_id,
+                evidence=creative_metric_evidence(metrics)
+                | {
+                    "source_bc_id": route.bc_id if route else None,
+                    "source_connection_id": str(route.connection_id) if route else None,
+                    "publication": {
+                        "publication_id": str(job_id),
+                        "observed_at": observed.isoformat(),
+                        "publication_version": 0,
+                        "active_contract": CREATIVE_OBSERVED_CONTRACT,
+                        "publication_digest": hashlib.sha256(
+                            json.dumps(row, sort_keys=True).encode()
+                        ).hexdigest(),
+                        "scope": {
+                            "tenant_id": str(tenant_id),
+                            "advertiser_id": advertiser,
+                            "start_date": str(start),
+                            "end_date": str(end),
+                            "campaign_ids": sorted(campaign_ids),
+                            "kind": "CAMPAIGNS" if campaign_ids else "ACCOUNT_DAY",
+                        },
+                    },
+                },
                 **basic_metric_values(metrics),
             )
             counts[advertiser, day] = counts.get((advertiser, day), 0) + 1
@@ -473,6 +719,23 @@ def publish_creative_day(
             observed_at=observed,
             job_id=job_id,
         )
+    if not campaign_ids:
+        for advertiser, day in buckets:
+            state = session.get(
+                ReportSyncState, (tenant_id, advertiser, "creative_day", day)
+            )
+            session.connection().execute(
+                text(
+                    "UPDATE creative_report_day SET evidence=jsonb_set(evidence,'{publication,publication_version}',to_jsonb(CAST(:v AS bigint))) WHERE tenant_id=:t AND advertiser_id=:a AND stat_date=:d AND sync_job_id=:j"
+                ),
+                {
+                    "v": state.publication_version,
+                    "t": tenant_id,
+                    "a": advertiser,
+                    "d": day,
+                    "j": job_id,
+                },
+            )
     session.flush()
     if job_id is not None:
         # 创意事实提交后立即登记身份目录补读；身份请求走独立后台服务，
@@ -722,3 +985,186 @@ def _refresh_reconciliation_sums(session, tenant_id, buckets):
         """),
                 {"t": tenant_id, "a": advertiser, "days": days},
             )
+
+
+def _publication_coordinates(
+    level: str, meta: AccountMeta, day: date, *, campaign_ids: Sequence[str] = ()
+) -> dict[str, Any]:
+    """空发布没有事实行，仍须保存当时实际请求的坐标，不能事后借账户现值。"""
+    return {
+        "level": level,
+        "source_kind": "PLATFORM_DIRECT",
+        "contract_revision": NATIVE_CONTRACT,
+        "currency": meta.currency,
+        "timezone": meta.timezone,
+        "local_day": day.isoformat(),
+        "scope": "CAMPAIGN_LOCAL_DAY" if campaign_ids else "ACCOUNT_LOCAL_DAY",
+        **({"campaign_ids": sorted(campaign_ids)} if campaign_ids else {}),
+        "window": "DAILY_NATIVE_CLICK_HOURS_TOTAL_UNKNOWN",
+    }
+
+
+def publish_parent_day(
+    session: Session,
+    *,
+    level: str,
+    tenant_id: UUID,
+    job_id: UUID,
+    accounts: dict[str, AccountMeta],
+    start: date,
+    end: date,
+    rows: Iterable[dict[str, Any]],
+    requested_at: datetime,
+    route: FrozenTikTokRoute,
+) -> int:
+    """同一 ReportingData 发布父级直接向量，绝不进入广告派生 writer。"""
+    from app.modules.reporting.levels import LEVELS
+    from app.modules.reporting.metrics import metric_evidence
+    from app.modules.reporting.store_models import ParentReportDay
+
+    contract = LEVELS[f"{level}_day"]
+    if not contract.parent:
+        raise ValueError(level)
+    kind = f"{level}_day"
+    staged = []
+    seen = set()
+    counts: dict[tuple[str, date], int] = {}
+    now = _database_now(session)
+    for row in rows:
+        adv = _account(row, accounts)
+        dimensions, metrics = row.get("dimensions", {}), row.get("metrics", {})
+        day = _in_range(parse_local_day(dimensions.get("stat_time_day")), start, end)
+        rid = dimensions.get(contract.dimension)
+        if not isinstance(rid, str) or not rid or (adv, rid, day) in seen:
+            raise DomainError("report_row_invalid", "系列日报身份缺失或重复")
+        seen.add((adv, rid, day))
+        evidence = metric_evidence(metrics, level=level)
+        evidence.update(
+            source_connection_id=str(route.connection_id),
+            source_channel=route.channel,
+            source_bc_id=route.bc_id,
+            route_revision=str(route.binding_revision),
+            request_digest=hashlib.sha256(
+                json.dumps(
+                    [
+                        str(tenant_id),
+                        adv,
+                        str(start),
+                        str(end),
+                        route.model_dump(mode="json"),
+                        evidence["request"],
+                        evidence["contract_revision"],
+                    ],
+                    sort_keys=True,
+                ).encode()
+            ).hexdigest(),
+            response_row_digest=hashlib.sha256(
+                json.dumps(row, sort_keys=True).encode()
+            ).hexdigest(),
+        )
+        staged.append(
+            ParentReportDay(
+                tenant_id=tenant_id,
+                advertiser_id=adv,
+                level=level,
+                remote_id=rid,
+                object_name=metrics.get(f"{level}_name"),
+                campaign_id=metrics.get("campaign_id"),
+                campaign_name=metrics.get("campaign_name"),
+                stat_date=day,
+                currency=accounts[adv].currency,
+                timezone=accounts[adv].timezone,
+                fetched_at=now,
+                sync_job_id=job_id,
+                evidence=evidence,
+                **basic_metric_values(metrics),
+            )
+        )
+        counts[(adv, day)] = counts.get((adv, day), 0) + 1
+    buckets = _writable_buckets(
+        session,
+        tenant_id=tenant_id,
+        accounts=accounts,
+        kind=kind,
+        start=start,
+        end=end,
+        requested_at=requested_at,
+    )
+    payload_by_bucket = {key: [] for key in buckets}
+    for fact in staged:
+        key = (fact.advertiser_id, fact.stat_date)
+        if key in payload_by_bucket:
+            payload_by_bucket[key].append(
+                (fact.remote_id, fact.evidence, fact.currency, fact.timezone)
+            )
+    payloads = {
+        (advertiser, day): _payload_digest(
+            [
+                (
+                    "",
+                    _publication_coordinates(level, accounts[advertiser], day),
+                    None,
+                    None,
+                ),
+                *payload_by_bucket[(advertiser, day)],
+            ]
+        )
+        for advertiser, day in buckets
+    }
+    buckets = _publication_buckets(
+        session,
+        tenant_id=tenant_id,
+        kind=kind,
+        buckets=buckets,
+        observed_at=requested_at,
+        payloads=payloads,
+    )
+    if not buckets:
+        return 0
+    session.exec(
+        delete(ParentReportDay).where(
+            col(ParentReportDay.tenant_id) == tenant_id,
+            col(ParentReportDay.level) == level,
+            _bucket_filter(ParentReportDay, buckets),
+        )
+    )
+    session.add_all([r for r in staged if (r.advertiser_id, r.stat_date) in buckets])
+    session.flush()
+    published_versions = _set_state(
+        session,
+        tenant_id=tenant_id,
+        kind=kind,
+        buckets=buckets,
+        counts=counts,
+        observed_at=requested_at,
+        job_id=job_id,
+        publication_metadata={
+            (advertiser, day): (
+                _publication_coordinates(level, accounts[advertiser], day),
+                payloads[(advertiser, day)],
+            )
+            for advertiser, day in buckets
+        },
+    )
+    # 空桶的合同与版本已经和状态一起批量写入；行证据引用同一批精确版本。
+    for fact in staged:
+        if (fact.advertiser_id, fact.stat_date) in buckets:
+            fact.evidence = fact.evidence | {
+                "observed_at": requested_at.isoformat(),
+                "publication_version": published_versions[
+                    (fact.advertiser_id, fact.stat_date)
+                ],
+                "local_day": fact.stat_date.isoformat(),
+                "currency": fact.currency,
+                "timezone": fact.timezone,
+            }
+    session.flush()
+    return len(staged)
+
+
+def publish_campaign_day(session: Session, **kwargs: Any) -> int:
+    return publish_parent_day(session, level="campaign", **kwargs)
+
+
+def publish_adgroup_day(session: Session, **kwargs: Any) -> int:
+    return publish_parent_day(session, level="adgroup", **kwargs)

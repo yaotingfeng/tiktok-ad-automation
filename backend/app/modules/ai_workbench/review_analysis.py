@@ -3,11 +3,13 @@
 import heapq
 import json
 from decimal import Decimal
+from typing import Any
 from uuid import uuid5
 
 from fastapi import HTTPException
 
 from app.core.errors import DomainError
+from app.modules.ai_workbench.review_projection import metric_buckets_for_reading
 from app.modules.ai_workbench.review_store import (
     ReviewArtifact,
     ReviewSource,
@@ -78,7 +80,7 @@ def analyze_for_task(
     query = query.order_by(ReviewSource.advertiser_id, ReviewSource.id)
     groups = {}
     sources = []
-    coverage = {
+    coverage: dict[str, Any] = {
         "requested_accounts": 1 if advertiser_id else len(scope),
         "frozen_accounts": 0,
         "available_accounts": 0,
@@ -96,6 +98,9 @@ def analyze_for_task(
     def candidates():
         sequence = 0
         for source in session.exec(query.execution_options(yield_per=1)):
+            from app.modules.reporting.frozen_evidence import archive_reports
+
+            archive_reports(source.payload, source.category)
             report = source.payload
             if _digest(report) != source.digest:
                 raise DomainError("ai_evidence_changed", "冻结证据摘要不一致")
@@ -146,6 +151,9 @@ def analyze_for_task(
                             "timezone",
                             "attribution",
                             "optimization_goal",
+                            "level",
+                            "source_kind",
+                            "contract_revision",
                         )
                     }
                     partition.update(
@@ -358,6 +366,14 @@ def analyze_for_task(
         "source_reference_count": len(sources),
         "interpretation": "Totals scan every frozen row, separately by currency/timezone/attribution/window/maturity. Only eligible paired spend and revenue enter totals and ratio; missing is not zero. Rankings are raw account/object observations, not optimizer causal lift. Source refs archived with this analysis.",
     }
+    raw_items = result["items"]
+    result["items"] = [
+        {
+            **item,
+            "metric_bucket": metric_buckets_for_reading([item["metric_bucket"]])[0],
+        }
+        for item in raw_items
+    ]
     while (
         len(json.dumps(result, ensure_ascii=False).encode()) > 64000
         and len(result["items"]) > 1
@@ -369,7 +385,12 @@ def analyze_for_task(
             "ai_analysis_page_too_large",
             "分析页超过 64KB，请缩小 limit 或按 advertiser_id 查询",
         )
-    payload = {**result, "source_refs": sources, "all_totals": totals}
+    payload = {
+        **result,
+        "items": raw_items[: len(result["items"])],
+        "source_refs": sources,
+        "all_totals": totals,
+    }
     previous = session.get(ReviewArtifact, (task.id, identity))
     if previous is None:
         session.add(

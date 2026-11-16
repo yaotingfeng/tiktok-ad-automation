@@ -34,18 +34,42 @@ def _assert_financial_parity(actual, expected):
         "status",
         "filters",
         "publication_versions",
-        "summary",
         "coverage",
         "metrics_observed_at",
         "total",
         "rows_truncated",
     ):
         assert actual[key] == expected[key], key
-    assert actual["projection_contract"] == "financial-review-v1"
+    assert actual["projection_contract"] == "financial-review-v2"
     assert len(actual["rows"]) == len(expected["rows"])
     for a, e in zip(actual["rows"], expected["rows"], strict=True):
         assert a["row_key"] == e["row_key"]
-        assert a["metric_buckets"] == e["metric_buckets"], a["row_key"]
+
+        # 分析范围不包含可执行 refs，scope_digest 不等于页面动作范围摘要；其余来源与金额完全相同。
+        def financial(value):
+            if isinstance(value, dict):
+                return {
+                    k: financial(v)
+                    for k, v in value.items()
+                    if k not in {"scope_digest", "evidence_ref"}
+                }
+            if isinstance(value, list):
+                return [financial(v) for v in value]
+            return value
+
+        from tests.modules.reporting.evidence_helpers import archived_records
+
+        assert financial(actual["summary"]) == financial(expected["summary"])
+        for left, right in zip(
+            actual["summary"]["buckets"], expected["summary"]["buckets"], strict=True
+        ):
+            assert archived_records(actual, left) == archived_records(expected, right)
+        assert archived_records(actual, a["metric_buckets"][0]) == archived_records(
+            expected, e["metric_buckets"][0]
+        )
+        assert financial(a["metric_buckets"]) == financial(e["metric_buckets"]), a[
+            "row_key"
+        ]
         assert a["display"]["name"] == e["display"]["name"]
         if e["coverage"].get("status") == "INCOMPLETE":
             assert a["coverage"]["status"] == "INCOMPLETE"
@@ -444,3 +468,102 @@ def test_full_account_freeze_retries_if_older_backtest_source_changes(
         for p in source_payloads(session, task, "rule_backtest_inputs")
         if p.get("advertiser_id")
     ]
+
+
+def test_native_selected_layers_and_actual_publication_cutoff(
+    session, context, monkeypatch
+):
+    from datetime import date, timedelta
+    from uuid import uuid4
+
+    from app.modules.reporting.publish import AccountMeta, publish_parent_day
+
+    version = _version(session, context)
+    _publish(session, context)
+    day = date(2026, 11, 12)
+    from app.integrations.tiktok.contracts.context import FrozenTikTokRoute
+    from app.modules.reporting.filters import authorized_grants
+
+    grant = authorized_grants(
+        session, context=context, bc_id=version.bc_id, advertiser_ids=("acc-1",)
+    )[0]
+    route = FrozenTikTokRoute(
+        tenant_id=context.tenant_id,
+        bc_id=version.bc_id,
+        connection_id=grant.connection_id,
+        channel="OFFICIAL_API",
+        authorization_revision=0,
+        adapter_contract_revision="official-api-v1",
+    )
+
+    def parent(observed):
+        publish_parent_day(
+            session,
+            tenant_id=context.tenant_id,
+            job_id=uuid4(),
+            level="campaign",
+            route=route,
+            accounts={"acc-1": AccountMeta("USD", "UTC")},
+            start=day,
+            end=day,
+            requested_at=observed,
+            rows=[
+                {
+                    "dimensions": {
+                        "campaign_id": "campaign-one",
+                        "stat_time_day": str(day),
+                    },
+                    "metrics": {
+                        "campaign_name": "嘉书-剧campaign-one-备注",
+                        "spend": "50",
+                        "native_growth_ad_revenue_value_d0": "20",
+                    },
+                }
+            ],
+        )
+
+    parent(CUTOFF)
+    pack = build_data_pack(session, context=context, version=version, cutoff=CUTOFF)
+    report = next(
+        r
+        for r in pack["reporting"]
+        if r["dimension"] == "campaign" and r["maturity_horizon"] == "d0"
+    )
+    values = {
+        b["source_kind"]: b["values"]["spend"] for b in report["summary"]["buckets"]
+    }
+    assert values == {"PLATFORM_DIRECT": "50", "CHILD_DERIVED": "60"}
+    assert all(b["level"] == "campaign" for b in report["summary"]["buckets"])
+    baseline = freeze_review_page(
+        session,
+        context=context,
+        bc_id=version.bc_id,
+        filters=ReportingFilter.model_validate(report["filters"]),
+        cutoff=CUTOFF,
+        freeze_all=True,
+    )
+    _assert_financial_parity(report, baseline)
+    from app.modules.ai_workbench import reviews
+    from app.modules.ai_workbench.review_analysis import analyze_for_task
+    from tests.modules.ai_workbench.review_helpers import create_prepared_review_task
+
+    monkeypatch.setattr(reviews, "_now", lambda: CUTOFF)
+    task = create_prepared_review_task(
+        session, context=context, optimizer_id=version.optimizer_id, request_id=uuid4()
+    )
+    analysis = analyze_for_task(
+        session, task=task, dimension="campaign", maturity_horizon="d0"
+    )
+    assert {item["source_kind"] for item in analysis["totals"]} == {
+        "PLATFORM_DIRECT",
+        "CHILD_DERIVED",
+    }
+    assert {item["level"] for item in analysis["totals"]} == {"campaign"}
+    parent(CUTOFF + timedelta(seconds=1))
+    late = build_data_pack(session, context=context, version=version, cutoff=CUTOFF)
+    assert all(
+        r["status"] == "UNAVAILABLE" and r["reason"] == "publication_after_cutoff"
+        for r in late["reporting"]
+        if r["dimension"] in {"account", "campaign", "drama"}
+        and r["maturity_horizon"] == "d0"
+    )

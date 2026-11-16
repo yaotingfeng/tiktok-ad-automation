@@ -6,6 +6,7 @@ from collections.abc import Callable, Iterator
 from datetime import UTC, datetime
 from enum import Enum
 from typing import Any
+from typing import cast as typing_cast
 from uuid import UUID, uuid4, uuid5
 
 from pydantic import ValidationError
@@ -104,7 +105,7 @@ def get_draft(
 ) -> BuildDraft:
     _authorize(session, context, "build" if lock else "read")
     query = select(BuildDraft).where(
-        BuildDraft.tenant_id == context.tenant_id, BuildDraft.id == draft_id
+        col(BuildDraft.tenant_id) == context.tenant_id, col(BuildDraft.id) == draft_id
     )
     if lock:
         query = query.with_for_update()
@@ -121,22 +122,46 @@ def _check_intent(
     context: TenantContext,
     *,
     bc_id: str,
-    strategy_version_id: UUID,
-    provider_connection_id: UUID,
-    application_id: str,
+    strategy_version_id: UUID | None,
+    provider_connection_id: UUID | None,
+    application_id: str | None,
     drama_lines: list[str],
     account_lines: list[str],
     link_config: dict[str, Any],
     execution_connection_id: UUID | None = None,
+    scene_selection: dict[str, Any] | None = None,
 ) -> None:
     _authorize(session, context)
+    native = bool(
+        scene_selection and scene_selection.get("kind") == "NATIVE_SERIES_DIRECT_VIDEO"
+    )
+    if native:
+        from .selection_schemas import NativeSeriesPlanSet
+
+        selection = NativeSeriesPlanSet.model_validate(scene_selection)
+        if (
+            provider_connection_id
+            or application_id
+            or drama_lines
+            or link_config
+            or account_lines != selection.advertiser_ids
+        ):
+            raise DomainError(
+                "draft_input_invalid",
+                "原生选择与 Mini 输入互斥，账户须与显式计划集一致",
+            )
     if (
         not isinstance(bc_id, str)
         or not bc_id.strip()
         or len(bc_id) > 128
-        or not isinstance(application_id, str)
-        or not application_id.strip()
-        or len(application_id) > 255
+        or (
+            not native
+            and (
+                not isinstance(application_id, str)
+                or not application_id.strip()
+                or len(application_id) > 255
+            )
+        )
     ):
         raise DomainError("draft_input_invalid", "请选择当前 BC 和版权方应用")
     bc = session.get(TenantBC, (context.tenant_id, bc_id), populate_existing=True)
@@ -153,12 +178,15 @@ def _check_intent(
     strategy = session.get(Strategy, version.strategy_id, populate_existing=True)
     if strategy is None or not strategy.active:
         raise DomainError("strategy_not_found", "投放策略已停用或不存在")
-    get_application(
-        session,
-        context=context,
-        connection_id=provider_connection_id,
-        application_id=application_id,
-    )
+    if not native:
+        # Mini 入口已 resolve_provider，且上面的输入校验已验证应用标识。
+        assert provider_connection_id is not None and application_id is not None
+        get_application(
+            session,
+            context=context,
+            connection_id=provider_connection_id,
+            application_id=application_id,
+        )
     for values, bound in ((drama_lines, 1000), (account_lines, MAX_ACCOUNT_LINES)):
         if (
             not isinstance(values, list)
@@ -242,16 +270,40 @@ def create_draft(
     request_id: UUID | None = None,
     execution_connection_id: UUID | None = None,
     media_kind: MediaKind = "VIDEO",
+    scene_selection: dict[str, Any] | None = None,
+    structure_override: dict[str, Any] | None = None,
 ) -> UUID:
+    if scene_selection is not None:
+        from pydantic import TypeAdapter
+
+        from .selection_schemas import SceneSelection
+
+        scene_selection = (
+            TypeAdapter(SceneSelection)
+            .validate_python(scene_selection)
+            .model_dump(mode="json")
+        )
     if media_kind not in {"VIDEO", "CAROUSEL"}:
         raise DomainError("draft_media_kind_invalid", "草稿素材类型无效")
-    provider_connection_id, application_id = resolve_provider(
-        session, context, provider_connection_id, application_id, custom_provider_name
+    native = bool(
+        scene_selection and scene_selection.get("kind") == "NATIVE_SERIES_DIRECT_VIDEO"
     )
-    provider = get_connection(
-        session, context=context, connection_id=provider_connection_id
-    )
-    manual = validate_manual_links(manual_links or [], drama_lines, provider.kind)
+    if native:
+        if media_kind != "VIDEO" or manual_links or custom_provider_name:
+            raise DomainError("draft_input_invalid", "原生直接视频输入无效")
+        manual = {}
+    else:
+        provider_connection_id, application_id = resolve_provider(
+            session,
+            context,
+            provider_connection_id,
+            application_id,
+            custom_provider_name,
+        )
+        provider = get_connection(
+            session, context=context, connection_id=provider_connection_id
+        )
+        manual = validate_manual_links(manual_links or [], drama_lines, provider.kind)
     intent: dict[str, Any] = {
         "bc_id": bc_id,
         "strategy_version_id": strategy_version_id,
@@ -261,7 +313,16 @@ def create_draft(
         "account_lines": account_lines,
         "link_config": link_config,
     }
+    if scene_selection is not None:
+        intent["scene_selection"] = scene_selection
     _check_intent(session, context, **intent)
+    if structure_override is not None:
+        from .structure import StructureOverride
+
+        structure_override = StructureOverride.model_validate(
+            structure_override
+        ).model_dump(mode="json")
+        intent["structure_override"] = structure_override
     if manual:
         intent["manual_links"] = list(manual.values())
     # 未指定连接的既有请求摘要保持原文，便于原 request_id 幂等回读。
@@ -288,8 +349,8 @@ def create_draft(
     _authorize(session, context)
     prior = session.exec(
         select(BuildDraft).where(
-            BuildDraft.tenant_id == context.tenant_id,
-            BuildDraft.request_id == request_id,
+            col(BuildDraft.tenant_id) == context.tenant_id,
+            col(BuildDraft.request_id) == request_id,
         )
     ).one_or_none()
     if prior:
@@ -302,6 +363,8 @@ def create_draft(
         )
     draft = BuildDraft(
         media_kind=media_kind,
+        scene_selection=scene_selection,
+        structure_override=structure_override,
         tenant_id=context.tenant_id,
         bc_id=bc_id,
         strategy_version_id=strategy_version_id,
@@ -331,6 +394,7 @@ def prepare_draft(
         {"key": f"draft-prepare:{context.tenant_id}:{request_id}"},
     )
     draft = get_draft(session, context=context, draft_id=draft_id, lock=True)
+
     prior = session.get(DraftPreparationRequest, (context.tenant_id, request_id))
     if prior:
         if prior.draft_id != draft.id:
@@ -338,9 +402,9 @@ def prepare_draft(
         return prior.preparation_id
     existing = session.exec(
         select(DraftPreparation).where(
-            DraftPreparation.tenant_id == context.tenant_id,
-            DraftPreparation.draft_id == draft.id,
-            DraftPreparation.draft_revision == draft.revision,
+            col(DraftPreparation.tenant_id) == context.tenant_id,
+            col(DraftPreparation.draft_id) == draft.id,
+            col(DraftPreparation.draft_revision) == draft.revision,
         )
     ).one_or_none()
     if existing and existing.status == "PENDING":
@@ -360,8 +424,44 @@ def prepare_draft(
         bc_id=draft.bc_id,
         connection_id=draft.execution_connection_id,
     )
+    if (
+        existing
+        and (draft.scene_selection or {}).get("kind") == "NATIVE_SERIES_DIRECT_VIDEO"
+    ):
+        from .draft_tasks import queue_preparation
+
+        # 同修订重试保留各计划的证据和游标；只重新评估当前冻结路由。
+        _preparation_route(session, context, draft, existing)
+        existing.status, existing.phase, existing.error_code = "PENDING", "scenes", None
+        existing.generation += 1
+        draft.status = "PREPARING"
+        session.add(
+            DraftPreparationRequest(
+                tenant_id=context.tenant_id,
+                request_id=request_id,
+                draft_id=draft.id,
+                preparation_id=existing.id,
+            )
+        )
+        queue_preparation(session, existing, delay=0)
+        session.flush()
+        return existing.id
     if existing or draft.status != "DRAFT":
         _bump_revision(session, draft, draft.revision)
+    if (
+        draft.scene_selection
+        and draft.scene_selection.get("kind") == "NATIVE_SERIES_DIRECT_VIDEO"
+    ):
+        prep = DraftPreparation(
+            tenant_id=context.tenant_id,
+            draft_id=draft.id,
+            draft_revision=draft.revision,
+            actor_id=context.actor_id,
+            request_id=request_id,
+        )
+        return _enqueue_draft_preparation(
+            session, context, draft, prep, route, request_id
+        )
     # Every new local preparation starts account resolution afresh. Manual
     # groups survive while automatic groups are rebuilt in stable order.
     SASession.execute(
@@ -373,8 +473,8 @@ def prepare_draft(
     )
     dramas = session.exec(
         select(DraftDrama).where(
-            DraftDrama.tenant_id == context.tenant_id,
-            DraftDrama.draft_id == draft.id,
+            col(DraftDrama.tenant_id) == context.tenant_id,
+            col(DraftDrama.draft_id) == draft.id,
         )
     ).all()
     for drama in dramas:
@@ -390,9 +490,9 @@ def prepare_draft(
     input_rows = session.exec(
         select(DraftInput)
         .where(
-            DraftInput.tenant_id == context.tenant_id,
-            DraftInput.draft_id == draft.id,
-            DraftInput.kind == "drama",
+            col(DraftInput.tenant_id) == context.tenant_id,
+            col(DraftInput.draft_id) == draft.id,
+            col(DraftInput.kind) == "drama",
         )
         .order_by(col(DraftInput.line_no))
     ).all()
@@ -429,8 +529,8 @@ def prepare_draft(
             get_application(
                 session,
                 context=context,
-                connection_id=draft.provider_connection_id,
-                application_id=draft.application_id,
+                connection_id=typing_cast(UUID, draft.provider_connection_id),
+                application_id=typing_cast(str, draft.application_id),
             ),
             draft.link_config,
         )
@@ -444,20 +544,20 @@ def prepare_draft(
         ]
     )
     previous_provider = session.exec(
-        select(LinkPreparation.id)
+        select(col(LinkPreparation.id))
         .join(
             DraftPreparation,
             and_(
-                col(DraftPreparation.tenant_id) == LinkPreparation.tenant_id,
-                col(DraftPreparation.provider_task_id) == LinkPreparation.id,
+                col(DraftPreparation.tenant_id) == col(LinkPreparation.tenant_id),
+                col(DraftPreparation.provider_task_id) == col(LinkPreparation.id),
             ),
         )
         .where(
-            DraftPreparation.tenant_id == context.tenant_id,
-            DraftPreparation.draft_id == draft.id,
-            LinkPreparation.connection_id == draft.provider_connection_id,
-            LinkPreparation.application_id == draft.application_id,
-            LinkPreparation.request_digest == provider_digest,
+            col(DraftPreparation.tenant_id) == context.tenant_id,
+            col(DraftPreparation.draft_id) == draft.id,
+            col(LinkPreparation.connection_id) == draft.provider_connection_id,
+            col(LinkPreparation.application_id) == draft.application_id,
+            col(LinkPreparation.request_digest) == provider_digest,
         )
         .order_by(col(DraftPreparation.draft_revision).desc())
         .limit(1)
@@ -468,14 +568,14 @@ def prepare_draft(
             select(LinkPreparation)
             .join(
                 DraftPreparation,
-                (col(DraftPreparation.tenant_id) == LinkPreparation.tenant_id)
-                & (col(DraftPreparation.provider_task_id) == LinkPreparation.id),
+                (col(DraftPreparation.tenant_id) == col(LinkPreparation.tenant_id))
+                & (col(DraftPreparation.provider_task_id) == col(LinkPreparation.id)),
             )
             .where(
-                DraftPreparation.tenant_id == context.tenant_id,
-                DraftPreparation.draft_id == draft.id,
-                LinkPreparation.connection_id == draft.provider_connection_id,
-                LinkPreparation.application_id == draft.application_id,
+                col(DraftPreparation.tenant_id) == context.tenant_id,
+                col(DraftPreparation.draft_id) == draft.id,
+                col(LinkPreparation.connection_id) == draft.provider_connection_id,
+                col(LinkPreparation.application_id) == draft.application_id,
                 col(LinkPreparation.config) == link_config,
             )
             .order_by(col(DraftPreparation.draft_revision).desc())
@@ -484,8 +584,8 @@ def prepare_draft(
         if candidate:
             old_rows = session.exec(
                 select(LinkPreparationItem).where(
-                    LinkPreparationItem.tenant_id == context.tenant_id,
-                    LinkPreparationItem.preparation_id == candidate.id,
+                    col(LinkPreparationItem.tenant_id) == context.tenant_id,
+                    col(LinkPreparationItem.preparation_id) == candidate.id,
                 )
             ).all()
             old_lines = {row.line_no: row.raw_input for row in old_rows}
@@ -501,15 +601,15 @@ def prepare_draft(
     if (
         previous_provider is not None
         and session.exec(
-            select(LinkPreparationItem.id)
+            select(col(LinkPreparationItem.id))
             .where(
-                LinkPreparationItem.tenant_id == context.tenant_id,
-                LinkPreparationItem.preparation_id == previous_provider,
+                col(LinkPreparationItem.tenant_id) == context.tenant_id,
+                col(LinkPreparationItem.preparation_id) == previous_provider,
                 (col(LinkPreparationItem.status) == "failed")
                 | (
                     (col(LinkPreparationItem.status) == "needs_resolution")
                     & (
-                        LinkPreparationItem.resolved["error_code"].astext
+                        col(LinkPreparationItem.resolved)["error_code"].astext
                         == "drama_not_found"
                     )
                 ),
@@ -527,8 +627,8 @@ def prepare_draft(
             else prepare_links(
                 session,
                 context=context,
-                connection_id=draft.provider_connection_id,
-                application_id=draft.application_id,
+                connection_id=typing_cast(UUID, draft.provider_connection_id),
+                application_id=typing_cast(str, draft.application_id),
                 lines=list(lines),
                 config=link_config,
                 request_id=uuid5(prep.id, "provider-links"),
@@ -556,8 +656,8 @@ def prepare_selected_mini(
     previous = session.exec(
         select(DraftPreparation)
         .where(
-            DraftPreparation.tenant_id == context.tenant_id,
-            DraftPreparation.draft_id == draft.id,
+            col(DraftPreparation.tenant_id) == context.tenant_id,
+            col(DraftPreparation.draft_id) == draft.id,
         )
         .order_by(col(DraftPreparation.draft_revision).desc())
         .limit(1)
@@ -672,14 +772,14 @@ def _capabilities_page(
         select(DraftCapabilityDependency, CapabilityJob)
         .join(
             CapabilityJob,
-            (col(CapabilityJob.tenant_id) == DraftCapabilityDependency.tenant_id)
-            & (col(CapabilityJob.id) == DraftCapabilityDependency.job_id),
+            (col(CapabilityJob.tenant_id) == col(DraftCapabilityDependency.tenant_id))
+            & (col(CapabilityJob.id) == col(DraftCapabilityDependency.job_id)),
         )
         .where(
-            DraftCapabilityDependency.tenant_id == context.tenant_id,
-            DraftCapabilityDependency.preparation_id == prep.id,
-            DraftCapabilityDependency.status == "PENDING",
-            CapabilityJob.status != "PENDING",
+            col(DraftCapabilityDependency.tenant_id) == context.tenant_id,
+            col(DraftCapabilityDependency.preparation_id) == prep.id,
+            col(DraftCapabilityDependency.status) == "PENDING",
+            col(CapabilityJob.status) != "PENDING",
         )
         .order_by(col(DraftCapabilityDependency.connection_id))
         .limit(PAGE_SIZE)
@@ -709,11 +809,11 @@ def _capabilities_page(
             )
     session.flush()
     pending = session.exec(
-        select(DraftCapabilityDependency.connection_id)
+        select(col(DraftCapabilityDependency.connection_id))
         .where(
-            DraftCapabilityDependency.tenant_id == context.tenant_id,
-            DraftCapabilityDependency.preparation_id == prep.id,
-            DraftCapabilityDependency.status == "PENDING",
+            col(DraftCapabilityDependency.tenant_id) == context.tenant_id,
+            col(DraftCapabilityDependency.preparation_id) == prep.id,
+            col(DraftCapabilityDependency.status) == "PENDING",
         )
         .limit(1)
     ).first()
@@ -726,25 +826,119 @@ def _scenes_page(
 ) -> None:
     from .identity_selection import selected_identity
 
+    if (
+        draft.scene_selection
+        and draft.scene_selection.get("kind") == "NATIVE_SERIES_DIRECT_VIDEO"
+    ):
+        from .native_materials import prepare_native_materials
+        from .scene_jobs import native_checkpoint
+        from .selection_schemas import NativeSeriesPlanSet
+
+        route = _preparation_route(session, context, draft, prep)
+        plans = NativeSeriesPlanSet.model_validate(draft.scene_selection).plans
+        states, reasons, checkpoints = [], [], []
+        # 先取得路由/账户/SceneJob，再按全批素材 ID 顺序取锁。
+        for plan in plans:
+            selection = plan.selection.model_dump(mode="json")
+            try:
+                receipt = ensure_scene_preparation(
+                    session,
+                    context=context,
+                    bc_id=draft.bc_id,
+                    advertiser_id=selection["advertiser_id"],
+                    link_id=None,
+                    route=route,
+                    native_selection=selection,
+                )
+                if receipt.state == "queued":
+                    states.append("PENDING")
+                    continue
+                checkpoint = native_checkpoint(
+                    session,
+                    context=context,
+                    draft=draft,
+                    route=route,
+                    plan_key=plan.plan_key,
+                )
+                checkpoints.append((plan, checkpoint))
+            except DomainError as error:
+                states.append("BLOCKED")
+                reasons.append(error.code)
+        state = _scene_prep(session, draft, prep)
+        material_ids = set()
+        for plan, checkpoint in checkpoints:
+            if checkpoint.state != "READY" or checkpoint.materials_ready:
+                continue
+            cursor = (
+                (state.native_materials or {})
+                .get("plans", {})
+                .get(str(plan.plan_key), {})
+                .get("cursor", 0)
+            )
+            for source in plan.selection.video_sources[cursor : cursor + 20]:
+                material_ids.add(source.material_id)
+                if source.cover_material_id:
+                    material_ids.add(source.cover_material_id)
+        session.exec(
+            select(MaterialFile)
+            .where(
+                col(MaterialFile.tenant_id) == context.tenant_id,
+                col(MaterialFile.id).in_(material_ids),
+            )
+            .order_by(col(MaterialFile.id))
+            .with_for_update()
+        ).all()
+        for plan, checkpoint in checkpoints:
+            if checkpoint.state == "READY" and not checkpoint.materials_ready:
+                prepare_native_materials(
+                    session,
+                    context=context,
+                    draft=draft,
+                    prep=prep,
+                    route=route,
+                    checkpoint=checkpoint,
+                    plan_key=plan.plan_key,
+                )
+                checkpoint = native_checkpoint(
+                    session,
+                    context=context,
+                    draft=draft,
+                    route=route,
+                    plan_key=plan.plan_key,
+                )
+            if not plan.selection.video_sources:
+                states.append("BLOCKED")
+                reasons.append("native_materials_not_prepared")
+            else:
+                states.append(checkpoint.materials_state)
+            reasons.extend(checkpoint.reason_codes)
+            reasons.extend(issue["reason_code"] for issue in checkpoint.material_issues)
+        if "PENDING" in states:
+            return
+        # 准备聚合由逐项事实派生；不以一个失败吞掉兄弟项。
+        prep.status = draft.status = "READY" if "READY" in states else "BLOCKED"
+        prep.phase = "done"
+        prep.error_code = reasons[0] if reasons else None
+        return
     state = _scene_prep(session, draft, prep)
     route = _preparation_route(session, context, draft, prep)
     identity = selected_identity(draft)
     # 先以首个有素材的链接准备各账户目录。Mini 未确定时停在名称选择；
     # 用户选择覆盖本批次链接，预览仍逐剧检查各链接真实目标，不能从应用推断。
     link_id = session.exec(
-        select(DraftDrama.link_id)
+        select(col(DraftDrama.link_id))
         .join(
             PromotionLink,
-            (col(PromotionLink.tenant_id) == DraftDrama.tenant_id)
-            & (col(PromotionLink.id) == DraftDrama.link_id),
+            (col(PromotionLink.tenant_id) == col(DraftDrama.tenant_id))
+            & (col(PromotionLink.id) == col(DraftDrama.link_id)),
         )
         .where(
-            DraftDrama.tenant_id == context.tenant_id,
-            DraftDrama.draft_id == draft.id,
-            DraftDrama.matched_count > 0,
-            PromotionLink.connection_id == draft.provider_connection_id,
-            PromotionLink.application_id == draft.application_id,
-            PromotionLink.status == "ready",
+            col(DraftDrama.tenant_id) == context.tenant_id,
+            col(DraftDrama.draft_id) == draft.id,
+            col(DraftDrama.matched_count) > 0,
+            col(PromotionLink.connection_id) == draft.provider_connection_id,
+            col(PromotionLink.application_id) == draft.application_id,
+            col(PromotionLink.status) == "ready",
             col(PromotionLink.verified_at).is_not(None),
         )
         .order_by(col(DraftDrama.first_line), col(DraftDrama.drama_id))
@@ -754,12 +948,12 @@ def _scenes_page(
         prep.status, prep.phase, draft.status = "READY", "done", "READY"
         return
     if not state.scenes_queued:
-        query = select(DraftAccount.advertiser_id).where(
-            DraftAccount.tenant_id == context.tenant_id,
-            DraftAccount.draft_id == draft.id,
+        query = select(col(DraftAccount.advertiser_id)).where(
+            col(DraftAccount.tenant_id) == context.tenant_id,
+            col(DraftAccount.draft_id) == draft.id,
         )
         if state.scene_after is not None:
-            query = query.where(DraftAccount.advertiser_id > state.scene_after)
+            query = query.where(col(DraftAccount.advertiser_id) > state.scene_after)
         accounts = session.exec(
             query.order_by(col(DraftAccount.advertiser_id)).limit(PAGE_SIZE)
         ).all()
@@ -800,14 +994,14 @@ def _scenes_page(
         select(DraftSceneDependency, SceneJob)
         .join(
             SceneJob,
-            (col(SceneJob.tenant_id) == DraftSceneDependency.tenant_id)
-            & (col(SceneJob.id) == DraftSceneDependency.job_id),
+            (col(SceneJob.tenant_id) == col(DraftSceneDependency.tenant_id))
+            & (col(SceneJob.id) == col(DraftSceneDependency.job_id)),
         )
         .where(
-            DraftSceneDependency.tenant_id == context.tenant_id,
-            DraftSceneDependency.preparation_id == prep.id,
-            DraftSceneDependency.status == "PENDING",
-            SceneJob.status != "PENDING",
+            col(DraftSceneDependency.tenant_id) == context.tenant_id,
+            col(DraftSceneDependency.preparation_id) == prep.id,
+            col(DraftSceneDependency.status) == "PENDING",
+            col(SceneJob.status) != "PENDING",
         )
         .order_by(col(DraftSceneDependency.advertiser_id))
         .limit(PAGE_SIZE)
@@ -852,11 +1046,11 @@ def _scenes_page(
         dependency.error_code = result.reason_code
     session.flush()
     pending = session.exec(
-        select(DraftSceneDependency.advertiser_id)
+        select(col(DraftSceneDependency.advertiser_id))
         .where(
-            DraftSceneDependency.tenant_id == context.tenant_id,
-            DraftSceneDependency.preparation_id == prep.id,
-            DraftSceneDependency.status == "PENDING",
+            col(DraftSceneDependency.tenant_id) == context.tenant_id,
+            col(DraftSceneDependency.preparation_id) == prep.id,
+            col(DraftSceneDependency.status) == "PENDING",
         )
         .limit(1)
     ).first()
@@ -871,16 +1065,21 @@ def _accounts_page(
     rows = session.exec(
         select(DraftInput)
         .where(
-            DraftInput.tenant_id == context.tenant_id,
-            DraftInput.draft_id == draft.id,
-            DraftInput.kind == "account",
-            DraftInput.line_no > prep.account_after,
+            col(DraftInput.tenant_id) == context.tenant_id,
+            col(DraftInput.draft_id) == draft.id,
+            col(DraftInput.kind) == "account",
+            col(DraftInput.line_no) > prep.account_after,
         )
         .order_by(col(DraftInput.line_no))
         .limit(PAGE_SIZE)
     ).all()
     if not rows:
-        prep.phase = "links"
+        prep.phase = (
+            "scenes"
+            if draft.scene_selection
+            and draft.scene_selection.get("kind") == "NATIVE_SERIES_DIRECT_VIDEO"
+            else "links"
+        )
         return
     results = resolve_lines(
         session,
@@ -1024,17 +1223,21 @@ def _links_page(
         cursor=prep.link_cursor,
         page_size=PAGE_SIZE,
     )
+    from app.modules.providers.link_steps import has_runnable_link_items
+
+    automatic_ids = []
     for result in page.items:
         row = session.exec(
             select(DraftInput).where(
-                DraftInput.tenant_id == context.tenant_id,
-                DraftInput.draft_id == draft.id,
-                DraftInput.kind == "drama",
-                DraftInput.line_no == result.line_no,
+                col(DraftInput.tenant_id) == context.tenant_id,
+                col(DraftInput.draft_id) == draft.id,
+                col(DraftInput.kind) == "drama",
+                col(DraftInput.line_no) == result.line_no,
             )
         ).one()
         if row.manual_link.get("url"):
             continue  # 已补链输入不接受旧版权方结果覆盖。
+        automatic_ids.append(result.input_id)
         row.status, row.reason_code, row.provider_input_id = (
             result.status,
             result.error_code,
@@ -1044,19 +1247,17 @@ def _links_page(
         row.candidates = [
             candidate.model_dump(mode="json") for candidate in result.candidates
         ]
-        if result.status in {"pending", "retryable_error"}:
-            prep.pending_links = True
         if result.status == "ready":
             assert result.drama_id and result.link_id and result.title
             # DTOs do not weaken the persisted identity boundary.
             link = session.exec(
                 select(PromotionLink).where(
-                    PromotionLink.tenant_id == context.tenant_id,
-                    PromotionLink.id == result.link_id,
-                    PromotionLink.drama_id == result.drama_id,
-                    PromotionLink.connection_id == draft.provider_connection_id,
-                    PromotionLink.application_id == draft.application_id,
-                    PromotionLink.status == "ready",
+                    col(PromotionLink.tenant_id) == context.tenant_id,
+                    col(PromotionLink.id) == result.link_id,
+                    col(PromotionLink.drama_id) == result.drama_id,
+                    col(PromotionLink.connection_id) == draft.provider_connection_id,
+                    col(PromotionLink.application_id) == draft.application_id,
+                    col(PromotionLink.status) == "ready",
                 )
             ).one_or_none()
             if link is None:
@@ -1086,6 +1287,13 @@ def _links_page(
             elif prior.first_line != result.line_no:
                 row.status, row.duplicate_of = "duplicate", prior.first_line
         session.add(row)
+    # 人工补链替代原结果；只等待仍参与自动取链的输入，跨页保留等待状态。
+    prep.pending_links |= has_runnable_link_items(
+        session,
+        tenant_id=context.tenant_id,
+        preparation_id=prep.provider_task_id,
+        item_ids=automatic_ids,
+    )
     if page.next_cursor is not None and page.next_cursor == prep.link_cursor:
         raise DomainError("repeated_cursor", "版权方分页游标重复")
     prep.link_cursor = page.next_cursor
@@ -1103,8 +1311,8 @@ def _materials_page(
     drama = session.exec(
         select(DraftDrama)
         .where(
-            DraftDrama.tenant_id == context.tenant_id,
-            DraftDrama.draft_id == draft.id,
+            col(DraftDrama.tenant_id) == context.tenant_id,
+            col(DraftDrama.draft_id) == draft.id,
             col(DraftDrama.material_state).in_(["pending", "matching"]),
         )
         .order_by(col(DraftDrama.first_line), col(DraftDrama.drama_id))
@@ -1129,11 +1337,11 @@ def _materials_page(
         # 保留最初冻结的文件 ID，不让同一视频重复进入素材包。分组由预览
         # 规划器根据冻结的素材包顺序决定，草稿阶段只保存一个稳定的源分组。
         exists = session.exec(
-            select(DraftCreativeUnitItem.material_id)
+            select(col(DraftCreativeUnitItem.material_id))
             .join(
                 MaterialFile,
-                (col(MaterialFile.tenant_id) == DraftCreativeUnitItem.tenant_id)
-                & (col(MaterialFile.id) == DraftCreativeUnitItem.material_id),
+                (col(MaterialFile.tenant_id) == col(DraftCreativeUnitItem.tenant_id))
+                & (col(MaterialFile.id) == col(DraftCreativeUnitItem.material_id)),
             )
             .where(
                 col(DraftCreativeUnitItem.tenant_id) == context.tenant_id,
@@ -1164,8 +1372,8 @@ def continue_draft(session: Session, *, context: TenantContext, task_id: UUID) -
     prep = session.exec(
         select(DraftPreparation)
         .where(
-            DraftPreparation.tenant_id == context.tenant_id,
-            DraftPreparation.id == task_id,
+            col(DraftPreparation.tenant_id) == context.tenant_id,
+            col(DraftPreparation.id) == task_id,
         )
         .execution_options(populate_existing=True)
     ).one_or_none()
@@ -1174,7 +1382,7 @@ def continue_draft(session: Session, *, context: TenantContext, task_id: UUID) -
     draft = get_draft(session, context=context, draft_id=prep.draft_id, lock=True)
     prep = session.exec(
         select(DraftPreparation)
-        .where(DraftPreparation.id == prep.id)
+        .where(col(DraftPreparation.id) == prep.id)
         .with_for_update()
         .execution_options(populate_existing=True)
     ).one()
@@ -1267,9 +1475,9 @@ def edit_material_groups(
         chunk = identities[offset : offset + PAGE_SIZE]
         actual = session.exec(
             select(MaterialFile).where(
-                MaterialFile.tenant_id == context.tenant_id,
+                col(MaterialFile.tenant_id) == context.tenant_id,
                 col(MaterialFile.id).in_(chunk),
-                MaterialFile.media_type == "VIDEO",
+                col(MaterialFile.media_type) == "VIDEO",
                 material_visible(tenant_id=context.tenant_id),
             )
         ).all()
@@ -1314,6 +1522,8 @@ def update_draft(
     manual_links: list[dict[str, Any]] | None = None,
     custom_provider_name: str | None = None,
     execution_connection_id: UUID | None | _Unchanged = _Unchanged.VALUE,
+    scene_selection: dict[str, Any] | None = None,
+    structure_override: dict[str, Any] | None = None,
 ) -> int:
     """Input/strategy changes restart preparation; material-only edits use their
     separate endpoint to preserve every other drama's prepared grouping.
@@ -1323,6 +1533,77 @@ def update_draft(
         raise DomainError(
             "draft_revision_conflict", "草稿已更新，请保留当前编辑并读取最新版本"
         )
+    if (
+        draft.scene_selection
+        and draft.scene_selection.get("kind") == "NATIVE_SERIES_DIRECT_VIDEO"
+    ):
+        from .selection_schemas import NativeSeriesPlanSet
+        from .structure import StructureOverride
+
+        selection = NativeSeriesPlanSet.model_validate(
+            scene_selection or draft.scene_selection
+        ).model_dump(mode="json")
+        structure = (
+            StructureOverride.model_validate(structure_override).model_dump(mode="json")
+            if structure_override is not None
+            else draft.structure_override
+        )
+        selected_strategy = strategy_version_id or draft.strategy_version_id
+        connection = (
+            draft.execution_connection_id
+            if execution_connection_id is _Unchanged.VALUE
+            else execution_connection_id
+        )
+        if manual_links or custom_provider_name:
+            raise DomainError("draft_input_invalid", "原生草稿不使用版权方链接")
+        _check_intent(
+            session,
+            context,
+            bc_id=draft.bc_id,
+            strategy_version_id=selected_strategy,
+            provider_connection_id=provider_connection_id,
+            application_id=application_id,
+            drama_lines=drama_lines or [],
+            account_lines=account_lines
+            if account_lines is not None
+            else NativeSeriesPlanSet.model_validate(selection).advertiser_ids,
+            link_config=link_config or {},
+            execution_connection_id=connection,
+            scene_selection=selection,
+        )
+        revision = _bump_revision(session, draft, expected_revision)
+        draft.scene_selection = selection
+        draft.structure_override = structure
+        draft.strategy_version_id = selected_strategy
+        draft.execution_connection_id = connection
+        draft.status = "DRAFT"
+        SASession.execute(
+            session,
+            delete(DraftAccount).where(
+                col(DraftAccount.tenant_id) == context.tenant_id,
+                col(DraftAccount.draft_id) == draft.id,
+            ),
+        )
+        SASession.execute(
+            session,
+            delete(DraftInput).where(
+                col(DraftInput.tenant_id) == context.tenant_id,
+                col(DraftInput.draft_id) == draft.id,
+            ),
+        )
+        _store_inputs(
+            session,
+            draft,
+            "account",
+            NativeSeriesPlanSet.model_validate(selection).advertiser_ids,
+        )
+        session.add(draft)
+        session.flush()
+        return revision
+    if structure_override is not None:
+        raise DomainError("draft_input_invalid", "Mini 结构修改请使用既有结构入口")
+    if scene_selection and scene_selection.get("kind") != "MINI_APP":
+        raise DomainError("draft_input_invalid", "请新建原生目的地草稿")
     if custom_provider_name is not None:
         provider_connection_id, application_id = resolve_provider(
             session, context, None, None, custom_provider_name
@@ -1331,17 +1612,18 @@ def update_draft(
         row.manual_link
         for row in session.exec(
             select(DraftInput).where(
-                DraftInput.tenant_id == context.tenant_id,
-                DraftInput.draft_id == draft.id,
-                DraftInput.kind == "drama",
+                col(DraftInput.tenant_id) == context.tenant_id,
+                col(DraftInput.draft_id) == draft.id,
+                col(DraftInput.kind) == "drama",
             )
         ).all()
         if row.manual_link
     ]
     existing = session.exec(
-        select(DraftInput.kind, DraftInput.raw_text)
+        select(col(DraftInput.kind), col(DraftInput.raw_text))
         .where(
-            DraftInput.tenant_id == context.tenant_id, DraftInput.draft_id == draft.id
+            col(DraftInput.tenant_id) == context.tenant_id,
+            col(DraftInput.draft_id) == draft.id,
         )
         .order_by(col(DraftInput.kind), col(DraftInput.line_no))
     ).all()

@@ -35,6 +35,7 @@ import {
   loadColumnPrefs,
   saveColumnPrefs,
 } from "./columnPrefs"
+import { DirectoryBrowser } from "./DirectoryBrowser"
 import {
   AdsDetailSheet,
   type DetailActionScope,
@@ -91,7 +92,7 @@ export function AdsWorkspace() {
       ? applied
       : { ...applied, page: 1, cursor: undefined, snapshot_id: undefined }
   const ads = useAdsQuery(requestSearch, queryRevision)
-  const items = ads.query.data?.items ?? []
+  const items = ads.query.isError ? [] : ads.query.data?.items ?? []
   const catalog = useMetricCatalog()
   const [submittedTask, setSubmittedTask] = useState<{
     task_id: string
@@ -262,18 +263,26 @@ export function AdsWorkspace() {
     [clearSelection, clearManagementPreview, closeDetail, forceNextQuery],
   )
   const refetchRows = ads.query.refetch
-  const refreshCurrentPage = useCallback(() => {
-    forceNextQuery()
-    void refetchRows()
-    // 已打开的详情/广告内素材也读取同一轮目录回读，不留着操作前的缓存。
+  const refreshCurrentDirectory = useCallback(() => {
+    // 本人操作回读只更新当前目录观察；报表成员、金额及展示继续绑定原查询。
     void queryClient.invalidateQueries({
       queryKey: ["tenant", tenantId, "ads"],
       predicate: (query) =>
-        ["detail", "ad-materials", "linked"].includes(
-          String(query.queryKey[3]),
-        ) && query.queryKey[4] === currentBcId,
+        query.queryKey[3] === "detail" && query.queryKey[4] === currentBcId,
     })
-  }, [refetchRows, queryClient, tenantId, currentBcId, forceNextQuery])
+  }, [queryClient, tenantId, currentBcId])
+  const refreshCurrentPage = useCallback(() => {
+    forceNextQuery()
+    void refetchRows()
+    refreshCurrentDirectory()
+    // 素材维度沿用原有回读：刷新广告内素材和关联报表。
+    void queryClient.invalidateQueries({
+      queryKey: ["tenant", tenantId, "ads"],
+      predicate: (query) =>
+        ["ad-materials", "linked"].includes(String(query.queryKey[3])) &&
+        query.queryKey[4] === currentBcId,
+    })
+  }, [refetchRows, forceNextQuery, refreshCurrentDirectory, queryClient, tenantId, currentBcId])
   const syncMutation = useMutation({
     mutationFn: async () => {
       // 手动刷新按当前筛选账户插队，不从当前页推导范围，也不触发历史回补。
@@ -387,6 +396,7 @@ export function AdsWorkspace() {
   const update = (next: Partial<AdsSearch>) =>
     setSearch((current) => ({ ...current, ...next, page: next.page ?? 1 }))
   const apply = () => {
+    forceNextQuery()
     ads.selection.clear()
     clearManagementPreview()
     setCursorHistory([])
@@ -462,7 +472,7 @@ export function AdsWorkspace() {
     accountName?: string,
   ) => {
     setScopeLabels({ accountName, parent })
-    applyScope({ dimension, advertiser_ids: [advertiserId], ids: [parent.id] })
+    applyScope({ dimension, contribution: null, advertiser_ids: [advertiserId], ids: [parent.id] })
   }
   const clearScopeAccount = () => {
     setScopeLabels({})
@@ -648,6 +658,7 @@ export function AdsWorkspace() {
     !selectionMutation.isPending &&
     !adMaterialSelection.isPending &&
     !ads.query.isFetching &&
+    !ads.query.isError &&
     applied.page === 1
   useEffect(() => {
     if (!syncStatus.data) return
@@ -662,7 +673,18 @@ export function AdsWorkspace() {
       pendingRefreshScope.current = null
       setNewDataAvailable(false)
       // 早于首次同步状态响应完成的提交，也要读取当前页的真实状态。
-      if (followOwnOperation) void refreshCurrentPage()
+      if (followOwnOperation) {
+        if (applied.dimension === "material") refreshCurrentPage()
+        else refreshCurrentDirectory()
+      }
+      return
+    }
+    // 日报固定本次查询，源发布只提示用户重查；素材沿用原有刷新合同。
+    if (applied.dimension !== "material") {
+      if (previous.version !== version) {
+        setNewDataAvailable(true)
+        if (followOwnOperation) refreshCurrentDirectory()
+      }
       return
     }
     // 延迟的新版本在操作结束后仍可自动加载；同一版本只加载一次，避免刷新循环。
@@ -692,7 +714,9 @@ export function AdsWorkspace() {
     currentBcId,
     ads.snapshot,
     refreshCurrentPage,
+    refreshCurrentDirectory,
     canAutoLoadLatest,
+    applied.dimension,
     newDataAvailable,
     pageVisible,
   ])
@@ -721,6 +745,14 @@ export function AdsWorkspace() {
   }
   return (
     <div className="flex min-w-0 flex-col gap-3">
+      {tenantId && currentBcId && (
+        <DirectoryBrowser
+          key={`${tenantId}:${currentBcId}`}
+          tenantId={tenantId}
+          bcId={currentBcId}
+          onOpen={(ref) => setDetailStack([{ source: "directory", ref }])}
+        />
+      )}
       {submittedTask && submittedTask.bc_id === currentBcId && (
         <Alert>
           <AlertDescription className="flex flex-wrap items-center justify-between gap-2">
@@ -849,6 +881,7 @@ export function AdsWorkspace() {
               setApplied((current) => ({
                 ...current,
                 dimension,
+                contribution: ["ad", "material"].includes(dimension) ? null : current.contribution,
                 page: 1,
                 cursor: undefined,
                 snapshot_id: undefined,
@@ -856,6 +889,7 @@ export function AdsWorkspace() {
               setSearch((current) => ({
                 ...current,
                 dimension,
+                contribution: ["ad", "material"].includes(dimension) ? null : current.contribution,
                 page: 1,
                 cursor: undefined,
                 snapshot_id: undefined,
@@ -966,10 +1000,16 @@ export function AdsWorkspace() {
       )}
       {ads.query.isError && (
         <p role="alert" className="text-sm text-destructive">
-          广告报表读取失败，请刷新重试。
+          查询失败、已过期或合同已更新，请重新查询。
+          <Button variant="outline" onClick={() => loadLatest()}>
+            重新查询
+          </Button>
         </p>
       )}
       <AdsDetailSheet
+        onOpenDirectory={(ref) =>
+          setDetailStack((stack) => [...stack, { source: "directory", ref }])
+        }
         entry={detail}
         // 表格来源的行换成当前表格里的最新数据（操作回读后状态会更新）。
         tableRow={

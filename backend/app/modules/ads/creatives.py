@@ -3,7 +3,7 @@
 import json
 from collections.abc import Iterator, Mapping
 from datetime import datetime
-from typing import Any
+from typing import Any, cast
 from uuid import UUID
 
 from sqlalchemy import inspect, text
@@ -803,7 +803,12 @@ def publish_staged_creatives(
                 next(
                     (
                         row
-                        for row in _cached_rows(entity, tenant_id, advertiser_id, None)
+                        for row in _cached_rows(
+                            cast(Mapping[str, Any], entity),
+                            tenant_id,
+                            advertiser_id,
+                            None,
+                        )
                         if row["assets"]
                     ),
                     None,

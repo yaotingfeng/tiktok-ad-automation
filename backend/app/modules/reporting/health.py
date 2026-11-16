@@ -28,6 +28,7 @@ from app.modules.reporting.directory_refresh import (
     rule_accounts,
 )
 from app.modules.reporting.freshness import FRESHNESS, fresh_report_success
+from app.modules.reporting.levels import DAY_KINDS, PARENT_KINDS
 from app.modules.reporting.planner import (
     REFRESH_MARGIN,
     _common,
@@ -229,7 +230,8 @@ def measure_freshness(session, plan, *, now, accounts=None):
     """分钟检查只读发布水位、筛选与动作队列，不触碰目录或素材关联事实。"""
     owned = owned_accounts(session, plan) if accounts is None else accounts
     params = _measurement_params(session, plan, now=now, owned=owned, coverage=False)
-    # 每账户合并两类水位；只在当地零点后的新鲜度窗口读取昨日，平时主键只读两行。
+    # 每账户一次读取各日层级水位；只在当地零点后的新鲜度窗口读取昨日。
+    # recent 在账户内物化后补齐缺失层级，不能在 kind 展开后重复探测同一账户。
     # 不再让双 JOIN 在大池重复随机读取，或改走整租户历史水位的哈希扫描。
     # 一次求出完整活跃归属集合；只拆SQL执行，不降低覆盖、不分批发布。
     # 每句仍受原5秒限制，调用方10秒总预算覆盖全部批次与后续指标。
@@ -246,40 +248,40 @@ def measure_freshness(session, plan, *, now, accounts=None):
             SELECT a.advertiser_id,a.timezone,a.local_day,kinds.kind AS report_kind,
               kinds.last_success_at,kinds.previous_success_at
             FROM active a
-            LEFT JOIN LATERAL (
-              SELECT
-                max(s.last_success_at) FILTER (WHERE s.report_kind='ad_day'
-                  AND s.stat_date=a.local_day) AS ad_at,
-                max(s.last_success_at) FILTER (WHERE s.report_kind='ad_day'
-                  AND s.stat_date=a.local_day-1) AS ad_previous_at,
-                max(s.last_success_at) FILTER (WHERE s.report_kind='creative_day'
-                  AND s.stat_date=a.local_day) AS material_at,
-                max(s.last_success_at) FILTER (WHERE s.report_kind='creative_day'
-                  AND s.stat_date=a.local_day-1) AS material_previous_at
-              FROM report_sync_state s
-              WHERE s.tenant_id=:t AND s.advertiser_id=a.advertiser_id
-                AND s.report_kind IN ('ad_day','creative_day')
-                AND s.stat_date BETWEEN CASE
-                  WHEN (CAST(:now AS timestamptz) AT TIME ZONE a.timezone)
-                    < a.local_day + CAST(:previous_grace AS interval)
-                  THEN a.local_day-1 ELSE a.local_day END AND a.local_day
-            ) recent ON true
-            CROSS JOIN LATERAL (VALUES
-              ('ad_day',recent.ad_at,recent.ad_previous_at),
-              ('creative_day',recent.material_at,recent.material_previous_at)
-            ) kinds(kind,last_success_at,previous_success_at)
+            CROSS JOIN LATERAL (
+              WITH recent AS MATERIALIZED (
+                SELECT s.report_kind,
+                  max(s.last_success_at) FILTER (WHERE s.stat_date=a.local_day) AS last_success_at,
+                  max(s.last_success_at) FILTER (WHERE s.stat_date=a.local_day-1) AS previous_success_at
+                FROM report_sync_state s
+                WHERE s.tenant_id=:t AND s.advertiser_id=a.advertiser_id
+                  AND s.report_kind=ANY(CAST(:report_kinds AS text[]))
+                  AND s.stat_date BETWEEN CASE
+                    WHEN (CAST(:now AS timestamptz) AT TIME ZONE a.timezone)
+                      < a.local_day + CAST(:previous_grace AS interval)
+                    THEN a.local_day-1 ELSE a.local_day END AND a.local_day
+                GROUP BY s.report_kind
+              )
+              SELECT k.kind,recent.last_success_at,recent.previous_success_at
+              FROM unnest(CAST(:report_kinds AS text[])) k(kind)
+              LEFT JOIN recent ON recent.report_kind=k.kind
+            ) kinds
+            WHERE kinds.kind IN ('ad_day','creative_day') OR EXISTS (
+              SELECT 1 FROM sync_scope registered WHERE registered.tenant_id=:t
+                AND registered.advertiser_id=a.advertiser_id AND registered.resource=kinds.kind)
         """),
                 {
                     **params,
                     "ids": active[offset : offset + FRESHNESS_BATCH_SIZE],
                     # 两种水位共用一次探测；各自是否可借昨日仍由fresh_report_success裁定。
                     "previous_grace": max(FRESHNESS.values()),
+                    "report_kinds": [*DAY_KINDS, "creative_day"],
                 },
             )
             .mappings()
             .all()
         )
-    stale = {"ad_day": set(), "creative_day": set()}
+    stale = {kind: set() for kind in (*DAY_KINDS, "creative_day")}
     times = []
     for row in rows:
         at = fresh_report_success(
@@ -306,6 +308,11 @@ def measure_freshness(session, plan, *, now, accounts=None):
     ).scalar_one()
     metrics = {
         "stale_ad_accounts": len(stale["ad_day"]),
+        **{
+            f"stale_{kind}_accounts": len(stale[kind])
+            for kind in DAY_KINDS
+            if kind != "ad_day"
+        },
         "stale_material_accounts": len(stale["creative_day"]),
         "pending_actions": pending,
         "oldest_data_at": min(times).isoformat() if times else None,
@@ -315,6 +322,7 @@ def measure_freshness(session, plan, *, now, accounts=None):
     ]
     repairs = {
         "ad": stale["ad_day"],
+        **{kind: stale[kind] for kind in PARENT_KINDS},
         "material": stale["creative_day"],
         "directory": set(),
     }
@@ -381,6 +389,7 @@ def measure_coverage(session, plan, *, now, accounts=None, stage=None):
         {
             "ad": set(),
             "material": set(),
+            **{kind: set() for kind in PARENT_KINDS},
             "directory": {r["advertiser_id"] for r in missing},
         },
     )
@@ -397,7 +406,10 @@ def measure_health(session, plan, *, now, accounts=None):
     return (
         fresh | coverage,
         issues + coverage_issues,
-        {key: repairs[key] | coverage_repairs[key] for key in repairs},
+        {
+            **repairs,
+            **{key: repairs[key] | value for key, value in coverage_repairs.items()},
+        },
     )
 
 
@@ -612,7 +624,9 @@ def _repair_health_units(session, plan, row, repairs, now, *, scope, screen_unkn
     """同2秒内轮转两类修复；后续单元失败不能撤销先前已完成的请求。"""
     stop = monotonic() + REPAIR_BUDGET_SECONDS - 0.2
     directory = sorted(repairs.get("directory", ()))
-    regular = screen_unknown or any(repairs[name] for name in ("ad", "material"))
+    regular = screen_unknown or any(
+        repairs[name] for name in ("ad", "material", *PARENT_KINDS)
+    )
     regular = regular or bool(row.metrics.get("pending_actions"))
     state = dict(row.metrics.get(_DIRECTORY_REPAIR_KEY) or {})
     if directory:
@@ -819,23 +833,27 @@ def _repair_health(session, plan, row, repairs, now, *, screen_unknown=False):
                 "limit": MAX_REPAIR_ACCOUNTS,
             },
         ).scalars()
-        repairs = {**repairs, "ad": repairs["ad"] | set(unknown)}
-    count = plan_hot(
-        session,
-        plan,
-        active=_repair_fact_accounts(
-            session, plan, repairs["ad"], kind="ad_day", now=now
-        ),
-        now=now,
-    )
-    count += plan_creative(
-        session,
-        plan,
-        active=_repair_fact_accounts(
-            session, plan, repairs["material"], kind="creative_day", now=now
-        ),
-        now=now,
-    )
+        # 未知账户需要恢复原广告和素材两条事实探测；父级由完整广告需求登记。
+        unknown_accounts = set(unknown)
+        repairs = {
+            **repairs,
+            "ad": repairs["ad"] | unknown_accounts,
+            "material": repairs["material"] | unknown_accounts,
+        }
+    report_repairs = {
+        "ad_day": repairs["ad"],
+        "creative_day": repairs["material"],
+        **{kind: repairs[kind] for kind in PARENT_KINDS},
+    }
+    count = 0
+    for kind, accounts in report_repairs.items():
+        active = _repair_fact_accounts(session, plan, accounts, kind=kind, now=now)
+        if kind == "creative_day":
+            count += plan_creative(session, plan, active=active, now=now)
+        else:
+            count += plan_hot(
+                session, plan, active=active, now=now, include_creative=False, kind=kind
+            )
     count += _rescue_queued_actions(session, plan, now=now)
     if count:
         row.last_repair_at = now
@@ -960,7 +978,10 @@ def _new_coverage_progress(scope, hints=None):
         "offset": 0,
         "metrics": {},
         "issues": [],
-        "repairs": {"ad": [], "material": [], "directory": []},
+        # 覆盖续步和新鲜度修复共享完整的日层级合同，即使本阶段没有父级缺口。
+        "repairs": {
+            name: [] for name in ("ad", "material", "directory", *PARENT_KINDS)
+        },
         "stages": stages,
         "continuation_seq": 0,
         "retry_not_before": None,

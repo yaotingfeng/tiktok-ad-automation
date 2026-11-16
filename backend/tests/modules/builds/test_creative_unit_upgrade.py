@@ -28,6 +28,8 @@ def legacy_preview(session, context, draft_id):
             "strategy_version_id": draft.strategy_version_id,
         },
     )
+    # 旧预览也冻结账户币种；catalog 的空配置不是可提交的历史正文。
+    value.config = {"currency": "USD"}
     session.add(
         PreviewContract(
             tenant_id=context.tenant_id,
@@ -178,9 +180,11 @@ def test_real_old_schema_upgrade_and_mixed_history_drain(monkeypatch):
         SubmissionUnit,
     )
     from app.modules.builds.preview_models import BuildUnit, PreviewDrama
-    from tests.migration_database import historical_database
+    from tests.migration_database import historical_database, insert_historical_row
     from tests.modules.builds.test_drafts import create_intent
-    from tests.modules.builds.test_image_composition_migration import scaffold
+    from tests.modules.builds.test_image_composition_migration import (
+        historical_scaffold,
+    )
     from tests.modules.conftest import create_context
 
     probe = release_probe()
@@ -190,16 +194,16 @@ def test_real_old_schema_upgrade_and_mixed_history_drain(monkeypatch):
     ):
         with Session(engine) as db:
             context = create_context(db)
-            intent = create_intent(db, context)
-            draft, drama = scaffold(db, context, intent)
-            draft.media_kind = "VIDEO"
+            intent = create_intent(db, context, historical=True)
+            draft, drama = historical_scaffold(db, context, intent, media_kind="VIDEO")
             old = preview(db, context, draft.id, intent)
             scope = {
                 "tenant_id": context.tenant_id,
                 "preview_id": old.id,
                 "bc_id": old.bc_id,
             }
-            db.add(
+            insert_historical_row(
+                db,
                 PreviewDrama(
                     **scope,
                     drama_id=drama.drama_id,
@@ -207,7 +211,7 @@ def test_real_old_schema_upgrade_and_mixed_history_drain(monkeypatch):
                     title=drama.title,
                     url="https://example.invalid",
                     protected_base="synthetic",
-                )
+                ),
             )
             db.flush()
             unit = BuildUnit(
@@ -231,12 +235,17 @@ def test_real_old_schema_upgrade_and_mixed_history_drain(monkeypatch):
             sub = Submission(
                 **scope, draft_id=draft.id, actor_id=context.actor_id, ordinal=1
             )
-            db.add(sub)
+            insert_historical_row(db, sub)
             db.flush()
             assert probe.creative_unit_drain(db.connection())["blockers"].keys() == {
                 "submission_runnable"
             }
-            sub.expanded, sub.status = True, "COMPLETED"
+            db.execute(
+                text(
+                    "UPDATE build_submission SET expanded=true,status='COMPLETED' WHERE id=:id"
+                ),
+                {"id": sub.id},
+            )
             db.add(
                 SubmissionUnit(
                     **scope,

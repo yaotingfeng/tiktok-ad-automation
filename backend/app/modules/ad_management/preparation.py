@@ -4,8 +4,8 @@ from copy import deepcopy
 from datetime import UTC, datetime
 from uuid import UUID
 
-from sqlalchemy import func
-from sqlmodel import Session, select
+from sqlalchemy import Numeric, cast, func
+from sqlmodel import Session, col, select
 
 from app.core.errors import DomainError
 from app.integrations.tiktok.contracts.context import FrozenTikTokRoute
@@ -25,7 +25,9 @@ PREPARE_CHUNK_SIZE = 200
 def prepare_direct_chunk(session: Session, task_id: UUID) -> bool:
     """一次短事务原子保存最终值和游标；重复投递从上次已提交的位置继续。"""
     task = session.exec(
-        select(ManagementTask).where(ManagementTask.id == task_id).with_for_update()
+        select(ManagementTask)
+        .where(col(ManagementTask.id) == task_id)
+        .with_for_update()
     ).one_or_none()
     if task is None or task.source_kind != "DIRECT" or task.status != "PREPARING":
         return True
@@ -70,12 +72,12 @@ def prepare_direct_chunk(session: Session, task_id: UUID) -> bool:
     old = (
         session.exec(
             select(ManagementTaskItem).where(
-                ManagementTaskItem.tenant_id == task.tenant_id,
-                ManagementTaskItem.task_id == task.id,
+                col(ManagementTaskItem.tenant_id) == task.tenant_id,
+                col(ManagementTaskItem.task_id) == task.id,
                 tuple_(
-                    ManagementTaskItem.ref["advertiser_id"].astext,
-                    ManagementTaskItem.ref["kind"].astext,
-                    ManagementTaskItem.ref["remote_id"].astext,
+                    col(ManagementTaskItem.ref)["advertiser_id"].astext,
+                    col(ManagementTaskItem.ref)["kind"].astext,
+                    col(ManagementTaskItem.ref)["remote_id"].astext,
                 ).in_(candidates),
             )
         ).all()
@@ -94,13 +96,12 @@ def prepare_direct_chunk(session: Session, task_id: UUID) -> bool:
         )
 
     existing = {identity(i.ref, i.material_use): i for i in old}
-    from sqlmodel import col
 
     last_position = session.exec(
-        select(ManagementTaskItem.position)
+        select(col(ManagementTaskItem.position))
         .where(
-            ManagementTaskItem.tenant_id == task.tenant_id,
-            ManagementTaskItem.task_id == task.id,
+            col(ManagementTaskItem.tenant_id) == task.tenant_id,
+            col(ManagementTaskItem.task_id) == task.id,
         )
         .order_by(col(ManagementTaskItem.position).desc())
         .limit(1)
@@ -120,6 +121,20 @@ def prepare_direct_chunk(session: Session, task_id: UUID) -> bool:
             and item.execution_result == "PENDING"
         )
         if previous is not None and not promote:
+            # CBO 来源可能跨准备块；只合并审计映射，绝不覆盖首次冻结金额/币种。
+            for fact_key in ("budget_facts", "roas_facts"):
+                facts = previous.capability.get(fact_key)
+                incoming = item.capability.get(fact_key)
+                if facts and incoming:
+                    sources = list(facts["sources"])
+                    for source in incoming["sources"]:
+                        if source not in sources:
+                            sources.append(source)
+                    previous.capability = {
+                        **previous.capability,
+                        fact_key: {**facts, "sources": sources},
+                    }
+                    session.add(previous)
             continue
         row = ManagementTaskItem(
             tenant_id=task.tenant_id,
@@ -179,22 +194,33 @@ def prepare_direct_chunk(session: Session, task_id: UUID) -> bool:
         # 所有块完成后检查跨块冲突，尚未向平台发送；同一系列不同 ROAS、
         # 同账户多个系列最终同名都逐项跳过，不能让分块改变业务校验。
         if mutation.field in {"roas", "name"}:
-            account = ManagementTaskItem.ref["advertiser_id"].astext
+            account = col(ManagementTaskItem.ref)["advertiser_id"].astext
             group = (
-                ManagementTaskItem.parent_ref["remote_id"].astext
+                col(ManagementTaskItem.parent_ref)["remote_id"].astext
                 if mutation.field == "roas"
-                else ManagementTaskItem.final_value
+                else col(ManagementTaskItem.final_value)
             )
             candidates = session.exec(
                 select(account, group)
                 .where(
-                    ManagementTaskItem.tenant_id == task.tenant_id,
-                    ManagementTaskItem.task_id == task.id,
-                    ManagementTaskItem.execution_result == "PENDING",
+                    col(ManagementTaskItem.tenant_id) == task.tenant_id,
+                    col(ManagementTaskItem.task_id) == task.id,
+                    col(ManagementTaskItem.execution_result) == "PENDING",
+                    col(ManagementTaskItem.capability)["roas_facts"][
+                        "budget_strategy"
+                    ].astext
+                    == "CBO"
+                    if mutation.field == "roas"
+                    else True,
                 )
                 .group_by(account, group)
                 .having(
-                    func.count(func.distinct(ManagementTaskItem.final_value)) > 1
+                    func.count(
+                        func.distinct(
+                            cast(col(ManagementTaskItem.final_value), Numeric)
+                        )
+                    )
+                    > 1
                     if mutation.field == "roas"
                     else func.count() > 1
                 )
@@ -205,9 +231,9 @@ def prepare_direct_chunk(session: Session, task_id: UUID) -> bool:
                 changed = session.exec(
                     update(ManagementTaskItem)
                     .where(
-                        ManagementTaskItem.tenant_id == task.tenant_id,
-                        ManagementTaskItem.task_id == task.id,
-                        ManagementTaskItem.execution_result == "PENDING",
+                        col(ManagementTaskItem.tenant_id) == task.tenant_id,
+                        col(ManagementTaskItem.task_id) == task.id,
+                        col(ManagementTaskItem.execution_result) == "PENDING",
                         tuple_(account, group).in_(candidates),
                     )
                     .values(
@@ -248,7 +274,7 @@ def prepare_direct_task(engine, task_id: UUID) -> None:
         with Session(engine) as session:
             task = session.exec(
                 select(ManagementTask)
-                .where(ManagementTask.id == task_id)
+                .where(col(ManagementTask.id) == task_id)
                 .with_for_update()
             ).one_or_none()
             if task and task.status == "PREPARING":

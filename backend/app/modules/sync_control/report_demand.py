@@ -5,10 +5,12 @@ from __future__ import annotations
 from collections.abc import Iterable, Sequence
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
+from typing import cast as typing_cast
 from uuid import UUID, uuid4
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import and_, func, or_
+from sqlalchemy.orm import Session as SQLAlchemySession
 from sqlalchemy.sql.elements import ColumnElement
 from sqlmodel import Session, col, select
 
@@ -191,6 +193,21 @@ def enqueue_report_requirements(
             )
         ).all()
     }
+    # 新父级需求必须在写 scope / outbox 之前核验当前权限，不能只相信冻结 BC。
+    from app.modules.reporting.levels import LEVELS, PARENT_KINDS
+
+    contract = LEVELS[kind].contract if kind in LEVELS else "report-v2"
+    if kind in LEVELS:
+        from app.core.context import TenantContext
+        from app.modules.accounts.routing import verify_read_routes
+
+        context = TenantContext(tenant_id=tenant_id, actor_id=actor_id, role="operator")
+        # 同一阶段沿正式批量权限入口逐户核验证据，避免三层需求重复逐户查公共权限。
+        verify_read_routes(
+            session, context=context, route=route, advertiser_ids=advertisers
+        )
+    if kind in PARENT_KINDS and campaign_ids:
+        raise DomainError("report_query_invalid", "父级日报仅允许完整账户日")
     query = {"campaign_ids": sorted(campaign_ids)}
     scope_values, classes = [], {}
     for advertiser in advertisers:
@@ -203,7 +220,7 @@ def enqueue_report_requirements(
             advertiser,
             kind,
             query,
-            "report-v2",
+            contract,
             timezone=account.timezone,
         )
         scope_values.append(
@@ -218,7 +235,7 @@ def enqueue_report_requirements(
                 resource=kind,
                 timezone=account.timezone,
                 identity_digest=key.digest,
-                query_contract={"query": query, "metrics": "report-v2"},
+                query_contract={"query": query, "metrics": contract},
             ).model_dump()
         )
         local_today = now.astimezone(ZoneInfo(account.timezone)).date()
@@ -290,11 +307,13 @@ def enqueue_report_requirements(
             },
         ).returning(SyncRequirement)
         requirements.extend(
-            session.execute(
+            typing_cast(SQLAlchemySession, session)
+            .execute(
                 select(SyncRequirement)
                 .from_statement(returning)
                 .execution_options(populate_existing=True)
-            ).scalars()
+            )
+            .scalars()
         )
     pending = [
         row for row in requirements if row.satisfied_revision < row.desired_revision

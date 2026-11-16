@@ -44,3 +44,37 @@ def test_preview_provider_heads_are_merged_without_operations():
             )
             for node in ast.walk(function)
         )
+
+
+def test_native_archive_merge_has_only_parent_links():
+    backend = Path(__file__).resolve().parents[1]
+    config = Config(str(backend / "alembic.ini"))
+    config.set_main_option("script_location", str(backend / "app/alembic"))
+    script = ScriptDirectory.from_config(config)
+    merge = script.get_revision("0132_native_ai_archive_merge")
+    assert merge.down_revision == ("0131_native_ai_merge", "0131_ai_review_archive")
+    tree = ast.parse(Path(merge.path).read_text())
+    for name in ("upgrade", "downgrade"):
+        function = next(
+            node
+            for node in tree.body
+            if isinstance(node, ast.FunctionDef) and node.name == name
+        )
+        assert len(function.body) == 1 and isinstance(function.body[0], ast.Pass)
+
+
+def test_material_and_native_heads_merge_without_operations():
+    backend = Path(__file__).resolve().parents[1]
+    config = Config(str(backend / "alembic.ini"))
+    config.set_main_option("script_location", str(backend / "app/alembic"))
+    script = ScriptDirectory.from_config(config)
+    assert script.get_heads() == ["0133_native_material_merge"]
+    merge = script.get_revision("0133_native_material_merge")
+    assert merge.down_revision == (
+        "0132_native_ai_archive_merge",
+        "0132_material_link_upload",
+    )
+    module = ast.parse(Path(merge.path).read_text())
+    for function in module.body:
+        if isinstance(function, ast.FunctionDef):
+            assert len(function.body) == 1 and isinstance(function.body[0], ast.Pass)

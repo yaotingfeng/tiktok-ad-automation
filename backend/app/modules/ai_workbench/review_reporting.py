@@ -1,16 +1,18 @@
 """复盘直接冻结领域报表结果，不建立供浏览器分页的短期快照。
 
-身份、聚合、空值、素材残差复用报表领域 SQL；分析投影不展开页面动作成员，
-也不重复读取同一份指标。调用者必须先校验整个复盘账户范围。
+身份、聚合、空值复用报表领域 SQL；非素材直接冻结分析指标，素材复用实例与
+对账合同后移除动作引用。调用者必须先校验整个复盘账户范围。
 """
 
 import json
 from collections import defaultdict
+from datetime import datetime
 from uuid import uuid4
 
 from fastapi import HTTPException
 from sqlalchemy import text
 
+from app.modules.reporting.levels import query_kind, state_sql
 from app.modules.reporting.queries import _summary
 from app.modules.reporting.read_models.coverage import projection_coverage
 from app.modules.reporting.row_set import SnapshotTotals, _ctes, _summary_select
@@ -31,18 +33,22 @@ def freeze_report(session, *, context, bc_id, filters, cutoff, states):
         review_labels=True,
     )
     summary_sql = _summary_select(
-        frozenset(), individual=dimension not in {"drama", "material"}, all_rows=True
+        frozenset(),
+        individual=dimension not in {"drama", "material"},
+        all_rows=True,
+        scoped=dimension != "material",
     )
     row_sql = _summary_select(
-        frozenset(), individual=dimension not in {"drama", "material"}, per_row=True
+        frozenset(),
+        individual=dimension not in {"drama", "material"},
+        per_row=True,
+        scoped=dimension != "material",
     )
-    # 各维度全部行和合计来自同一 SQL 语句；不分页，不截断，也不在 Python 重算金额。
+    # 非素材全部行和合计来自同一 SQL；素材成员仍由此选择，再复用实例汇总合同。
     coverage_source = (
         "SELECT tenant_id,advertiser_id,stat_date,status FROM material_period"
         if dimension == "material"
-        else "SELECT tenant_id,advertiser_id,stat_date,status FROM account_report_day_state"
-        if dimension == "account"
-        else "SELECT tenant_id,advertiser_id,stat_date,status FROM report_sync_state WHERE report_kind='ad_day'"
+        else state_sql(query_kind(dimension))
     )
     data = session.execute(
         text(f"""{ctes},
@@ -76,11 +82,11 @@ def freeze_report(session, *, context, bc_id, filters, cutoff, states):
     ]
     published = [
         s.last_success_at
-        for s in states["publications"]
+        for s in (
+            states["publications"] if dimension == "material" else selected_states
+        )
         if filters.start_date <= s.stat_date <= filters.end_date and s.last_success_at
     ]
-    if dimension == "account":
-        published = [s.last_success_at for s in selected_states if s.last_success_at]
     projection = (
         projection_coverage(selected_states) if dimension == "material" else None
     )
@@ -93,6 +99,16 @@ def freeze_report(session, *, context, bc_id, filters, cutoff, states):
             if s.observed_at or s.last_success_at
         ]
     )
+    # 选中事实自己的发布坐标也受截止约束，不能用较旧账户水位掩盖新事实。
+    for bucket in data.row_buckets:
+        for group in bucket.get("observations") or []:
+            for observation in group or []:
+                publication = observation.get("publication") or {}
+                stamp = publication.get("observed_at") or publication.get(
+                    "last_success_at"
+                )
+                if stamp:
+                    observations.append(datetime.fromisoformat(stamp))
     observed = max(observations) if observations else None
     if observed and observed > cutoff:
         return {
@@ -129,13 +145,47 @@ def freeze_report(session, *, context, bc_id, filters, cutoff, states):
         versions["material_query_contract"] = MATERIAL_QUERY_CONTRACT
     if published:
         versions["max"] = int(max(published).timestamp() * 1_000_000)
+    summary = _summary(totals, strict_denominators=dimension != "material")
+    if dimension == "material":
+        items, ordinary = _material_analysis_rows(
+            session, context=context, bc_id=bc_id, filters=filters, members=member_data
+        )
+        from app.modules.reporting.dimension_query import merge_metric_buckets
+
+        summary.update(
+            scope="SELECTED_MATERIALS",
+            buckets=[
+                bucket.model_dump(mode="json")
+                for bucket in merge_metric_buckets(ordinary, strict_denominators=True)
+            ],
+        )
+    from app.modules.reporting.frozen_evidence import EvidenceAccumulator, bind_row
+
+    report_id = str(uuid4())
+    accumulator = EvidenceAccumulator(
+        owner="FROZEN_REPORT_ROWS",
+        owner_id=report_id,
+        filters=filters.model_dump(mode="json"),
+    )
+    items = [
+        bind_row(
+            row,
+            owner="FROZEN_REPORT_ROWS",
+            owner_id=report_id,
+            filters=filters.model_dump(mode="json"),
+        )
+        for row in items
+    ]
+    for row in items:
+        accumulator.add(row)
+    summary = accumulator.finalize(summary)
     return {
-        "id": str(uuid4()),
-        "projection_contract": "financial-review-v1",
+        "id": report_id,
+        "projection_contract": "financial-review-v2",
         "status": coverage["status"],
         "filters": filters.model_dump(mode="json"),
         "publication_versions": versions,
-        "summary": _summary(totals),
+        "summary": summary,
         "coverage": coverage,
         "metrics_observed_at": observed.isoformat() if observed else None,
         "rows": items,
@@ -206,9 +256,72 @@ def _analysis_rows(members, buckets, dimension, advertiser_id, states):
                 "row_key": key,
                 "display": display,
                 "metric_buckets": _summary(
-                    SnapshotTotals(1, tuple(values), (), (), True)
+                    SnapshotTotals(1, tuple(values), (), (), True),
+                    strict_denominators=dimension != "material",
+                    row_evidence=True,
                 )["buckets"],
+                "source_evidence": [
+                    r
+                    for bucket in values
+                    for group in bucket.get("observations", [])
+                    if group
+                    for r in group
+                ],
                 "coverage": coverage,
             }
         )
     return result
+
+
+def _material_analysis_rows(session, *, context, bc_id, filters, members):
+    """复用素材实例事实与财务合同；临时 scope 不入库、不建立浏览器分页快照。"""
+    from app.modules.reporting.creative_query import read_facts
+    from app.modules.reporting.material_query import (
+        freeze_instance_tracer,
+        material_summary_contributions,
+        materialize_material_rows,
+    )
+    from app.modules.reporting.query_models import QuerySnapshot
+    from app.modules.reporting.row_set import SnapshotMember
+
+    if not members:
+        return [], []
+    scope = QuerySnapshot(
+        tenant_id=context.tenant_id,
+        actor_id=context.actor_id,
+        bc_id=bc_id,
+        advertiser_ids=list(filters.advertiser_ids),
+        filter_digest="review",
+    )
+    facts = read_facts(
+        session,
+        tenant_id=context.tenant_id,
+        advertisers=filters.advertiser_ids,
+        filters=filters,
+        row_keys=[m["row_key"] for m in members],
+        observations=True,
+    )
+    reports = materialize_material_rows(
+        session,
+        tenant_id=context.tenant_id,
+        advertisers=filters.advertiser_ids,
+        filters=filters,
+        members=[SnapshotMember(m["row_key"], (), ()) for m in members],
+        selected_facts=facts,
+    )
+    reports = freeze_instance_tracer(
+        session, snapshot=scope, filters=filters, reports=reports, facts=facts
+    )
+    ordinary = [
+        contribution
+        for report in reports
+        for contribution in material_summary_contributions(report)
+    ]
+    rows = []
+    for report in reports:
+        payload = report.model_dump(mode="json")
+        payload.pop("refs", None)
+        payload.pop("material_uses", None)
+        payload["coverage"] = {**payload["coverage"], "action_evidence": "NOT_INCLUDED"}
+        rows.append(payload)
+    return rows, ordinary

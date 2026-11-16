@@ -110,6 +110,8 @@ def _command(item: ManagementTaskItem) -> ManagementCommand:
         original["material_type"] = item.material_use["material_type"]
     if capability.get("ad_type") is not None:
         original.setdefault("ad_type", capability["ad_type"])
+    if capability.get("roas_facts"):
+        original["roas_facts"] = capability["roas_facts"]
     final = item.final_value
     if final is None:
         raise DomainError("management_request_invalid", "冻结最终值缺失")
@@ -142,8 +144,12 @@ def _public(item: ManagementTaskItem) -> ManagementItemPublic:
 
     original: Decimal | str | None
     final: Decimal | str | None = item.final_value
-    if (item.capability or {}).get("operation") == "rename":
-        # 改名的原值与最终值都是系列名称，原样展示；纯数字名称也不能被转成数值。
+    if (item.capability or {}).get("operation") in {
+        "rename",
+        "set_status",
+        "set_material_status",
+    }:
+        # 名称和启停原值是文本事实，不能因数值转换变成空值。
         original = item.original_value
     else:
         original = decimal(item.original_value)
@@ -153,6 +159,8 @@ def _public(item: ManagementTaskItem) -> ManagementItemPublic:
             except InvalidOperation, ValueError:
                 pass
     return ManagementItemPublic(
+        budget_facts=item.capability.get("budget_facts"),
+        roas_facts=item.capability.get("roas_facts"),
         ref=_ref(item.ref),
         material_use=_material(item.material_use),
         original_value=original,
@@ -179,8 +187,8 @@ def _attempts(
         session.exec(
             select(ManagementRequestAttempt)
             .where(
-                ManagementRequestAttempt.tenant_id == item.tenant_id,
-                ManagementRequestAttempt.task_item_id == item.id,
+                col(ManagementRequestAttempt.tenant_id) == item.tenant_id,
+                col(ManagementRequestAttempt.task_item_id) == item.id,
             )
             .order_by(col(ManagementRequestAttempt.attempt))
         ).all()
@@ -257,16 +265,16 @@ def _recover_cancelled_claims(session: Session, task: ManagementTask) -> None:
     rows = session.exec(
         select(ManagementTaskItem)
         .where(
-            ManagementTaskItem.task_id == task.id,
-            ManagementTaskItem.tenant_id == task.tenant_id,
-            ManagementTaskItem.execution_result == "PENDING",
+            col(ManagementTaskItem.task_id) == task.id,
+            col(ManagementTaskItem.tenant_id) == task.tenant_id,
+            col(ManagementTaskItem.execution_result) == "PENDING",
             col(ManagementTaskItem.claim_token).is_not(None),
             or_(
-                ManagementTaskItem.claimed_until <= now,
+                col(ManagementTaskItem.claimed_until) <= now,
                 col(ManagementTaskItem.claimed_until).is_(None),
             ),
         )
-        .order_by(ManagementTaskItem.id)
+        .order_by(col(ManagementTaskItem.id))
         .with_for_update()
     ).all()
     unknown_ids = []
@@ -295,18 +303,89 @@ def _recover_cancelled_claims(session: Session, task: ManagementTask) -> None:
         queue_reconciliation(session, task, tuple(unknown_ids))
     # 提前到达的恢复消息不能消耗尚未到期领取的唯一唤醒机会。
     next_expiry = session.exec(
-        select(func.min(ManagementTaskItem.claimed_until)).where(
-            ManagementTaskItem.task_id == task.id,
-            ManagementTaskItem.tenant_id == task.tenant_id,
-            ManagementTaskItem.execution_result == "PENDING",
+        select(func.min(col(ManagementTaskItem.claimed_until))).where(
+            col(ManagementTaskItem.task_id) == task.id,
+            col(ManagementTaskItem.tenant_id) == task.tenant_id,
+            col(ManagementTaskItem.execution_result) == "PENDING",
             col(ManagementTaskItem.claim_token).is_not(None),
-            ManagementTaskItem.claimed_until > now,
+            col(ManagementTaskItem.claimed_until) > now,
         )
     ).one()
     if next_expiry is not None:
         schedule_wakeup(
             session, task, next_expiry + timedelta(seconds=1), kind="claim", quantum=30
         )
+
+
+def same_management_value(operation: str, actual: Any, expected: Any) -> bool:
+    """金额/ROAS 比例按十进制比较，等值文本不会造成发送冲突。"""
+    if actual is None or expected is None:
+        return False
+    if operation in {"update_budget", "update_roas"}:
+        try:
+            left, right = Decimal(str(actual)), Decimal(str(expected))
+            return left.is_finite() and right.is_finite() and left == right
+        except InvalidOperation, ValueError:
+            return False
+    return str(actual) == str(expected)
+
+
+def _verify_roas_restore_scope(session, item, ref):
+    """CBO 反向写必须覆盖同一完整成员集合；任何兄弟冲突都禁止部分恢复。"""
+    capability = item.capability
+    facts = capability.get("roas_facts") or {}
+    if facts.get("budget_strategy") != "CBO" or not capability.get("restore_after"):
+        return
+    members = capability.get("restore_roas_members", [])
+    rows = session.exec(
+        select(AdObject).where(
+            col(AdObject.tenant_id) == ref.tenant_id,
+            col(AdObject.advertiser_id) == ref.advertiser_id,
+            col(AdObject.kind) == "adgroup",
+            col(AdObject.parent_kind) == "campaign",
+            col(AdObject.parent_remote_id) == facts["campaign_ref"]["remote_id"],
+        )
+    ).all()
+    expected = {r["remote_id"] for r in facts["affected_refs"]}
+    if (
+        not expected
+        or {r.remote_id for r in rows} != expected
+        or {m["ref"]["remote_id"] for m in members} != expected
+        or len(members) != len(expected)
+    ):
+        raise DomainError(
+            "roas_restore_scope_conflict", "CBO 恢复影响成员已变化或不完整"
+        )
+    directions = set()
+    for member in members:
+        row = next(r for r in rows if r.remote_id == member["ref"]["remote_id"])
+        value = (row.configuration or {}).get("roas_bid")
+        if (
+            not member["eligible"]
+            or not member["sent"]
+            or not same_management_value(
+                "update_roas", member["original_value"], members[0]["original_value"]
+            )
+            or not same_management_value(
+                "update_roas", member["final_value"], members[0]["final_value"]
+            )
+            or row.source_channel != capability.get("source_channel")
+            or str(row.source_connection_id)
+            != str(capability.get("source_connection_id"))
+            or row.observed_at <= datetime.fromisoformat(member["request_at"])
+            or row.configuration.get("deep_bid_type") != facts["mode"]
+        ):
+            raise DomainError("roas_restore_member_conflict", "CBO 恢复成员证据无效")
+        if same_management_value("update_roas", value, member["final_value"]):
+            directions.add("target")
+        elif same_management_value("update_roas", value, member["original_value"]):
+            directions.add("original")
+        else:
+            raise DomainError(
+                "roas_restore_member_conflict", "CBO 恢复成员当前比例冲突"
+            )
+    if len(directions) != 1:
+        raise DomainError("roas_restore_member_conflict", "CBO 恢复成员当前比例不一致")
 
 
 def _same_frozen_value(
@@ -372,6 +451,32 @@ def _same_frozen_value(
             expected_connection
         ):
             raise DomainError("management_source_conflict", "目录对象来源连接已变化")
+        # 恢复只消费原写请求之后的新鲜目录；发送前再次核验同一证据边界。
+        restore_after = capability.get("restore_after")
+        if restore_after and row.observed_at <= datetime.fromisoformat(restore_after):
+            raise DomainError(
+                "management_observation_conflict", "恢复缺少发送后的目录证据"
+            )
+        if restore_after and capability.get("operation") == "update_roas":
+            _verify_roas_restore_scope(session, item, ref)
+        facts = capability.get("roas_facts")
+        if facts:
+            parent = session.get(
+                AdObject,
+                (
+                    ref.tenant_id,
+                    ref.advertiser_id,
+                    "campaign",
+                    facts["campaign_ref"]["remote_id"],
+                ),
+            )
+            if (
+                (row.configuration or {}).get("deep_bid_type") != facts["mode"]
+                or parent is None
+                or (parent.configuration or {}).get("budget_optimize_on")
+                is not (facts["budget_strategy"] == "CBO")
+            ):
+                raise DomainError("roas_mode_changed", "冻结 ROAS 模式或预算策略已变化")
         operation = str(capability.get("operation"))
         if operation == "rename":
             # 改名的冻结原值是目录名称；名称已被他人修改则不覆盖。
@@ -383,7 +488,9 @@ def _same_frozen_value(
             current = (row.configuration or {}).get(key)
     if current is None:
         raise DomainError("management_observation_conflict", "冻结目标当前值缺失")
-    if str(current) != str(item.original_value):
+    if not same_management_value(
+        str(capability.get("operation")), current, item.original_value
+    ):
         raise DomainError("management_original_changed", "管理目标原始值已变化")
 
 
@@ -391,22 +498,25 @@ def _locked_item(session: Session, item_id: UUID, *, lock_task: bool = True):
     """取消先锁父任务，修改也采用同一锁序，防止并发回执与取消形成死锁。"""
     if lock_task:
         scope = session.exec(
-            select(ManagementTaskItem.task_id, ManagementTaskItem.tenant_id).where(
-                ManagementTaskItem.id == item_id
-            )
+            select(
+                col(ManagementTaskItem.task_id), col(ManagementTaskItem.tenant_id)
+            ).where(col(ManagementTaskItem.id) == item_id)
         ).one_or_none()
         if scope is None:
             return None
         task = session.exec(
             select(ManagementTask)
-            .where(ManagementTask.id == scope[0], ManagementTask.tenant_id == scope[1])
+            .where(
+                col(ManagementTask.id) == scope[0],
+                col(ManagementTask.tenant_id) == scope[1],
+            )
             .with_for_update()
         ).one_or_none()
         if task is None:
             return None
     return session.exec(
         select(ManagementTaskItem)
-        .where(ManagementTaskItem.id == item_id)
+        .where(col(ManagementTaskItem.id) == item_id)
         .with_for_update()
     ).one_or_none()
 
@@ -415,8 +525,8 @@ def _update_task(session: Session, task_id: UUID, tenant_id: UUID) -> None:
     task = session.exec(
         select(ManagementTask)
         .where(
-            ManagementTask.id == task_id,
-            ManagementTask.tenant_id == tenant_id,
+            col(ManagementTask.id) == task_id,
+            col(ManagementTask.tenant_id) == tenant_id,
         )
         .with_for_update()
     ).one_or_none()
@@ -427,16 +537,17 @@ def _update_task(session: Session, task_id: UUID, tenant_id: UUID) -> None:
     # 万条任务只读取状态聚合，不在每个回执后物化整批JSON和逐项查询attempt。
     rows = session.exec(
         select(
-            ManagementTaskItem.execution_result,
-            ManagementTaskItem.observation_state,
+            col(ManagementTaskItem.execution_result),
+            col(ManagementTaskItem.observation_state),
             func.count(),
         )
         .where(
-            ManagementTaskItem.task_id == task.id,
-            ManagementTaskItem.tenant_id == tenant_id,
+            col(ManagementTaskItem.task_id) == task.id,
+            col(ManagementTaskItem.tenant_id) == tenant_id,
         )
         .group_by(
-            ManagementTaskItem.execution_result, ManagementTaskItem.observation_state
+            col(ManagementTaskItem.execution_result),
+            col(ManagementTaskItem.observation_state),
         )
     ).all()
     totals: dict[str, int] = {}
@@ -459,10 +570,10 @@ def _update_task(session: Session, task_id: UUID, tenant_id: UUID) -> None:
     )
     task.counts = counts
     latest_retryable = (
-        select(ManagementRequestAttempt.retryable)
+        select(col(ManagementRequestAttempt.retryable))
         .where(
-            ManagementRequestAttempt.task_item_id == ManagementTaskItem.id,
-            ManagementRequestAttempt.tenant_id == tenant_id,
+            col(ManagementRequestAttempt.task_item_id) == col(ManagementTaskItem.id),
+            col(ManagementRequestAttempt.tenant_id) == tenant_id,
         )
         .order_by(col(ManagementRequestAttempt.attempt).desc())
         .limit(1)
@@ -471,11 +582,11 @@ def _update_task(session: Session, task_id: UUID, tenant_id: UUID) -> None:
     )
     retry_pending = (
         session.exec(
-            select(ManagementTaskItem.id)
+            select(col(ManagementTaskItem.id))
             .where(
-                ManagementTaskItem.task_id == task.id,
-                ManagementTaskItem.tenant_id == tenant_id,
-                ManagementTaskItem.execution_result == "NOT_SENT",
+                col(ManagementTaskItem.task_id) == task.id,
+                col(ManagementTaskItem.tenant_id) == tenant_id,
+                col(ManagementTaskItem.execution_result) == "NOT_SENT",
                 latest_retryable == True,  # noqa: E712
             )
             .limit(1)
@@ -489,8 +600,13 @@ def _update_task(session: Session, task_id: UUID, tenant_id: UUID) -> None:
         pass  # 取消后仍可记录在途回执，但不能复活任务或发送剩余项。
     elif "PENDING" in statuses or retry_pending:
         task.status = "RUNNING"
-    elif "UNKNOWN" in statuses:
+    elif "UNKNOWN" in statuses or any(
+        result == "ACCEPTED" and observation == "NEEDS_REVIEW"
+        for result, observation, _total in rows
+    ):
         task.status = "NEEDS_REVIEW"
+    elif counts["refresh_pending"]:
+        task.status = "RUNNING"
     elif statuses and statuses <= {"ACCEPTED", "NO_CHANGE"}:
         task.status = "SUCCEEDED"
     elif statuses:
@@ -575,9 +691,9 @@ def _persist_outcome(
         attempt = session.exec(
             select(ManagementRequestAttempt)
             .where(
-                ManagementRequestAttempt.tenant_id == item.tenant_id,
-                ManagementRequestAttempt.task_item_id == item.id,
-                ManagementRequestAttempt.attempt == attempt_no,
+                col(ManagementRequestAttempt.tenant_id) == item.tenant_id,
+                col(ManagementRequestAttempt.task_item_id) == item.id,
+                col(ManagementRequestAttempt.attempt) == attempt_no,
             )
             .with_for_update()
         ).one_or_none()
@@ -639,7 +755,16 @@ def _persist_outcome(
         item.reason = response.get("reason")
         item.delivery_status = "DELIVERED" if outcome == "ACCEPTED" else outcome
         item.observation_state = (
-            "ACCEPTED"
+            (
+                "REFRESH_PENDING"
+                if (item.capability or {}).get("operation")
+                in {"update_budget", "update_roas"}
+                or (
+                    settings.ADS_SYNC_ENABLED
+                    and (item.capability or {}).get("operation") == "set_status"
+                )
+                else "ACCEPTED"
+            )
             if outcome == "ACCEPTED"
             else ("NEEDS_REVIEW" if outcome == "UNKNOWN" else None)
         )
@@ -678,19 +803,26 @@ def _refresh_many_after_commit(
     refs: tuple[EntityRef, ...],
 ) -> None:
     # 一个物理批次只登记一份定向回读，不能再按20成员重复锁BC和投递。
-    del context
     if not settings.ADS_SYNC_ENABLED:
         return
     with Session(database_engine) as session, session.begin():
         plan = session.get(AdSyncBc, (route.tenant_id, route.bc_id))
         if plan is None or not plan.enabled:
             return
+        for advertiser in dict.fromkeys(ref.advertiser_id for ref in refs):
+            verify_route(
+                session,
+                context=context,
+                route=route,
+                advertiser_id=advertiser,
+                capability="read",
+            )
         request_directory(
             session,
             tenant_id=route.tenant_id,
             bc_id=route.bc_id,
-            frozen_route=plan.frozen_route,
-            actor_id=plan.actor_id,
+            frozen_route=route.model_dump(mode="json"),
+            actor_id=context.actor_id,
             advertiser_ids=list(dict.fromkeys(ref.advertiser_id for ref in refs)),
             scope="targeted",
             refs=list(refs),
@@ -702,6 +834,51 @@ def _refresh_many_after_commit(
             now=datetime.now(UTC),
             tier="manual",
         )
+
+
+def _target_observed(session: Session, item: ManagementTaskItem) -> bool | None:
+    """启停/预算只认发送后的同连接目录事实，不把排队或回执当观察。"""
+    ref = _ref(item.ref)
+    row = session.get(
+        AdObject, (ref.tenant_id, ref.advertiser_id, ref.kind, ref.remote_id)
+    )
+    task = session.get(ManagementTask, item.task_id)
+    attempts = _attempts(session, item)
+    if task is None:
+        return None
+    try:
+        verify_route(
+            session,
+            context=TenantContext(task.tenant_id, task.actor_id, "operator"),
+            route=_route(task),
+            advertiser_id=ref.advertiser_id,
+            capability="read",
+        )
+    except DomainError:
+        return None
+    if not (
+        row is not None
+        and attempts
+        and row.observed_at > attempts[-1].request_at
+        and str(row.source_connection_id) == task.route["connection_id"]
+        and row.source_channel == task.route["channel"]
+    ):
+        return None
+    if item.capability.get("operation") in {"update_budget", "update_roas"}:
+        # 比较观察时的实际金额，不借 SDK 回执或旧目录宣称生效。
+        try:
+            return Decimal(
+                str(
+                    (row.configuration or {}).get(
+                        "roas_bid"
+                        if item.capability.get("operation") == "update_roas"
+                        else "budget"
+                    )
+                )
+            ) == Decimal(str(item.final_value))
+        except InvalidOperation:
+            return False
+    return row.operation_status == item.final_value
 
 
 def _set_refresh_state(
@@ -719,22 +896,97 @@ def _set_refresh_state(
         # 目录刷新比真实状态观察弱；异步刷新不能覆盖正在核查或已落库的观察终态。
         if item.observation_state not in {"ACCEPTED", "REFRESH_PENDING"}:
             return
+        if item.capability.get("operation") in {"update_budget", "update_roas"}:
+            task = session.get(ManagementTask, item.task_id)
+            # 管理项的非空 task_id 外键保证父任务存在。
+            assert task is not None
+            try:
+                verify_route(
+                    session,
+                    context=TenantContext(task.tenant_id, task.actor_id, "operator"),
+                    route=_route(task),
+                    advertiser_id=item.ref["advertiser_id"],
+                    capability="read",
+                )
+            except DomainError as route_error:
+                item.observation_state = "NEEDS_REVIEW"
+                item.reason = route_error.code
+                session.add(item)
+                _update_task(session, item.task_id, item.tenant_id)
+                return
+            if not settings.ADS_SYNC_ENABLED:
+                item.observation_state = "NEEDS_REVIEW"
+                item.reason = "targeted_refresh_unavailable"
+                session.add(item)
+                _update_task(session, item.task_id, item.tenant_id)
+                return
+        refresh_failed = pending
+        if (
+            not pending
+            and settings.ADS_SYNC_ENABLED
+            and (item.capability or {}).get("operation")
+            in {"set_status", "update_budget", "update_roas"}
+        ):
+            observed = _target_observed(session, item)
+            if observed is False and item.capability.get("operation") in {
+                "update_budget",
+                "update_roas",
+            }:
+                item.observation_state = "NEEDS_REVIEW"
+                item.reason = (
+                    "roas_observed_different"
+                    if item.capability.get("operation") == "update_roas"
+                    else "budget_observed_different"
+                )
+                session.add(item)
+                _update_task(session, item.task_id, item.tenant_id)
+                return
+            if observed is None and item.capability.get("operation") == "update_roas":
+                error = "roas_observation_unavailable"
+            pending = not observed
+        if pending and (item.capability or {}).get("operation") in {
+            "set_status",
+            "update_budget",
+            "update_roas",
+        }:
+            bc_id = session.exec(
+                select(col(ManagementTask.bc_id)).where(col(ManagementTask.id) == item.task_id)
+            ).one()
+            plan = session.get(AdSyncBc, (item.tenant_id, bc_id))
+            if plan is None or not plan.enabled:
+                # 平台已受理，但当前无观察来源；保留回执，不能不断排队或冒充已回读。
+                item.observation_state = "NEEDS_REVIEW"
+                item.reason = "targeted_refresh_unavailable"
+                session.add(item)
+                _update_task(session, item.task_id, item.tenant_id)
+                return
         item.observation_state = "REFRESH_PENDING" if pending else "ACCEPTED"
         if pending:
-            item.reason = error or "targeted_refresh_failed"
+            item.reason = error or (
+                "targeted_refresh_failed" if refresh_failed else None
+            )
             task = session.get(ManagementTask, item.task_id)
             if task is not None:
-                enqueue_after_commit(
-                    session,
-                    context=TenantContext(
-                        tenant_id=task.tenant_id,
-                        actor_id=task.actor_id,
-                        role="operator",
-                    ),
-                    task_name="ad_management.execute",
-                    task_key=f"ad_management.refresh:{item.id}:{uuid4()}",
-                    payload={"task_id": str(task.id), "generation": 1},
-                )
+                from app.modules.ad_management.recovery_dispatch import schedule_wakeup
+
+                if refresh_failed:
+                    enqueue_after_commit(
+                        session,
+                        context=TenantContext(
+                            task.tenant_id, task.actor_id, "operator"
+                        ),
+                        task_name="ad_management.execute",
+                        task_key=f"ad_management.refresh:{item.id}:{uuid4()}",
+                        payload={"task_id": str(task.id), "generation": 1},
+                    )
+                else:
+                    schedule_wakeup(
+                        session,
+                        task,
+                        _now() + timedelta(seconds=30),
+                        kind="refresh",
+                        quantum=30,
+                    )
         elif item.reason == "targeted_refresh_failed":
             item.reason = None
         session.add(item)
@@ -755,7 +1007,15 @@ def _retry_targeted_refresh(database_engine: Engine, item_id: UUID) -> None:
             tenant_id=task.tenant_id, actor_id=task.actor_id, role="operator"
         )
         ref = _ref(item.ref)
+        observed = (item.capability or {}).get("operation") in {
+            "set_status",
+            "update_budget",
+            "update_roas",
+        } and _target_observed(session, item)
         session.commit()
+    if observed:
+        _set_refresh_state(database_engine, item_id, pending=False)
+        return
     try:
         _refresh_after_commit(database_engine, context=context, route=route, ref=ref)
     except Exception:
@@ -785,9 +1045,9 @@ def _mark_unknown_after_persist_failure(
             attempt = session.exec(
                 select(ManagementRequestAttempt)
                 .where(
-                    ManagementRequestAttempt.tenant_id == item.tenant_id,
-                    ManagementRequestAttempt.task_item_id == item.id,
-                    ManagementRequestAttempt.attempt == attempt_no,
+                    col(ManagementRequestAttempt.tenant_id) == item.tenant_id,
+                    col(ManagementRequestAttempt.task_item_id) == item.id,
+                    col(ManagementRequestAttempt.attempt) == attempt_no,
                 )
                 .with_for_update()
             ).one_or_none()
@@ -842,9 +1102,9 @@ def _mark_unknown_after_fence_failure(
             attempt = session.exec(
                 select(ManagementRequestAttempt)
                 .where(
-                    ManagementRequestAttempt.tenant_id == item.tenant_id,
-                    ManagementRequestAttempt.task_item_id == item.id,
-                    ManagementRequestAttempt.attempt == attempt_no,
+                    col(ManagementRequestAttempt.tenant_id) == item.tenant_id,
+                    col(ManagementRequestAttempt.task_item_id) == item.id,
+                    col(ManagementRequestAttempt.attempt) == attempt_no,
                 )
                 .with_for_update()
             ).one_or_none()
@@ -886,8 +1146,8 @@ def execute_item(database_engine: Engine, item_id: UUID) -> bool | None:
                 raise DomainError("management_item_not_found", "管理任务项不存在")
             task = session.exec(
                 select(ManagementTask).where(
-                    ManagementTask.id == item.task_id,
-                    ManagementTask.tenant_id == item.tenant_id,
+                    col(ManagementTask.id) == item.task_id,
+                    col(ManagementTask.tenant_id) == item.tenant_id,
                 )
             ).one_or_none()
             if task is None:
@@ -975,7 +1235,9 @@ def execute_item(database_engine: Engine, item_id: UUID) -> bool | None:
             lease.fence(redis_client)
             with Session(database_engine) as check:
                 current = check.exec(
-                    select(ManagementTaskItem).where(ManagementTaskItem.id == item_id)
+                    select(ManagementTaskItem).where(
+                        col(ManagementTaskItem.id) == item_id
+                    )
                 ).one()
                 task = check.get(ManagementTask, current.task_id)
                 assert task is not None
@@ -1008,7 +1270,9 @@ def execute_item(database_engine: Engine, item_id: UUID) -> bool | None:
             lease.fence(redis_client)
             with Session(database_engine) as preflight:
                 latest = preflight.exec(
-                    select(ManagementTaskItem).where(ManagementTaskItem.id == item_id)
+                    select(ManagementTaskItem).where(
+                        col(ManagementTaskItem.id) == item_id
+                    )
                 ).one_or_none()
                 if latest is None:
                     raise DomainError("management_item_not_found", "管理任务项不存在")
@@ -1085,7 +1349,7 @@ def execute_item(database_engine: Engine, item_id: UUID) -> bool | None:
         with Session(database_engine) as read:
             attempt = read.exec(
                 select(ManagementRequestAttempt)
-                .where(ManagementRequestAttempt.task_item_id == item_id)
+                .where(col(ManagementRequestAttempt.task_item_id) == item_id)
                 .order_by(col(ManagementRequestAttempt.attempt).desc())
             ).first()
             assert attempt is not None

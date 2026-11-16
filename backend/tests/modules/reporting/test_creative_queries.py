@@ -144,25 +144,20 @@ def test_snapshot_summary_page_export_and_actions_obey_ad_filter(session, sync_s
     )
     assert {u.ad_ref.remote_id for u in selection.material_uses} == {"ad-1"}
     assert {u.ad_material_id for u in selection.material_uses} == {"c1", "c3"}
-    export = ReportExport(
-        tenant_id=sync_seed.tenant_id,
-        actor_id=sync_seed.actor_id,
+    from app.modules.reporting.exports import create_export
+
+    export_id = create_export(
+        session,
+        context=sync_seed.context,
         bc_id="bc-a",
-        advertiser_ids=["acc-1"],
-        filters=filters.model_dump(mode="json"),
-        filter_digest="x",
-        publication_versions={},
-        naming_versions={},
         snapshot_id=first.snapshot.snapshot_id,
         idempotency_key=str(uuid4()),
-        coverage={},
-        frozen_rows=[
-            {"row_key": r.row_key, "refs": [], "material_uses": []}
-            for r in first.items + second.items
-        ],
-    )
+    ).id
+    export = session.get(ReportExport, export_id)
     rows = list(_export_rows(session, export))
-    assert [Decimal(r["metric_buckets"][0]["values"]["spend"]) for r in rows] == [
+    # 五类冻结导出中只有普通实例参与素材合计，父控制/对账各自保留原行。
+    instances = [row for row in rows if row["row_kind"] == "INSTANCE"]
+    assert [Decimal(r["metric_buckets"][0]["values"]["spend"]) for r in instances] == [
         20,
         10,
     ]
@@ -302,6 +297,7 @@ def test_old_material_cache_and_snapshot_contracts_are_rejected(session, sync_se
 
     from app.modules.reporting.query_models import QuerySnapshot, read_snapshot
     from app.modules.reporting.query_reuse import _digest, query_key
+    from app.modules.reporting.schemas import MATERIAL_QUERY_CONTRACT
     from tests.modules.reporting.query_helpers import query_ads
     from tests.modules.reporting.test_material_query import material_row, publish
 
@@ -318,18 +314,29 @@ def test_old_material_cache_and_snapshot_contracts_are_rejected(session, sync_se
     publish(session, sync_seed, "acc-1", [material_row("unknown", "11")])
     page = query_ads(session, context=sync_seed.context, bc_id="bc-a", filters=filters)
     snapshot = session.get(QuerySnapshot, page.snapshot.snapshot_id)
-    assert snapshot.publication_versions["material_query_contract"] == 2
-    snapshot.publication_versions = {"reporting": 1}
-    session.add(snapshot)
-    session.flush()
-    with pytest.raises(HTTPException) as exc:
-        read_snapshot(
-            session, context=sync_seed.context, bc_id="bc-a", snapshot_id=snapshot.id
-        )
     assert (
-        exc.value.status_code == 409
-        and exc.value.detail == "query_snapshot_contract_changed"
+        snapshot.publication_versions["material_query_contract"]
+        == MATERIAL_QUERY_CONTRACT
     )
+    # 缺失合同及容量迁移前的 v3 都不能复用为当前快照。
+    for old_versions in (
+        {"reporting": 1},
+        snapshot.publication_versions | {"material_query_contract": 3},
+    ):
+        snapshot.publication_versions = old_versions
+        session.add(snapshot)
+        session.flush()
+        with pytest.raises(HTTPException) as exc:
+            read_snapshot(
+                session,
+                context=sync_seed.context,
+                bc_id="bc-a",
+                snapshot_id=snapshot.id,
+            )
+        assert (
+            exc.value.status_code == 409
+            and exc.value.detail == "query_snapshot_contract_changed"
+        )
 
 
 def test_same_video_keeps_currency_buckets_separate(session, sync_seed):

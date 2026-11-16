@@ -287,15 +287,15 @@ test.describe("ads workspace", () => {
     ).toHaveCount(0)
   })
 
-  test("素材维度隐藏平台不提供的天数列", async ({ page }) => {
+  test("素材维度显示创意日报提供的收入窗口", async ({ page }) => {
     await adsBoundary(page)
     await page.goto(`/tenants/${TENANT}/ads?bc_id=${BC_A}`)
     await page.getByRole("tab", { name: "素材" }).click()
     await expect(
       page.getByRole("columnheader", { name: /第 2 天/ }),
-    ).toHaveCount(0)
+    ).toBeVisible()
     await expect(
-      page.getByRole("columnheader", { name: /广告曝光总价值/ }),
+      page.getByRole("columnheader", { name: /广告展示总价值/ }),
     ).toBeVisible()
   })
 
@@ -321,8 +321,9 @@ test.describe("ads workspace", () => {
     await adsBoundary(page, { partialSpend: true })
     await page.goto(`/tenants/${TENANT}/ads?bc_id=${BC_A}`)
     const row = page.locator("tbody tr").first()
-    await expect(row.getByText("100.00", { exact: true })).toBeVisible()
-    await expect(row.getByLabel("部分账户数据未同步完整")).toBeVisible()
+    const spend = row.locator('[data-metric="spend"]')
+    await expect(spend).toContainText("100.00")
+    await expect(spend.getByRole("img", { name: "部分合计：有成员或日期缺项，已知收益使用完整同范围花费计算", exact: true })).toBeVisible()
     // 行覆盖完整时名称旁不出现不完整警示。
     await expect(row.getByLabel("数据不完整")).toHaveCount(0)
   })

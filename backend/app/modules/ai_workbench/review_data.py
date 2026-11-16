@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import UTC, date, datetime, timedelta
+from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from fastapi import HTTPException
@@ -111,13 +112,13 @@ def build_data_pack(
             continue
         start = date.fromisoformat(window["maturity_windows"]["d7"]["start_date"])
         end = date.fromisoformat(window["complete_through"])
-        states = {}
+        states: dict[str, Any] = {}
         state_queries = {}
         state_fingerprints = {}
         for key, model, day_column in (
-            ("account", AccountReportDayState, AccountReportDayState.stat_date),
-            ("publications", ReportSyncState, ReportSyncState.stat_date),
-            ("material", ReadBucketState, ReadBucketState.bucket),
+            ("account", AccountReportDayState, col(AccountReportDayState.stat_date)),
+            ("publications", ReportSyncState, col(ReportSyncState.stat_date)),
+            ("material", ReadBucketState, col(ReadBucketState.bucket)),
         ):
             query = select(model).where(
                 model.tenant_id == context.tenant_id,
@@ -139,9 +140,16 @@ def build_data_pack(
             state_fingerprints[key] = [
                 row.model_dump(mode="json") for row in states[key]
             ]
-        states["campaign"] = states["drama"] = [
-            s for s in states["publications"] if s.report_kind == "ad_day"
-        ]
+        from app.modules.reporting.levels import selected_states
+
+        states["account"] = states["campaign"] = states["drama"] = selected_states(
+            session,
+            tenant_id=context.tenant_id,
+            advertiser_id=advertiser_id,
+            dimension="campaign",
+            start=start,
+            end=end,
+        )
         states["account_name"] = account.name if account else advertiser_id
         states["review_labels"] = {
             row.remote_id: {
@@ -161,14 +169,14 @@ def build_data_pack(
                 if row.budget_value is not None
                 else None,
             }
-            for row in session.execute(
+            for row in session.connection().execute(
                 text("""
-                SELECT ids.remote_id, COALESCE(NULLIF(e.name,''), p.raw_name, f.campaign_name) AS name,
+                SELECT ids.remote_id, COALESCE(NULLIF(e.name,''), p.raw_name, f.campaign_name, native.campaign_name) AS name,
                     p.provider_label,p.status AS naming_status,p.drama_name,
                     e.ad_type,e.operation_status,e.review_status,e.delivery_status,
                     COALESCE(NULLIF(e.roas_bid,0),e.target_roas) AS target_roas,e.budget_value
                 FROM (
-                    SELECT DISTINCT campaign_id AS remote_id FROM campaign_metric_day
+                    SELECT DISTINCT campaign_id AS remote_id FROM campaign_selected_day
                     WHERE tenant_id=:tenant AND advertiser_id=:adv AND stat_date BETWEEN :start AND :end
                 ) ids
                 LEFT JOIN ad_entity_read e ON e.tenant_id=:tenant AND e.advertiser_id=:adv
@@ -181,6 +189,12 @@ def build_data_pack(
                         AND stat_date BETWEEN :start AND :end AND campaign_name IS NOT NULL
                     ORDER BY stat_date DESC,fetched_at DESC LIMIT 1
                 ) f ON TRUE
+                LEFT JOIN LATERAL (
+                    SELECT campaign_name FROM campaign_selected_day
+                    WHERE tenant_id=:tenant AND advertiser_id=:adv AND campaign_id=ids.remote_id
+                        AND stat_date BETWEEN :start AND :end AND campaign_name IS NOT NULL
+                    ORDER BY stat_date DESC,fetched_at DESC LIMIT 1
+                ) native ON TRUE
             """),
                 {
                     "tenant": context.tenant_id,
@@ -191,7 +205,7 @@ def build_data_pack(
             )
         }
         # 整个账户只设置一次查询参数，避免12份临时快照反复切换。
-        session.execute(text("SET LOCAL jit = off"))
+        session.connection().execute(text("SET LOCAL jit = off"))
         # 各归因周期独立取七个成熟完整日；D7 不能复用近七日未成熟合计。
         for horizon, mature_window in window["maturity_windows"].items():
             for dimension in ("account", "campaign", "drama", "material"):
@@ -246,24 +260,25 @@ def build_data_pack(
             select(BusinessDay)
             .join(
                 BusinessPublication,
-                (BusinessDay.tenant_id == BusinessPublication.tenant_id)
-                & (BusinessDay.bc_id == BusinessPublication.bc_id)
-                & (BusinessDay.run_id == BusinessPublication.run_id),
+                (col(BusinessDay.tenant_id) == col(BusinessPublication.tenant_id))
+                & (col(BusinessDay.bc_id) == col(BusinessPublication.bc_id))
+                & (col(BusinessDay.run_id) == col(BusinessPublication.run_id)),
             )
             .join(
                 BusinessRun,
-                (BusinessRun.tenant_id == BusinessDay.tenant_id)
-                & (BusinessRun.id == BusinessDay.run_id),
+                (col(BusinessRun.tenant_id) == col(BusinessDay.tenant_id))
+                & (col(BusinessRun.id) == col(BusinessDay.run_id)),
             )
             .where(
-                BusinessRun.finished_at <= cutoff,
-                BusinessDay.tenant_id == context.tenant_id,
-                BusinessDay.bc_id == version.bc_id,
-                BusinessDay.advertiser_id == advertiser_id,
-                BusinessDay.stat_date >= date.fromisoformat(window["start_date"]),
-                BusinessDay.stat_date <= date.fromisoformat(window["complete_through"]),
+                col(BusinessRun.finished_at) <= cutoff,
+                col(BusinessDay.tenant_id) == context.tenant_id,
+                col(BusinessDay.bc_id) == version.bc_id,
+                col(BusinessDay.advertiser_id) == advertiser_id,
+                col(BusinessDay.stat_date) >= date.fromisoformat(window["start_date"]),
+                col(BusinessDay.stat_date)
+                <= date.fromisoformat(window["complete_through"]),
             )
-            .order_by(BusinessDay.stat_date, BusinessDay.campaign_id)
+            .order_by(col(BusinessDay.stat_date), col(BusinessDay.campaign_id))
         ).all()
         business.append(
             {
@@ -277,15 +292,16 @@ def build_data_pack(
             }
         )
         logs = session.exec(
-            select(OperationLogEvent, OperationExport.advertiser_id)
+            select(OperationLogEvent, col(OperationExport.advertiser_id))
             .join(OperationExport)
             .where(
-                OperationExport.tenant_id == context.tenant_id,
-                OperationExport.bc_id == version.bc_id,
-                OperationExport.advertiser_id == advertiser_id,
-                OperationExport.observed_at <= cutoff,
-                OperationLogEvent.occurred_at >= cutoff - timedelta(days=WINDOW_DAYS),
-                OperationLogEvent.occurred_at < cutoff,
+                col(OperationExport.tenant_id) == context.tenant_id,
+                col(OperationExport.bc_id) == version.bc_id,
+                col(OperationExport.advertiser_id) == advertiser_id,
+                col(OperationExport.observed_at) <= cutoff,
+                col(OperationLogEvent.occurred_at)
+                >= cutoff - timedelta(days=WINDOW_DAYS),
+                col(OperationLogEvent.occurred_at) < cutoff,
             )
             .order_by(col(OperationLogEvent.occurred_at).desc())
         ).all()

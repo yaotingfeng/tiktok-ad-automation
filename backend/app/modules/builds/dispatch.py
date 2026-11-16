@@ -33,7 +33,10 @@ from app.modules.builds.submissions import (
     get_submission,
     group_material_state,
 )
-from app.modules.tenants.permissions import require_tenant
+from app.modules.tenants.permissions import (
+    require_build_authorization_stamp,
+    require_tenant,
+)
 
 STEP_TASK = "builds.execute_step"
 READ_TASK = "builds.reconcile_step"
@@ -73,6 +76,23 @@ def queue_step(
 ) -> None:
     if (step.tenant_id, step.submission_id) != (submission.tenant_id, submission.id):
         raise DomainError("resource_not_found", "执行步骤范围无效")
+    if not reconcile and submission.progress.get("local_cancelled"):
+        if (
+            step.status in {"PENDING", "QUEUED"}
+            and not step.remote_id
+            and step.request_body is None
+            and step.kind != "READBACK"
+        ):
+            step.status, step.phase, step.error_code = (
+                "FAILED",
+                "DONE",
+                "local_submission_cancelled",
+            )
+            step.dispatch_revision += 1
+            step.dispatch_id = None
+            evidence(session, step=step, claim=None, conclusion="LOCAL_CANCELLED")
+            session.add(step)
+        return
     if not reconcile and (
         step.remote_id
         or (
@@ -85,6 +105,46 @@ def queue_step(
         raise DomainError(
             "execution_requires_reconciliation", "该步骤必须先核实远端结果"
         )
+    if not reconcile:
+        from .native_execution import validate
+        from .preview_models import BuildPreview, BuildUnit
+        from .routes import verify_unit_route
+
+        frozen_unit = session.get(BuildUnit, step.unit_id)
+        if frozen_unit is not None and "native_request" in frozen_unit.scene_snapshot:
+            try:
+                require_build_authorization_stamp(session, submission=submission)
+                context = _context(submission)
+                require_tenant(
+                    session,
+                    actor_id=context.actor_id,
+                    tenant_id=context.tenant_id,
+                    action="build",
+                )
+                route = verify_unit_route(
+                    session, context=context, unit=frozen_unit, capability="build"
+                )
+                validate(
+                    session,
+                    context=context,
+                    preview=session.get(BuildPreview, step.preview_id),
+                    route=route,
+                    unit_id=step.unit_id,
+                    refreshing=True,
+                )
+            except DomainError as error:
+                # 仅本 Unit 停止；不把本地围栏错误记录成平台拒绝。
+                step.status, step.phase, step.error_code = "FAILED", "DONE", error.code
+                step.dispatch_id = None
+                evidence(
+                    session,
+                    step=step,
+                    claim=None,
+                    conclusion="LOCAL_FAILED",
+                    summary={"reason_code": error.code},
+                )
+                session.add(step)
+                return
     name = READ_TASK if reconcile else STEP_TASK
     step.resolved = {**step.resolved, "dispatch_task": name}
     step.dispatch_revision += 1
@@ -113,8 +173,8 @@ def wake_unit(session: Session, *, unit_id: UUID, context: TenantContext) -> Non
     unit = session.exec(
         select(SubmissionUnit)
         .where(
-            SubmissionUnit.tenant_id == context.tenant_id,
-            SubmissionUnit.unit_id == unit_id,
+            col(SubmissionUnit.tenant_id) == context.tenant_id,
+            col(SubmissionUnit.unit_id) == unit_id,
         )
         .with_for_update()
     ).one_or_none()
@@ -181,7 +241,7 @@ def _dependency(session: Session, context: TenantContext, step: ExecutionStep) -
             select(ExecutionStep).where(
                 col(ExecutionStep.tenant_id) == step.tenant_id,
                 col(ExecutionStep.unit_id) == step.unit_id,
-                ExecutionStep.kind == "CTA",
+                col(ExecutionStep.kind) == "CTA",
             )
         ).one()
         if cta.status in {"FAILED", "UNKNOWN"}:
@@ -226,18 +286,18 @@ def _unit_candidates(*, tenant_id: Any, unit_id: Any, now: datetime) -> Any:
     parent_settled = (
         select(parent.id)
         .where(
-            parent.tenant_id == ExecutionStep.tenant_id,
-            parent.id == ExecutionStep.parent_step_id,
+            parent.tenant_id == col(ExecutionStep.tenant_id),
+            parent.id == col(ExecutionStep.parent_step_id),
             col(parent.status).in_(["SUCCEEDED", "FAILED"]),
         )
         .correlate(ExecutionStep)
         .exists()
     )
     current_read = (
-        select(PendingDispatch.id)
+        select(col(PendingDispatch.id))
         .where(
-            PendingDispatch.id == ExecutionStep.dispatch_id,
-            PendingDispatch.task_name == READ_TASK,
+            col(PendingDispatch.id) == col(ExecutionStep.dispatch_id),
+            col(PendingDispatch.task_name) == READ_TASK,
         )
         .exists()
     )
@@ -306,19 +366,19 @@ def finalize_submission(
         row = session.exec(
             select(Submission)
             .where(
-                Submission.tenant_id == context.tenant_id,
-                Submission.id == submission_id,
+                col(Submission.tenant_id) == context.tenant_id,
+                col(Submission.id) == submission_id,
             )
             .with_for_update()
         ).one_or_none()
         if row is None or row.actor_id != context.actor_id:
             return
         active_unit = session.exec(
-            select(SubmissionUnit.unit_id)
+            select(col(SubmissionUnit.unit_id))
             .where(
-                SubmissionUnit.tenant_id == row.tenant_id,
-                SubmissionUnit.submission_id == row.id,
-                SubmissionUnit.disposition == "INCLUDED",
+                col(SubmissionUnit.tenant_id) == row.tenant_id,
+                col(SubmissionUnit.submission_id) == row.id,
+                col(SubmissionUnit.disposition) == "INCLUDED",
                 col(SubmissionUnit.expanded).is_(False),
             )
             .limit(1)
@@ -326,80 +386,124 @@ def finalize_submission(
         # 在途时仅查轻量步骤集合；完整对象投影只在收尾时计算，避免每条
         # 回执都展开整个大批次的账户×广告图。
         active_states = session.exec(
-            select(ExecutionStep.status, ExecutionStep.mismatch)
+            select(col(ExecutionStep.status), col(ExecutionStep.mismatch))
             .where(
-                ExecutionStep.tenant_id == row.tenant_id,
-                ExecutionStep.submission_id == row.id,
+                col(ExecutionStep.tenant_id) == row.tenant_id,
+                col(ExecutionStep.submission_id) == row.id,
                 text("NOT " + obsolete_readback_sql("execution_step")),
                 text("NOT " + resolved_sql("execution_step")),
-                select(SubmissionUnit.unit_id)
+                select(col(SubmissionUnit.unit_id))
                 .where(
-                    SubmissionUnit.tenant_id == ExecutionStep.tenant_id,
-                    SubmissionUnit.submission_id == ExecutionStep.submission_id,
-                    SubmissionUnit.unit_id == ExecutionStep.unit_id,
-                    SubmissionUnit.disposition == "INCLUDED",
+                    col(SubmissionUnit.tenant_id) == col(ExecutionStep.tenant_id),
+                    col(SubmissionUnit.submission_id)
+                    == col(ExecutionStep.submission_id),
+                    col(SubmissionUnit.unit_id) == col(ExecutionStep.unit_id),
+                    col(SubmissionUnit.disposition) == "INCLUDED",
                 )
                 .exists(),
                 or_(
                     col(ExecutionStep.status).in_(
                         ["PENDING", "QUEUED", "RUNNING", "RETRYABLE", "UNKNOWN"]
                     ),
-                    ExecutionStep.mismatch,
+                    col(ExecutionStep.mismatch),
                 ),
             )
-            .group_by(ExecutionStep.status, ExecutionStep.mismatch)
+            .group_by(col(ExecutionStep.status), col(ExecutionStep.mismatch))
         ).all()
+        native_preview = None
+        if (
+            row.expanded
+            and active_unit is None
+            and all(
+                status in {"PENDING", "RETRYABLE"} and not mismatch
+                for status, mismatch in active_states
+            )
+        ):
+            from .preview_models import BuildPreview
+
+            preview = session.get(BuildPreview, row.preview_id)
+            assert preview is not None
+            if "native_request" in preview.config or "native_batch" in preview.config:
+                native_preview = preview
         if any(status == "UNKNOWN" or mismatch for status, mismatch in active_states):
             row.status = "NEEDS_REVIEW"
-        elif row.expanded and active_unit is None and not active_states:
-            try:
-                row.status = get_submission(
-                    session, context=context, submission_id=row.id
-                ).status
-            except DomainError:
-                # Internal termination retains existing results even when the
-                # original actor can no longer read this tenant's public API.
-                facts = session.exec(
-                    select(ExecutionStep.status, ExecutionStep.mismatch)
-                    .where(
-                        col(ExecutionStep.tenant_id) == row.tenant_id,
-                        ExecutionStep.submission_id == row.id,
-                        text("NOT " + obsolete_readback_sql("execution_step")),
-                        select(SubmissionUnit.unit_id)
+        elif (
+            row.expanded
+            and active_unit is None
+            and (not active_states or native_preview is not None)
+        ):
+            if native_preview is not None:
+                from .native_completion import batch_results
+
+                # Native 计划终态复用冻结事实 owner；未发送前置/后代不等于在途。
+                # 内部收尾不授予原操作者新的读取权，也不依赖其仍可调用公共 API。
+                row.status, _ = batch_results(session, row, native_preview)
+            else:
+                try:
+                    row.status = get_submission(
+                        session, context=context, submission_id=row.id
+                    ).status
+                except DomainError:
+                    # Internal termination retains existing results even when the
+                    # original actor can no longer read this tenant's public API.
+                    facts = session.exec(
+                        select(col(ExecutionStep.status), col(ExecutionStep.mismatch))
                         .where(
-                            SubmissionUnit.tenant_id == ExecutionStep.tenant_id,
-                            SubmissionUnit.submission_id == ExecutionStep.submission_id,
-                            SubmissionUnit.unit_id == ExecutionStep.unit_id,
-                            SubmissionUnit.disposition == "INCLUDED",
+                            col(ExecutionStep.tenant_id) == row.tenant_id,
+                            col(ExecutionStep.submission_id) == row.id,
+                            text("NOT " + obsolete_readback_sql("execution_step")),
+                            select(col(SubmissionUnit.unit_id))
+                            .where(
+                                col(SubmissionUnit.tenant_id)
+                                == col(ExecutionStep.tenant_id),
+                                col(SubmissionUnit.submission_id)
+                                == col(ExecutionStep.submission_id),
+                                col(SubmissionUnit.unit_id)
+                                == col(ExecutionStep.unit_id),
+                                col(SubmissionUnit.disposition) == "INCLUDED",
+                            )
+                            .exists(),
                         )
-                        .exists(),
+                        .group_by(
+                            col(ExecutionStep.status), col(ExecutionStep.mismatch)
+                        )
+                    ).all()
+                    row.status = aggregate_status(
+                        {status for status, _ in facts}
+                        | ({"MISMATCH"} if any(m for _, m in facts) else set())
                     )
-                    .group_by(col(ExecutionStep.status), col(ExecutionStep.mismatch))
-                ).all()
-                row.status = aggregate_status(
-                    {status for status, _ in facts}
-                    | ({"MISMATCH"} if any(m for _, m in facts) else set())
-                )
         elif attention:
             row.status = "NEEDS_REVIEW"
         elif active_states or active_unit is not None or not row.expanded:
             row.status = "RUNNING"
+        if row.status == "COMPLETED":
+            from .preview_models import BuildPreview
+
+            preview = session.get(BuildPreview, row.preview_id)
+            # 提交的 preview_id 外键保留冻结预览。
+            assert preview is not None
+            if "native_request" in preview.config or "native_batch" in preview.config:
+                from .native_completion import all_native_matched
+
+                if not all_native_matched(session, row, preview):
+                    row.status = "NEEDS_REVIEW"
         # 总状态/更新时间来自纳入执行的业务事实；消费空消息不能表示新进展。
         # 同时纠正历史轮询污染的时间，不改任何步骤或平台回执。
         latest = session.exec(
-            select(func.max(ExecutionStep.updated_at))
+            select(func.max(col(ExecutionStep.updated_at)))
             .join(
                 SubmissionUnit,
                 and_(
-                    SubmissionUnit.tenant_id == ExecutionStep.tenant_id,
-                    SubmissionUnit.submission_id == ExecutionStep.submission_id,
-                    SubmissionUnit.unit_id == ExecutionStep.unit_id,
+                    col(SubmissionUnit.tenant_id) == col(ExecutionStep.tenant_id),
+                    col(SubmissionUnit.submission_id)
+                    == col(ExecutionStep.submission_id),
+                    col(SubmissionUnit.unit_id) == col(ExecutionStep.unit_id),
                 ),
             )
             .where(
-                ExecutionStep.tenant_id == row.tenant_id,
-                ExecutionStep.submission_id == row.id,
-                SubmissionUnit.disposition == "INCLUDED",
+                col(ExecutionStep.tenant_id) == row.tenant_id,
+                col(ExecutionStep.submission_id) == row.id,
+                col(SubmissionUnit.disposition) == "INCLUDED",
                 text("NOT " + obsolete_readback_sql("execution_step")),
             )
         ).one()
@@ -439,8 +543,8 @@ def process_unit(
         unit = session.exec(
             select(SubmissionUnit)
             .where(
-                SubmissionUnit.tenant_id == context.tenant_id,
-                SubmissionUnit.unit_id == identity,
+                col(SubmissionUnit.tenant_id) == context.tenant_id,
+                col(SubmissionUnit.unit_id) == identity,
             )
             .with_for_update()
         ).one_or_none()
@@ -678,8 +782,8 @@ def repair_execution(*, database_engine: Any, limit: int = 100) -> int:
     with Session(database_engine) as session, session.begin():
         runnable = (
             _unit_candidates(
-                tenant_id=SubmissionUnit.tenant_id,
-                unit_id=SubmissionUnit.unit_id,
+                tenant_id=col(SubmissionUnit.tenant_id),
+                unit_id=col(SubmissionUnit.unit_id),
                 now=now,
             )
             .correlate(SubmissionUnit)
@@ -688,16 +792,16 @@ def repair_execution(*, database_engine: Any, limit: int = 100) -> int:
         units = session.exec(
             select(SubmissionUnit)
             .where(
-                SubmissionUnit.disposition == "INCLUDED",
-                SubmissionUnit.expanded,
+                col(SubmissionUnit.disposition) == "INCLUDED",
+                col(SubmissionUnit.expanded),
                 or_(
                     col(SubmissionUnit.dispatch_id).is_not(None),
                     and_(col(SubmissionUnit.reason_code).is_(None), runnable),
                     # 旧修复器可能复活了已压缩的同代消息。先核验摘要，不能
                     # 将真正的跨租户/参数篡改当作可恢复的归档记录。
-                    SubmissionUnit.reason_code == "dispatch_payload_invalid",
+                    col(SubmissionUnit.reason_code) == "dispatch_payload_invalid",
                 ),
-                SubmissionUnit.repair_after <= now,
+                col(SubmissionUnit.repair_after) <= now,
             )
             .order_by(col(SubmissionUnit.repair_after), col(SubmissionUnit.unit_id))
             .limit(limit)
@@ -716,8 +820,8 @@ def repair_execution(*, database_engine: Any, limit: int = 100) -> int:
             if unit.reason_code == "dispatch_payload_invalid" and dispatch is None:
                 dispatch = session.exec(
                     select(PendingDispatch).where(
-                        PendingDispatch.tenant_id == unit.tenant_id,
-                        PendingDispatch.task_key == expected_key,
+                        col(PendingDispatch.tenant_id) == unit.tenant_id,
+                        col(PendingDispatch.task_key) == expected_key,
                     )
                 ).one_or_none()
             identity_matches = dispatch is not None and (

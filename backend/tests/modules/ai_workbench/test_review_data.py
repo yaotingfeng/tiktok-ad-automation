@@ -63,7 +63,7 @@ def test_account_window_uses_local_complete_days_and_maturity():
 
 
 def test_pack_uses_published_metrics_and_preserves_old_values(session, context):
-    from datetime import date
+    from datetime import date, timedelta
 
     from app.modules.ai_workbench.review_data import build_data_pack
     from app.modules.ai_workbench.reviews import load_optimizer
@@ -79,7 +79,7 @@ def test_pack_uses_published_metrics_and_preserves_old_values(session, context):
     _, version = load_optimizer(session, context, optimizer.id)
     day = date(2026, 11, 12)
 
-    def publish(spend):
+    def publish(spend, observed=datetime(2026, 11, 13, 11, tzinfo=UTC)):
         publish_ad_day(
             session,
             tenant_id=context.tenant_id,
@@ -87,7 +87,7 @@ def test_pack_uses_published_metrics_and_preserves_old_values(session, context):
             accounts={"acc-1": AccountMeta("USD", "UTC")},
             start=day,
             end=day,
-            requested_at=datetime(2026, 11, 13, 11, tzinfo=UTC),
+            requested_at=observed,
             rows=[
                 ad_row(
                     "ad-one",
@@ -113,5 +113,5 @@ def test_pack_uses_published_metrics_and_preserves_old_values(session, context):
     assert bucket["currency"] == "USD"
     assert bucket["values"]["spend"] == "10"
     assert bucket["values"]["revenue_d0"] == "0"
-    publish("20")
+    publish("20", datetime(2026, 11, 13, 11, tzinfo=UTC) + timedelta(seconds=1))
     assert bucket["values"]["spend"] == "10"

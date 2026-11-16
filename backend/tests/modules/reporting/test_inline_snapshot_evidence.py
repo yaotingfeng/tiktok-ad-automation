@@ -1,13 +1,9 @@
 """素材版本内联后，冻结身份与清理水位仍在真实PostgreSQL中保持安全。"""
 
-import importlib.util
 from datetime import UTC, datetime, timedelta
-from pathlib import Path
 from uuid import uuid4
 
 import pytest
-from alembic.migration import MigrationContext
-from alembic.operations import Operations
 from fastapi import HTTPException
 from sqlalchemy import event, text
 from sqlmodel import Session
@@ -78,6 +74,8 @@ def test_inline_missing_version_fails_closed(session, sync_seed):
 
 
 def test_unfiltered_material_summary_matches_full_row_filter_path(session, sync_seed):
+    from tests.modules.reporting.evidence_helpers import comparable_snapshot_evidence
+
     material_snapshot(session, sync_seed)
     use(session, sync_seed, adv="acc-2", ad="a2", video="v1", ad_material="m2")
     pages = [
@@ -92,8 +90,22 @@ def test_unfiltered_material_summary_matches_full_row_filter_path(session, sync_
         for bounds in ({}, {"min_spend": 0})
     ]
     assert pages[0].total == pages[1].total
-    assert pages[0].summary == pages[1].summary
-    assert pages[0].items == pages[1].items
+    assert pages[0].snapshot.snapshot_id != pages[1].snapshot.snapshot_id
+
+    values = [
+        comparable_snapshot_evidence(
+            session,
+            sync_seed,
+            page.snapshot.snapshot_id,
+            {
+                "summary": page.summary,
+                "items": [item.model_dump(mode="json") for item in page.items],
+            },
+        )
+        for page in pages
+    ]
+    # 定位已独立验证；金额、覆盖、摘要及全部冻结原件都保持严格相等。
+    assert values[0] == values[1]
 
 
 def test_active_snapshot_watermark_preserves_old_retired_version_until_expiry(
@@ -165,29 +177,66 @@ def test_cleanup_skips_uncommitted_builder_and_shared_builders_do_not_block():
                 cleaner.rollback()
 
 
-def test_inline_migration_roundtrip_preserves_frozen_versions(session, sync_seed):
-    snapshot, rows = material_snapshot(session, sync_seed)
-    before = snapshot_members(session, snapshot=snapshot, rows=rows)
-    path = (
-        Path(__file__).resolve().parents[3]
-        / "app/alembic/versions/0109_snapshot_inline_evidence.py"
+def test_inline_migration_roundtrip_preserves_frozen_versions(monkeypatch):
+    from alembic import command
+
+    from tests.migration_database import historical_database
+    from tests.modules.reporting.sync_conftest import sync_seed
+    from tests.modules.reporting.test_report_evidence_migration import (
+        _ref,
+        _seed_snapshot,
     )
-    spec = importlib.util.spec_from_file_location("inline_evidence_migration", path)
-    migration = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(migration)
-    with Operations.context(MigrationContext.configure(session.connection())):
-        migration.downgrade()
-        assert (
-            session.connection()
-            .execute(
-                text(
-                    "SELECT count(*) FROM query_snapshot_evidence WHERE snapshot_id=:s"
-                ),
-                {"s": snapshot.id},
+
+    # 只在0108/0109之间往返；不能在已物理退役旧素材表的head上执行旧downgrade。
+    with historical_database(monkeypatch, "0105_entity_metric_days") as (
+        database,
+        config,
+    ):
+        with Session(database) as session, session.begin():
+            seed = sync_seed.__wrapped__(session, historical=True)
+            ref = _ref(seed.tenant_id, "acc-1", "ad", "historical-ad")
+            identity = _seed_snapshot(
+                session,
+                seed,
+                "bc-a",
+                "material",
+                ["acc-1"],
+                [
+                    (
+                        "historical-material",
+                        [ref],
+                        [
+                            {
+                                "ad_ref": ref,
+                                "platform_material_id": "vid",
+                                "ad_material_id": "creative",
+                                "material_type": "VIDEO",
+                            }
+                        ],
+                    )
+                ],
+                {"directory": 1},
             )
-            .scalar_one()
-            > 0
+        command.upgrade(config, "0109_snapshot_inline_evidence")
+        query = text(
+            "SELECT row_key,evidence_versions FROM query_snapshot_row WHERE snapshot_id=:s ORDER BY row_key"
         )
-        migration.upgrade()
-    session.expire_all()
-    assert snapshot_members(session, snapshot=snapshot, rows=rows) == before
+        with database.connect() as connection:
+            before = connection.execute(query, {"s": identity}).all()
+            assert before and before[0].evidence_versions
+        command.downgrade(config, "0108_report_lookup_cover")
+        with database.connect() as connection:
+            linked = (
+                connection.execute(
+                    text(
+                        "SELECT version_id FROM query_snapshot_evidence WHERE snapshot_id=:s ORDER BY version_id"
+                    ),
+                    {"s": identity},
+                )
+                .scalars()
+                .all()
+            )
+            assert linked == sorted(before[0].evidence_versions)
+        command.upgrade(config, "0109_snapshot_inline_evidence")
+        with database.connect() as connection:
+            assert connection.execute(query, {"s": identity}).all() == before

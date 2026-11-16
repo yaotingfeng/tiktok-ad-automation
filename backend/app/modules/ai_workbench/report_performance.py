@@ -3,6 +3,8 @@
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
 
+from sqlmodel import col
+
 from app.modules.ai_workbench.review_store import ReviewArtifact, scoped
 
 
@@ -26,7 +28,7 @@ def report_performance(session, task, *, now=None):
             payload["coverage"].label("coverage"),
             payload["partitions"].label("partitions"),
         )
-        .where(ReviewArtifact.kind.in_(["analysis", "timeline"]))
+        .where(col(ReviewArtifact.kind).in_(["analysis", "timeline"]))
         .order_by(ReviewArtifact.created_at, ReviewArtifact.id)
     ).all()
     windows, timelines = {}, {}

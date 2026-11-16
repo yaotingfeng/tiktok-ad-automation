@@ -140,6 +140,9 @@ def c5_env(monkeypatch):
         # 成功写入现在会立即生成回读 outbox；完整清理本夹具的已提交租户，
         # 避免它的后台任务污染后续用例的全局派发窗口与空队列断言。
         with Session(engine) as cleanup, cleanup.begin():
+            # 删除名称投影会生成新范围证据，先完成触发器写入，再按外键顺序清理。
+            names = SQLModel.metadata.tables["campaign_name_projection"]
+            cleanup.exec(names.delete().where(names.c.tenant_id == context.tenant_id))
             for table in reversed(SQLModel.metadata.sorted_tables):
                 if "tenant_id" in table.c:
                     cleanup.exec(
@@ -750,7 +753,8 @@ def test_targeted_refresh_failure_is_durable_and_retry_does_not_resend(
             item = session.get(ManagementTaskItem, item_id)
             assert item is not None
             assert item.execution_result == "ACCEPTED"
-            assert item.observation_state == "ACCEPTED"
+            # 目录请求排队不证明预算已生效；真实发布由 Native 纵链覆盖。
+            assert item.observation_state == "REFRESH_PENDING"
         assert calls == [True]
         assert len(refreshes) == 1
     finally:

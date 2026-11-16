@@ -1,6 +1,7 @@
 """冻结完整当地日的成熟资格及真实指标可用性，不推算尚未观测的收入。"""
 
 from datetime import date, datetime, time, timedelta
+from typing import Any
 from zoneinfo import ZoneInfo
 
 from sqlmodel import Session, select
@@ -11,7 +12,6 @@ from app.modules.reporting.read_models.models import (
     AccountReportDayState,
     ReadBucketState,
 )
-from app.modules.reporting.store_models import ReportSyncState
 
 
 def maturity_evidence(
@@ -29,7 +29,6 @@ def maturity_evidence(
     start = date.fromisoformat(window["start_date"])
     end = date.fromisoformat(window["end_date"])
     days = window["maturity_days"]
-    model = AccountReportDayState if dimension == "account" else ReportSyncState
     if dimension == "material":
         states = (
             source_states
@@ -55,32 +54,32 @@ def maturity_evidence(
             for row in states
         }
     else:
-        conditions = (
-            [] if dimension == "account" else [ReportSyncState.report_kind == "ad_day"]
-        )
+        from app.modules.reporting.levels import selected_states
+
         states = (
             source_states
             if source_states is not None
-            else session.exec(
-                select(model).where(
-                    model.tenant_id == context.tenant_id,
-                    model.advertiser_id == advertiser_id,
-                    model.stat_date >= start,
-                    model.stat_date <= end,
-                    *conditions,
-                )
-            ).all()
+            else selected_states(
+                session,
+                tenant_id=context.tenant_id,
+                advertiser_id=advertiser_id,
+                dimension=dimension,
+                start=start,
+                end=end,
+            )
         )
         source = {
             row.stat_date: (
                 row.status,
                 row.observed_at or row.last_success_at,
-                row.revision if dimension == "account" else row.publication_version,
+                row.revision
+                if isinstance(row, AccountReportDayState)
+                else row.publication_version,
                 True,
             )
             for row in states
         }
-    entries = []
+    entries: list[dict[str, Any]] = []
     observed_times = []
     for offset in range((end - start).days + 1):
         day = start + timedelta(days=offset)

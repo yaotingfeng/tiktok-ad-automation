@@ -5,6 +5,7 @@
 - 端到端验收（tests/acceptance）是多分钟级批量搭建，对数据库负载敏感，不与普通用例
   共用同一个测试数据库实例：设置 ACCEPTANCE_DATABASE_URL（独立实例）时两类同时运行，
   否则先跑完普通用例再单独跑验收。
+- --serial-file 将指定容量文件放到并行组结束后逐文件独立进程执行，保留所有收集和原性能门槛。
 - --fast 只跑快速层（排除 slow 标记，含全部验收），供日常检查；发布门禁跑全部。
 - 官方 MCP 通道退役中，mcp 标记的用例始终不运行。
 - 每组内保持文件路径排序（已知部分夹具依赖收集顺序）。
@@ -19,6 +20,7 @@ REDIS_URL、TEST_REDIS_URL（Redis 需开启足够多的库号）。
 import argparse
 import json
 import os
+import shutil
 import subprocess
 import sys
 import time
@@ -46,7 +48,7 @@ def weights_for(nodeids, durations):
     return result
 
 
-def partition(nodeids, durations, shards):
+def partition(nodeids, durations, shards, *, split_files=True):
     """最长处理时间优先装箱；返回每组的 pytest 参数（文件路径或用例 ID）。"""
     weights = weights_for(nodeids, durations)
     by_file = defaultdict(list)
@@ -55,7 +57,7 @@ def partition(nodeids, durations, shards):
     units = []  # (估计耗时, 文件, 参数列表)
     for path, ids in by_file.items():
         total = sum(weights[i] for i in ids)
-        if total > SPLIT_SECONDS and len(ids) > 1:
+        if split_files and total > SPLIT_SECONDS and len(ids) > 1:
             units.extend((weights[i], path, [i]) for i in ids)
         else:
             units.append((total, path, [path]))
@@ -71,11 +73,29 @@ def partition(nodeids, durations, shards):
     ]
 
 
+def runner_partition(nodeids, durations, index, count):
+    """外层按完整文件归属 runner；内层仍复用原分组与容量独占流程。"""
+    if count < 1 or not 0 <= index < count:
+        raise ValueError("runner partition index must be within partition count")
+    groups = partition(nodeids, durations, count, split_files=False)
+    files = set(groups[index][1]) if index < len(groups) else set()
+    return [nodeid for nodeid in nodeids if nodeid.split("::", 1)[0] in files]
+
+
 def split_exclusive(nodeids):
     """拆出需独占阶段运行的验收用例；两部分均保持原收集顺序。"""
     regular = [n for n in nodeids if not n.startswith(EXCLUSIVE_PREFIX)]
     exclusive = [n for n in nodeids if n.startswith(EXCLUSIVE_PREFIX)]
     return regular, exclusive
+
+
+def split_serial(nodeids, files):
+    """明确指定的容量测量文件独占 CPU/数据库；不减少收集或改变原门槛。"""
+    files = set(files)
+    return (
+        [n for n in nodeids if n.split("::", 1)[0] not in files],
+        [n for n in nodeids if n.split("::", 1)[0] in files],
+    )
 
 
 def with_database(url, name):
@@ -129,7 +149,9 @@ def read_results(path):
     outcomes, durations = {}, defaultdict(float)
     if not path.exists():
         return outcomes, durations
-    for line in path.read_text().splitlines():
+    for line in path.read_text().splitlines(keepends=True):
+        if not line.endswith("\n"):
+            continue
         record = json.loads(line)
         nodeid = record["nodeid"]
         durations[nodeid] += record["duration"]
@@ -161,7 +183,7 @@ def pytest_command(args, fast=False):
     ]
 
 
-def start_groups(groups, first_index, label, args, base_env, database_url=None):
+def start_groups(groups, first_index, label, args, base_env, database_url=None, *, redis_index=None):
     """启动一批分组；组号从 first_index 起，保证库名与 Redis 库号不冲突。"""
     database_url = database_url or base_env["DATABASE_URL"]
     running = []
@@ -174,7 +196,8 @@ def start_groups(groups, first_index, label, args, base_env, database_url=None):
         log = (args.work / f"shard{index}.log").open("w")
         process = subprocess.Popen(
             pytest_command(group, args.fast),
-            env=shard_env(base_env, index, name, results, database_url),
+            env=shard_env(base_env, index if redis_index is None else redis_index + offset,
+                          name, results, database_url),
             stdout=log,
             stderr=subprocess.STDOUT,
         )
@@ -185,15 +208,49 @@ def start_groups(groups, first_index, label, args, base_env, database_url=None):
 
 def wait_groups(running, label, args, started):
     outcomes, measured = {}, {}
+    process_errors = []
+    next_progress = started
+    while True:
+        live = [index for index, process, _, _ in running if process.poll() is None]
+        if not live:
+            break
+        if time.monotonic() >= next_progress:
+            # 直接读既有逐条结果流，宿主退出前也能看到各组进度，不能靠事后 artifact。
+            for index, _, _, results in running:
+                current, _ = read_results(results)
+                print(
+                    f"  {label}组 {index} 进度：完成 {len(current)}，"
+                    f"失败 {sum(outcome == 'failed' for outcome in current.values())}，"
+                    f"进程 {'running' if index in live else 'exited'}，"
+                    f"最近 {next(reversed(current), 'none')}",
+                    flush=True,
+                )
+            memory_path = Path("/proc/meminfo")
+            memory = next(
+                (line.split()[1] for line in memory_path.read_text().splitlines()
+                 if line.startswith("MemAvailable:")), "unknown"
+            ) if memory_path.is_file() else "n/a"
+            print(
+                f"  宿主采样：MemAvailable_KiB={memory}，"
+                f"free_disk_GiB={shutil.disk_usage(args.work).free // (1024 ** 3)}",
+                flush=True,
+            )
+            next_progress = time.monotonic() + 30
+        time.sleep(1)
     for index, process, log, results in running:
-        process.wait()
+        returncode = process.wait()
         log.close()
         shard_outcomes, shard_durations = read_results(results)
         outcomes.update(shard_outcomes)
         measured.update(shard_durations)
+        # sessionfinish/插件错误可能发生在全部用例通过后，不能只看逐项结果。
+        if returncode not in (0, 1) or (
+            returncode == 1 and "failed" not in shard_outcomes.values()
+        ):
+            process_errors.append(f"{label}组 {index}：pytest 退出码 {returncode}")
         tail = (args.work / f"shard{index}.log").read_text().strip().splitlines()[-1:]
         print(f"  {label}组 {index} 结束（{(time.monotonic() - started) / 60:.1f} 分钟）：{tail[0] if tail else ''}", flush=True)
-    return outcomes, measured
+    return outcomes, measured, process_errors
 
 
 def main():
@@ -205,7 +262,11 @@ def main():
         default=int(os.environ.get("CHECK_ACCEPTANCE_SHARDS", "2")),
         help="验收独占阶段的并行组数",
     )
+    parser.add_argument("--runner-count", type=int, default=1)
+    parser.add_argument("--runner-index", type=int, default=0)
+    parser.add_argument("--serial-file", action="append", default=[], help="普通组结束后串行运行的容量测量文件")
     parser.add_argument("--fast", action="store_true", help="只跑快速层，排除 slow 标记")
+    parser.add_argument("--isolate-files", action="store_true", help="测试文件之间恢复独立的 head 测试库")
     parser.add_argument("--work", type=Path, required=True)
     parser.add_argument("--durations", type=Path, action="append", default=[])
     parser.add_argument("--save-durations", type=Path)
@@ -213,21 +274,40 @@ def main():
     args = parser.parse_args()
     args.work.mkdir(parents=True, exist_ok=True)
     base_env = dict(os.environ)
+    if args.isolate_files:
+        base_env["CI_ISOLATE_TEST_FILES"] = "1"
     durations = {}
     for path in args.durations:
         if path.exists():
             durations.update(json.loads(path.read_text()))
     nodeids = collect(args.targets or ["tests"], base_env, args.fast)
+    collected = nodeids
+    try:
+        nodeids = runner_partition(collected, durations, args.runner_index, args.runner_count)
+    except ValueError as error:
+        parser.error(str(error))
+    manifest = {
+        "runner_index": args.runner_index,
+        "runner_count": args.runner_count,
+        "collected_count": len(collected),
+        "selected_count": len(nodeids),
+        "selected_files": sorted({nodeid.split("::", 1)[0] for nodeid in nodeids}),
+    }
+    (args.work / "runner-partition.json").write_text(json.dumps(manifest, indent=2) + "\n")
+    print(f"Runner {args.runner_index + 1}/{args.runner_count}："
+          f"全量收集 {len(collected)}，本分区 {len(nodeids)}", flush=True)
     if not nodeids:
         print("后端：没有需要运行的测试")
         return 0
-    regular, exclusive = split_exclusive(nodeids)
+    parallel, serial = split_serial(nodeids, args.serial_file)
+    regular, exclusive = split_exclusive(parallel)
     shards = max(1, args.shards)
     regular_groups = partition(regular, durations, shards) if regular else []
     exclusive_groups = partition(exclusive, durations, args.exclusive_shards) if exclusive else []
     print(
         f"后端：{len(nodeids)} 项；普通 {len(regular)} 项分 {len(regular_groups)} 组并行，"
-        f"验收 {len(exclusive)} 项随后分 {len(exclusive_groups)} 组独占运行",
+        f"验收 {len(exclusive)} 项随后分 {len(exclusive_groups)} 组独占运行；"
+        f"容量 {len(serial)} 项最后串行运行",
         flush=True,
     )
     started = time.monotonic()
@@ -240,16 +320,18 @@ def main():
         if concurrent
         else []
     )
-    outcomes, measured = {}, {}
+    outcomes, measured, process_errors = {}, {}, []
     if concurrent:
-        more, more_measured = wait_groups(acceptance_running, "验收", args, started)
+        more, more_measured, errors = wait_groups(acceptance_running, "验收", args, started)
         outcomes.update(more)
         measured.update(more_measured)
-    more, more_measured = wait_groups(regular_running, "", args, started)
+        process_errors.extend(errors)
+    more, more_measured, errors = wait_groups(regular_running, "", args, started)
     outcomes.update(more)
     measured.update(more_measured)
+    process_errors.extend(errors)
     if exclusive_groups and not concurrent:
-        more, more_measured = wait_groups(
+        more, more_measured, errors = wait_groups(
             start_groups(exclusive_groups, shards, "验收", args, base_env),
             "验收",
             args,
@@ -257,6 +339,19 @@ def main():
         )
         outcomes.update(more)
         measured.update(more_measured)
+        process_errors.extend(errors)
+    # 所有并行进程都已退出；每个容量文件使用新进程，避免历史RSS峰值跨文件继承。
+    # Redis复用已结束普通组的0号槽；独立结果编号不能无限增加Redis库号。
+    for serial_index, path in enumerate(sorted({n.split("::", 1)[0] for n in serial})):
+        selected = [n for n in serial if n.split("::", 1)[0] == path]
+        more, more_measured, errors = wait_groups(
+            start_groups(partition(selected, durations, 1), shards + args.exclusive_shards + serial_index,
+                         "容量串行", args, base_env, redis_index=0),
+            "容量串行", args, started,
+        )
+        outcomes.update(more)
+        measured.update(more_measured)
+        process_errors.extend(errors)
     failed = sorted(n for n, o in outcomes.items() if o == "failed")
     missing = sorted(set(nodeids) - set(outcomes))
     if missing:
@@ -277,9 +372,9 @@ def main():
         )
         rerun_args = sorted({n if n in current else n.split("::", 1)[0] for n in failed})
         with (args.work / "rerun.log").open("w") as log:
-            subprocess.run(
+            rerun_process = subprocess.run(
                 pytest_command(rerun_args, args.fast),
-                env=shard_env(base_env, shards + args.exclusive_shards, name, results),
+                env=shard_env(base_env, 0, name, results),
                 stdout=log,
                 stderr=subprocess.STDOUT,
                 check=False,
@@ -287,6 +382,8 @@ def main():
         rerun, _ = read_results(results)
         # 重跑整个文件时，用例 ID 中的随机参数会改变；按文件内同名函数前缀对应。
         def rerun_outcome(nodeid):
+            if rerun_process.returncode != 0:
+                return "failed"
             if nodeid in rerun:
                 return rerun[nodeid]
             prefix = nodeid.split("[", 1)[0]
@@ -312,7 +409,9 @@ def main():
         print("  并行不稳定（单独重跑通过）：" + nodeid)
     for nodeid in failed:
         print("  失败：" + nodeid)
-    if failed:
+    for error in process_errors:
+        print("  进程失败：" + error)
+    if failed or process_errors:
         # check.sh 退出会回收临时目录，先保留失败复跑的尾部证据供发布排查。
         rerun_log = args.work / "rerun.log"
         if rerun_log.exists():

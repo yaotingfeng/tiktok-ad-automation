@@ -2,8 +2,8 @@
 
 from uuid import UUID
 
-from sqlalchemy import case, func
-from sqlmodel import Session, col, select
+from sqlalchemy import case, func, select
+from sqlmodel import Session, col
 
 from app.core.config import settings
 from app.modules.ai_workbench.reviews import DSHReviewTask
@@ -21,8 +21,8 @@ def list_review_page(
     status: str | None,
 ) -> dict:
     task = DSHReviewTask
-    scope = (task.tenant_id == tenant_id, task.optimizer_id == optimizer_id)
-    filters = (*scope, task.status == status) if status else scope
+    scope = (col(task.tenant_id) == tenant_id, col(task.optimizer_id) == optimizer_id)
+    filters = (*scope, col(task.status) == status) if status else scope
     result = col(task.result)
 
     def array_count(key):
@@ -34,11 +34,11 @@ def list_review_page(
 
     query = (
         select(
-            task.id,
-            task.status,
-            task.created_at,
-            task.finished_at,
-            task.optimizer_version,
+            col(task.id),
+            col(task.status),
+            col(task.created_at),
+            col(task.finished_at),
+            col(task.optimizer_version),
             col(task.evidence)["captured_at"].as_string().label("captured_at"),
             col(task.evidence)["preparation"].label("preparation"),
             result["report"]["headline"].as_string().label("headline"),
@@ -51,23 +51,34 @@ def list_review_page(
         .offset(offset)
         .limit(limit)
     )
-    items = [dict(row._mapping) for row in session.exec(query).all()]
-    total = session.exec(select(func.count()).select_from(task).where(*filters)).one()
+    items = [dict(row) for row in session.connection().execute(query).mappings()]
+    total = (
+        session.connection()
+        .execute(select(func.count()).select_from(task).where(*filters))
+        .scalar_one()
+    )
     # 当前活动任务独立于历史页和状态筛选，查看历史时也能阻止重复发起。
-    active = session.exec(
-        select(
-            task.id, task.status, col(task.evidence)["preparation"].label("preparation")
+    active = (
+        session.connection()
+        .execute(
+            select(
+                col(task.id),
+                col(task.status),
+                col(task.evidence)["preparation"].label("preparation"),
+            )
+            .where(*scope, col(task.status).in_(ACTIVE_REVIEW_STATUSES))
+            .order_by(col(task.created_at).desc(), col(task.id).desc())
+            .limit(1)
         )
-        .where(*scope, col(task.status).in_(ACTIVE_REVIEW_STATUSES))
-        .order_by(col(task.created_at).desc(), col(task.id).desc())
-        .limit(1)
-    ).first()
+        .mappings()
+        .first()
+    )
     return {
         "items": items,
         "total": total,
         "offset": offset,
         "limit": limit,
         "has_more": offset + len(items) < total,
-        "active_task": dict(active._mapping) if active else None,
+        "active_task": dict(active) if active else None,
         "runtime_ready": bool(settings.AI_DSH_SERVICE_TOKEN),
     }

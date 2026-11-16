@@ -19,6 +19,10 @@ from app.jobs.outbox import enqueue_after_commit
 from app.models import User
 from app.modules.accounts.routing import verify_route
 from app.modules.ad_management.execution import _public as _item_public
+from app.modules.ad_management.execution import (
+    _same_frozen_value,
+    same_management_value,
+)
 from app.modules.ad_management.history_scope import readable_history
 from app.modules.ad_management.models import (
     ManagementPreview,
@@ -83,17 +87,17 @@ def _scoped_task(
     )
     task = session.exec(
         select(ManagementTask).where(
-            ManagementTask.id == task_id,
-            ManagementTask.tenant_id == context.tenant_id,
-            ManagementTask.bc_id == bc_id,
+            col(ManagementTask.id) == task_id,
+            col(ManagementTask.tenant_id) == context.tenant_id,
+            col(ManagementTask.bc_id) == bc_id,
         )
     ).one_or_none()
     if task is None:
         raise DomainError("management_task_not_found", "管理任务不存在")
     # 历史权限按集合核验，万条任务不逐项重复查询目录/授权。
     visible = session.exec(
-        select(ManagementTask.id).where(
-            ManagementTask.id == task.id, readable_history(context, bc_id)
+        select(col(ManagementTask.id)).where(
+            col(ManagementTask.id) == task.id, readable_history(context, bc_id)
         )
     ).first()
     if visible is None:
@@ -102,15 +106,15 @@ def _scoped_task(
         route = _route(task)
         scopes = session.exec(
             select(
-                ManagementTaskItem.ref["advertiser_id"].astext,
-                ManagementTaskItem.capability["operation"].astext,
-                ManagementTaskItem.ref["kind"].astext,
+                col(ManagementTaskItem.ref)["advertiser_id"].astext,
+                col(ManagementTaskItem.capability)["operation"].astext,
+                col(ManagementTaskItem.ref)["kind"].astext,
             )
             .where(
-                ManagementTaskItem.tenant_id == context.tenant_id,
-                ManagementTaskItem.task_id == task.id,
-                ManagementTaskItem.execution_result.in_(
-                    ["PENDING", "NOT_SENT", "ACCEPTED"]
+                col(ManagementTaskItem.tenant_id) == context.tenant_id,
+                col(ManagementTaskItem.task_id) == task.id,
+                col(ManagementTaskItem.execution_result).in_(
+                    ["PENDING", "NOT_SENT", "ACCEPTED", "UNKNOWN"]
                 ),
             )
             .distinct()
@@ -143,8 +147,8 @@ def get_task(
     rows = session.exec(
         select(ManagementTaskItem)
         .where(
-            ManagementTaskItem.task_id == task.id,
-            ManagementTaskItem.tenant_id == context.tenant_id,
+            col(ManagementTaskItem.task_id) == task.id,
+            col(ManagementTaskItem.tenant_id) == context.tenant_id,
         )
         .order_by(col(ManagementTaskItem.position))
         .offset(offset)
@@ -155,7 +159,7 @@ def get_task(
         for attempt in session.exec(
             select(ManagementRequestAttempt)
             .where(
-                ManagementRequestAttempt.tenant_id == context.tenant_id,
+                col(ManagementRequestAttempt.tenant_id) == context.tenant_id,
                 col(ManagementRequestAttempt.task_item_id).in_(
                     [row.id for row in rows]
                 ),
@@ -187,8 +191,8 @@ def get_task(
         select(func.count())
         .select_from(ManagementTaskItem)
         .where(
-            ManagementTaskItem.tenant_id == context.tenant_id,
-            ManagementTaskItem.task_id == task.id,
+            col(ManagementTaskItem.tenant_id) == context.tenant_id,
+            col(ManagementTaskItem.task_id) == task.id,
         )
     ).one()
     return summary.model_copy(
@@ -238,8 +242,8 @@ def _with_summaries(
     task_ids = [task.id for task in tasks]
     mutations = dict(
         session.exec(
-            select(ManagementPreview.id, ManagementPreview.mutation).where(
-                ManagementPreview.tenant_id == context.tenant_id,
+            select(col(ManagementPreview.id), col(ManagementPreview.mutation)).where(
+                col(ManagementPreview.tenant_id) == context.tenant_id,
                 col(ManagementPreview.id).in_([task.preview_id for task in tasks]),
             )
         ).all()
@@ -253,9 +257,9 @@ def _with_summaries(
     sources: dict[UUID, ManagementTaskSource] = {}
     for task_id, rule_id, rule_name in session.exec(
         select(
-            AutomationActionLedger.management_task_id,
-            AutomationActionLedger.rule_id,
-            AutomationRule.name,
+            col(AutomationActionLedger.management_task_id),
+            col(AutomationActionLedger.rule_id),
+            col(AutomationRule.name),
         )
         .join(
             AutomationRule,
@@ -263,7 +267,7 @@ def _with_summaries(
             isouter=True,
         )
         .where(
-            AutomationActionLedger.tenant_id == context.tenant_id,
+            col(AutomationActionLedger.tenant_id) == context.tenant_id,
             col(AutomationActionLedger.management_task_id).in_(task_ids),
         )
         .distinct()
@@ -272,12 +276,12 @@ def _with_summaries(
             sources[task_id] = ManagementTaskSource(
                 kind="rule", rule_id=rule_id, rule_name=rule_name
             )
-    kind = ManagementTaskItem.ref["kind"].astext
+    kind = col(ManagementTaskItem.ref)["kind"].astext
     target_kinds: dict[UUID, dict[str, int]] = {}
     for task_id, entity_kind, total in session.exec(
-        select(ManagementTaskItem.task_id, kind, func.count())
+        select(col(ManagementTaskItem.task_id), kind, func.count())
         .where(
-            ManagementTaskItem.tenant_id == context.tenant_id,
+            col(ManagementTaskItem.tenant_id) == context.tenant_id,
             col(ManagementTaskItem.task_id).in_(task_ids),
         )
         .group_by(col(ManagementTaskItem.task_id), kind)
@@ -333,18 +337,18 @@ def list_tasks(
         action="read",
     )
     statement = select(ManagementTask).where(
-        ManagementTask.tenant_id == context.tenant_id,
-        ManagementTask.bc_id == bc_id,
+        col(ManagementTask.tenant_id) == context.tenant_id,
+        col(ManagementTask.bc_id) == bc_id,
         readable_history(context, bc_id),
     )
     if action is not None:
         field = func.coalesce(
-            ManagementTask.request["mutation"]["field"].astext,
-            ManagementPreview.mutation["field"].astext,
+            col(ManagementTask.request)["mutation"]["field"].astext,
+            col(ManagementPreview.mutation)["field"].astext,
         )
         value = func.coalesce(
-            ManagementTask.request["mutation"]["value"].astext,
-            ManagementPreview.mutation["value"].astext,
+            col(ManagementTask.request)["mutation"]["value"].astext,
+            col(ManagementPreview.mutation)["value"].astext,
         )
         statement = statement.join(
             ManagementPreview,
@@ -397,8 +401,8 @@ def cancel_task(
     task = session.exec(
         select(ManagementTask)
         .where(
-            ManagementTask.id == task_id,
-            ManagementTask.tenant_id == context.tenant_id,
+            col(ManagementTask.id) == task_id,
+            col(ManagementTask.tenant_id) == context.tenant_id,
         )
         .with_for_update()
     ).one_or_none()
@@ -410,8 +414,8 @@ def cancel_task(
     rows = session.exec(
         select(ManagementTaskItem)
         .where(
-            ManagementTaskItem.task_id == task.id,
-            ManagementTaskItem.tenant_id == context.tenant_id,
+            col(ManagementTaskItem.task_id) == task.id,
+            col(ManagementTaskItem.tenant_id) == context.tenant_id,
         )
         .with_for_update()
     ).all()
@@ -440,8 +444,8 @@ def retry_task(
         raise DomainError("management_retry_invalid", "重试需要幂等键")
     source = session.exec(
         select(ManagementTask).where(
-            ManagementTask.id == task_id,
-            ManagementTask.tenant_id == context.tenant_id,
+            col(ManagementTask.id) == task_id,
+            col(ManagementTask.tenant_id) == context.tenant_id,
         )
     ).one_or_none()
     if source is None:
@@ -450,9 +454,9 @@ def retry_task(
     _idempotency_lock(session, context, idempotency_key)
     existing = session.exec(
         select(ManagementTask).where(
-            ManagementTask.tenant_id == context.tenant_id,
-            ManagementTask.actor_id == context.actor_id,
-            ManagementTask.idempotency_key == idempotency_key,
+            col(ManagementTask.tenant_id) == context.tenant_id,
+            col(ManagementTask.actor_id) == context.actor_id,
+            col(ManagementTask.idempotency_key) == idempotency_key,
         )
     ).one_or_none()
     if existing is not None:
@@ -462,8 +466,8 @@ def retry_task(
     items = session.exec(
         select(ManagementTaskItem)
         .where(
-            ManagementTaskItem.task_id == source.id,
-            ManagementTaskItem.tenant_id == context.tenant_id,
+            col(ManagementTaskItem.task_id) == source.id,
+            col(ManagementTaskItem.tenant_id) == context.tenant_id,
         )
         .order_by(col(ManagementTaskItem.position))
     ).all()
@@ -474,8 +478,8 @@ def retry_task(
         latest = session.exec(
             select(ManagementRequestAttempt)
             .where(
-                ManagementRequestAttempt.tenant_id == item.tenant_id,
-                ManagementRequestAttempt.task_item_id == item.id,
+                col(ManagementRequestAttempt.tenant_id) == item.tenant_id,
+                col(ManagementRequestAttempt.task_item_id) == item.id,
             )
             .order_by(col(ManagementRequestAttempt.attempt).desc())
         ).first()
@@ -567,8 +571,8 @@ def prepare_restore(
 ) -> ManagementPreviewPublic:
     task = session.exec(
         select(ManagementTask).where(
-            ManagementTask.id == task_id,
-            ManagementTask.tenant_id == context.tenant_id,
+            col(ManagementTask.id) == task_id,
+            col(ManagementTask.tenant_id) == context.tenant_id,
         )
     ).one_or_none()
     if task is None:
@@ -577,8 +581,8 @@ def prepare_restore(
     old_items = session.exec(
         select(ManagementTaskItem)
         .where(
-            ManagementTaskItem.task_id == task.id,
-            ManagementTaskItem.tenant_id == context.tenant_id,
+            col(ManagementTaskItem.task_id) == task.id,
+            col(ManagementTaskItem.tenant_id) == context.tenant_id,
         )
         .order_by(col(ManagementTaskItem.position))
     ).all()
@@ -643,10 +647,29 @@ def prepare_restore(
     )
     session.add(preview)
     session.flush()
+    # 一次读取各来源的最后实际 attempt，每个成员保留自己的发送时间。
+    source_attempts = {
+        a.task_item_id: a
+        for a in session.exec(
+            select(ManagementRequestAttempt)
+            .where(
+                ManagementRequestAttempt.tenant_id == task.tenant_id,
+                col(ManagementRequestAttempt.task_item_id).in_(
+                    [i.id for i in old_items]
+                ),
+            )
+            .distinct(col(ManagementRequestAttempt.task_item_id))
+            .order_by(
+                col(ManagementRequestAttempt.task_item_id),
+                col(ManagementRequestAttempt.attempt).desc(),
+            )
+        ).all()
+    }
     public_items: list[ManagementItemPublic] = []
     for position, old in enumerate(old_items):
         conflict = False
-        already_disabled = False
+        conflict_reason = "configuration_conflict"
+        already_target = False
         ref = old.ref
         current = session.get(
             AdObject,
@@ -664,22 +687,81 @@ def prepare_restore(
             status = current.operation_status
             if status is None:
                 conflict = True
-            elif status == "DISABLE":
-                already_disabled = True
+            # 恢复目标来自冻结原值，启用和暂停必须对称；UNKNOWN 也不盲重放。
+            elif (
+                old.original_value in {"ENABLE", "DISABLE"}
+                and status == old.original_value
+            ):
+                already_target = True
             elif str(status) != str(old.final_value):
                 conflict = True
         else:
             key = "roas_bid" if operation == "update_roas" else "budget"
             value = (current.configuration or {}).get(key)
-            if value is None or str(value) != str(old.final_value):
+            if operation == "update_roas" and same_management_value(
+                operation, value, old.original_value
+            ):
+                already_target = True
+            elif not same_management_value(operation, value, old.final_value):
                 conflict = True
+        capability = dict(old.capability)
+        if operation in {"update_budget", "update_roas"}:
+            # 复用发送前 owner 校验，恢复仍是新意图，原 UNKNOWN 回执保持不变。
+            latest = source_attempts.get(old.id)
+            if (
+                latest is None
+                or latest.outcome not in {"ACCEPTED", "UNKNOWN"}
+                or old.execution_result not in {"ACCEPTED", "UNKNOWN"}
+            ):
+                conflict = True
+            else:
+                capability["restore_after"] = latest.request_at.isoformat()
+                if operation == "update_roas":
+                    # 冻结独立反向意图的每个成员；不从第一项推断兄弟的原值或受理。
+                    facts = capability.get("roas_facts") or {}
+                    members = [
+                        i for i in old_items if i.capability.get("roas_facts") == facts
+                    ]
+                    if facts.get("budget_strategy") == "CBO":
+                        capability["restore_roas_members"] = [
+                            {
+                                "ref": i.ref,
+                                "original_value": i.original_value,
+                                "final_value": i.final_value,
+                                "eligible": i.execution_result
+                                in {"ACCEPTED", "UNKNOWN"},
+                                "sent": i.id in source_attempts
+                                and source_attempts[i.id].outcome
+                                in {"ACCEPTED", "UNKNOWN"},
+                                "request_at": source_attempts[
+                                    i.id
+                                ].request_at.isoformat()
+                                if i.id in source_attempts
+                                else None,
+                            }
+                            for i in members
+                        ]
+                candidate = old.model_copy(
+                    update={
+                        "original_value": old.original_value
+                        if already_target
+                        else old.final_value,
+                        "capability": capability,
+                    }
+                )
+                try:
+                    _same_frozen_value(session, candidate, _item_public(old).ref)
+                except DomainError as error:
+                    conflict = True
+                    conflict_reason = error.code
+        if operation == "update_roas" and not capability.get("roas_facts"):
+            conflict = True
+            conflict_reason = "roas_restore_evidence_missing"
         reason = (
-            "configuration_conflict"
-            if conflict
-            else ("already_disabled" if already_disabled else None)
+            conflict_reason if conflict else ("no_change" if already_target else None)
         )
         execution_result = (
-            "CONFLICT" if conflict else ("NO_CHANGE" if already_disabled else "PENDING")
+            "CONFLICT" if conflict else ("NO_CHANGE" if already_target else "PENDING")
         )
         session.add(
             ManagementPreviewItem(
@@ -692,14 +774,28 @@ def prepare_restore(
                 reason=reason,
                 execution_result=execution_result,
                 parent_ref=dict(old.parent_ref) if old.parent_ref else None,
-                capability=dict(old.capability),
+                capability=capability,
             )
         )
         public_items.append(
             ManagementItemPublic(
                 ref=old.ref,
-                original_value=None,
+                original_value=old.final_value,
                 final_value=old.original_value,
+                budget_facts=capability.get("budget_facts"),
+                roas_facts=capability.get("roas_facts"),
+                restore_observation={
+                    "source_task_id": task.id,
+                    "value": str(current.configuration.get("roas_bid"))
+                    if current and current.configuration.get("roas_bid") is not None
+                    else None,
+                    "observed_at": current.observed_at if current else None,
+                    "source_connection_id": current.source_connection_id
+                    if current
+                    else None,
+                }
+                if operation == "update_roas"
+                else None,
                 reason=reason,
                 execution_result=cast(Any, execution_result),
             )
@@ -722,8 +818,8 @@ def reconcile(
 ) -> ManagementTaskPublic:
     task = session.exec(
         select(ManagementTask).where(
-            ManagementTask.id == task_id,
-            ManagementTask.tenant_id == context.tenant_id,
+            col(ManagementTask.id) == task_id,
+            col(ManagementTask.tenant_id) == context.tenant_id,
         )
     ).one_or_none()
     if task is None:
@@ -731,8 +827,8 @@ def reconcile(
     _scoped_task(session, context, task.bc_id, task.id, action="read")
     rows = session.exec(
         select(ManagementTaskItem).where(
-            ManagementTaskItem.task_id == task.id,
-            ManagementTaskItem.tenant_id == context.tenant_id,
+            col(ManagementTaskItem.task_id) == task.id,
+            col(ManagementTaskItem.tenant_id) == context.tenant_id,
         )
     ).all()
     # Reconciliation is deliberately local-only; UNKNOWN and ACCEPTED remain
@@ -750,8 +846,8 @@ def retry_targeted_refresh(
     task = session.exec(
         select(ManagementTask)
         .where(
-            ManagementTask.id == task_id,
-            ManagementTask.tenant_id == context.tenant_id,
+            col(ManagementTask.id) == task_id,
+            col(ManagementTask.tenant_id) == context.tenant_id,
         )
         .with_for_update()
     ).one_or_none()
@@ -759,11 +855,11 @@ def retry_targeted_refresh(
         raise DomainError("management_task_not_found", "管理任务不存在")
     _scoped_task(session, context, task.bc_id, task.id, action="ads_manage")
     pending = session.exec(
-        select(ManagementTaskItem.id).where(
-            ManagementTaskItem.task_id == task.id,
-            ManagementTaskItem.tenant_id == context.tenant_id,
-            ManagementTaskItem.execution_result == "ACCEPTED",
-            ManagementTaskItem.observation_state == "REFRESH_PENDING",
+        select(col(ManagementTaskItem.id)).where(
+            col(ManagementTaskItem.task_id) == task.id,
+            col(ManagementTaskItem.tenant_id) == context.tenant_id,
+            col(ManagementTaskItem.execution_result) == "ACCEPTED",
+            col(ManagementTaskItem.observation_state) == "REFRESH_PENDING",
         )
     ).all()
     if not pending:

@@ -8,7 +8,7 @@ from app.models import User
 
 
 def test_legacy_telemetry_configuration_does_not_capture_requests(monkeypatch):
-    import importlib
+    import runpy
     from unittest.mock import Mock
 
     import sentry_sdk
@@ -21,9 +21,11 @@ def test_legacy_telemetry_configuration_does_not_capture_requests(monkeypatch):
         patch.setattr(settings, "SENTRY_DSN", HttpUrl("https://public/1"))
         patch.setattr(settings, "FASTAPI_ENV", None)
         patch.setattr(sentry_sdk, "init", initialize)
-        importlib.reload(app.main)
+        original_app = app.main.app
+        probe = runpy.run_path(app.main.__file__)
+        assert probe["app"] is not original_app
+        assert app.main.app is original_app
         initialize.assert_not_called()
-    importlib.reload(app.main)
 
 
 @pytest.fixture
@@ -86,7 +88,15 @@ def test_bootstrap_schema_excludes_template_business_and_signup(client):
     paths = client.get("/api/openapi.json").json()["paths"]
     assert "/api/integrations/tiktok/callback" in paths
     assert "/api/users/" in paths
+    assert "/api/tenants/{tenant_id}/materials/link-uploads/{batch_id}/items" in paths
+    assert (
+        "/api/tenants/{tenant_id}/materials/link-uploads/{batch_id}/items/{item_id}/retry"
+        in paths
+    )
     assert not any(
-        "/items" in path or "/private/" in path or path.endswith("/signup")
+        path == "/api/items"
+        or path.startswith("/api/items/")
+        or "/private/" in path
+        or path.endswith("/signup")
         for path in paths
     )

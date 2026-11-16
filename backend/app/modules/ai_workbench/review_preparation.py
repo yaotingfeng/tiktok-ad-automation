@@ -7,7 +7,7 @@ from uuid import UUID
 from billiard.exceptions import SoftTimeLimitExceeded
 from fastapi import HTTPException
 from sqlalchemy import DateTime, cast, or_, text
-from sqlmodel import select
+from sqlmodel import col, select
 
 from app.core.context import TenantContext
 from app.core.errors import DomainError
@@ -56,7 +56,7 @@ def repair_preparation(session, *, now, limit=100):
                 cast(queued_at, DateTime(timezone=True)) < now - timedelta(minutes=5),
             ),
         )
-        .order_by(reviews.DSHReviewTask.created_at)
+        .order_by(col(reviews.DSHReviewTask.created_at))
         .limit(limit)
         .with_for_update(skip_locked=True)
     ).all()

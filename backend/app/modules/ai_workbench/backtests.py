@@ -5,6 +5,7 @@ import json
 from collections import defaultdict
 from datetime import date, timedelta
 from decimal import Decimal
+from typing import Any
 from uuid import NAMESPACE_URL, UUID, uuid5
 
 from fastapi import HTTPException
@@ -303,7 +304,9 @@ def _daily_replay(session, *, task, rule_id, candidate_definitions):
         for (currency, timezone), totals in sorted(
             grouped.items(), key=lambda item: str(item[0])
         ):
-            metrics = {k: str(v) for k, v in totals.items() if k != "objects_paused"}
+            metrics: dict[str, Any] = {
+                k: str(v) for k, v in totals.items() if k != "objects_paused"
+            }
             for prefix in ("actual", "kept", "blocked"):
                 spend = totals[prefix + "_spend"]
                 metrics[prefix + "_roas"] = (

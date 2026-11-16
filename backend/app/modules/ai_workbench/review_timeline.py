@@ -6,6 +6,7 @@ from datetime import date, timedelta
 from decimal import Decimal, InvalidOperation
 
 from fastapi import HTTPException
+from sqlmodel import col
 
 from app.core.errors import DomainError
 from app.modules.ai_workbench.review_store import (
@@ -371,7 +372,7 @@ def timeline_for_task(
             scoped(ReviewSource, task)
             .where(
                 ReviewSource.category == "rule_backtest_inputs",
-                ReviewSource.advertiser_id.in_(scope),
+                col(ReviewSource.advertiser_id).in_(scope),
             )
             .execution_options(yield_per=1)
         )

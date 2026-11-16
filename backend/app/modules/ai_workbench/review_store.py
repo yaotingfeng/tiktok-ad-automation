@@ -50,7 +50,9 @@ class ReviewSource(SQLModel, table=True):
     source_metadata: dict = Field(
         default_factory=dict, sa_column=Column(JSONB, nullable=False)
     )
-    captured_at: datetime = Field(sa_type=DateTime(timezone=True))
+    captured_at: datetime = Field(
+        sa_column=Column(DateTime(timezone=True), nullable=False)
+    )
 
 
 class ReviewReceipt(SQLModel, table=True):
@@ -67,7 +69,10 @@ class ReviewReceipt(SQLModel, table=True):
         default_factory=list, sa_column=Column(JSONB, nullable=False)
     )
     created_at: datetime = Field(
-        default_factory=lambda: datetime.now(UTC), sa_type=DateTime(timezone=True)
+        default_factory=lambda: datetime.now(UTC),
+        sa_column=Column(
+            DateTime(timezone=True), default=lambda: datetime.now(UTC), nullable=False
+        ),
     )
 
 
@@ -87,7 +92,10 @@ class ReviewArtifact(SQLModel, table=True):
     payload: dict = Field(sa_column=Column(JSONB, nullable=False))
     # 草稿笔记永不获得证据资格；其他产物只在成功交付后登记凭证。
     created_at: datetime = Field(
-        default_factory=lambda: datetime.now(UTC), sa_type=DateTime(timezone=True)
+        default_factory=lambda: datetime.now(UTC),
+        sa_column=Column(
+            DateTime(timezone=True), default=lambda: datetime.now(UTC), nullable=False
+        ),
     )
 
 

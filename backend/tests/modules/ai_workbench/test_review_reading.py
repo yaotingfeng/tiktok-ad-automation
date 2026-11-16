@@ -276,6 +276,10 @@ def test_revoked_account_or_changed_optimizer_blocks_task_tools(
     for endpoint, body in (
         ("query", {"category": "reporting"}),
         ("read", {"evidence_id": campaign_source(session, task)["id"]}),
+        (
+            "read",
+            {"evidence_id": campaign_source(session, task)["id"], "view": "provenance"},
+        ),
     ):
         assert (
             client.post(
@@ -423,3 +427,219 @@ def test_history_index_shows_optimizer_context_before_account_samples(session, r
     page = query_for_task(session, task=task, category="history")
     ids = [item["id"] for item in page["items"]]
     assert ids.index(str(root.id)) < ids.index(str(account.id))
+
+
+def test_native_v2_delivery_projects_provenance_but_archives_full_sources_and_analysis(
+    session, reading
+):
+    import json
+
+    from app.modules.ai_workbench.review_analysis import analyze_for_task
+    from app.modules.ai_workbench.review_store import ReviewArtifact
+
+    task, _, _ = reading
+    source = session.exec(
+        scoped(ReviewSource, task).where(
+            ReviewSource.category == "reporting",
+            ReviewSource.dimension == "account",
+            ReviewSource.maturity_horizon == "d0",
+        )
+    ).one()
+    raw = source.payload
+    assert source.digest == reviews._digest(raw)
+    assert raw["rows"][0]["source_evidence"]
+    assert raw["summary"]["buckets"][0]["evidence_ref"]["record_count"] > 0
+    page = read_for_task(session, task=task, evidence_id=source.id)
+    assert len(json.dumps(page, ensure_ascii=False).encode()) <= 64000
+    visible = page["rows"][0]["metric_buckets"][0]
+    archived = raw["rows"][0]["metric_buckets"][0]
+    for key in (
+        "values",
+        "availability",
+        "reasons",
+        "level",
+        "source_kind",
+        "contract_revision",
+    ):
+        assert visible[key] == archived[key]
+    assert "provenance" not in visible and visible["provenance_details_archived"]
+    assert page["metadata"]["summary"]["buckets"][0]["provenance_details_archived"]
+    assert str(source.id) not in delivered_evidence_ids(session, task)
+    assert page["id"] in delivered_evidence_ids(session, task)
+    analysis = analyze_for_task(
+        session, task=task, dimension="account", maturity_horizon="d0"
+    )
+    assert len(json.dumps(analysis, ensure_ascii=False).encode()) <= 64000
+    assert analysis["items"][0]["metric_bucket"] == visible
+    artifact = session.get(ReviewArtifact, (task.id, UUID(analysis["id"])))
+    assert artifact.payload["items"][0]["metric_bucket"] == archived
+    assert artifact.digest == reviews._digest(artifact.payload)
+    assert session.get(ReviewSource, (task.id, source.id)).digest == reviews._digest(
+        raw
+    )
+    assert read_for_task(session, task=task, evidence_id=source.id) == page
+
+
+def test_provenance_pages_deliver_archive_local_exact_population(
+    client, session, reading
+):
+    import json
+    from decimal import Decimal
+
+    from tests.modules.reporting.evidence_helpers import archived_records
+
+    task, publish, _ = reading
+    _, headers = claim_task(client)
+    source = session.exec(
+        scoped(ReviewSource, task).where(
+            ReviewSource.category == "reporting",
+            ReviewSource.dimension == "account",
+            ReviewSource.maturity_horizon == "d0",
+        )
+    ).one()
+    original_digest = source.digest
+    source_body = json.dumps(source.payload, sort_keys=True)
+    path = f"/api/integrations/ai-workbench/reviews/{task.id}/evidence/read"
+    normal = client.post(
+        path, headers=headers, json={"evidence_id": str(source.id), "limit": 1}
+    )
+    assert normal.status_code == 200, normal.text
+    assert "source_evidence" not in normal.json()["rows"][0]
+    expected = archived_records(source.payload, source.payload["summary"]["buckets"][0])
+    received, receipts, cursor = [], [], None
+    while True:
+        body = {"evidence_id": str(source.id), "view": "provenance", "limit": 17}
+        if cursor:
+            body["evidence_cursor"] = cursor
+        response = client.post(path, headers=headers, json=body)
+        assert response.status_code == 200, response.text
+        assert len(response.content) <= 64000
+        page = response.json()
+        assert page["evidence_ref"]["owner"] == "FROZEN_REPORT_ROWS"
+        assert page["evidence_ref"]["owner_id"] == source.payload["id"]
+        received.extend(page["records"])
+        receipts.append(page["id"])
+        cursor = page["next_cursor"]
+        if cursor is None:
+            break
+    assert received == expected
+    assert len(received) == 61
+    assert sum(Decimal(r["fact"]["spend"]) for r in received) == 610
+    assert len(set(receipts)) == len(receipts)
+    assert normal.json()["id"] not in receipts
+    delivered = delivered_evidence_ids(session, task)
+    assert all(receipt in delivered for receipt in receipts)
+    assert str(source.id) not in delivered
+    assert (
+        source.digest == original_digest
+        and json.dumps(source.payload, sort_keys=True) == source_body
+    )
+    publish("900", observed=datetime.now(UTC) + timedelta(seconds=1))
+    repeat = client.post(
+        path,
+        headers=headers,
+        json={"evidence_id": str(source.id), "view": "provenance", "limit": 17},
+    )
+    assert repeat.json()["records"] == received[:17]
+    wrong = client.post(
+        path,
+        headers=headers,
+        json={
+            "evidence_id": str(source.id),
+            "view": "provenance",
+            "limit": 17,
+            "row_key": source.payload["rows"][0]["row_key"],
+            "evidence_cursor": repeat.json()["next_cursor"],
+        },
+    )
+    assert wrong.status_code == 404
+
+
+def test_old_financial_archive_contract_is_not_reinterpreted(session, reading):
+    task, _, _ = reading
+    source = session.exec(
+        scoped(ReviewSource, task).where(
+            ReviewSource.category == "reporting",
+            ReviewSource.dimension == "account",
+            ReviewSource.maturity_horizon == "d0",
+        )
+    ).one()
+    from app.modules.ai_workbench.review_store import archive_source
+
+    source = archive_source(
+        session,
+        task=task,
+        category="reporting",
+        captured_at=source.captured_at,
+        payload=source.payload | {"projection_contract": "financial-review-v1"},
+        identity="old-financial-contract-fixture",
+    )
+    before = delivered_evidence_ids(session, task)
+    for view in ("reading", "provenance"):
+        with pytest.raises(HTTPException) as old:
+            read_for_task(session, task=task, evidence_id=source.id, view=view)
+        assert (old.value.status_code, old.value.detail) == (
+            409,
+            "report_evidence_contract_changed",
+        )
+    assert delivered_evidence_ids(session, task) == before
+
+
+@pytest.mark.parametrize("unavailable_first", [False, True])
+def test_attribution_provenance_selects_valid_report_beside_unavailable_archive(
+    client, session, context, reading, unavailable_first
+):
+    from app.modules.ai_workbench.review_store import archive_source
+    from app.modules.reporting.queries import freeze_review_page
+    from app.modules.reporting.schemas import ReportingFilter
+    from tests.modules.reporting.evidence_helpers import archived_records
+
+    task, _, cutoff = reading
+    _, headers = claim_task(client)
+    original = session.exec(
+        scoped(ReviewSource, task).where(
+            ReviewSource.category == "reporting",
+            ReviewSource.dimension == "account",
+            ReviewSource.maturity_horizon == "d0",
+        )
+    ).one()
+    filters = ReportingFilter.model_validate(original.payload["filters"])
+    args = {"context": context, "bc_id": "bc-a", "filters": filters, "freeze_all": True}
+    valid = freeze_review_page(session, **args, cutoff=cutoff)
+    unavailable = freeze_review_page(
+        session, **args, cutoff=cutoff - timedelta(seconds=2)
+    )
+    assert unavailable == {
+        "status": "UNAVAILABLE",
+        "reason": "publication_after_cutoff",
+        "rows": [],
+    }
+    reports = [unavailable, valid] if unavailable_first else [valid, unavailable]
+    source = archive_source(
+        session,
+        task=task,
+        category="attribution",
+        captured_at=cutoff,
+        payload={"rows": [{"reports": reports}]},
+        identity=f"mixed-availability-{unavailable_first}",
+    )
+    expected = archived_records(valid, valid["summary"]["buckets"][0])
+    before = delivered_evidence_ids(session, task)
+    path = f"/api/integrations/ai-workbench/reviews/{task.id}/evidence/read"
+    body = {
+        "evidence_id": str(source.id),
+        "view": "provenance",
+        "report_id": valid["id"],
+        "limit": 1,
+    }
+    response = client.post(path, headers=headers, json=body)
+    assert response.status_code == 200, response.text
+    assert response.json()["records"] == expected[:1]
+    assert delivered_evidence_ids(session, task) == before | {response.json()["id"]}
+    assert client.post(path, headers=headers, json=body).json() == response.json()
+    assert delivered_evidence_ids(session, task) == before | {response.json()["id"]}
+    rejected = client.post(
+        path, headers=headers, json=body | {"report_id": "missing-report"}
+    )
+    assert rejected.status_code == 422
+    assert delivered_evidence_ids(session, task) == before | {response.json()["id"]}
